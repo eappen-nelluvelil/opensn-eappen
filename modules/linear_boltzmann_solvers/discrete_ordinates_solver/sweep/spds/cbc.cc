@@ -74,15 +74,37 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   for (const auto& cell : grid_->local_cells)
   {
     const size_t num_faces = cell.faces.size();
-    unsigned int num_dependencies = 0;
+    // OLD:
+    // unsigned int num_dependencies = 0;
+    
+    // NEW: Separate dependency counters
+    unsigned int num_local_preds = 0;
+    unsigned int num_non_local_boundary_preds = 0;
+    
     std::vector<uint64_t> succesors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
       if (cell_face_orientations_[cell.local_id][f] == INCOMING)
       {
+        // OLD:
+        // if (cell.faces[f].has_neighbor)
+        //   ++num_dependencies;
+
+        // NEW:
+        // Check if face has a neighbor (cell or boundary)
         if (cell.faces[f].has_neighbor)
-          ++num_dependencies;
+        {
+          // Check if neighbor is local or non-local
+          if (grid_->IsCellLocal(cell.faces[f].neighbor_id))
+            ++num_local_preds;  // Dependency resolved by local task
+          else
+            ++num_non_local_boundary_preds; // Dependency resolved by non-local task
+        }
+        else  // Is an external boundary face
+        {
+          ++num_non_local_boundary_preds; // Treat boundary as external dependency
+        }
       }
       else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
       {
@@ -92,7 +114,12 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       }
     }
 
-    task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
+    // OLD:
+    // task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
+    
+    // NEW: Use new Task struct members that track local and non-local task dependencies
+    task_list_.push_back({num_local_preds, num_non_local_boundary_preds, 
+                succesors, cell.local_id, &cell, false});
   }
 }
 

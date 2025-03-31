@@ -15,8 +15,21 @@ class CBC_SPDS;
 class CBC_AngleSet : public AngleSet
 {
 protected:
+  // NEW: Structure to track runtime dependencies
+  struct TaskRuntimeInfo
+  {
+    unsigned int remaining_local_dependencies = 0;
+    unsigned int remaining_non_local_dependencies = 0;
+    bool completed = false;
+    // Future idea: Add TaskStatus enum if needed for more complex states
+  };
+
   const CBC_SPDS& cbc_spds_;
   std::vector<Task> current_task_list_;
+
+  // NEW: Runtime tracking parallel to current_task_list_
+  std::vector<TaskRuntimeInfo> task_runtime_info_;
+
   CBC_ASynchronousCommunicator async_comm_;
 
 public:
@@ -27,6 +40,9 @@ public:
                const std::vector<size_t>& angle_indices,
                std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                const MPICommunicatorSet& comm_set);
+
+  // NEW: Initialize the task_runtime_info_ structure
+  void InitializeTaskRuntimeInfo();
 
   AsynchronousCommunicator* GetCommunicator() override;
 

@@ -26,7 +26,13 @@
 #include "framework/object_factory.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
+#include <exception>
 #include <iomanip>
+#include <memory>
+#include <stdexcept>
+
+// For CBC_SweepAnalyzer
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_solver/sweep/analysis/cbc_sweep_analyzer.h"
 
 namespace opensn
 {
@@ -751,7 +757,9 @@ DiscreteOrdinatesSolver::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
-    // Build SPDS
+    log.Log0Verbose0() << program_timer.GetTimeString() << " Initializing CBC SPDS.";
+
+    // --- 1. Build SPDS objects
     for (const auto& [quadrature, info] : quadrature_unq_so_grouping_map_)
     {
       const auto& unique_so_groupings = info.first;
@@ -762,11 +770,81 @@ DiscreteOrdinatesSolver::InitializeSweepDataStructures()
 
         const size_t master_dir_id = so_grouping.front();
         const auto& omega = quadrature->omegas[master_dir_id];
+
+        // Map lookup
+        const auto& allow_cycles = quadrature_allow_cycles_map_.at(quadrature);
+
         const auto new_swp_order = std::make_shared<CBC_SPDS>(
-          omega, this->grid_ptr_, quadrature_allow_cycles_map_[quadrature]);
+          omega, this->grid_ptr_, allow_cycles);
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
-      }
-    }
+      } // for so_groupinng
+    } // for quadrature pointer
+
+    log.Log0Verbose1() << program_timer.GetTimeString() << " Done initializing CBC SPUDS.";
+
+    // --- 2. Execute non-invasive analysis
+    log.Log() << "\nExecuting non-invasive CBC Sweep analysis ...";
+
+    // Need representative angle/group counts for data size estimate
+    size_t representative_num_angles = 0;
+    if (!groupsets_.empty() && groupsets_[0].quadrature)
+        representative_num_angles = groupsets_[0].quadrature->omegas.size();
+    size_t representative_num_groups = num_groups_;
+
+    size_t overall_max_faces = 0;
+    size_t overall_max_data = 0;
+
+    // Now iterate through the map that was just populated
+    for (const auto& [quadrature_ptr, spds_list] : quadrature_spds_map_)
+    {
+      for (const auto& spds_ptr : spds_list)
+      {
+        // Ensure this SPDS is actually for CBC before casting
+        auto cbc_spds_ptr = std::dynamic_pointer_cast<const CBC_SPDS>(spds_ptr);
+        
+        if (cbc_spds_ptr)
+        {
+          // Get the solver's spatial discretization object
+          // Ensure discretization_ is initialized before this point
+          if (!this->discretization_)
+          {
+            throw std::logic_error("Discretization not initialized before CBC analysis.");
+          }
+
+          const auto& discretization = *this->discretization_;
+
+          CBC_SweepAnalyzer analyzer(*cbc_spds_ptr,
+                                     discretization,
+                                     representative_num_angles,
+                                    representative_num_groups);
+
+          try
+          {
+            CBC_SweepAnalyzer::Results results = analyzer.Analyze();
+            // Log results specific to this SPDS
+            log.Log() << " Analyzed SPDS (Omega=" << cbc_spds_ptr->GetOmega().PrintStr()
+                      <<"): Max live faces=" << results.max_live_faces_count
+                      <<", estimated max data size (bytes)=" << results.max_live_data_size_estimate;
+
+            overall_max_faces = std::max(overall_max_faces, results.max_live_faces_count);
+            overall_max_data  = std::max(overall_max_data, results.max_live_data_size_estimate);
+          }
+          catch (const std::exception& e) // Catch std::exception for broader coverage
+          {
+            log.LogAllError() << "Error during CBC sweep analysis for SPDS (Omega="
+                              << cbc_spds_ptr->GetOmega().PrintStr() << "): " << e.what();
+            // Decide whether to continue or re-throw/exit
+          }
+        } // if cbc_spds_ptr
+      } // for spds_ptr
+    } // for quadrature_ptr
+
+    log.Log() << "Overall CBC sweep analysis results:";
+    log.Log() << " Overall max concurrent live faces across all SPDS: " << overall_max_faces;
+    log.Log() << " Overall estimate max live data size (bytes): " << overall_max_data;
+    log.Log() << "Finished non-invase CBC sweep analysis.\n";
+
+    // End of unconditional analysis block
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");

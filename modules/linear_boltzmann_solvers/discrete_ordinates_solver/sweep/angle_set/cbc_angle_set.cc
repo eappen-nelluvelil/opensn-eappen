@@ -10,6 +10,8 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
+#include <cstdint>
+#include <sys/types.h>
 
 namespace opensn
 {
@@ -25,12 +27,32 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
     async_comm_(id, *fluds, comm_set)
 {
+  // NEW:
+  // Initialize runtime info when the task list is first set (or reset)
+  // Note: current_task_list_ might be empty here if ResetSweepBuffers is
+  // called before the first AngleSetAdvance.
+  // Initialization might be better placed at the start of AngleSetAdvance if 
+  // list is empty 
 }
 
 AsynchronousCommunicator*
 CBC_AngleSet::GetCommunicator()
 {
   return static_cast<AsynchronousCommunicator*>(&async_comm_);
+}
+
+// NEW: InitializeTaskRuntimeInfo() implementation
+void CBC_AngleSet::InitializeTaskRuntimeInfo() {
+  const size_t num_tasks = current_task_list_.size();
+  task_runtime_info_.assign(num_tasks, TaskRuntimeInfo()); // Resize and default construct
+
+  for (size_t i = 0; i < num_tasks; ++i) {
+      // Initialize remaining dependencies from the SPDS task list definition
+      task_runtime_info_[i].remaining_local_dependencies = current_task_list_[i].num_local_predecessors;
+      // Crucially, also initialize remaining non-local deps based on SPDS definition
+      task_runtime_info_[i].remaining_non_local_dependencies = current_task_list_[i].num_non_local_predecessors;
+      task_runtime_info_[i].completed = false; // Ensure completed is reset
+  }
 }
 
 AngleSetStatus
@@ -41,15 +63,35 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (executed_)
     return AngleSetStatus::FINISHED;
 
+  // NEW:
+  // If task_list runtime info is empty, initialize it
   if (current_task_list_.empty())
+  {
     current_task_list_ = cbc_spds_.GetTaskList();
+    InitializeTaskRuntimeInfo();  // Initialize runtime info based on the new list
+  }
 
   sweep_chunk.SetAngleSet(*this);
 
+  // NEW: --- Handle non-local dependencies
   auto tasks_who_received_data = async_comm_.ReceiveData();
 
   for (const uint64_t task_number : tasks_who_received_data)
-    --current_task_list_[task_number].num_dependencies;
+  {
+    // OLD:
+    // --current_task_list_[task_number].num_dependencies;
+
+    // NEW:
+    // Check bounds just in case task_number is an index
+    if (task_number < task_runtime_info_.size())
+    {
+      // Decrement the *non-local* dependency count
+      if (task_runtime_info_[task_number].remaining_non_local_dependencies > 0)
+      {
+        task_runtime_info_[task_number].remaining_non_local_dependencies--;
+      }
+    }
+  }
 
   async_comm_.SendData();
 
@@ -63,6 +105,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   while (a_task_executed)
   {
     a_task_executed = false;
+
+    // OLD:
+    /*
     for (auto& cell_task : current_task_list_)
     {
       if (not cell_task.completed)
@@ -81,7 +126,46 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
       }
     } // for cell_task
     async_comm_.SendData();
+    */
+
+    // NEW:
+    // Iterate by index to access both current_task_list_ and task_runtime_info_
+    for (size_t task_idx = 0; task_idx < current_task_list_.size(); ++task_idx)
+    {
+      auto& runtime_info = task_runtime_info_[task_idx];
+      const auto& task_def = current_task_list_[task_idx];  // Use original definition for successors, cell_ptr, etc.
+
+      if (!runtime_info.completed)
+      {
+        all_tasks_completed = false;  // Found an incomplete task
+        
+        // NEW: Readiness check: only local dependencies must be zero for execution within this loop.
+        // Overall readiness (including non-local messages and BCs) is checked before the loop.
+        // if (runtime_info.remaining_local_dependencies == 0 &&
+        //     runtime_info.remaining_non_local_dependencies == 0)
+        if (runtime_info.remaining_local_dependencies == 0)
+        {
+          sweep_chunk.SetCell(task_def.cell_ptr, *this);
+          sweep_chunk.Sweep(*this);
+
+          // Decrement *local* dependencies for successors
+          for (uint64_t successor_task_idx : task_def.successors)
+          {
+            if (successor_task_idx < task_runtime_info_.size() && // Bounds check
+                task_runtime_info_[successor_task_idx].remaining_local_dependencies > 0)  // Avoid underflow
+                task_runtime_info_[successor_task_idx].remaining_local_dependencies--;
+          }
+
+          runtime_info.completed = true; // Mark this completed in runtime
+          a_task_executed = true;
+          async_comm_.SendData(); // Send any new data generated
+        } // if ready
+      } // if not completed
+    } // for cell_task
+    async_comm_.SendData();
+
   }
+  
 
   const bool all_messages_sent = async_comm_.SendData();
 
@@ -102,6 +186,8 @@ CBC_AngleSet::ResetSweepBuffers()
 {
   current_task_list_.clear();
   async_comm_.Reset();
+  // NEW:
+  task_runtime_info_.clear(); // Clear runtime info as well
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;
 }

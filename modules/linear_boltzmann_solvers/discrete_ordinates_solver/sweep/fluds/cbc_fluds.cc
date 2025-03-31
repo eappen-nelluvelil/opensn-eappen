@@ -48,10 +48,25 @@ CBC_FLUDS::GetNonLocalUpwindData(uint64_t cell_global_id, unsigned int face_id) 
   return deplocs_outgoing_messages_.at({cell_global_id, face_id});
 }
 
+// const std::vector<double>*
+// CBC_FLUDS::GetNonLocalUpwindData(uint64_t neighbor_global_id, unsigned int neighbor_face_id) const
+// {
+//   const auto key = CellFaceKey{neighbor_global_id, neighbor_face_id};
+//   const auto it = deplocs_outgoing_messages_.find(key);
+
+//   if (it != deplocs_outgoing_messages_.end()) {
+//       return &(it->second); // Return pointer to the vector if key found
+//   } else {
+//       // Key not found, meaning data hasn't arrived or been processed yet
+//       return nullptr;
+//   }
+// }
+
 const double*
 CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                 unsigned int face_node_mapped,
                                 unsigned int angle_set_index)
+
 {
   const size_t dof_map = face_node_mapped * num_groups_and_angles_ + angle_set_index * num_groups_;
   return &psi_data[dof_map];

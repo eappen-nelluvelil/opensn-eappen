@@ -35,11 +35,23 @@ enum class AngleSetStatus
 
 struct Task
 {
-  unsigned int num_dependencies;
+  // An issue with num_dependencies is that it does not distinguish between
+  // dependencies that will be resolved by *local* task completion versus
+  // those resolved by *non-local* message arrivals (or BCs)
+  // For the CBC_SweepAnalyzer::Analyze method to work correctly, it needs to 
+  // know which tasks can be based *only* on BCs or non-local inputs
+  // OLD: 
+  // unsigned int num_dependencies;
+
+  // NEW: Separate counts for local cell predecessors vs boundary/non-local predecessors
+  // This more granular information is needed by CBC_SweepAnalyzer
+  unsigned int num_local_predecessors = 0;  // Count of local cell predecessors
+  unsigned int num_non_local_predecessors = 0;  // Count of non-local cell/boundary predecessors
+
   std::vector<uint64_t> successors;
-  uint64_t reference_id;
+  uint64_t reference_id;  // cell.local_id
   const Cell* cell_ptr;
-  bool completed = false;
+  bool completed = false; // Used by actual sweep, not CBC_SweepAnalyzer
 };
 
 /// Stage Task Dependency Graphs

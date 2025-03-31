@@ -34,6 +34,10 @@ public:
   const std::vector<double>& GetNonLocalUpwindData(uint64_t cell_global_id,
                                                    unsigned int face_id) const;
 
+  // Change return type from const reference to const pointer
+  // const std::vector<double>* GetNonLocalUpwindData(uint64_t neighbor_global_id,
+  //                                                unsigned int neighbor_face_id) const;
+
   const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                      unsigned int face_node_mapped,
                                      unsigned int angle_set_index);
