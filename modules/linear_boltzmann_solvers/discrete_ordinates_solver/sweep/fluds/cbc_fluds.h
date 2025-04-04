@@ -77,6 +77,15 @@ public:
     return deplocs_outgoing_messages_;
   }
 
+  // Method to update the stored subset for the current cell
+  void UpdateCurrentCellPsiSubset(const double* psi_vector_start, size_t subset_size);
+
+  // Const getter (for reading from the subset)
+  const std::vector<double>& GetCurrentCellPsiSubset() const;
+
+  // Non-const getter (for writing into the subset)
+  std::vector<double>& GetCurrentCellPsiSubset();
+
 private:
   const CBC_FLUDSCommonData& common_data_;
   std::reference_wrapper<std::vector<double>> local_psi_data_;
@@ -93,6 +102,8 @@ private:
   std::vector<std::vector<double>> delayed_prelocI_outgoing_psi_old_;
 
   std::map<CellFaceKey, std::vector<double>> deplocs_outgoing_messages_;
+
+  std::vector<double> current_cell_psi_subset_; // New member to store the subset
 };
 
 } // namespace opensn

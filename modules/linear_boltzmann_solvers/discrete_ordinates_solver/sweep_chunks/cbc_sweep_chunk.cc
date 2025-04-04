@@ -243,16 +243,40 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
     // Save angular flux during sweep
     if (save_angular_flux_)
     {
-      auto& output_psi = GetDestinationPsi();
-      double* cell_psi_data =
-        &output_psi[discretization_.MapDOFLocal(*cell_, 0, groupset_.psi_uk_man_, 0, 0)];
+      // Get a mutable reference to the FLUDS subset storage
+      auto& cell_psi_subset = fluds_->GetCurrentCellPsiSubset();
+
+      // Ensure the subset has the correct size (it should have been resized
+      // by UpdateCurrentCellPsiSubset before the Sweep call)
+      assert(cell_psi_subset.size() == cell_num_nodes_ * group_angle_stride_);
+
+      // auto& output_psi = GetDestinationPsi();
+      // double* cell_psi_data =
+      //   &output_psi[discretization_.MapDOFLocal(*cell_, 0, groupset_.psi_uk_man_, 0, 0)];
 
       for (size_t i = 0; i < cell_num_nodes_; ++i)
       {
         const size_t imap =
           i * groupset_angle_group_stride_ + direction_num * groupset_group_stride_;
+
+        // Calculate index relative to the START of the cell's subset vector
+        // group_angle_stride_ = num_angles_in_set * num_groups_in_set
+        // group_stride_ = num_groups_in_set
+        // const size_t imap = i * group_angle_stride_ + as_ss_idx * group_stride_;
+        //                     // ^-- Offset for node i
+        //                                           // ^-- Offset for angle within AngleSet
+        //                                                     // ^-- Offset for group
         for (int gsg = 0; gsg < gs_size_; ++gsg)
-          cell_psi_data[imap + gsg] = b[gsg](i);
+        {
+          // cell_psi_data[imap + gsg] = b[gsg](i);
+
+          // Write into the subset vector using the relative index
+          if ((imap + gsg) < cell_psi_subset.size()) 
+          {
+            cell_psi_subset[imap + gsg] = b[gsg](i);
+          } // Add error handling in case of bounds access error
+          
+        }
       }
     }
 

@@ -57,4 +57,36 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
   return &psi_data[dof_map];
 }
 
+void CBC_FLUDS::UpdateCurrentCellPsiSubset(const double* psi_vector_start, size_t subset_size)
+{
+  // Resize the internal storage if necessary
+  if (current_cell_psi_subset_.size() != subset_size)
+  {
+    current_cell_psi_subset_.resize(subset_size);
+  }
+
+  // Copy the data from the main psi vector into the local subset storage
+  if (subset_size > 0 && psi_vector_start != nullptr)
+  {
+    // Using std::copy
+    std::copy(psi_vector_start,
+              psi_vector_start + subset_size,
+              current_cell_psi_subset_.begin());
+  }
+  else if (subset_size == 0)
+  {
+     current_cell_psi_subset_.clear(); // Handle zero size case if needed
+  }
+}
+
+const std::vector<double>& CBC_FLUDS::GetCurrentCellPsiSubset() const
+{
+  return current_cell_psi_subset_;
+}
+
+std::vector<double>& CBC_FLUDS::GetCurrentCellPsiSubset()
+{
+  return current_cell_psi_subset_;
+}
+
 } // namespace opensn

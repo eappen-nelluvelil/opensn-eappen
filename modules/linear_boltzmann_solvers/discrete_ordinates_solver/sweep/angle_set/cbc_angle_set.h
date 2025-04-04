@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_solver/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_solver/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/lbs_solver/lbs_solver.h"
 
 namespace opensn
 {
@@ -26,7 +27,8 @@ public:
                std::shared_ptr<FLUDS>& fluds,
                const std::vector<size_t>& angle_indices,
                std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-               const MPICommunicatorSet& comm_set);
+               const MPICommunicatorSet& comm_set,
+               LBSSolver& lbs_solver); // Add solver reference parameter
 
   AsynchronousCommunicator* GetCommunicator() override;
 
@@ -61,6 +63,9 @@ public:
                        uint64_t cell_local_id,
                        unsigned int face_num,
                        unsigned int fi) override;
+
+private:
+  LBSSolver& lbs_solver_ref_; // Store reference to the solver
 };
 
 } // namespace opensn

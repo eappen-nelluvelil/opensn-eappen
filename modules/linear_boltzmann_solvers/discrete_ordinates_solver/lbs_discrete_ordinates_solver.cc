@@ -1047,7 +1047,8 @@ DiscreteOrdinatesSolver::InitFluxDataStructures(LBSGroupset& groupset)
                                                         fluds,
                                                         angle_indices,
                                                         sweep_boundaries_,
-                                                        *grid_local_comm_set_);
+                                                        *grid_local_comm_set_,
+                                                        *this);
 
         angle_set_group.GetAngleSets().push_back(angle_set);
       }
