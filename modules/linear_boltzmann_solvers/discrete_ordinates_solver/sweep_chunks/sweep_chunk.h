@@ -66,6 +66,12 @@ public:
   /// For cell-by-cell methods or computing the residual on a single cell.
   virtual void SetCell(Cell const* cell_ptr, AngleSet& angle_set) {}
 
+  // Needed to get access to MapDOF
+  const SpatialDiscretization& GetSpatialDiscretization() const { return discretization_; }
+
+  // Needed to get access to psi_uk_man
+  const LBSGroupset& GetGroupset() const { return groupset_; }
+
   virtual ~SweepChunk() = default;
 
 protected:

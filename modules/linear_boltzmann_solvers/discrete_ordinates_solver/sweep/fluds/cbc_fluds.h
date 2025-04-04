@@ -21,15 +21,21 @@ public:
   CBC_FLUDS(size_t num_groups,
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
-            std::vector<double>& local_psi_data,
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm);
 
   const FLUDSCommonData& GetCommonData() const;
 
+  // OLD METHOD: deprecate at some point
   const std::vector<double>& GetLocalUpwindDataBlock() const;
 
+  // OLD METHOD: deprecate at some point
   const double* GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell);
+
+  const double* GetLocalUpwindPsi(const Cell& face_neighbor,
+                                  const unsigned int adj_cell_node_offset) const;
+
+  double* GetLocalDownwindPsi(const Cell& cell);
 
   const std::vector<double>& GetNonLocalUpwindData(uint64_t cell_global_id,
                                                    unsigned int face_id) const;
@@ -77,9 +83,15 @@ public:
     return deplocs_outgoing_messages_;
   }
 
+  // Const getter (for reading from the subset)
+  const std::vector<double>& GetLocalPsiData() const { return local_psi_data_; }
+
+  // Non-const getter (for writing into the subset)
+  std::vector<double>& GetLocalPsiData() { return local_psi_data_; }
+
 private:
   const CBC_FLUDSCommonData& common_data_;
-  std::reference_wrapper<std::vector<double>> local_psi_data_;
+  std::vector<double> local_psi_data_;
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
 

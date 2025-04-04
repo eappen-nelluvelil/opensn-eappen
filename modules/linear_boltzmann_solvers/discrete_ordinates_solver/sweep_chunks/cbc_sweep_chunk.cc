@@ -63,6 +63,7 @@ CbcSweepChunk::SetAngleSet(AngleSet& angle_set)
 
   surface_source_active_ = IsSurfaceSourceActive();
   group_stride_ = angle_set.GetNumGroups();
+  // This is size of the local_psi_data vector in CBC FLUDS
   group_angle_stride_ = angle_set.GetNumGroups() * angle_set.GetNumAngles();
 }
 
@@ -134,14 +135,8 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
       auto face_nodal_mapping = &fluds_->GetCommonData().GetFaceNodalMapping(cell_local_id_, f);
 
       const std::vector<double>* psi_upwnd_data_block = nullptr;
-      const double* psi_local_face_upwnd_data = nullptr;
-      if (is_local_face)
-      {
-        psi_upwnd_data_block = &fluds_->GetLocalUpwindDataBlock();
-        psi_local_face_upwnd_data = fluds_->GetLocalCellUpwindPsi(
-          *psi_upwnd_data_block, *cell_transport_view_->FaceNeighbor(f));
-      }
-      else if (not is_boundary_face)
+
+      if ((not is_local_face) and (not is_boundary_face))
       {
         psi_upwnd_data_block = &fluds_->GetNonLocalUpwindData(cell_->global_id, f);
       }
@@ -162,10 +157,11 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
           const double* psi = nullptr;
           if (is_local_face)
           {
-            assert(psi_local_face_upwnd_data);
             const unsigned int adj_cell_node = face_nodal_mapping->cell_node_mapping_[fj];
-            psi = &psi_local_face_upwnd_data[adj_cell_node * groupset_angle_group_stride_ +
-                                             direction_num * groupset_group_stride_];
+            const unsigned int adj_cell_node_offset =
+              adj_cell_node * groupset_angle_group_stride_ + direction_num * groupset_group_stride_;
+            psi = fluds_->GetLocalUpwindPsi(*cell_transport_view_->FaceNeighbor(f),
+                                            adj_cell_node_offset);
           }
           else if (not is_boundary_face)
           {
@@ -188,8 +184,8 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
           for (int gsg = 0; gsg < gs_size_; ++gsg)
             b[gsg](i) += psi[gsg] * mu_Nij;
         } // for face node j
-      }   // for face node i
-    }     // for f
+      } // for face node i
+    } // for f
 
     // Looping over groups, assembling mass terms
     for (int gsg = 0; gsg < gs_size_; ++gsg)
@@ -286,6 +282,8 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
 
       for (int fi = 0; fi < num_face_nodes; ++fi)
       {
+        // Given the face index and the face node index, get the index of the
+        // cell node that the face node corresponds to
         const int i = cell_mapping_->MapFaceNode(f, fi);
 
         if (is_boundary_face)
@@ -296,8 +294,16 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
         }
 
         double* psi = nullptr;
+
+        // Map the cell node to the appropriate downwind node if at a local face
+        const unsigned int cell_node_offset =
+          i * groupset_angle_group_stride_ + direction_num * groupset_group_stride_;
+        const unsigned int i_map = is_local_face ? cell_node_offset : 0;
+
         if (is_local_face)
-          psi = nullptr;
+        {
+          psi = fluds_->GetLocalDownwindPsi(*cell_);
+        }
         else if (not is_boundary_face)
         {
           assert(psi_dnwnd_data);
@@ -306,17 +312,18 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
         }
         else if (is_reflecting_boundary_face)
           psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id_, f, fi);
+
         if (psi)
         {
           if (not is_boundary_face or is_reflecting_boundary_face)
           {
             for (int gsg = 0; gsg < gs_size_; ++gsg)
-              psi[gsg] = b[gsg](i);
+              psi[gsg + i_map] = b[gsg](i);
           }
         }
       } // for fi
-    }   // for face
-  }     // for angleset/subset
+    } // for face
+  } // for angleset/subset
 }
 
 } // namespace opensn

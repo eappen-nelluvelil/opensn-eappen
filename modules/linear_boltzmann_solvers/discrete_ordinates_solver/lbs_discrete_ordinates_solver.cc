@@ -231,7 +231,7 @@ DiscreteOrdinatesSolver::ReorientAdjointSolution()
                                std::to_string(gs) + " not found.");
 
       } // for angle m
-    }   // if saving angular flux
+    } // if saving angular flux
 
     const auto num_gs_groups = groupset.groups.size();
     const auto gsg_i = groupset.groups.front().id;
@@ -260,7 +260,7 @@ DiscreteOrdinatesSolver::ReorientAdjointSolution()
             phi_new_local_[dof_map + g] *= std::pow(-1.0, ell);
             phi_old_local_[dof_map + g] *= std::pow(-1.0, ell);
           } // for group g
-        }   // for moment m
+        } // for moment m
 
         // Reorient angular flux
         if (options_.save_angular_flux)
@@ -276,7 +276,7 @@ DiscreteOrdinatesSolver::ReorientAdjointSolution()
           }
         }
       } // for node i
-    }   // for cell
+    } // for cell
 
   } // for groupset
 }
@@ -368,13 +368,13 @@ DiscreteOrdinatesSolver::ComputeBalance()
                     const double psi = *bndry->PsiIncoming(cell.local_id, f, fi, n, g);
                     local_in_flow -= mu * wt * psi * IntFi_shapeI;
                   } // for group
-                }   // for fi
-              }     // if mu < 0
-            }       // for n
-          }         // for groupset
-        }           // if reflecting boundary
-      }             // if boundary
-    }               // for f
+                } // for fi
+              } // if mu < 0
+            } // for n
+          } // for groupset
+        } // if reflecting boundary
+      } // if boundary
+    } // for f
 
     // Outflow: The group-wise outflow was determined during a solve so we just accumulate it here.
     for (int f = 0; f < cell.faces.size(); ++f)
@@ -395,8 +395,8 @@ DiscreteOrdinatesSolver::ComputeBalance()
         local_absorption += sigma_a[g] * phi_0g * IntV_shapeI(i);
         local_production += q_0g * IntV_shapeI(i);
       } // for g
-    }   // for i
-  }     // for cell
+    } // for i
+  } // for cell
 
   // Compute local balance
   double local_balance = local_production + local_in_flow - local_absorption - local_out_flow;
@@ -484,13 +484,13 @@ DiscreteOrdinatesSolver::ComputeLeakage(const unsigned int groupset_id,
                 const auto psi = psi_new_local_[groupset_id][imap];
                 local_leakage[gsg] += weight * mu * psi * int_f_shape_i(i);
               } // for g
-            }   // outgoing
-          }     // for n
-        }       // for face node
-      }         // if right bndry
+            } // outgoing
+          } // for n
+        } // for face node
+      } // if right bndry
       ++f;
     } // for face
-  }   // for cell
+  } // for cell
 
   // Communicate to obtain global leakage
   std::vector<double> global_leakage(num_gs_groups, 0.0);
@@ -570,13 +570,13 @@ DiscreteOrdinatesSolver::ComputeLeakage(const std::vector<uint64_t>& boundary_id
                 const auto imap = discretization_->MapDOFLocal(cell, i, psi_uk_man, n, gsg);
                 bndry_leakage[g] += coeff * psi_gs[imap];
               } // for groupset group gsg
-            }   // for angle n
-          }     // for face index fi
-        }       // if face on desired boundary
+            } // for angle n
+          } // for face index fi
+        } // if face on desired boundary
         ++f;
       } // for face
-    }   // for cell
-  }     // for groupset gs
+    } // for cell
+  } // for groupset gs
 
   // Serialize the data
   std::vector<double> local_data;
@@ -963,7 +963,7 @@ DiscreteOrdinatesSolver::AssociateSOsAndDirections(const std::shared_ptr<MeshCon
 
       ++so_grouping_id;
     } // for so_grouping
-  }   // map scope
+  } // map scope
 
   return {unq_so_grps, dir_id_to_so_map};
 }
@@ -1030,14 +1030,10 @@ DiscreteOrdinatesSolver::InitFluxDataStructures(LBSGroupset& groupset)
       }
       else if (sweep_type_ == "CBC")
       {
-        OpenSnLogicalErrorIf(not options_.save_angular_flux,
-                             "When using sweep_type \"CBC\" then "
-                             "\"save_angular_flux\" must be true.");
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
-                                      psi_new_local_[groupset.id],
                                       groupset.psi_uk_man_,
                                       *discretization_);
 
@@ -1054,7 +1050,7 @@ DiscreteOrdinatesSolver::InitFluxDataStructures(LBSGroupset& groupset)
       else
         OpenSnInvalidArgument("Unsupported sweeptype \"" + sweep_type_ + "\"");
     } // for an_ss
-  }   // for so_grouping
+  } // for so_grouping
 
   groupset.angle_agg->angle_set_groups.push_back(std::move(angle_set_group));
 

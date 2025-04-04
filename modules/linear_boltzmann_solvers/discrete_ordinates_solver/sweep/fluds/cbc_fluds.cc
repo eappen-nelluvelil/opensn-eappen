@@ -12,15 +12,18 @@ namespace opensn
 CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      size_t num_angles,
                      const CBC_FLUDSCommonData& common_data,
-                     std::vector<double>& local_psi_data,
                      const UnknownManager& psi_uk_man,
                      const SpatialDiscretization& sdm)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    local_psi_data_(local_psi_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm)
 {
+  // Need to be sized to hold angles in an angleset for a groupset, instead of all angles in the
+  // groupset i.e., num angles in angle set * num groups in groupset for that angle set For the time
+  // being, use the full vector Each groupset is associated with a quadrature set
+  size_t num_ang_unknowns = sdm.GetNumLocalDOFs(psi_uk_man);
+  local_psi_data_.assign(num_ang_unknowns, 0.0);
 }
 
 const FLUDSCommonData&
@@ -29,17 +32,24 @@ CBC_FLUDS::GetCommonData() const
   return common_data_;
 }
 
-const std::vector<double>&
-CBC_FLUDS::GetLocalUpwindDataBlock() const
+// NEW METHOD to avoid having to access psi_new_local_[groupset.id]
+const double*
+CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor,
+                             const unsigned int adj_cell_node_offset) const
 {
-  return local_psi_data_;
+  // Starting index for upwind cell's angular flux data
+  const auto dof_map = sdm_.MapDOFLocal(face_neighbor, 0, psi_uk_man_, 0, 0);
+
+  const auto local_face_upwind_psi = &local_psi_data_[dof_map];
+  return &local_face_upwind_psi[adj_cell_node_offset];
 }
 
-const double*
-CBC_FLUDS::GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell)
+// NEW METHOD to set angular value data for a downwind face of the cell
+double*
+CBC_FLUDS::GetLocalDownwindPsi(const Cell& cell)
 {
   const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
-  return &psi_data_block[dof_map];
+  return &local_psi_data_[dof_map];
 }
 
 const std::vector<double>&
