@@ -1030,14 +1030,14 @@ DiscreteOrdinatesSolver::InitFluxDataStructures(LBSGroupset& groupset)
       }
       else if (sweep_type_ == "CBC")
       {
-        OpenSnLogicalErrorIf(not options_.save_angular_flux,
-                             "When using sweep_type \"CBC\" then "
-                             "\"save_angular_flux\" must be true.");
+        // OpenSnLogicalErrorIf(not options_.save_angular_flux,
+        //                      "When using sweep_type \"CBC\" then "
+        //                      "\"save_angular_flux\" must be true.");
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
-                                      psi_new_local_[groupset.id],
+                                      // psi_new_local_[groupset.id], // Get rid of this
                                       groupset.psi_uk_man_,
                                       *discretization_);
 
@@ -1047,8 +1047,7 @@ DiscreteOrdinatesSolver::InitFluxDataStructures(LBSGroupset& groupset)
                                                         fluds,
                                                         angle_indices,
                                                         sweep_boundaries_,
-                                                        *grid_local_comm_set_,
-                                                        *this);
+                                                        *grid_local_comm_set_);
 
         angle_set_group.GetAngleSets().push_back(angle_set);
       }
