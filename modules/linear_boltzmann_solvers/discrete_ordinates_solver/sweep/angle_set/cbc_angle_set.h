@@ -27,8 +27,7 @@ public:
                std::shared_ptr<FLUDS>& fluds,
                const std::vector<size_t>& angle_indices,
                std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-               const MPICommunicatorSet& comm_set,
-               LBSSolver& lbs_solver); // Add solver reference parameter
+               const MPICommunicatorSet& comm_set);
 
   AsynchronousCommunicator* GetCommunicator() override;
 
@@ -63,9 +62,6 @@ public:
                        uint64_t cell_local_id,
                        unsigned int face_num,
                        unsigned int fi) override;
-
-private:
-  LBSSolver& lbs_solver_ref_; // Store reference to the solver
 };
 
 } // namespace opensn
