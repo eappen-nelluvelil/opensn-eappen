@@ -20,12 +20,10 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
                            std::shared_ptr<FLUDS>& fluds,
                            const std::vector<size_t>& angle_indices,
                            std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-                           const MPICommunicatorSet& comm_set,
-                           LBSSolver& lbs_solver) // Add solver reference parameter
+                           const MPICommunicatorSet& comm_set)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
-    async_comm_(id, *fluds, comm_set),
-    lbs_solver_ref_(lbs_solver) // Initialize the reference
+    async_comm_(id, *fluds, comm_set)
 {
 }
 
@@ -73,6 +71,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
       {
         const Cell* cell_ptr = cell_task.cell_ptr;
 
+        /*
         // --- Modification 1: Populate the CBC FLUDS local cell angular flux storage before the sweep
         // Calculate the size and starting pointer of the subset for this cell
         const auto& sdm = sweep_chunk.GetSpatialDiscretization();
@@ -83,7 +82,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         const size_t num_nodes = sdm.GetCellNumNodes(*cell_ptr);
         const size_t num_angles = this->GetNumAngles(); // Angles in this specific AngleSet
         const size_t num_groups = this->GetNumGroups(); // Groups in this specific AngleSet/Groupset
-        const size_t cell_subset_size = num_nodes * num_angles * num_groups;
+        // const size_t cell_subset_size = num_nodes * num_angles * num_groups;
+        const size_t num_angular_unknowns = sdm.GetNumLocalDOFs(psi_uk_man);
+        
 
         // Map to the start of the cell's data using the unknown manager psi_uk_man
         const int64_t cell_dof_map_start = sdm.MapDOFLocal(*cell_ptr, 0, psi_uk_man, 0, 0); 
@@ -101,11 +102,21 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
         cbc_fluds.UpdateCurrentCellPsiSubset(subset_start_ptr, cell_subset_size);
         // --- End of Modification 1
+        */
+
+        // log.Log() << "Attempting to set cell";
 
         sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+
+        // log.Log() << "Set cell";
+
+        // log.Log() << "Attempting to perfom sweep";
+
         sweep_chunk.Sweep(*this); // This now writes to cbc_fluds.current_cell_psi_subset_
 
-        // CURRENTLY BROKEN!
+        // log.Log() << "Performed sweep";
+
+        /* CURRENTLY BROKEN!
         // --- Modification 2: Copy subset data back to the main vector ---
         if (lbs_solver_ref_.GetOptions().save_angular_flux) // Check if saving is enabled
         {
@@ -124,6 +135,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
           }
           // Need to add error handling here for bounds access errors; currently, there are issues
         }
+        */
 
         for (uint64_t local_task_num : cell_task.successors)
           --current_task_list_[local_task_num].num_dependencies;
