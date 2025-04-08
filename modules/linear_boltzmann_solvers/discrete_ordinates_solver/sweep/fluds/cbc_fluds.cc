@@ -5,6 +5,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_solver/sweep/spds/spds.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+#include "framework/logging/log.h"
 
 namespace opensn
 {
@@ -24,6 +25,42 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   // For the time being, use the full vector
   size_t num_ang_unknowns = sdm.GetNumLocalDOFs(psi_uk_man); 
   local_psi_data_.assign(num_ang_unknowns, 0.0);
+
+  // --- START: calculate maximum number of nodes per cell
+  size_t max_nodes_per_cell = 0;
+  const auto& grid = sdm.GetGrid();
+
+  if (grid && !grid->local_cells.size() == 0)
+  {
+    // Iterate through all locally owned cells provided by the grid
+    for (const auto& cell : grid->local_cells)
+    {
+      // Get the number of nodes for this specific cell using sdm
+      size_t current_cell_nodes = sdm.GetCellNumNodes(cell);
+
+      // Update the maximum value found so far
+      max_nodes_per_cell = std::max(max_nodes_per_cell, current_cell_nodes);
+    }
+  }
+
+  // Handle edge-case where there are no local cells, or somehow max stayed 0
+  if (max_nodes_per_cell == 0)
+  {
+    // Default to 1 to avoid errors with zero-sized blocks later
+    max_nodes_per_cell = 1;
+
+    if (grid && grid->local_cells.size() == 0)
+    {
+      log.Log0Warning() << "CBC_FLUDS constructor: no local cells found; setting max_nodes_per_cell = 1";
+    }
+    else  // If grid exists, but max is still 0
+    {
+      log.Log0Warning() << "CBC FLUDS constructor: max_nodes_per_cell = 0; setting it to 1";
+    }
+  }
+
+  log.Log() << "Maximum number of nodes per cell: " << max_nodes_per_cell;
+  // --- END: calculate maximum number of nodes per cell
 }
 
 const FLUDSCommonData&
@@ -33,19 +70,19 @@ CBC_FLUDS::GetCommonData() const
 }
 
 // OLD METHOD: deprecate at some point
-const std::vector<double>&
-CBC_FLUDS::GetLocalUpwindDataBlock() const
-{
-  return local_psi_data_;
-}
+// const std::vector<double>&
+// CBC_FLUDS::GetLocalUpwindDataBlock() const
+// {
+//   return local_psi_data_;
+// }
 
 // OLD METHOD: deprecate at some point
-const double*
-CBC_FLUDS::GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell)
-{
-  const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
-  return &psi_data_block[dof_map];
-}
+// const double*
+// CBC_FLUDS::GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell)
+// {
+//   const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
+//   return &psi_data_block[dof_map];
+// }
 
 // NEW METHOD to avoid having to access psi_new_local_[groupset.id]
 const double*

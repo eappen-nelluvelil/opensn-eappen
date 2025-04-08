@@ -28,10 +28,10 @@ public:
   const FLUDSCommonData& GetCommonData() const;
 
   // OLD METHOD: deprecate at some point
-  const std::vector<double>& GetLocalUpwindDataBlock() const;
+  // const std::vector<double>& GetLocalUpwindDataBlock() const;
 
   // OLD METHOD: deprecate at some point
-  const double* GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell);
+  // const double* GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell);
 
   const double*
   GetLocalUpwindPsi(const Cell& face_neighbor, 
