@@ -22,6 +22,8 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   // Need to be sized to hold angles in a angleset in a groupset, instead of all angles in all anglesets in the groupset
   // i.e., num angles in angle set * num groups in groupset for that angle set
   // For the time being, use the full vector
+
+  // Each groupset is associated with a quadrature set 
   size_t num_ang_unknowns = sdm.GetNumLocalDOFs(psi_uk_man); 
   local_psi_data_.assign(num_ang_unknowns, 0.0);
 }
@@ -33,19 +35,19 @@ CBC_FLUDS::GetCommonData() const
 }
 
 // OLD METHOD: deprecate at some point
-const std::vector<double>&
-CBC_FLUDS::GetLocalUpwindDataBlock() const
-{
-  return local_psi_data_;
-}
+// const std::vector<double>&
+// CBC_FLUDS::GetLocalUpwindDataBlock() const
+// {
+//   return local_psi_data_;
+// }
 
 // OLD METHOD: deprecate at some point
-const double*
-CBC_FLUDS::GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell)
-{
-  const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
-  return &psi_data_block[dof_map];
-}
+// const double*
+// CBC_FLUDS::GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell)
+// {
+//   const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
+//   return &psi_data_block[dof_map];
+// }
 
 // NEW METHOD to avoid having to access psi_new_local_[groupset.id]
 const double*
