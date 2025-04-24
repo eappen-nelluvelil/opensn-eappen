@@ -109,16 +109,16 @@ public:
   // Const getter for the optimally-sized local psi data vector.
   const std::vector<double>& GetOptimalLocalPsiData() const { return local_psi_data_; }
 
+  size_t optimal_num_angles_ = 0; // Number of angles in this AngleSet
+  size_t optimal_num_groups_ = 0; // Number of groups in the Groupset
+  size_t optimal_angle_stride_ = 0; // = optimal_num_groups_
+  size_t optimal_node_stride_ = 0;  // = optimal_num_angles_ * optimal_num_groups_
+
 private:
   const CBC_FLUDSCommonData& common_data_;
   std::vector<double> local_psi_data_; // New member to store the subset
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
-
-  size_t optimal_num_angles_ = 0; // Number of angles in this AngleSet
-  size_t optimal_num_groups_ = 0; // Number of groups in the Groupset
-  size_t optimal_angle_stride_ = 0; // = optimal_num_groups_
-  size_t optimal_node_stride_ = 0;  // = optimal_num_angles_ * optimal_num_groups_
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;

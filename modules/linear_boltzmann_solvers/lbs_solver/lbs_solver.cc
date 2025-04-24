@@ -1188,6 +1188,8 @@ LBSSolver::InitializeGroupsets()
     size_t gs_num_groups = groupset.groups.size();
     auto& grpset_psi_uk_man = groupset.psi_uk_man_;
 
+    // psi_uk_man has as many vectors as there are angles in the groupset,
+    // with each vector having as many entries there as groups in the groupset
     const auto VarVecN = UnknownType::VECTOR_N;
     for (unsigned int n = 0; n < num_angles; ++n)
       grpset_psi_uk_man.AddUnknown(VarVecN, gs_num_groups);
