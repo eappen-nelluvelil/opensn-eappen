@@ -6,6 +6,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/logging/log.h"
+#include "framework/math/unknown_manager/unknown_manager.h" // For UNITARY_UNKNOWN_MANAGER
 
 namespace opensn
 {
@@ -29,6 +30,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
 }
 */
 
+/*
 CBC_FLUDS::CBC_FLUDS(
   size_t num_groups_in_angle_set, // Renamed for clarity: groups in LBSGroupset
   size_t num_angles_in_angle_set, // Renamed for clarity: angles in this specific AngleSet
@@ -40,267 +42,90 @@ CBC_FLUDS::CBC_FLUDS(
     psi_uk_man_(lbs_groupset_psi_uk_man), // This member stores the LBSGroupset's psi_uk_man
     sdm_(sdm)
 {
-  // Sizing of local_psi_data_ is based on the LBSGroupset's psi_uk_man,
-  // which covers ALL angles in the LBSGroupset's quadrature.
-  size_t num_ang_unknowns_for_allocation = sdm_.GetNumLocalDOFs(psi_uk_man_);
-  local_psi_data_.assign(num_ang_unknowns_for_allocation, 0.0);
-
-  // --- Verification Code Start ---
-
-  // 1. Get the grid
-  const auto& grid = common_data_.GetSPDS().GetGrid(); // Correct way to access the grid
-
-  // 2. Determine N_TOTAL_gs_angles and N_TOTAL_gs_groups from psi_uk_man_
-  //    (the LBSGroupset's UnknownManager for psi)
-  //    This is what local_psi_data_ is actually dimensioned for.
-  const size_t N_TOTAL_gs_angles = psi_uk_man_.GetNumberOfUnknowns();
-  const size_t N_TOTAL_gs_groups =
-    (N_TOTAL_gs_angles > 0) ? psi_uk_man_.GetUnknown(0).GetNumComponents() : 0;
-
-  if (N_TOTAL_gs_angles == 0 || N_TOTAL_gs_groups == 0)
-  {
-    log.Log() << "CBC_FLUDS Warning: No angles or groups in psi_uk_man_ for verification. Skipping "
-                 "layout check.";
-  }
-  else
-  {
-    // Write unique values
-    for (const auto& cell : grid->local_cells) // Use the correctly accessed grid
-    {
-      const auto& cell_mapping = sdm_.GetCellMapping(cell);
-      const size_t num_nodes_in_cell = cell_mapping.GetNumNodes();
-
-      for (size_t n_idx = 0; n_idx < num_nodes_in_cell; ++n_idx) // Node index *within the cell*
-      {
-        for (size_t ang_idx = 0; ang_idx < N_TOTAL_gs_angles;
-             ++ang_idx) // Iterate over ALL angles psi_uk_man_ defines
-        {
-          for (size_t grp_idx = 0; grp_idx < N_TOTAL_gs_groups;
-               ++grp_idx) // Iterate over ALL groups psi_uk_man_ defines
-          {
-            int64_t G_map = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, ang_idx, grp_idx);
-
-            if (G_map < 0 || static_cast<size_t>(G_map) >= local_psi_data_.size())
-            {
-              log.Log() << "CBC_FLUDS Error (Write): Calculated G_map=" << G_map
-                        << " is out of bounds for local_psi_data_ size=" << local_psi_data_.size()
-                        << " for Cell=" << cell.local_id << ", Node=" << n_idx
-                        << ", Angle=" << ang_idx << ", Group=" << grp_idx;
-              // Decide on error handling: throw, exit, or continue with a flag
-              throw std::runtime_error("G_map out of bounds during verification write.");
-            }
-
-            double unique_value =
-              static_cast<double>(cell.local_id) * 1.0e9 + static_cast<double>(n_idx) * 1.0e7 +
-              static_cast<double>(ang_idx) * 1.0e4 + static_cast<double>(grp_idx);
-            local_psi_data_[G_map] = unique_value;
-          }
-        }
-      }
-    }
-
-    // --- Stride Verification Code Start ---
-    // Assumes the unique values have already been written using Method 1
-
-    bool strides_correct = true;
-    log.Log() << "\n--- Stride Verification ---";
-
-    for (const auto& cell : grid->local_cells)
-    {
-      const auto& cell_mapping = sdm_.GetCellMapping(cell);
-      const size_t num_nodes_in_cell = cell_mapping.GetNumNodes();
-
-      for (size_t n_idx = 0; n_idx < num_nodes_in_cell; ++n_idx)
-      {
-        for (size_t ang_idx = 0; ang_idx < N_TOTAL_gs_angles; ++ang_idx)
-        {
-          // *** Check Group Stride (Contiguity) ***
-          if (N_TOTAL_gs_groups > 1)
-          {
-            // Get map for group 0 and group 1
-            int64_t G_map_g0 = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, ang_idx, 0);
-            int64_t G_map_g1 = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, ang_idx, 1);
-
-            // EXPECTATION: MapDOFLocal for group 1 should be exactly 1 greater than for group 0
-            if (G_map_g1 != G_map_g0 + 1)
-            {
-              log.Log() << "Stride FAIL (Group): Cell=" << cell.local_id << " Node=" << n_idx
-                        << " Angle=" << ang_idx << " G0_map=" << G_map_g0 << " G1_map=" << G_map_g1
-                        << " Diff=" << (G_map_g1 - G_map_g0) << " Expected Diff=1";
-              strides_correct = false;
-            }
-
-            // Optional: Also check the value tagged for g1 is at G_map_g0 + 1
-            // Logical indices for next element: (cell, n_idx, ang_idx, grp_idx=1) since we start
-            // the check from g=0
-            double expected_val_g1 =
-              static_cast<double>(cell.local_id) * 1.0e9 + static_cast<double>(n_idx) * 1.0e7 +
-              static_cast<double>(ang_idx) * 1.0e4 + static_cast<double>(1); // Group index is 1
-
-            if (std::abs(local_psi_data_[G_map_g0 + 1] - expected_val_g1) > 1e-9)
-            {
-              // Using std::cerr for consistency, replace with log.Log() if preferred
-              log.Log() << "Value Check FAIL (Group): Cell=" << cell.local_id << " Node=" << n_idx
-                        << " Angle=" << ang_idx << " Expected G1 Value at Map=" << G_map_g0 + 1
-                        << ". Expected=" << expected_val_g1
-                        << ", Got=" << local_psi_data_[G_map_g0 + 1];
-              strides_correct = false; // Treat value mismatch same as stride mismatch
-            }
-          }
-
-          // *** Check Angle Stride ***
-          if (N_TOTAL_gs_angles > 1 &&
-              ang_idx < (N_TOTAL_gs_angles - 1)) // Avoid checking beyond last angle
-          {
-            // Check stride between angle 'ang_idx' and 'ang_idx + 1' for group 0
-            int64_t G_map_a0_g0 = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, ang_idx, 0);
-            int64_t G_map_a1_g0 = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, ang_idx + 1, 0);
-
-            // EXPECTATION: MapDOFLocal for angle ang_idx+1 should be N_TOTAL_gs_groups greater
-            int64_t expected_stride_angle = static_cast<int64_t>(N_TOTAL_gs_groups);
-            if (G_map_a1_g0 != G_map_a0_g0 + expected_stride_angle)
-            {
-              log.Log() << "Stride FAIL (Angle): Cell=" << cell.local_id << " Node=" << n_idx
-                        << " Angle=" << ang_idx << "->" << ang_idx + 1 << " G0_map0=" << G_map_a0_g0
-                        << " G0_map1=" << G_map_a1_g0 << " Diff=" << (G_map_a1_g0 - G_map_a0_g0)
-                        << " Expected Diff=" << expected_stride_angle;
-              strides_correct = false;
-            }
-            // Optional: Also check the value tagged for ang_idx+1, g=0 is at G_map_a0_g0 +
-            // expected_stride_angle Logical indices for next element: (cell, n_idx, ang_idx+1,
-            // grp_idx=0)
-            double expected_val_a1g0 =
-              static_cast<double>(cell.local_id) * 1.0e9 + static_cast<double>(n_idx) * 1.0e7 +
-              static_cast<double>(ang_idx + 1) * 1.0e4 + // Angle index is ang_idx + 1
-              static_cast<double>(0);                    // Group index is 0
-
-            if (std::abs(local_psi_data_[G_map_a0_g0 + expected_stride_angle] - expected_val_a1g0) >
-                1e-9)
-            {
-              log.Log() << "Value Check FAIL (Angle): Cell=" << cell.local_id << " Node=" << n_idx
-                        << " Expected Angle " << ang_idx + 1 << " Group 0 Value"
-                        << " at Map=" << G_map_a0_g0 + expected_stride_angle
-                        << ". Expected=" << expected_val_a1g0
-                        << ", Got=" << local_psi_data_[G_map_a0_g0 + expected_stride_angle];
-              strides_correct = false;
-            }
-          }
-
-          // *** Check Node Stride (within a cell) ***
-          if (num_nodes_in_cell > 1 &&
-              n_idx < (num_nodes_in_cell - 1)) // Avoid checking beyond last node
-          {
-            // Check stride between node n_idx and n_idx+1 for angle 0, group 0
-            int64_t G_map_n0_a0_g0 = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, 0, 0);
-            int64_t G_map_n1_a0_g0 = sdm_.MapDOFLocal(cell, n_idx + 1, psi_uk_man_, 0, 0);
-
-            // EXPECTATION: MapDOFLocal for node n_idx+1 should be (N_TOTAL_gs_angles *
-            // N_TOTAL_gs_groups) greater
-            int64_t expected_stride_node =
-              static_cast<int64_t>(N_TOTAL_gs_angles * N_TOTAL_gs_groups);
-            if (G_map_n1_a0_g0 != G_map_n0_a0_g0 + expected_stride_node)
-            {
-              log.Log() << "Stride FAIL (Node): Cell=" << cell.local_id << " Node=" << n_idx << "->"
-                        << n_idx + 1 << " A0G0_map0=" << G_map_n0_a0_g0
-                        << " A0G0_map1=" << G_map_n1_a0_g0
-                        << " Diff=" << (G_map_n1_a0_g0 - G_map_n0_a0_g0)
-                        << " Expected Diff=" << expected_stride_node;
-              strides_correct = false;
-            }
-            // Optional: Check value tagged for n_idx+1, a=0, g=0 is at G_map_n0_a0_g0 +
-            // expected_stride_node Logical indices for next element: (cell, n_idx+1, ang_idx=0,
-            // grp_idx=0)
-            double expected_val_n1a0g0 =
-              static_cast<double>(cell.local_id) * 1.0e9 +
-              static_cast<double>(n_idx + 1) * 1.0e7 + // Node index is n_idx + 1
-              static_cast<double>(0) * 1.0e4 +         // Angle index is 0
-              static_cast<double>(0);                  // Group index is 0
-
-            if (std::abs(local_psi_data_[G_map_n0_a0_g0 + expected_stride_node] -
-                         expected_val_n1a0g0) > 1e-9)
-            {
-              log.Log() << "Value Check FAIL (Node): Cell=" << cell.local_id << " Expected Node "
-                        << n_idx + 1 << " Angle 0 Group 0 Value"
-                        << " at Map=" << G_map_n0_a0_g0 + expected_stride_node
-                        << ". Expected=" << expected_val_n1a0g0
-                        << ", Got=" << local_psi_data_[G_map_n0_a0_g0 + expected_stride_node];
-              strides_correct = false;
-            }
-          }
-        } // End Angle Loop
-      } // End Node Loop
-    } // End Cell Loop
-
-    if (strides_correct)
-    {
-      log.Log() << "Stride verification PASSED!";
-    }
-    else
-    {
-      log.Log() << "Stride verification FAILED!";
-      // throw std::runtime_error("CBC_FLUDS stride verification failed.");
-    }
-    // --- Stride Verification Code End ---
-
-    // Read and verify values
-    bool layout_is_correct = true;
-    for (const auto& cell : grid->local_cells) // Use the correctly accessed grid
-    {
-      const auto& cell_mapping = sdm_.GetCellMapping(cell);
-      const size_t num_nodes_in_cell = cell_mapping.GetNumNodes();
-
-      for (size_t n_idx = 0; n_idx < num_nodes_in_cell; ++n_idx)
-      {
-        for (size_t ang_idx = 0; ang_idx < N_TOTAL_gs_angles; ++ang_idx) // Iterate over ALL angles
-        {
-          for (size_t grp_idx = 0; grp_idx < N_TOTAL_gs_groups;
-               ++grp_idx) // Iterate over ALL groups
-          {
-            int64_t G_map = sdm_.MapDOFLocal(cell, n_idx, psi_uk_man_, ang_idx, grp_idx);
-
-            if (G_map < 0 || static_cast<size_t>(G_map) >= local_psi_data_.size())
-            {
-              log.Log() << "CBC_FLUDS Error (Read): Calculated G_map=" << G_map
-                        << " is out of bounds for local_psi_data_ size=" << local_psi_data_.size()
-                        << " for Cell=" << cell.local_id << ", Node=" << n_idx
-                        << ", Angle=" << ang_idx << ", Group=" << grp_idx;
-              layout_is_correct = false;
-              // Decide on error handling
-              throw std::runtime_error("G_map out of bounds during verification read.");
-            }
-
-            double expected_value =
-              static_cast<double>(cell.local_id) * 1.0e9 + static_cast<double>(n_idx) * 1.0e7 +
-              static_cast<double>(ang_idx) * 1.0e4 + static_cast<double>(grp_idx);
-
-            if (std::abs(local_psi_data_[G_map] - expected_value) > 1e-9)
-            {
-              log.Log() << "CBC_FLUDS Verification FAILED for:"
-                        << " Cell=" << cell.local_id << " Node_in_cell=" << n_idx
-                        << " Angle=" << ang_idx << " Group=" << grp_idx << " G_map=" << G_map
-                        << ". Expected=" << expected_value << ", Got=" << local_psi_data_[G_map];
-              layout_is_correct = false;
-            }
-          }
-        }
-      }
-    }
-
-    if (layout_is_correct)
-    {
-      log.Log() << "CBC_FLUDS: Memory layout verification PASSED!";
-    }
-    else
-    {
-      log.Log() << "CBC_FLUDS: Memory layout verification FAILED overall.";
-      // Potentially throw an error here if a failed verification should halt execution
-      // throw std::runtime_error("CBC_FLUDS memory layout verification failed.");
-    }
-  } // end else (if N_TOTAL_gs_angles > 0 ...)
-  // --- Verification Code End ---
-
-  local_psi_data_.assign(num_ang_unknowns_for_allocation, 0.0);
+  // Create a temporary UnknownManager representing ONE scalar DOF per node
+  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
+                                           UnknownStorageType::NODAL);
+  // Get number of local spatial DOFs (nodes for PWLD) using the temporary manager
+  const size_t num_local_spatial_dofs =
+    sdm_.GetNumLocalDOFs(temp_unitary_uk_man); // Use local temp manager
+  const size_t num_angles = this->num_angles_;
+  const size_t num_groups = this->num_groups_;
+  const size_t required_size = num_local_spatial_dofs * num_angles * num_groups;
+  local_psi_data_.assign(required_size, 0.0);
 }
+*/
+
+CBC_FLUDS::CBC_FLUDS(
+  size_t num_groups_in_angle_set, // = LBSGroupset groups
+  size_t num_angles_in_angle_set, // = Angles in this specific AngleSet
+  const CBC_FLUDSCommonData& common_data,
+  const UnknownManager& lbs_groupset_psi_uk_man, // Original LBSGroupset's psi_uk_man
+  const SpatialDiscretization& sdm)
+  : FLUDS(num_groups_in_angle_set, num_angles_in_angle_set, common_data.GetSPDS()),
+    common_data_(common_data),
+    psi_uk_man_(lbs_groupset_psi_uk_man), // Not needed to store member
+    sdm_(sdm)
+{
+  // --- Calculate Sizes ---
+
+  // 1. Spatial DOFs (remains the same)
+  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
+                                           UnknownStorageType::NODAL);
+  const size_t num_local_spatial_dofs = sdm_.GetNumLocalDOFs(temp_unitary_uk_man);
+
+  // 2. Groups (remains the same)
+  const size_t num_groups = this->num_groups_; // = num_groups_in_angle_set
+
+  // 3. Angles BEFORE refactoring (from the original groupset uk_man)
+  const size_t N_TOTAL_gs_angles = lbs_groupset_psi_uk_man.GetNumberOfUnknowns();
+
+  // 4. Angles AFTER refactoring (from the specific AngleSet)
+  const size_t N_angles_in_set = this->num_angles_; // = num_angles_in_angle_set
+
+  // 5. Calculate sizes in number of doubles
+  size_t size_before_doubles = 0;
+  if (N_TOTAL_gs_angles > 0 && num_groups > 0)
+  { // Avoid multiplying by zero
+    size_before_doubles = num_local_spatial_dofs * N_TOTAL_gs_angles * num_groups;
+  }
+
+  size_t size_after_doubles = 0;
+  if (N_angles_in_set > 0 && num_groups > 0)
+  { // Avoid multiplying by zero
+    size_after_doubles = num_local_spatial_dofs * N_angles_in_set * num_groups;
+  }
+
+  // --- Allocate the optimized vector ---
+  local_psi_data_.assign(size_after_doubles, 0.0);
+
+  // --- Print/Log Comparison ---
+  // Check if the actual allocated size matches the calculation
+  if (local_psi_data_.size() != size_after_doubles)
+  {
+    log.Log0Warning() << "CBC_FLUDS Warning: Allocated local_psi_data_ size ("
+                      << local_psi_data_.size() << ") does not match calculated size ("
+                      << size_after_doubles << ").";
+  }
+
+  // Convert sizes to Megabytes (MB) for better readability
+  const double mb_divisor = 1024.0 * 1024.0;
+  double size_before_mb = static_cast<double>(size_before_doubles * sizeof(double)) / mb_divisor;
+  double size_after_mb = static_cast<double>(size_after_doubles * sizeof(double)) / mb_divisor;
+
+  // Use OpenSn Logger (adjust log level as needed, e.g., Log0Verbose1)
+  log.Log() << "CBC_FLUDS Size Comparison for AngleSet (Angles: " << N_angles_in_set << " of "
+            << N_TOTAL_gs_angles << ", Groups: " << num_groups << "):";
+  log.Log() << "  Size BEFORE refactor: " << size_before_doubles << " doubles (" << std::fixed
+            << std::setprecision(3) << size_before_mb << " MB)";
+  log.Log() << "  Size AFTER refactor:  " << size_after_doubles << " doubles (" << std::fixed
+            << std::setprecision(3) << size_after_mb << " MB)";
+  if (size_before_mb > 1e-6)
+  { // Avoid division by zero if original size was 0
+    double reduction = (size_before_mb - size_after_mb) / size_before_mb * 100.0;
+    log.Log() << "  Memory Reduction: " << std::fixed << std::setprecision(1) << reduction << "%";
+  }
+
+} // End Constructor
 
 const FLUDSCommonData&
 CBC_FLUDS::GetCommonData() const
@@ -309,23 +134,68 @@ CBC_FLUDS::GetCommonData() const
 }
 
 // NEW METHOD to avoid having to access psi_new_local_[groupset.id]
-const double*
-CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor,
-                             const unsigned int adj_cell_node_offset) const
-{
-  // Starting index for upwind cell's angular flux data
-  const auto dof_map = sdm_.MapDOFLocal(face_neighbor, 0, psi_uk_man_, 0, 0);
+// const double*
+// CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor,
+//                              const unsigned int adj_cell_node_offset) const
+// {
+//   // Starting index for upwind cell's angular flux data
+//   const auto dof_map = sdm_.MapDOFLocal(face_neighbor, 0, psi_uk_man_, 0, 0);
 
-  const auto local_face_upwind_psi = &local_psi_data_[dof_map];
-  return &local_face_upwind_psi[adj_cell_node_offset];
+//   const auto local_face_upwind_psi = &local_psi_data_[dof_map];
+//   return &local_face_upwind_psi[adj_cell_node_offset];
+// }
+
+const double*
+CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor) const
+{
+  const size_t num_angles = this->num_angles_;
+  const size_t num_groups = this->num_groups_;
+  const size_t node_stride_compact = num_angles * num_groups;
+
+  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
+                                           UnknownStorageType::NODAL);
+  // Get the base spatial DOF index for the neighbor cell's first node using the temporary manager
+  const int64_t node0_global_map =
+    sdm_.MapDOFLocal(face_neighbor, 0, temp_unitary_uk_man, 0, 0); // Use local temp manager
+
+  const int64_t offset = node0_global_map * node_stride_compact;
+
+  if (offset < 0 || static_cast<size_t>(offset) >= local_psi_data_.size())
+  {
+    throw std::runtime_error("CBC_FLUDS::GetLocalUpwindPsi: Offset out of bounds.");
+  }
+  return &local_psi_data_[offset]; // Returns pointer to start of neighbor cell's data block
 }
 
 // NEW METHOD to set angular value data for a downwind face of the cell
+// double*
+// CBC_FLUDS::GetLocalDownwindPsi(const Cell& cell)
+// {
+//   const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
+//   return &local_psi_data_[dof_map];
+// }
+
 double*
 CBC_FLUDS::GetLocalDownwindPsi(const Cell& cell)
 {
-  const auto dof_map = sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0);
-  return &local_psi_data_[dof_map];
+  const size_t num_angles = this->num_angles_;
+  const size_t num_groups = this->num_groups_;
+  const size_t node_stride_compact = num_angles * num_groups;
+
+  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
+                                           UnknownStorageType::NODAL);
+
+  // Get the base spatial DOF index for the cell's first node using the temporary manager
+  const int64_t node0_global_map =
+    sdm_.MapDOFLocal(cell, 0, temp_unitary_uk_man, 0, 0); // Use local temp manager
+
+  const int64_t offset = node0_global_map * node_stride_compact;
+
+  if (offset < 0 || static_cast<size_t>(offset) >= local_psi_data_.size())
+  {
+    throw std::runtime_error("CBC_FLUDS::GetLocalDownwindPsi: Offset out of bounds.");
+  }
+  return &local_psi_data_[offset]; // Returns pointer to start of cell's data block
 }
 
 const std::vector<double>&

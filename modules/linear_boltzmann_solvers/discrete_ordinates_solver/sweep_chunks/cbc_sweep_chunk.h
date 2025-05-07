@@ -36,8 +36,13 @@ private:
   CBC_FLUDS* fluds_;
   size_t gs_size_;
   int gs_gi_;
-  size_t group_stride_;
-  size_t group_angle_stride_;
+
+  // --- NEW:
+  // Strides based on the compact data layout for the current AngleSet
+  size_t num_angles_in_set_; // Number of angles in the current AngleSet
+  size_t compact_angle_stride_; // Stride to get to next angle ( = gs_size_)
+  size_t compact_node_stride_;  // Stride to get to next node ( = num_angles_in_set_ * gs_size_)
+
   bool surface_source_active_;
 
   const Cell* cell_;

@@ -32,8 +32,10 @@ public:
   // OLD METHOD: deprecate at some point
   const double* GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell);
 
-  const double* GetLocalUpwindPsi(const Cell& face_neighbor,
-                                  const unsigned int adj_cell_node_offset) const;
+  // --- NEW METHODS:
+  // const double* GetLocalUpwindPsi(const Cell& face_neighbor,
+  //                                 const unsigned int adj_cell_node_offset) const;
+  const double* GetLocalUpwindPsi(const Cell& face_neighbor) const;
 
   double* GetLocalDownwindPsi(const Cell& cell);
 
