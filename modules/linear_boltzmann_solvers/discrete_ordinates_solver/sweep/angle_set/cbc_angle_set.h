@@ -62,6 +62,13 @@ public:
                        uint64_t cell_local_id,
                        unsigned int face_num,
                        unsigned int fi) override;
+
+  // --- NEW:
+  unsigned int GetLocalAngleIndex(size_t global_direction_num) const;
+
+// --- NEW:
+private:
+  std::map<size_t, unsigned int> global_to_local_angle_map_;
 };
 
 } // namespace opensn

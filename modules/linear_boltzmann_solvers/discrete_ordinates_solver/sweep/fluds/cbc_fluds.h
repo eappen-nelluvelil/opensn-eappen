@@ -27,15 +27,15 @@ public:
   const FLUDSCommonData& GetCommonData() const;
 
   // OLD METHOD: deprecate at some point
-  const std::vector<double>& GetLocalUpwindDataBlock() const;
+  // const std::vector<double>& GetLocalUpwindDataBlock() const;
 
   // OLD METHOD: deprecate at some point
-  const double* GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell);
+  // const double* GetLocalCellUpwindPsi(const std::vector<double>& psi_data_block, const Cell& cell);
 
-  const double* GetLocalUpwindPsi(const Cell& face_neighbor,
-                                  const unsigned int adj_cell_node_offset) const;
+  // const double* GetLocalUpwindPsi(const Cell& face_neighbor,
+                                  // const unsigned int adj_cell_node_offset) const;
 
-  double* GetLocalDownwindPsi(const Cell& cell);
+  // double* GetLocalDownwindPsi(const Cell& cell);
 
   const std::vector<double>& GetNonLocalUpwindData(uint64_t cell_global_id,
                                                    unsigned int face_id) const;
@@ -43,6 +43,24 @@ public:
   const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                      unsigned int face_node_mapped,
                                      unsigned int angle_set_index);
+
+  // --- NEW:
+  // Private mapping for compact local_psi_data_
+  size_t MapDOFCompactLocal(const Cell& cell,
+    unsigned int node_in_cell,
+    unsigned int angle_idx_ss, // 0 to num_angles_in_set_ - 1
+    unsigned int group_idx_gs // 0 to num_groups_ - 1
+  ) const;
+
+  // --- NEW:
+  const double* GetLocalUpwindPsi_Compact(const Cell& upwind_cell,
+                                         unsigned int upwind_node_in_cell,
+                                         unsigned int angle_idx_ss) const;  // Angle index within current angle set
+
+  // --- NEW:
+  double* GetLocalDownwindPsi_Compact(const Cell& current_cell,
+                                      unsigned int current_node_in_cell,
+                                      unsigned int angle_idx_ss); // Angle index within current angle set
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -94,6 +112,9 @@ private:
   std::vector<double> local_psi_data_;
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
+
+  // --- NEW:
+  const size_t num_angles_in_set_;
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;
