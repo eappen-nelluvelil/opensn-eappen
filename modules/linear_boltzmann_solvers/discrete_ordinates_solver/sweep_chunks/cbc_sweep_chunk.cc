@@ -8,6 +8,7 @@
 #include "framework/mesh/cell/cell.h"
 #include "framework/logging/log.h"
 #include "caliper/cali.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_solver/sweep/communicators/cbc_async_comm.h" // For dynamic_cast
 
 namespace opensn
 {
@@ -67,7 +68,7 @@ CbcSweepChunk::SetAngleSet(AngleSet& angle_set)
   // --- NEW:
   // Calculate and store strides for the compact layout
   num_angles_in_set_ = angle_set.GetNumAngles();
-  compact_angle_stride_ = gs_size_;                      // Stride = number of groups
+  compact_angle_stride_ = gs_size_;                     // Stride = number of groups
   compact_node_stride_ = num_angles_in_set_ * gs_size_; // Stride = angles_in_set * groups_per_angle
 }
 

@@ -42,9 +42,13 @@ public:
   const std::vector<double>& GetNonLocalUpwindData(uint64_t cell_global_id,
                                                    unsigned int face_id) const;
 
-  const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
-                                     unsigned int face_node_mapped,
-                                     unsigned int angle_set_index);
+  // const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
+  //                                    unsigned int face_node_mapped,
+  //                                    unsigned int angle_set_index);
+
+  const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data_aggregated,
+                                     unsigned int face_node_mapped_idx,
+                                     unsigned int local_angle_idx_in_set) const; // Use const
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
