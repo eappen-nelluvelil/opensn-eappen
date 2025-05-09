@@ -556,7 +556,7 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
         const int i = cell_mapping_->MapFaceNode(f, fi); // Node index in current cell
 
         // Outflow for balance (Corrected IntFi_shapeI access)
-        if (is_boundary_face and not is_reflecting_boundary_face)
+        if (is_boundary_face) // Always add outflow for any physical boundary
         {
           const double IntFi_shapeI_val = IntFi_shapeI_vec(i); // Access value for node i
           for (int gsg = 0; gsg < gs_size_; ++gsg)
