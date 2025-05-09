@@ -18,27 +18,38 @@ class Cell;
 class CBC_FLUDS : public FLUDS
 {
 public:
-  CBC_FLUDS(size_t num_groups,
-            size_t num_angles,
+  CBC_FLUDS(size_t num_groups, // Number of groups in this AngleSet's LBSGroupset
+            size_t num_angles, // Number of angles in THIS specific AngleSet
             const CBC_FLUDSCommonData& common_data,
-            const UnknownManager& psi_uk_man,
+            const UnknownManager&
+              psi_uk_man, // LBSGroupset's psi_uk_man (used for context/logging in constructor)
             const SpatialDiscretization& sdm);
 
   const FLUDSCommonData& GetCommonData() const;
 
-  // --- NEW METHODS:
-  // const double* GetLocalUpwindPsi(const Cell& face_neighbor,
-  //                                 const unsigned int adj_cell_node_offset) const;
+  // --- Methods for local angular flux data ---
+
+  // GetLocalUpwindPsi returns a base pointer to the start of an upwind neighbor cell's
+  // data block within the compact local_psi_data_.
+  // The caller (CbcSweepChunk) adds a relative offset for the specific node/angle.
   const double* GetLocalUpwindPsi(const Cell& face_neighbor) const;
 
+  // GetLocalDownwindPsi returns a base pointer to the start of the current cell's
+  // data block within the compact local_psi_data_ for writing.
+  // The caller (CbcSweepChunk) adds a relative offset for the specific node/angle.
   double* GetLocalDownwindPsi(const Cell& cell);
+
+  // --- Methods for non-local (remote) angular flux data ---
 
   const std::vector<double>& GetNonLocalUpwindData(uint64_t cell_global_id,
                                                    unsigned int face_id) const;
-
-  const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
-                                     unsigned int face_node_mapped,
-                                     unsigned int angle_set_index);
+  // GetNonLocalUpwindPsi interprets a received multi-angle packet
+  // (for all angles in this AngleSet, for all nodes on a face)
+  // and returns a pointer to the data for a specific angle and face node.
+  const double*
+  GetNonLocalUpwindPsi(const std::vector<double>& psi_data, // Received multi-AngleSet-angle packet
+                       unsigned int face_node_mapped,       // Node index on the face
+                       unsigned int angle_set_index); // Local index of angle within this AngleSet
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -71,7 +82,7 @@ public:
     return delayed_prelocI_outgoing_psi_old_;
   }
 
-  // cell_global_id, face_id
+  // For managing messages received from remote processors
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
   std::map<CellFaceKey, std::vector<double>>& GetDeplocsOutgoingMessages()
@@ -79,16 +90,18 @@ public:
     return deplocs_outgoing_messages_;
   }
 
-  // Const getter (for reading from the subset)
+  // Accessors for the primary local angular flux data buffer
+  // For reading
   const std::vector<double>& GetLocalPsiData() const { return local_psi_data_; }
 
-  // Non-const getter (for writing into the subset)
+  // For writing (direct indexing, if needed)
   std::vector<double>& GetLocalPsiData() { return local_psi_data_; }
 
 private:
   const CBC_FLUDSCommonData& common_data_;
-  std::vector<double> local_psi_data_;
-  const UnknownManager& psi_uk_man_;
+  std::vector<double> local_psi_data_; // Now optimally sized for angles in THIS AngleSet
+  const UnknownManager& psi_uk_man_;   // LBSGroupset's psi_uk_man (stored, but not used for
+                                       // local_psi_data_ sizing/indexing)
   const SpatialDiscretization& sdm_;
 
   std::vector<double> delayed_local_psi_;

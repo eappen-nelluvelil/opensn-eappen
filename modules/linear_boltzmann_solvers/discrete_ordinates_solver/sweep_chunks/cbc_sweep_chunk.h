@@ -34,27 +34,24 @@ public:
 
 private:
   CBC_FLUDS* fluds_;
-  size_t gs_size_;
+  size_t gs_size_; // Number of groups in the LBSGroupset
   int gs_gi_;
 
-  // --- NEW:
-  // Strides based on the compact data layout for the current AngleSet
-  // size_t num_angles_in_set_;    // Number of angles in the current AngleSet
-  // size_t compact_angle_stride_; // Stride to get to next angle ( = gs_size_)
-  // size_t compact_node_stride_;  // Stride to get to next node ( = num_angles_in_set_ * gs_size_)
+  // Strides for accessing the COMPACT local_psi_data_ in CBC_FLUDS
+  size_t num_angles_in_set_local_; // Number of angles in THIS AngleSet
+  size_t
+    local_compact_angle_stride_; // Stride between angles within a spatial DOF's block (= gs_size_)
+  size_t local_compact_node_stride_; // Stride between spatial DOFs' blocks (=
+                                     // num_angles_in_set_local_ * gs_size_)
 
-  // --- FIX? For local/remote buffer sizing issues
-  // --- Strides for COMPACT local_psi_data_ ---
-  size_t num_angles_in_set_local_;    // Angles in this AngleSet (used for local_psi_data_ layout)
-  size_t local_compact_angle_stride_; // = gs_size_
-  size_t local_compact_node_stride_;  // = num_angles_in_set_local_ * gs_size_
-
-  // // --- Strides for REMOTE communication buffer layout ---
-  size_t num_angles_in_set_remote_; // Angles in this AngleSet (used for remote buffer layout)
-  size_t remote_angle_stride_; // = gs_size_ (stride between angles within a node's block in remote
-                               // buffer)
-  size_t remote_node_stride_;  // = num_angles_in_set_remote_ * gs_size_ (stride between nodes in
-                               // remote buffer)
+  // Strides for defining the layout and accessing REMOTE communication buffers (psi_dnwnd_data)
+  // This buffer contains data for all angles in THIS AngleSet for all nodes on a face.
+  size_t
+    num_angles_in_set_remote_; // Number of angles in THIS AngleSet (same as local, for clarity)
+  size_t remote_angle_stride_; // Stride between angles within a face-node's block in the remote
+                               // buffer (= gs_size_)
+  size_t remote_node_stride_;  // Stride between face-nodes' blocks in the remote buffer (=
+                               // num_angles_in_set_remote_ * gs_size_)
 
   bool surface_source_active_;
 
