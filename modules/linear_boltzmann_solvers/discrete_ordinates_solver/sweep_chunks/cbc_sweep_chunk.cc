@@ -296,6 +296,58 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
       }
     }
 
+    // If requested, save angular fluxes during sweep
+    // Crucically, this *does not* write to local_psi_data_,
+    // but instead to `psi_new_local_[groupset.id]` via reference
+    if (save_angular_flux_)
+    {
+      // Get a reference to the destination vector for angular fluxes.
+      auto& output_psi = GetDestinationPsi();
+
+      // Get a raw pointer to the beginning of the current cell's data block within
+      // output_psi
+      // discretization_.MapDOFLocal maps the cell's node 0, using the LBSGroupset's
+      // full psi_uk_man_ (which understands all angles in the groupset's
+      // quadrature), to get the starting 1D index.
+      double* cell_psi_data_base_ptr = &output_psi[discretization_.MapDOFLocal(
+        *cell_,                // Current cell
+        0,                     // First node of the cell
+        groupset_.psi_uk_man_, // UK manager for ALL angles in groupset quadrature
+        0,                     // First unknown (angle 0 of groupset quad)
+        0)];                   // First component (group 0)
+
+      // Iterate over each node of the current cell
+      for (size_t i = 0; i < cell_num_nodes_; ++i)
+      {
+        // Calculate the offset within the cell's angular flux data block to reach the
+        // data for the current node 'i' and the current GLOBAL angle 'direction_num'
+        //
+        // - groupset_angle_group_stride_:
+        //   Stride to get from one node's full data block (all global angles,
+        //   all groups) to the next node's block
+        //   This stride is based on the total number of angles in the
+        //   groupset's quadrature
+        //
+        // - groupset_group_stride_:
+        //   Stride to get from one global angle's group data to the next global
+        //   angle's group data (for the same node)
+        //   This is gs_size_
+        const size_t relative_offset_in_cell =
+          i * groupset_angle_group_stride_ + // Offset to current node 'i'
+          direction_num * groupset_group_stride_; // Further offset to current GLOBAL angle 'direction_num'
+
+        // Iterate over each group in the current groupset
+        for (unsigned int gsg = 0; gsg < gs_size_; ++gsg)
+        {
+          // Write the solved angular flux (b[gsg](i) for current cell node 'i',
+          // current angle, and group 'gsg') into the correct location in the
+          // output_psi vector
+          // The final index is base_ptr + relative_offset + group_index
+          cell_psi_data_base_ptr[relative_offset_in_cell + gsg] = b[gsg](i);
+        }
+      }
+    }
+
     // Perform outgoing surface operations
     // (write to local/remote/reflecting boundaries)
     for (int f = 0; f < cell_num_faces_; ++f)
@@ -369,7 +421,8 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
           // that block
           const size_t offset_in_cell_block =
             i * local_compact_node_stride_ + // Offset to this node's (all angles) block
-            as_ss_idx * local_compact_angle_stride_; // Further offset to this specific angle's group block
+            as_ss_idx *
+              local_compact_angle_stride_; // Further offset to this specific angle's group block
 
           psi_downwind_groups_ptr = psi_downwind_cell_base_ptr + offset_in_cell_block;
         }
@@ -384,7 +437,8 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
           // as_ss_idx = current AngleSet angle index (0 to num_angles_in_set_remote_-1)
           const size_t nonlocal_addr_offset =
             fi * remote_node_stride_ + // Offset to the block for this face node
-            as_ss_idx * remote_angle_stride_; // Offset to the block for this angle within the node's block
+            as_ss_idx *
+              remote_angle_stride_; // Offset to the block for this angle within the node's block
 
           psi_downwind_groups_ptr = &(*psi_nonlocal_dnwnd_data_block_ptr)[nonlocal_addr_offset];
         }
@@ -398,7 +452,7 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
                                    fi);
         }
 
-         // Write the solved angular flux (b[gsg](i)) to the determined location
+        // Write the solved angular flux (b[gsg](i)) to the determined location
         if (psi_downwind_groups_ptr != nullptr)
         {
           for (int gsg = 0; gsg < gs_size_; ++gsg)
