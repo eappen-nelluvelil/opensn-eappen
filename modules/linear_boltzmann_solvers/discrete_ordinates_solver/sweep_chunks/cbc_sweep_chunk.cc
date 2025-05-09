@@ -115,10 +115,10 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
   const auto& d2m_op = groupset_.quadrature->GetDiscreteToMomentOperator();
 
   // Initialize local matrices and vectors (sized appropriately for the current cell)
-  DenseMatrix<double> Amat(cell_num_nodes_, cell_num_nodes_);
-  DenseMatrix<double> Atemp(cell_num_nodes_, cell_num_nodes_);
-  std::vector<Vector<double>> b(gs_size_, Vector<double>(cell_num_nodes_));
-  std::vector<double> source(cell_num_nodes_);
+  DenseMatrix<double> Amat(max_num_cell_dofs_, max_num_cell_dofs_);
+  DenseMatrix<double> Atemp(max_num_cell_dofs_, max_num_cell_dofs_);
+  std::vector<Vector<double>> b(gs_size_, Vector<double>(max_num_cell_dofs_));
+  std::vector<double> source(max_num_cell_dofs_);
 
   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell_local_id_];
   std::vector<double> face_mu_values(cell_num_faces_);
@@ -262,8 +262,8 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
       }
 
       // Add Mass matrix term to Atemp and source term to b
-      // Atemp = Amat + sigma_tg * M
-      // b += M * source
+      // Atemp = Amat + sigma_tgr * M
+      // b += M * Q
       for (size_t i = 0; i < cell_num_nodes_; ++i)
       {
         double temp_M_source = 0.0;
