@@ -156,7 +156,7 @@ CBC_FLUDS::GetLocalDownwindPsi(const Cell& cell)
     sdm_.MapDOFLocal(cell, 0, temp_unitary_uk_man, 0, 0); // Use local temp manager
 
   // Offset to the start of the current cell's data block in the compact local_psi_data_.
-  const int64_t offset = node0_global_map * node_stride_compact;
+  const int64_t offset = node0_spatial_map * node_stride_compact;
 
   if (offset < 0 || static_cast<size_t>(offset) >= local_psi_data_.size())
   {
