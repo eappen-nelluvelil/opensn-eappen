@@ -63,42 +63,34 @@ CBC_FLUDS::CBC_FLUDS(
   const SpatialDiscretization& sdm)
   : FLUDS(num_groups_in_angle_set, num_angles_in_angle_set, common_data.GetSPDS()),
     common_data_(common_data),
-    psi_uk_man_(lbs_groupset_psi_uk_man), // Not needed to store member
+    psi_uk_man_(lbs_groupset_psi_uk_man),
     sdm_(sdm)
 {
-  // --- Calculate Sizes ---
+  // Calculate sizes
 
-  // 1. Spatial DOFs (remains the same)
+  // Spatial DOFs
   const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
                                            UnknownStorageType::NODAL);
   const size_t num_local_spatial_dofs = sdm_.GetNumLocalDOFs(temp_unitary_uk_man);
 
-  // 2. Groups (remains the same)
+  // Groups
   const size_t num_groups = this->num_groups_; // = num_groups_in_angle_set
 
-  // 3. Angles BEFORE refactoring (from the original groupset uk_man)
+  // Angles BEFORE refactoring (from the original groupset uk_man)
   const size_t N_TOTAL_gs_angles = lbs_groupset_psi_uk_man.GetNumberOfUnknowns();
 
-  // 4. Angles AFTER refactoring (from the specific AngleSet)
+  // Angles AFTER refactoring (from the specific AngleSet)
   const size_t N_angles_in_set = this->num_angles_; // = num_angles_in_angle_set
 
-  // 5. Calculate sizes in number of doubles
-  size_t size_before_doubles = 0;
-  if (N_TOTAL_gs_angles > 0 && num_groups > 0)
-  { // Avoid multiplying by zero
-    size_before_doubles = num_local_spatial_dofs * N_TOTAL_gs_angles * num_groups;
-  }
+  // Calculate sizes in number of doubles
+  size_t size_before_doubles = num_local_spatial_dofs * N_TOTAL_gs_angles * num_groups;
+  size_t size_before_doubles_2 = sdm.GetNumLocalDOFs(lbs_groupset_psi_uk_man);
 
-  size_t size_after_doubles = 0;
-  if (N_angles_in_set > 0 && num_groups > 0)
-  { // Avoid multiplying by zero
-    size_after_doubles = num_local_spatial_dofs * N_angles_in_set * num_groups;
-  }
+  size_t size_after_doubles = num_local_spatial_dofs * N_angles_in_set * num_groups;
 
-  // --- Allocate the optimized vector ---
+  // Allocate the optimized vector
   local_psi_data_.assign(size_after_doubles, 0.0);
 
-  // --- Print/Log Comparison ---
   // Check if the actual allocated size matches the calculation
   if (local_psi_data_.size() != size_after_doubles)
   {
@@ -107,25 +99,29 @@ CBC_FLUDS::CBC_FLUDS(
                       << size_after_doubles << ").";
   }
 
-  // Convert sizes to Megabytes (MB) for better readability
+  // Convert sizes to mbs
   const double mb_divisor = 1024.0 * 1024.0;
   double size_before_mb = static_cast<double>(size_before_doubles * sizeof(double)) / mb_divisor;
+  double size_before_mb_2 =
+    static_cast<double>(size_before_doubles_2 * sizeof(double)) / mb_divisor;
+
   double size_after_mb = static_cast<double>(size_after_doubles * sizeof(double)) / mb_divisor;
 
-  // Use OpenSn Logger (adjust log level as needed, e.g., Log0Verbose1)
   log.Log() << "CBC_FLUDS Size Comparison for AngleSet (Angles: " << N_angles_in_set << " of "
             << N_TOTAL_gs_angles << ", Groups: " << num_groups << "):";
+
   log.Log() << "  Size BEFORE refactor: " << size_before_doubles << " doubles (" << std::fixed
             << std::setprecision(3) << size_before_mb << " MB)";
+
+  log.Log() << "  Size BEFORE refactor (verification): " << size_before_doubles_2 << " doubles ("
+            << std::fixed << std::setprecision(3) << size_before_mb_2 << " MB)";
+
   log.Log() << "  Size AFTER refactor:  " << size_after_doubles << " doubles (" << std::fixed
             << std::setprecision(3) << size_after_mb << " MB)";
-  if (size_before_mb > 1e-6)
-  { // Avoid division by zero if original size was 0
-    double reduction = (size_before_mb - size_after_mb) / size_before_mb * 100.0;
-    log.Log() << "  Memory Reduction: " << std::fixed << std::setprecision(1) << reduction << "%";
-  }
 
-} // End Constructor
+  double reduction = (size_before_mb - size_after_mb) / size_before_mb * 100.0;
+  log.Log() << "  Memory Reduction: " << std::fixed << std::setprecision(1) << reduction << "%";
+}
 
 const FLUDSCommonData&
 CBC_FLUDS::GetCommonData() const
@@ -213,108 +209,48 @@ CBC_FLUDS::GetNonLocalUpwindData(uint64_t cell_global_id, unsigned int face_id) 
 //   num_groups_; return &psi_data[dof_map];
 // }
 
-/*
 const double*
-CBC_FLUDS::GetNonLocalUpwindPsi(
-  const std::vector<double>&
-    psi_data_aggregated,             // Vector with data for ALL angles in the set for this face
-  unsigned int face_node_mapped_idx, // Node index on face (0 to N_face_nodes-1)
-  unsigned int local_angle_idx_in_set) const // Local angle index (0 to N_angles_in_set-1)
+CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data, // Expects multi-angle packet
+                                unsigned int face_node_mapped,       // Node index ON FACE
+                                unsigned int angle_set_index) // Local angle index within AngleSet
 {
-  const size_t num_groups = this->num_groups_;
-  // Number of angles THIS AngleSet handles (and thus packed into psi_data_aggregated)
-  const size_t num_angles_in_set = this->num_angles_;
+  // num_groups_and_angles_ = this->num_angles_ (angles in AngleSet) * this->num_groups_ (groups per
+  // angle) This represents the total number of psi values for ONE face node across ALL angles in
+  // THIS AngleSet.
+  const size_t num_psi_per_face_node_for_set = this->num_angles_ * this->num_groups_;
 
-  // Calculate strides WITHIN the aggregated vector for this face
-  const size_t angle_stride_agg = num_groups; // Groups are contiguous per angle
-  // Stride needed to get from Node K to Node K+1 for the same angle/group
-  const size_t node_stride_agg = num_angles_in_set * num_groups;
+  // num_groups_ is the number of groups, which is the stride between angles for the same face node.
+  const size_t num_groups_stride = this->num_groups_;
 
-  // Calculate the final 1D offset
-  const size_t offset =
-    face_node_mapped_idx * node_stride_agg + // Offset to the start of this node's data
-    local_angle_idx_in_set *
-      angle_stride_agg; // Offset to the start of this angle's data (for group 0)
+  const size_t dof_map =
+    face_node_mapped *
+      num_psi_per_face_node_for_set +    // Offset to the start of data for this face_node_mapped
+    angle_set_index * num_groups_stride; // Offset to the start of data for this specific
+                                         // angle_set_index (for group 0)
 
-  // Bounds check - crucial! Check if accessing groups would go out of bounds
-  if (offset + num_groups > psi_data_aggregated.size())
-  {
+  // Bounds check is still important here using psi_data.size()
+  if (dof_map + num_groups_stride > psi_data.size() && num_groups_stride > 0)
+  { // Avoid issues if num_groups_stride is 0
+    // (More detailed error message)
     std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetNonLocalUpwindPsi: Offset calculation error. "
-               << "Offset=" << offset << ", num_groups=" << num_groups
-               << ", AggregatedVectorSize=" << psi_data_aggregated.size()
-               << ", RequestedNodeIdx=" << face_node_mapped_idx
-               << ", RequestedLocalAngleIdx=" << local_angle_idx_in_set
-               << ", NumAnglesInSet=" << num_angles_in_set;
+    err_stream << "CBC_FLUDS::GetNonLocalUpwindPsi: Offset out of bounds. "
+               << "Calculated_dof_map=" << dof_map << ", num_groups_stride=" << num_groups_stride
+               << ", psi_data.size()=" << psi_data.size()
+               << ", face_node_mapped=" << face_node_mapped
+               << ", angle_set_index=" << angle_set_index
+               << ", this->num_angles_=" << this->num_angles_
+               << ", this->num_groups_=" << this->num_groups_;
     throw std::runtime_error(err_stream.str());
   }
-
-  return &psi_data_aggregated[offset]; // Return pointer to start of group data
-
-  // ---- USE THE BELOW BLOCK; ABOVE BLOCK IS JUNK
-  // const size_t num_groups = this->num_groups_;
-  // // The input vector psi_data_aggregated contains data for ONE angle,
-  // // packed as [node0_g0, node0_g1, ..., node1_g0, node1_g1, ...]
-  // const size_t node_stride_in_packet = num_groups;
-  // const size_t offset = face_node_mapped_idx * node_stride_in_packet;
-
-  // return &psi_data_aggregated[offset]; // Pointer to group 0 for the requested node
-}
-*/
-
-const double*
-CBC_FLUDS::GetNonLocalUpwindPsi(
-  const std::vector<double>&
-    psi_data_aggregated,             // Vector with data for ONE angle, packed node-major
-  unsigned int face_node_mapped_idx, // Node index on face (0 to N_face_nodes-1)
-  unsigned int local_angle_idx_in_set)
-  const // Local angle index (0 to N_angles_in_set-1) - Used for context/debug now
-{
-  // Number of energy groups (this remains the same)
-  const size_t num_groups = this->num_groups_;
-
-  // --- Calculate offset based on the ACTUAL structure of psi_data_aggregated ---
-  // The received packet (psi_data_aggregated) contains data for ONLY ONE angle.
-  // The structure is:
-  // [node0_g0, node0_g1, ..., node0_g(N-1),   <-- Node 0 block (size = num_groups)
-  //  node1_g0, node1_g1, ..., node1_g(N-1),   <-- Node 1 block (size = num_groups)
-  //  ...
-  //  nodeM_g0, ..., nodeM_g(N-1) ]             <-- Node M block (size = num_groups)
-  // Where N=num_groups, M=num_face_nodes-1
-
-  // The stride needed to jump from the start of one node's data block
-  // to the start of the next node's data block IN THIS PACKET is simply num_groups.
-  const size_t node_stride_in_packet = num_groups;
-
-  // Calculate the final 1D offset to the start of the data for the requested node
-  const size_t offset = face_node_mapped_idx * node_stride_in_packet;
-
-  // --- Bounds check - crucial! ---
-  // Check if accessing the data for the requested node (all groups) goes out of bounds.
-  if (psi_data_aggregated.empty() || (offset + num_groups > psi_data_aggregated.size()))
+  if (psi_data.empty() && (face_node_mapped > 0 || angle_set_index > 0))
   {
-    // Provide a detailed error message
-    const size_t num_angles_in_set = this->num_angles_; // Get for error message context
-    size_t expected_size = 0;
-    // Try to determine expected size based on other members if possible (e.g., face mapping size)
-    // This part is tricky without access to num_face_nodes directly here.
-    // We know the size SHOULD be num_face_nodes * num_groups, but we don't have num_face_nodes.
-    // So, we report what we have.
-
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetNonLocalUpwindPsi: Offset calculation error or empty vector. "
-               << "Calculated Offset=" << offset << ", NumGroups=" << num_groups
-               << ", Actual AggregatedVectorSize="
-               << psi_data_aggregated.size()
-               // << ", Expected AggregatedVectorSize (num_face_nodes*num_groups)= ?"
-               << ", RequestedNodeIdxOnFace=" << face_node_mapped_idx
-               << ", RequestedLocalAngleIdxInSet=" << local_angle_idx_in_set
-               << ", NumAnglesInOwningSet=" << num_angles_in_set;
-    throw std::runtime_error(err_stream.str());
+    throw std::runtime_error(
+      "CBC_FLUDS::GetNonLocalUpwindPsi: Accessing non-empty psi_data with non-zero indices.");
   }
+  if (psi_data.empty())
+    return nullptr; // Or handle as error
 
-  // Return pointer to the start of the energy group data for the requested node
-  return &psi_data_aggregated[offset];
+  return &psi_data[dof_map];
 }
 
 } // namespace opensn

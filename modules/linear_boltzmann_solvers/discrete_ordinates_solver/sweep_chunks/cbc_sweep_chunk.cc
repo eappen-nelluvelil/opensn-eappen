@@ -40,9 +40,15 @@ CbcSweepChunk::CbcSweepChunk(std::vector<double>& destination_phi,
     fluds_(nullptr),
     gs_size_(0),
     gs_gi_(0),
-    num_angles_in_set_(0),
-    compact_angle_stride_(0),
-    compact_node_stride_(0),
+    // num_angles_in_set_(0),
+    // compact_angle_stride_(0),
+    // compact_node_stride_(0),
+    num_angles_in_set_local_(0),
+    local_compact_angle_stride_(0),
+    local_compact_node_stride_(0),
+    num_angles_in_set_remote_(0),
+    remote_angle_stride_(0),
+    remote_node_stride_(0),
     surface_source_active_(false),
     cell_(nullptr),
     cell_local_id_(0),
@@ -67,9 +73,22 @@ CbcSweepChunk::SetAngleSet(AngleSet& angle_set)
 
   // --- NEW:
   // Calculate and store strides for the compact layout
-  num_angles_in_set_ = angle_set.GetNumAngles();
-  compact_angle_stride_ = gs_size_;                     // Stride = number of groups
-  compact_node_stride_ = num_angles_in_set_ * gs_size_; // Stride = angles_in_set * groups_per_angle
+  // num_angles_in_set_ = angle_set.GetNumAngles();
+  // compact_angle_stride_ = gs_size_;                     // Stride = number of groups
+  // compact_node_stride_ = num_angles_in_set_ * gs_size_; // Stride = angles_in_set *
+  // groups_per_angle
+
+  // --- FIX? For local/remote buffer sizing
+  // --- Strides for COMPACT local_psi_data_ ---
+  num_angles_in_set_local_ = angle_set.GetNumAngles();
+  local_compact_angle_stride_ = gs_size_;
+  local_compact_node_stride_ = num_angles_in_set_local_ * gs_size_;
+
+  // --- Strides for REMOTE communication buffer layout ---
+  // These define the structure of the buffer passed to/from the communicator
+  num_angles_in_set_remote_ = angle_set.GetNumAngles();
+  remote_angle_stride_ = gs_size_;
+  remote_node_stride_ = num_angles_in_set_remote_ * gs_size_;
 }
 
 void
@@ -353,7 +372,7 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
   const std::vector<size_t>& as_angle_indices = angle_set.GetAngleIndices();
 
   // Loop over angles in this AngleSet using LOCAL index as_ss_idx
-  for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_set_; ++as_ss_idx)
+  for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_set_local_; ++as_ss_idx)
   {
     auto direction_num = as_angle_indices[as_ss_idx]; // Global angle index
     auto omega = groupset_.quadrature->omegas[direction_num];
@@ -402,7 +421,7 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
 
           if (is_local_face)
           {
-            // *** CORRECTED Local Upwind Read ***
+            // Local upwind read
             const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
             // Node index WITHIN the UPWIND cell corresponding to face node fj
             const unsigned int adj_cell_node_idx = face_nodal_mapping->cell_node_mapping_[fj];
@@ -412,8 +431,10 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
 
             // Calculate offset RELATIVE to the cell's base pointer
             // Offset = (node_index_within_cell * node_stride) + (local_angle_index * angle_stride)
-            const size_t offset_in_cell_block =
-              adj_cell_node_idx * compact_node_stride_ + as_ss_idx * compact_angle_stride_;
+            // const size_t offset_in_cell_block =
+            //   adj_cell_node_idx * compact_node_stride_ + as_ss_idx * compact_angle_stride_;
+            const size_t offset_in_cell_block = adj_cell_node_idx * local_compact_node_stride_ +
+                                                as_ss_idx * local_compact_angle_stride_;
             psi_upwind_groups_ptr = psi_upwind_cell_base_ptr + offset_in_cell_block;
           }
           else if (not is_boundary_face)
@@ -445,7 +466,7 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
       } // for fi
     } // for face f
 
-    // Volumetric source and solve loop (no changes needed here)
+    // Volumetric source and solve loop
     for (int gsg = 0; gsg < gs_size_; ++gsg)
     {
       double sigma_tg = rho * sigma_t[gs_gi_ + gsg];
@@ -474,7 +495,7 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
       GaussElimination(Atemp, b[gsg], static_cast<int>(cell_num_nodes_));
     }
 
-    // Update phi moments (no changes needed here)
+    // Update phi moments
     auto& output_phi = GetDestinationPhi();
     for (int m = 0; m < num_moments_; ++m)
     {
@@ -509,9 +530,18 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
         const int locality = cell_transport_view_->FaceLocality(f);
         auto& face_nodal_mapping = fluds_->GetCommonData().GetFaceNodalMapping(cell_local_id_, f);
         auto& async_comm = *angle_set.GetCommunicator();
-        size_t num_face_nodes = face_nodal_mapping.face_node_mapping_.size(); // Use mapping size
+
+        // size_t num_face_nodes = face_nodal_mapping.face_node_mapping_.size(); // Use mapping size
+
+        size_t num_face_nodes = cell_mapping_->GetNumFaceNodes(f);
+
+        // size_t data_size_for_msg =
+        //   num_face_nodes * gs_size_; // Size for all nodes, all groups for ONE angle.
+
+        // Size of buffer for ALL angles in set, ALL groups, for ALL nodes on this face
         size_t data_size_for_msg =
-          num_face_nodes * gs_size_; // Size for all nodes, all groups for ONE angle.
+          num_face_nodes * remote_node_stride_;
+
         psi_nonlocal_dnwnd_data_block_ptr =
           &async_comm.InitGetDownwindMessageData(locality,
                                                  face.neighbor_id,
@@ -538,26 +568,40 @@ CbcSweepChunk::Sweep(AngleSet& angle_set)
 
         if (is_local_face)
         {
-          // *** CORRECTED Local Downwind Write ***
+          // Local downwind write
           // Get base pointer for the current cell's data block in the compact buffer
           double* psi_downwind_cell_base_ptr = fluds_->GetLocalDownwindPsi(*cell_);
 
           // Calculate offset RELATIVE to the cell's base pointer
           // Offset = (node_index_within_cell * node_stride) + (local_angle_index * angle_stride)
+
+          // const size_t offset_in_cell_block =
+          //   i * compact_node_stride_ + as_ss_idx * compact_angle_stride_;
+
           const size_t offset_in_cell_block =
-            i * compact_node_stride_ + as_ss_idx * compact_angle_stride_;
+            i * local_compact_node_stride_ + as_ss_idx * local_compact_angle_stride_;
+
           psi_downwind_groups_ptr = psi_downwind_cell_base_ptr + offset_in_cell_block;
         }
         else if (not is_boundary_face)
         {
-          // *** CORRECTED Non-Local Downwind Write ***
+          // Non-local downwind write
           assert(psi_nonlocal_dnwnd_data_block_ptr != nullptr);
           // Offset within the buffer obtained from InitGet...
           // Buffer structure: [face_node_0_group_0, ..., face_node_0_group_N-1,
           // face_node_1_group_0, ...]
-          const size_t nonlocal_offset =
-            fi * gs_size_; // Offset = face_node_index * groups_per_node
-          psi_downwind_groups_ptr = &((*psi_nonlocal_dnwnd_data_block_ptr)[nonlocal_offset]);
+          // const size_t nonlocal_offset =
+          //   fi * gs_size_; // Offset = face_node_index * groups_per_node
+          // psi_downwind_groups_ptr = &((*psi_nonlocal_dnwnd_data_block_ptr)[nonlocal_offset]);
+
+          // Indexing into the psi_dnwnd_data buffer.
+          // This buffer has layout: NodeMajor -> AngleSetIndexMajor -> GroupMajor
+          // fi = current face node index (0 to num_face_nodes_on_this_face-1)
+          // as_ss_idx = current AngleSet angle index (0 to num_angles_in_set_remote_-1)
+          const size_t nonlocal_addr_offset =
+            fi * remote_node_stride_ + // Offset to the block for this face node
+            as_ss_idx * remote_angle_stride_; // Offset to the block for this angle within the node's block
+          psi_downwind_groups_ptr = &(*psi_nonlocal_dnwnd_data_block_ptr)[nonlocal_addr_offset];
         }
         else if (is_reflecting_boundary_face)
         {
