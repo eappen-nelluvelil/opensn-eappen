@@ -42,14 +42,20 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     return AngleSetStatus::FINISHED;
 
   if (current_task_list_.empty())
+  {
     current_task_list_ = cbc_spds_.GetTaskList();
+    current_spls_to_task_index_map_ = cbc_spds_.GetSPLSToTaskIndexMap();
+  }
 
   sweep_chunk.SetAngleSet(*this);
 
   auto tasks_who_received_data = async_comm_.ReceiveData();
 
   for (const uint64_t task_number : tasks_who_received_data)
-    --current_task_list_[task_number].num_dependencies;
+  {
+    const int mapped_task_number = current_spls_to_task_index_map_[task_number];
+    --current_task_list_[mapped_task_number].num_dependencies;
+  }
 
   async_comm_.SendData();
 
@@ -73,7 +79,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         sweep_chunk.Sweep(*this);
 
         for (uint64_t local_task_num : cell_task.successors)
+        {
           --current_task_list_[local_task_num].num_dependencies;
+        }
 
         cell_task.completed = true;
         a_task_executed = true;

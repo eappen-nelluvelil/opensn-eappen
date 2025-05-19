@@ -19,6 +19,8 @@ protected:
   std::vector<Task> current_task_list_;
   CBC_ASynchronousCommunicator async_comm_;
 
+  std::vector<int> current_spls_to_task_index_map_;
+
 public:
   CBC_AngleSet(size_t id,
                size_t num_groups,

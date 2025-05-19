@@ -24,9 +24,21 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
+  const std::vector<int>& GetSPLSToTaskIndexMap() const;
+
+  int GetPeakLivenessCount() const { return peak_liveness_count_; }
+  const std::vector<int>& GetPsiStoreTimestepMap() const { return psi_store_timestep_; }
+  const std::vector<int>& GetPsiDiscardTimestepMap() const { return psi_discard_timestep_; }
+
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+
+  std::vector<int> map_original_local_id_new_task_index_;
+
+  int peak_liveness_count_ = 0;
+  std::vector<int> psi_store_timestep_;   // Index by original_local_id
+  std::vector<int> psi_discard_timestep_; // Index by original_local_id
 };
 
 } // namespace opensn
