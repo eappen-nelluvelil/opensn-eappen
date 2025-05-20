@@ -26,8 +26,15 @@ public:
 
   const std::vector<int>& GetSPLSToTaskIndexMap() const;
 
+  const std::vector<std::vector<int>>&
+  GetTaskLocalPredecessorsMap() const; // new_task_idx -> list of pred_new_task_idx
+
+  const Task& GetTaskByNewIndex(int new_task_idx) const; // Access task by its spls-ordered index
+
   int GetPeakLivenessCount() const { return peak_liveness_count_; }
+
   const std::vector<int>& GetPsiStoreTimestepMap() const { return psi_store_timestep_; }
+
   const std::vector<int>& GetPsiDiscardTimestepMap() const { return psi_discard_timestep_; }
 
 protected:
@@ -35,6 +42,8 @@ protected:
   std::vector<Task> task_list_;
 
   std::vector<int> map_original_local_id_new_task_index_;
+
+  std::vector<std::vector<int>> task_local_predecessors_map_;
 
   int peak_liveness_count_ = 0;
   std::vector<int> psi_store_timestep_;   // Index by original_local_id

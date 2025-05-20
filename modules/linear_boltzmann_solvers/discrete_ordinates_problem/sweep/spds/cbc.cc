@@ -146,35 +146,22 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     task_list_.push_back(task);
   }
 
-  // ---
+  task_local_predecessors_map_.assign(task_list_.size(), std::vector<int>());
 
-  // For each local cell create a task
-  // for (const auto& cell : grid_->local_cells)
-  // {
-  //   const size_t num_faces = cell.faces.size();
-  //   unsigned int num_dependencies = 0;
-  //   std::vector<uint64_t> successors;
-
-  //   for (size_t f = 0; f < num_faces; ++f)
-  //   {
-  //     if (cell_face_orientations_[cell.local_id][f] == INCOMING)
-  //     {
-  //       if (cell.faces[f].has_neighbor)
-  //         ++num_dependencies;
-  //     }
-  //     else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
-  //     {
-  //       const auto& face = cell.faces[f];
-  //       if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-  //         successors.push_back(grid->cells[face.neighbor_id].local_id);
-  //     }
-  //   }
-
-  //   task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
-  // }
+  for (int producer_task_idx = 0; producer_task_idx < task_list_.size(); ++producer_task_idx)
+  {
+    for (uint64_t consumer_task_idx_remapped : task_list_[producer_task_idx].successors)
+    {
+      if (consumer_task_idx_remapped < task_list_.size())
+      { // Bounds check
+        task_local_predecessors_map_[consumer_task_idx_remapped].push_back(producer_task_idx);
+      }
+      // else { /* error */ }
+    }
+  }
 
   // --- Liveness Analysis Data Structures ---
-  //
+  
   // To store the "store" event time (iteration number in simulated sweep)
   std::vector<int> cell_store_time(num_loc_cells, -1);
   // To store the "discard" event time
@@ -246,17 +233,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     // 2. This `processed_task` satisfies one dependency for each of its local predecessors
     //    (that fed into it). Check if those predecessors can now be discarded.
     //    This requires knowing the *predecessors* of `processed_task`.
-    //    Let's build a predecessor list for easier simulation:
-    std::vector<std::vector<int>> task_local_predecessors(task_list_.size());
-    for (int r_task_idx = 0; r_task_idx < task_list_.size(); ++r_task_idx)
-    {
-      for (uint64_t succ_task_idx : task_list_[r_task_idx].successors)
-      {
-        task_local_predecessors[succ_task_idx].push_back(r_task_idx);
-      }
-    }
-
-    for (int pred_task_idx : task_local_predecessors[current_task_idx_being_processed])
+    for (int pred_task_idx : task_local_predecessors_map_[current_task_idx_being_processed])
     {
       // `pred_task_idx` is a local predecessor whose data has just been "consumed"
       // by `current_task_idx_being_processed`.
@@ -352,6 +329,21 @@ const std::vector<int>&
 CBC_SPDS::GetSPLSToTaskIndexMap() const
 {
   return map_original_local_id_new_task_index_;
+}
+
+const std::vector<std::vector<int>>&
+CBC_SPDS::GetTaskLocalPredecessorsMap() const
+{
+  return task_local_predecessors_map_;
+}
+const Task&
+CBC_SPDS::GetTaskByNewIndex(int new_task_idx) const
+{
+  if (new_task_idx < 0 || new_task_idx >= task_list_.size())
+  {
+    throw std::out_of_range("GetTaskByNewIndex: new_task_idx out of bounds.");
+  }
+  return task_list_[new_task_idx];
 }
 
 } // namespace opensn

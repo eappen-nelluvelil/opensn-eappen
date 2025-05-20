@@ -8,6 +8,10 @@
 #include <map>
 #include <functional>
 
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/angular_flux_memory_pool.h"
+#include <memory>
+#include <memory_resource>
+
 namespace opensn
 {
 
@@ -50,7 +54,11 @@ Used in the constructor for contextual information and logging.
             const CBC_FLUDSCommonData& common_data,
             const UnknownManager&
               psi_uk_man, // LBSGroupset's psi_uk_man (used for context/logging in constructor)
-            const SpatialDiscretization& sdm);
+            const SpatialDiscretization& sdm,
+            const int peak_liveness_cell_count,
+            size_t max_node_per_cell_for_sdm,
+            const std::vector<int>* store_map_ptr,
+            const std::vector<int>* discard_map_ptr);
 
   /**
    * @brief Gets the common data associated with this FLUDS instance.
@@ -59,31 +67,19 @@ Used in the constructor for contextual information and logging.
 
   /// --- Methods for local angular flux data ---
 
-  /**
-   * @brief Returns a base pointer to the start of an upwind neighbor cell's
-   *        data block within the compact `local_psi_data_`.
-   * @param face_neighbor The upwind neighbor cell object.
-   * @return Pointer to the start of the `face_neighbor`'s angular flux data
-   *         (for all its nodes, all angles in this AngleSet, all groups)
-   *         within the `local_psi_data_` vector.
-   * @note The caller (e.g., `CbcSweepChunk`) is responsible for calculating
-   *       the relative offset from this base pointer to access data for a
-   *       specific node within `face_neighbor` and a specific angle managed
-   *       by this AngleSet.
-   */
-  const double* GetLocalUpwindPsi(const Cell& face_neighbor) const;
+  // Called by CBC_AngleSet at the appropriate sim_step
+  void AllocatePsiForCell(uint64_t original_cell_local_id);
+  void DeallocatePsiForCell(uint64_t original_cell_local_id);
 
-  /**
-   * @brief Returns a base pointer to the start of the current cell's
-   *        data block within the compact `local_psi_data_` for writing.
-   * @param cell The current cell object for which outgoing fluxes are being computed.
-   * @return Pointer to the start of the `cell`'s angular flux data storage
-   *         (for all its nodes, all angles in this AngleSet, all groups)
-   *         within the `local_psi_data_` vector.
-   * @note The caller (e.g., `CbcSweepChunk`) uses this base pointer and
-   *       calculates relative offsets to write data for specific nodes and angles.
-   */
-  double* GetLocalDownwindPsi(const Cell& cell);
+  // Called by CBCSweepChunk
+  const double* GetUpwindPsiData(uint64_t original_upwind_cell_local_id) const;
+  double* GetDownwindPsiWritePtr(uint64_t original_current_cell_local_id);
+
+  bool IsCellPsiAllocated(uint64_t original_cell_local_id) const;
+
+  // Liveness map accessors
+  int GetCellStoreStep(uint64_t original_cell_local_id) const;
+  int GetCellDiscardStep(uint64_t original_cell_local_id) const;
 
   /// --- Methods for non-local (remote) angular flux data ---
 
@@ -114,9 +110,9 @@ Used in the constructor for contextual information and logging.
    */
   const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                      unsigned int face_node_mapped,
-                                     unsigned int angle_set_index);
+                                     unsigned int angle_set_index) const;
 
-  void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
+  void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi(size_t num_grps, size_t num_angles) override {}
   void AllocateOutgoingPsi(size_t num_grps, size_t num_angles, size_t num_loc_sucs) override {}
@@ -161,27 +157,12 @@ Used in the constructor for contextual information and logging.
     return deplocs_outgoing_messages_;
   }
 
-  /// --- Accessors for `local_psi_data_` ---
+  void ForceDeallocateAllTrackedPsi();
 
-  /**
-   * @brief Gets a constant reference to the primary local angular flux data buffer.
-   * This buffer is sized for the angles managed by this AngleSet.
-   * @return Constant reference to `local_psi_data_`.
-   */
-  const std::vector<double>& GetLocalPsiData() const { return local_psi_data_; }
-
-  /**
-   * @brief Gets a mutable reference to the primary local angular flux data buffer.
-   * This buffer is sized for the angles managed by this AngleSet.
-   * @return Mutable reference to `local_psi_data_`.
-   */
-  std::vector<double>& GetLocalPsiData() { return local_psi_data_; }
+  size_t GetNumAllocatedPoolSlots() const; // Wrapper for pool's count
 
 private:
   const CBC_FLUDSCommonData& common_data_; ///< Reference to common data for this FLUDS type.
-  std::vector<double>
-    local_psi_data_; ///< Primary storage for local angular fluxes.
-                     ///< Layout: spatial DOF major -> angle in set major -> group major.
 
   /// Reference to the LBSGroupset's psi_uk_man. Stored for context/logging during
   /// construction, but not used for sizing or indexing `local_psi_data_`.
@@ -189,6 +170,13 @@ private:
 
   /// Reference to spatial discretization manager
   const SpatialDiscretization& sdm_;
+
+  std::unique_ptr<AngularFluxMemoryPool> psi_pool_;
+  std::map<uint64_t, double*> live_cell_psi_pointers_; // Key: original_cell_local_id
+
+  // Pointers to the liveness maps from SPDS (ensures SPDS outlives FLUDS or maps are copied)
+  const std::vector<int>* psi_store_timestep_map_ptr_;
+  const std::vector<int>* psi_discard_timestep_map_ptr_;
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;
