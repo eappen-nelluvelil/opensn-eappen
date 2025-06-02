@@ -74,12 +74,11 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   // ---------------------------------------------------------------------------
 
   // Successors in each Task still refere to original local_ids
-  // If task_list_ is now indexed 0, ..., N - 1 based on spls_, successors
-  // might need re-mapping if they are to be used as direct indices into the *newly ordered*
+  // task_list_ is now indexed 0, ..., N - 1 based on spls_
+  // Successors need re-mapping as they are to be used as direct indices into the *newly ordered*
   // task_list_
-  // Option A: Keep successors as local_ids and do a lookup
-  // Option B: Remap successors to be indices into the new spls-ordered task_list_
-  // Go with option B
+  
+  // Remap successors to be indices into the new spls-ordered task_list_
   map_original_local_id_new_task_index_.clear();
   map_original_local_id_new_task_index_.resize(num_loc_cells);
   for (int i = 0; i < spls_.size(); ++i)
@@ -160,7 +159,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     }
   }
 
-  // --- Liveness Analysis Data Structures ---
+  // --- Liveness analysis aata structures ---
   
   // To store the "store" event time (iteration number in simulated sweep)
   std::vector<int> cell_store_time(num_loc_cells, -1);
@@ -182,9 +181,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
 
     // Also, consider if this cell sends data via MPI.
     // This requires checking its outgoing faces against non-local neighbors.
-    // For simplicity, let's assume if it has *any* non-local successor (even if not explicitly
+    // Assume if it has *any* non-local successor (even if not explicitly
     // in task.successors which are local), its data is live until MPI send.
-    // A more refined approach checks faces. For now, let's add a placeholder:
     bool sends_to_mpi = false;
     const Cell& cell = *producer_task.cell_ptr;
     const size_t original_local_id = cell.local_id; // Assuming Task stores this or we can get it
@@ -208,8 +206,9 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     }
   }
 
-  // --- Simulate the Sweep for Liveness ---
-  // We iterate through the spls-ordered task_list. This represents the order of *computation*.
+  // --- Simulate the sweep for liveness ---
+  // We iterate through the spls-ordered task_list.
+  // This represents the order of *computation*.
   // `sim_step` acts as a logical time.
   for (int sim_step = 0; sim_step < task_list_.size(); ++sim_step)
   {
@@ -231,7 +230,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     // sim_step
 
     // 2. This `processed_task` satisfies one dependency for each of its local predecessors
-    //    (that fed into it). Check if those predecessors can now be discarded.
+    //    (that fed into it).
+    //    Check if those predecessors can now be discarded.
     //    This requires knowing the *predecessors* of `processed_task`.
     for (int pred_task_idx : task_local_predecessors_map_[current_task_idx_being_processed])
     {
