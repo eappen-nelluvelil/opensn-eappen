@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #include <set>
 #include <memory>
@@ -40,6 +41,18 @@ struct Task
   uint64_t reference_id;
   const Cell* cell_ptr;
   bool completed = false;
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: UPR-specific code modifications
+  // ---------------------------------------------------------------------------
+
+  // List of local cells that are upwind of this task
+  std::vector<uint64_t> predecessors;
+
+  // The number of direct downwind successors that have not yet been swept
+  // When this count = 0, this task's data can be deallocated
+  unsigned int successor_consumption_count = 0;
+  // ---------------------------------------------------------------------------
 };
 
 /// Stage Task Dependency Graphs

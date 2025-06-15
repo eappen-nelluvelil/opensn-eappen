@@ -101,40 +101,40 @@ public:
   void Sweep(AngleSet& angle_set) override;
 
 private:
-  CBC_FLUDS* fluds_; ///< Pointer to the CBC_FLUDS for the current AngleSet.
-  size_t gs_size_;   ///< Number of energy groups in the parent LBSGroupset.
-  int gs_gi_;        ///< Global starting group index of the parent LBSGroupset.
+  CBC_FLUDS* fluds_; //< Pointer to the CBC_FLUDS for the current AngleSet.
+  size_t gs_size_;   //< Number of energy groups in the parent LBSGroupset.
+  int gs_gi_;        //< Global starting group index of the parent LBSGroupset.
 
-  /// --- Strides for accessing `local_psi_data_` in `CBC_FLUDS` ---
+  // --- Strides for accessing `local_psi_data_` in `CBC_FLUDS` ---
 
-  /// Number of angular directions managed by the current AngleSet.
+  // Number of angular directions managed by the current AngleSet.
   size_t num_angles_in_set_local_;
 
-  /// Stride to jump between data for different angles (local to AngleSet)
-  /// for the same spatial DOF within the compact `local_psi_data_`.
-  /// Equal to `gs_size_` (number of groups).
+  // Stride to jump between data for different angles (local to AngleSet)
+  // for the same spatial DOF within the compact `local_psi_data_`.
+  // Equal to `gs_size_` (number of groups).
   size_t local_compact_angle_stride_;
 
-  /// Stride to jump between data for different spatial DOFs (nodes) within
-  /// the compact `local_psi_data_`.
-  /// Equal to `num_angles_in_set_local_ * gs_size_`.
+  // Stride to jump between data for different spatial DOFs (nodes) within
+  // the compact `local_psi_data_`.
+  // Equal to `num_angles_in_set_local_ * gs_size_`.
   size_t local_compact_node_stride_;
 
-  /// --- Strides for MPI communication buffers (e.g., `psi_dnwnd_data` for outgoing) ---
+  // --- Strides for MPI communication buffers (e.g., `psi_dnwnd_data` for outgoing) ---
 
-  /// These buffers are structured to contain data for all angles in THIS AngleSet,
-  /// for all nodes on a particular face.
-  /// Layout: face spatial DOF major -> angle in set major -> group major.
+  // These buffers are structured to contain data for all angles in THIS AngleSet,
+  // for all nodes on a particular face.
+  // Layout: face spatial DOF major -> angle in set major -> group major.
 
-  /// Number of angular directions in the current AngleSet (same as local, for clarity).
+  // Number of angular directions in the current AngleSet (same as local, for clarity).
   size_t num_angles_in_set_remote_;
 
-  /// Stride between angles within a single face-node's data block in an MPI buffer.
-  /// Equal to `gs_size_`.
+  // Stride between angles within a single face-node's data block in an MPI buffer.
+  // Equal to `gs_size_`.
   size_t remote_angle_stride_;
 
-  /// Stride between different face-nodes' data blocks in an MPI buffer.
-  /// Equal to `num_angles_in_set_remote_ * gs_size_`.
+  // Stride between different face-nodes' data blocks in an MPI buffer.
+  // Equal to `num_angles_in_set_remote_ * gs_size_`.
   size_t remote_node_stride_;
 
   bool surface_source_active_;

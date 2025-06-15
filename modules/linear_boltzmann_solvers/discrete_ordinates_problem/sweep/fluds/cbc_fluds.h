@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include <map>
 #include <functional>
+#include <memory_resource>
 
 namespace opensn
 {
@@ -32,32 +33,19 @@ class Cell;
 class CBC_FLUDS : public FLUDS
 {
 public:
-  /**
-   * Constructs a `CBC_FLUDS` object.
-   * @param num_groups_in_angle_set  Number of energy groups in LBSGroupset to which AngleSet
-   * belongs.
-   * @param num_angles_in_angle_set Number of discrete angular directions managed by this specific
-   * AngleSet instance.
-   * @param common_data Reference to common data shared among FLUDS instances for the same sweep
-   * ordering.
-   * @param lbs_groupset_psi_uk_man The UnknownManager for angular fluxes from the parent
-LBSGroupset.
-Used in the constructor for contextual information and logging.
-   * @param sdm Reference to the spatial discreization manager.
-   */
   CBC_FLUDS(size_t num_groups, // Number of groups in this AngleSet's LBSGroupset
             size_t num_angles, // Number of angles in THIS specific AngleSet
             const CBC_FLUDSCommonData& common_data,
-            const UnknownManager&
-              psi_uk_man, // LBSGroupset's psi_uk_man (used for context/logging in constructor)
-            const SpatialDiscretization& sdm);
+            const UnknownManager& psi_uk_man,
+            const SpatialDiscretization& sdm,
+            size_t max_wavefront_size);
 
   /**
    * Gets the common data associated with this FLUDS instance.
    */
   const FLUDSCommonData& GetCommonData() const;
 
-  /// --- Methods for local angular flux data ---
+  // --- Methods for local angular flux data ---
 
   /**
    * Returns a base pointer to the start of an upwind neighbor cell's
@@ -85,7 +73,7 @@ Used in the constructor for contextual information and logging.
    */
   double* GetLocalDownwindPsi(const Cell& cell);
 
-  /// --- Methods for non-local (remote) angular flux data ---
+  // --- Methods for non-local (remote) angular flux data ---
 
   /**
    * Retrieves the pre-received angular flux data packet for a specific
@@ -115,6 +103,15 @@ Used in the constructor for contextual information and logging.
   const double* GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                      unsigned int face_node_mapped,
                                      unsigned int angle_set_index);
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: UPR-specific code modifications
+  // ---------------------------------------------------------------------------
+  double* AllocateForCell(uint64_t cell_local_id);
+  void DeallocateForCell(uint64_t cell_local_id);
+  const double* GetPsiForCell(uint64_t cell_local_id) const;
+
+  // ---------------------------------------------------------------------------
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -147,7 +144,7 @@ Used in the constructor for contextual information and logging.
     return delayed_prelocI_outgoing_psi_old_;
   }
 
-  /// Key for messages from deploying locations: pairs a cell's global ID with a face index.
+  // Key for messages from deploying locations: pairs a cell's global ID with a face index.
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
   /**
@@ -161,7 +158,7 @@ Used in the constructor for contextual information and logging.
     return deplocs_outgoing_messages_;
   }
 
-  /// --- Accessors for `local_psi_data_` ---
+  // --- Accessors for `local_psi_data_` ---
 
   /**
    * Gets a constant reference to the primary local angular flux data buffer.
@@ -178,17 +175,35 @@ Used in the constructor for contextual information and logging.
   std::vector<double>& GetLocalPsiData() { return local_psi_data_; }
 
 private:
-  const CBC_FLUDSCommonData& common_data_; ///< Reference to common data for this FLUDS type.
+  const CBC_FLUDSCommonData& common_data_; //< Reference to common data for this FLUDS type.
   std::vector<double>
-    local_psi_data_; ///< Primary storage for local angular fluxes.
-                     ///< Layout: spatial DOF major -> angle in set major -> group major.
+    local_psi_data_; //< Primary storage for local angular fluxes.
+                     //< Layout: spatial DOF major -> angle in set major -> group major.
 
-  /// Reference to the LBSGroupset's psi_uk_man. Stored for context/logging during
-  /// construction, but not used for sizing or indexing `local_psi_data_`.
+  // Reference to the LBSGroupset's psi_uk_man. Stored for context/logging during
+  // construction, but not used for sizing or indexing `local_psi_data_`.
   const UnknownManager& psi_uk_man_;
 
-  /// Reference to spatial discretization manager
+  // Reference to spatial discretization manager
   const SpatialDiscretization& sdm_;
+
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: UPR-specific code modifications
+  // ---------------------------------------------------------------------------
+  
+  // Memory resource that manages pools of fixed-sized blocks
+  std::pmr::unsynchronized_pool_resource memory_pool_;
+
+  // Type-aware allocator that uses memory_pool_
+  std::pmr::polymorphic_allocator<double> psi_allocator_;
+
+  // Maps a cell local ID to its currently allocated memory block
+  std::map<uint64_t, double*> cell_memory_map_;
+
+  // Size in doubles for a single cell's full psi data
+  size_t single_cell_block_size_ = 0;
+  // ---------------------------------------------------------------------------
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;

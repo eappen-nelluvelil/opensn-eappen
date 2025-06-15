@@ -1030,15 +1030,21 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
       }
       else if (sweep_type_ == "CBC")
       {
-        OpenSnLogicalErrorIf(not options_.save_angular_flux,
-                             "When using sweep_type \"CBC\" then "
-                             "\"save_angular_flux\" must be true.");
+        // ---------------------------------------------------------------------
+        // Phase 2: UPR specific code modifications
+        // ---------------------------------------------------------------------
+
+        const auto cbc_spds = dynamic_cast<const CBC_SPDS&>(*sweep_ordering);
+        const size_t max_wavefront_size = cbc_spds.GetMaxWavefrontSize();
+
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                       groupset.psi_uk_man_,
-                                      *discretization_);
+                                      *discretization_,
+                                      max_wavefront_size);
+        // ---------------------------------------------------------------------
 
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,
                                                         gs_num_grps,

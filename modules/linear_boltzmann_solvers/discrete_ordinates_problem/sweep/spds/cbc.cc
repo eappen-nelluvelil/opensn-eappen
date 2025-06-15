@@ -71,29 +71,112 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
 
   // For each local cell create a task
+  // for (const auto& cell : grid_->local_cells)
+  // {
+  //   const size_t num_faces = cell.faces.size();
+  //   unsigned int num_dependencies = 0;
+  //   std::vector<uint64_t> succesors;
+
+  //   for (size_t f = 0; f < num_faces; ++f)
+  //   {
+  //     if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+  //     {
+  //       if (cell.faces[f].has_neighbor)
+  //         ++num_dependencies;
+  //     }
+  //     else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+  //     {
+  //       const auto& face = cell.faces[f];
+  //       if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
+  //         succesors.push_back(grid->cells[face.neighbor_id].local_id);
+  //     }
+  //   }
+
+  //   task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
+  // }
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: UPR-specific code modifications
+  // ---------------------------------------------------------------------------
+
+  task_list_.assign(num_loc_cells, Task());
+  std::vector<int> in_degree(num_loc_cells, 0);
+
   for (const auto& cell : grid_->local_cells)
   {
-    const size_t num_faces = cell.faces.size();
-    unsigned int num_dependencies = 0;
-    std::vector<uint64_t> succesors;
+    const auto cell_local_id = cell.local_id;
+    auto& task = task_list_[cell_local_id];
 
-    for (size_t f = 0; f < num_faces; ++f)
+    task.reference_id = cell_local_id;
+    task.cell_ptr = &cell;
+
+    unsigned int current_cell_num_dependencies = 0;
+
+    for (size_t f = 0; f < cell.faces.size(); ++f)
     {
-      if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+      if (cell_face_orientations_[cell_local_id][f] == INCOMING)
       {
         if (cell.faces[f].has_neighbor)
-          ++num_dependencies;
+        {
+          ++current_cell_num_dependencies;
+
+          // If neighbor is local, it is a predecessor
+          if (grid->IsCellLocal(cell.faces[f].neighbor_id))
+          {
+            task.predecessors.push_back(cell.faces[f].neighbor_id);
+          }
+        }
       }
-      else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+      else if (cell_face_orientations_[cell_local_id][f] == OUTGOING)
       {
         const auto& face = cell.faces[f];
         if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-          succesors.push_back(grid->cells[face.neighbor_id].local_id);
+        {
+          task.successors.push_back(grid->cells[face.neighbor_id].local_id);
+        }
+      }
+    } // for f
+
+    task.num_dependencies = current_cell_num_dependencies;
+    in_degree[cell_local_id] = current_cell_num_dependencies;
+    task.successor_consumption_count = task.successors.size();
+  } // for local cells
+
+  // Use variant of Kahn's algorithm to find max wavefront width
+  std::queue<uint64_t> ready_queue;
+  for (unsigned int c = 0; c < num_loc_cells; ++c)
+  {
+    if (in_degree[c] == 0)
+    {
+      ready_queue.push(c);
+    }
+  }
+
+  size_t live_cells_count = ready_queue.size();
+  max_wavefront_size_ = std::max(max_wavefront_size_, live_cells_count);
+
+  while (not ready_queue.empty())
+  {
+    uint64_t u = ready_queue.front();
+    ready_queue.pop();
+    --live_cells_count;
+
+    for (uint64_t v_id : task_list_[u].successors)
+    {
+      --in_degree[v_id];
+      if (in_degree[v_id] == 0)
+      {
+        ready_queue.push(v_id);
+        ++live_cells_count;
+        max_wavefront_size_ = std::max(max_wavefront_size_, live_cells_count);
       }
     }
-
-    task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
   }
+
+  log.Log() << "[UPR] CBC_SPDS: Maximum wavefront size is " << max_wavefront_size_
+            << " cells.";
+
+  // ---------------------------------------------------------------------------
 }
 
 const std::vector<Task>&
