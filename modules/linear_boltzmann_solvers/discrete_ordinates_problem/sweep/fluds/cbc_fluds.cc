@@ -31,52 +31,6 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                                            UnknownStorageType::NODAL);
   const size_t num_local_spatial_dofs = sdm_.GetNumLocalDOFs(temp_unitary_uk_man);
 
-  //    Layout: spatial DOF major -> angle in set major -> group major
-  //    @note `this->num_angles_` = Number of angles specific to this AngleSet
-  //    @note `this->num_groups_` = Number of groups specific to this AngleSet
-  size_t local_psi_data_size = num_local_spatial_dofs * this->num_angles_ * this->num_groups_;
-
-  // --- Verification logging ---
-  // Calculate what the old size would have been for comparison,
-  // when previous local cell angular flux storage was sized to account for the
-  // number of angles in the groupset's quadrature
-
-  // Number of angles in the parent LBSGroupset's full quadrature
-  const size_t num_angles_in_gs_quadrature = psi_uk_man_.GetNumberOfUnknowns();
-
-  // Calculate estimated old size in number of doubles
-  size_t size_before_doubles_calc =
-    num_local_spatial_dofs * num_angles_in_gs_quadrature * this->num_groups_;
-
-  // For direct comparison, get size using the LBSGroupset's UnknownManager
-  size_t size_before_doubles_direct = sdm.GetNumLocalDOFs(psi_uk_man);
-
-  const double mb_divisor = 1024.0 * 1024.0; // For conversion to MBs
-  auto size_before_mb = static_cast<double>(size_before_doubles_calc * sizeof(double)) / mb_divisor;
-  auto size_before_direct_mb =
-    static_cast<double>(size_before_doubles_direct * sizeof(double)) / mb_divisor;
-
-  auto size_after_mb = static_cast<double>(local_psi_data_size * sizeof(double)) / mb_divisor;
-
-  log.Log() << "CBC_FLUDS Size Comparison for AngleSet (Angles in Set: " << this->num_angles_
-            << ", Angles in Groupset Quadrature: " << num_angles_in_gs_quadrature
-            << ", Groups: " << this->num_groups_ << "):";
-  log.Log() << "  Original estimated size: " << size_before_doubles_calc << " doubles ("
-            << std::fixed << std::setprecision(3) << size_before_mb << " MB)";
-  log.Log() << "  Original direct size (for verification): " << size_before_doubles_direct
-            << " doubles (" << std::fixed << std::setprecision(3) << size_before_direct_mb
-            << " MB)";
-  log.Log() << "  Optimized size (current):  " << local_psi_data_size << " doubles (" << std::fixed
-            << std::setprecision(3) << size_after_mb << " MB)";
-
-  // Avoid division by zero if original size was effectively 0
-  if (size_before_mb > 1e-6)
-  {
-    auto reduction = (size_before_mb - size_after_mb) / size_before_mb * 100.0;
-    log.Log() << "  Memory Reduction for local_psi_data_: " << std::fixed << std::setprecision(1)
-              << reduction << "%";
-  }
-
   // ---------------------------------------------------------------------------
   // Phase 2: UPR-specific code modifications
   // ---------------------------------------------------------------------------
