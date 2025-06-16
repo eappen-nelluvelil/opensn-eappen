@@ -80,28 +80,8 @@ public:
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
 
   // ---------------------------------------------------------------------------
-  // Phase 2: UPR-specific code modifications
+  // Phase 3: UPR-specific code modifications
   // ---------------------------------------------------------------------------
-
-  // /**
-  //  * Performs the discrete ordinates sweep calculation for the currently
-  //  *        set cell, for all angles and groups within the provided `AngleSet`.
-  //  *
-  //  * This is the core computational method.
-  //  * It:
-  //  * - Assembles the local transport equation system for each angle and group.
-  //  * - Retrieves upwind angular fluxes from local neighbors.
-  //  *   remote locations (via MPI data managed by `CBC_FLUDS`), or boundaries.
-  //  * - Solves the local system for the outgoing angular fluxes at the cell nodes.
-  //  * - Updates the global scalar flux moments (`destination_phi_`).
-  //  * - If `save_angular_flux_` is true, stores the computed angular fluxes into
-  //  *   the global angular flux vector (`destination_psi_`).
-  //  * - Propagates outgoing angular fluxes to local downwind neighbors or stages them for MPI
-  //  * transmission to remote downwind neighbors.
-  //  *
-  //  * @param angle_set Reference to the current `AngleSet` being swept.
-  //  */
-  // void Sweep(AngleSet& angle_set) override;
 
   // psi_out_block: pointer to pre-allocated memory block where outgoing angular
   // for the current cell should be stored

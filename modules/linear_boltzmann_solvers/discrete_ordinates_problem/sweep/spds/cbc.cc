@@ -74,31 +74,6 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   // Phase 2: UPR-specific code modifications
   // ---------------------------------------------------------------------------
 
-  // For each local cell create a task
-  // for (const auto& cell : grid_->local_cells)
-  // {
-  //   const size_t num_faces = cell.faces.size();
-  //   unsigned int num_dependencies = 0;
-  //   std::vector<uint64_t> succesors;
-
-  //   for (size_t f = 0; f < num_faces; ++f)
-  //   {
-  //     if (cell_face_orientations_[cell.local_id][f] == INCOMING)
-  //     {
-  //       if (cell.faces[f].has_neighbor)
-  //         ++num_dependencies;
-  //     }
-  //     else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
-  //     {
-  //       const auto& face = cell.faces[f];
-  //       if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-  //         succesors.push_back(grid->cells[face.neighbor_id].local_id);
-  //     }
-  //   }
-
-  //   task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
-  // }
-
   task_list_.assign(num_loc_cells, Task());
   std::vector<int> in_degree(num_loc_cells, 0);
 

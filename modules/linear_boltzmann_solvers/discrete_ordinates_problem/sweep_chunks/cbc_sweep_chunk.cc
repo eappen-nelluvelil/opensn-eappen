@@ -194,29 +194,10 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
           // -------------------------------------------------------------------
           // Phase 3: UPR-specific code modifications
           // -------------------------------------------------------------------
+
+          // Local upwind read
           if (is_local_face)
           {
-            // // Local upwind read
-            // const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
-
-            // // Node index WITHIN the UPWIND cell corresponding to face node fj of CURRENT cell's
-            // // face f
-            // const unsigned int adj_cell_node_idx = face_nodal_mapping->cell_node_mapping_[fj];
-
-            // // 1. Get base pointer to the start of upwind_cell's data block in compact
-            // // local_psi_data_
-            // const double* psi_upwind_cell_base_ptr = fluds_->GetLocalUpwindPsi(*upwind_cell);
-
-            // // 2. Calculate relative offset to the specific node and angle within that block
-            // const size_t offset_in_cell_block =
-            //   adj_cell_node_idx *
-            //     local_compact_node_stride_ + // Offset to this node's (all angles) block
-            //   as_ss_idx *
-            //     local_compact_angle_stride_; // Further offset to this specific angle's group
-            //     block
-
-            // psi_upwind_groups_ptr = psi_upwind_cell_base_ptr + offset_in_cell_block;
-
             const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
             const unsigned int adj_cell_node_idx = face_nodal_mapping->cell_node_mapping_[fj];
 
@@ -424,21 +405,7 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
         // ---------------------------------------------------------------------
         if (is_local_face)
         {
-          // // Local downwind write
-          // // 1. Get base pointer to the start of current_cell's data block in
-          // // compact local_psi_data_
-          // double* psi_downwind_cell_base_ptr = fluds_->GetLocalDownwindPsi(*cell_);
-
-          // // 2. Calculate relative offset to the specific node and angle within
-          // // that block
-          // const size_t offset_in_cell_block =
-          //   i * local_compact_node_stride_ + // Offset to this node's (all angles) block
-          //   as_ss_idx *
-          //     local_compact_angle_stride_; // Further offset to this specific angle's group block
-
-          // psi_downwind_groups_ptr = psi_downwind_cell_base_ptr + offset_in_cell_block;
-
-          // Base point is now block allocated by the AngleSet for this cell
+          // Base pointer is now block allocated by the AngleSet for this cell
           double* psi_downwind_cell_base_ptr = psi_out_block;
 
           const size_t offset_in_cell_block =

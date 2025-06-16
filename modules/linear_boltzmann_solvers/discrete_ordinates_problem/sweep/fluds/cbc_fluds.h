@@ -44,34 +44,6 @@ public:
    */
   const FLUDSCommonData& GetCommonData() const;
 
-  // --- Methods for local angular flux data ---
-
-  /**
-   * Returns a base pointer to the start of an upwind neighbor cell's
-   *        data block within the compact `local_psi_data_`.
-   * @param face_neighbor The upwind neighbor cell object.
-   * @return Pointer to the start of the `face_neighbor`'s angular flux data
-   *         (for all its nodes, all angles in this AngleSet, all groups)
-   *         within the `local_psi_data_` vector.
-   * @note The caller (e.g., `CbcSweepChunk`) is responsible for calculating
-   *       the relative offset from this base pointer to access data for a
-   *       specific node within `face_neighbor` and a specific angle managed
-   *       by this AngleSet.
-   */
-  const double* GetLocalUpwindPsi(const Cell& face_neighbor) const;
-
-  /**
-   * Returns a base pointer to the start of the current cell's
-   *        data block within the compact `local_psi_data_` for writing.
-   * @param cell The current cell object for which outgoing fluxes are being computed.
-   * @return Pointer to the start of the `cell`'s angular flux data storage
-   *         (for all its nodes, all angles in this AngleSet, all groups)
-   *         within the `local_psi_data_` vector.
-   * @note The caller (e.g., `CbcSweepChunk`) uses this base pointer and
-   *       calculates relative offsets to write data for specific nodes and angles.
-   */
-  double* GetLocalDownwindPsi(const Cell& cell);
-
   // --- Methods for non-local (remote) angular flux data ---
 
   /**
@@ -157,27 +129,8 @@ public:
     return deplocs_outgoing_messages_;
   }
 
-  // --- Accessors for `local_psi_data_` ---
-
-  /**
-   * Gets a constant reference to the primary local angular flux data buffer.
-   * This buffer is sized for the angles managed by this AngleSet.
-   * @return Constant reference to `local_psi_data_`.
-   */
-  const std::vector<double>& GetLocalPsiData() const { return local_psi_data_; }
-
-  /**
-   * Gets a mutable reference to the primary local angular flux data buffer.
-   * This buffer is sized for the angles managed by this AngleSet.
-   * @return Mutable reference to `local_psi_data_`.
-   */
-  std::vector<double>& GetLocalPsiData() { return local_psi_data_; }
-
 private:
   const CBC_FLUDSCommonData& common_data_; //< Reference to common data for this FLUDS type.
-  std::vector<double>
-    local_psi_data_; //< Primary storage for local angular fluxes.
-                     //< Layout: spatial DOF major -> angle in set major -> group major.
 
   // Reference to the LBSGroupset's psi_uk_man. Stored for context/logging during
   // construction, but not used for sizing or indexing `local_psi_data_`.

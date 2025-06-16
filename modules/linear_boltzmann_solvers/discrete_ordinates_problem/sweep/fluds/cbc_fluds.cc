@@ -112,66 +112,6 @@ CBC_FLUDS::GetCommonData() const
   return common_data_;
 }
 
-const double*
-CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor) const
-{
-  // Stride to jump from one spatial DOF's full block of (angle-group) data to the next
-  // spatial DOF's block
-  const size_t node_stride_compact = this->num_angles_ * this->num_groups_;
-
-  // Use a temporary unitary UnknownManager to get the "flat" spatial DOF index
-  // for the first node of the face_neighbor cell.
-  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
-                                           UnknownStorageType::NODAL);
-
-  // Get the unique index (0 to num_local_spatial_dofs-1) for the first node of the neighbor cell.
-  const int64_t node0_spatial_map =
-    sdm_.MapDOFLocal(face_neighbor, 0, temp_unitary_uk_man, 0, 0); // Use local temp manager
-
-  // Offset to the start of the neighbor cell's data block
-  const int64_t offset = node0_spatial_map * node_stride_compact;
-
-  if (offset < 0 || static_cast<size_t>(offset) >= local_psi_data_.size())
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetLocalUpwindPsi: Offset out of bounds. "
-               << "NeighborCell global_id = " << face_neighbor.global_id
-               << ", Calculated Offset = " << offset
-               << ", CompactVectorSize = " << local_psi_data_.size()
-               << ", node0_spatial_map = " << node0_spatial_map
-               << ", node_stride_compact = " << node_stride_compact;
-    throw std::runtime_error(err_stream.str());
-  }
-
-  // Returns pointer to start of neighbor cell's data block.
-  return &local_psi_data_[offset];
-}
-
-double*
-CBC_FLUDS::GetLocalDownwindPsi(const Cell& cell)
-{
-  const size_t node_stride_compact = this->num_angles_ * this->num_groups_;
-
-  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
-                                           UnknownStorageType::NODAL);
-
-  const int64_t node0_spatial_map = sdm_.MapDOFLocal(cell, 0, temp_unitary_uk_man, 0, 0);
-
-  const int64_t offset = node0_spatial_map * node_stride_compact;
-
-  if (offset < 0 || static_cast<size_t>(offset) >= local_psi_data_.size())
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetLocalDownwindPsi: Offset out of bounds. "
-               << "CurrentCell global_id = " << cell.global_id << ", Calculated Offset =" << offset
-               << ", CompactVectorSize = " << local_psi_data_.size()
-               << ", node0_spatial_map = " << node0_spatial_map
-               << ", node_stride_compact = " << node_stride_compact;
-    throw std::runtime_error(err_stream.str());
-  }
-  return &local_psi_data_[offset];
-}
-
 const std::vector<double>&
 CBC_FLUDS::GetNonLocalUpwindData(uint64_t cell_global_id, unsigned int face_id) const
 {
