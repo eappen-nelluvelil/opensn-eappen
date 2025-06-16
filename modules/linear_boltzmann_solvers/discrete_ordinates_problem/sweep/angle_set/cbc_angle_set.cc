@@ -46,7 +46,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     return AngleSetStatus::FINISHED;
 
   if (current_task_list_.empty())
+  {
     current_task_list_ = cbc_spds_.GetTaskList();
+  }
 
   // Cast to CBC_FLUDS to access AllocateForCell and DeallocateForCell methods
   auto* cbc_fluds = dynamic_cast<CBC_FLUDS*>(&*fluds_);

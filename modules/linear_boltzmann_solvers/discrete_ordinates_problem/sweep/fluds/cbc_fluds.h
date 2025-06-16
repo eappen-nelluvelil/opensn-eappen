@@ -35,7 +35,6 @@ public:
   CBC_FLUDS(size_t num_groups, // Number of groups in this AngleSet's LBSGroupset
             size_t num_angles, // Number of angles in THIS specific AngleSet
             const CBC_FLUDSCommonData& common_data,
-            const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm,
             size_t max_wavefront_size);
 
@@ -130,13 +129,8 @@ public:
   }
 
 private:
-  const CBC_FLUDSCommonData& common_data_; //< Reference to common data for this FLUDS type.
+  const CBC_FLUDSCommonData& common_data_;
 
-  // Reference to the LBSGroupset's psi_uk_man. Stored for context/logging during
-  // construction, but not used for sizing or indexing `local_psi_data_`.
-  const UnknownManager& psi_uk_man_;
-
-  // Reference to spatial discretization manager
   const SpatialDiscretization& sdm_;
 
 

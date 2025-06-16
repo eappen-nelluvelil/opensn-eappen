@@ -14,27 +14,23 @@ namespace opensn
 CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      size_t num_angles,
                      const CBC_FLUDSCommonData& common_data,
-                     const UnknownManager& psi_uk_man,
                      const SpatialDiscretization& sdm,
                      size_t max_wavefront_size)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    psi_uk_man_(psi_uk_man),
     sdm_(sdm),
     memory_pool_(),
     psi_allocator_(&memory_pool_) // Point the allocator to the memory pool
 {
-  // 1. Get number of purely spatial DOFs on this MPI rank.
-  //    This is achieved by using a temporary UnknownManager representing a single
-  //    scalar unknown per spatial node.
-  const UnknownManager temp_unitary_uk_man({std::make_pair(UnknownType::SCALAR, 0)},
-                                           UnknownStorageType::NODAL);
-  const size_t num_local_spatial_dofs = sdm_.GetNumLocalDOFs(temp_unitary_uk_man);
-
   // ---------------------------------------------------------------------------
   // Phase 2: UPR-specific code modifications
   // ---------------------------------------------------------------------------
-  single_cell_block_size_ = num_local_spatial_dofs * this->num_angles_ * this->num_groups_;
+  const auto& grid = sdm_.GetGrid();
+  const auto& first_cell = grid->local_cells[0];
+  const size_t num_nodes_per_cell = sdm_.GetCellNumNodes(first_cell);
+  log.Log() << "[UPR] CBC_FLUDS: Number of nodes per cell: " << num_nodes_per_cell;
+
+  single_cell_block_size_ = num_nodes_per_cell * this->num_angles_ * this->num_groups_;
 
   // Allocate memory
   if (max_wavefront_size > 0 and single_cell_block_size_ > 0)

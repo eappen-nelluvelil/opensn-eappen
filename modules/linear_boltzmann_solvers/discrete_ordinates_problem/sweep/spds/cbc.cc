@@ -98,7 +98,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
           // If neighbor is local, it is a predecessor
           if (grid->IsCellLocal(cell.faces[f].neighbor_id))
           {
-            task.predecessors.push_back(cell.faces[f].neighbor_id);
+            const auto& neighbor_cell = grid->cells[cell.faces[f].neighbor_id];
+            task.predecessors.push_back(neighbor_cell.local_id);
           }
         }
       }
