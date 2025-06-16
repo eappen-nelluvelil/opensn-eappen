@@ -36,6 +36,70 @@ CBC_AngleSet::GetCommunicator()
 AngleSetStatus
 CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
 {
+  // ---------------------------------------------------------------------------
+  // Phase 3: UPR-specific code modifications
+  // ---------------------------------------------------------------------------
+
+  // CALI_CXX_MARK_SCOPE("CBC_AngleSet::AngleSetAdvance");
+
+  // if (executed_)
+  //   return AngleSetStatus::FINISHED;
+
+  // if (current_task_list_.empty())
+  //   current_task_list_ = cbc_spds_.GetTaskList();
+
+  // sweep_chunk.SetAngleSet(*this);
+
+  // auto tasks_who_received_data = async_comm_.ReceiveData();
+
+  // for (const uint64_t task_number : tasks_who_received_data)
+  //   --current_task_list_[task_number].num_dependencies;
+
+  // async_comm_.SendData();
+
+  // // Check if boundaries allow for execution
+  // for (auto& [bid, boundary] : boundaries_)
+  //   if (not boundary->CheckAnglesReadyStatus(angles_))
+  //     return AngleSetStatus::NOT_FINISHED;
+
+  // bool all_tasks_completed = true;
+  // bool a_task_executed = true;
+  // while (a_task_executed)
+  // {
+  //   a_task_executed = false;
+  //   for (auto& cell_task : current_task_list_)
+  //   {
+  //     if (not cell_task.completed)
+  //       all_tasks_completed = false;
+  //     if (cell_task.num_dependencies == 0 and not cell_task.completed)
+  //     {
+  //       sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+  //       sweep_chunk.Sweep(*this);
+
+  //       for (uint64_t local_task_num : cell_task.successors)
+  //         --current_task_list_[local_task_num].num_dependencies;
+
+  //       cell_task.completed = true;
+  //       a_task_executed = true;
+  //       async_comm_.SendData();
+  //     }
+  //   } // for cell_task
+  //   async_comm_.SendData();
+  // }
+
+  // const bool all_messages_sent = async_comm_.SendData();
+
+  // if (all_tasks_completed and all_messages_sent)
+  // {
+  //   // Update boundary readiness
+  //   for (auto& [bid, boundary] : boundaries_)
+  //     boundary->UpdateAnglesReadyStatus(angles_);
+  //   executed_ = true;
+  //   return AngleSetStatus::FINISHED;
+  // }
+
+  // return AngleSetStatus::NOT_FINISHED;
+
   CALI_CXX_MARK_SCOPE("CBC_AngleSet::AngleSetAdvance");
 
   if (executed_)
@@ -44,7 +108,16 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (current_task_list_.empty())
     current_task_list_ = cbc_spds_.GetTaskList();
 
-  sweep_chunk.SetAngleSet(*this);
+  // Cast to CBC_FLUDS to access AllocateForCell and DeallocateForCell methods
+  auto* cbc_fluds = dynamic_cast<CBC_FLUDS*>(&*fluds_);
+  if (!cbc_fluds)
+  {
+    throw std::runtime_error(
+      "[UPR] CBC_AngleSet::AngleSetAdvance: Failed to cast FLUDS pointer to CBC_FLUDS.");
+  }
+  // Cast to CBCSweepChunk to access new Sweep method
+  auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);
+  cbc_sweep_chunk.SetAngleSet(*this);
 
   auto tasks_who_received_data = async_comm_.ReceiveData();
 
@@ -67,16 +140,47 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     {
       if (not cell_task.completed)
         all_tasks_completed = false;
+
       if (cell_task.num_dependencies == 0 and not cell_task.completed)
       {
-        sweep_chunk.SetCell(cell_task.cell_ptr, *this);
-        sweep_chunk.Sweep(*this);
+        // sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+        // sweep_chunk.Sweep(*this);
 
-        for (uint64_t local_task_num : cell_task.successors)
-          --current_task_list_[local_task_num].num_dependencies;
+        // for (uint64_t local_task_num : cell_task.successors)
+        //   --current_task_list_[local_task_num].num_dependencies;
+
+        // cell_task.completed = true;
+        // a_task_executed = true;
+        // async_comm_.SendData();
+
+        // 1. Allocate memory for current cell's outgoing angular fluxes
+        double* psi_out_block = cbc_fluds->AllocateForCell(cell_task.reference_id);
+
+        // 2. Sweep the cell
+        cbc_sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+        cbc_sweep_chunk.Sweep(*this, psi_out_block);
 
         cell_task.completed = true;
         a_task_executed = true;
+
+        // 3. Update successors' dependency counts
+        for (uint64_t local_task_num : cell_task.successors)
+          --current_task_list_[local_task_num].num_dependencies;
+
+        // 4. Update predecessors' consumption counts, and deallocate if
+        // necessary
+        for (uint64_t predecessor_id : cell_task.predecessors)
+        {
+          auto& predecessor_task = current_task_list_[predecessor_id];
+          --predecessor_task.successor_consumption_count;
+
+          // If all successors have been consumed, deallocate the psi block
+          if (predecessor_task.successor_consumption_count == 0)
+          {
+            cbc_fluds->DeallocateForCell(predecessor_id);
+          }
+        }
+
         async_comm_.SendData();
       }
     } // for cell_task
@@ -95,6 +199,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   }
 
   return AngleSetStatus::NOT_FINISHED;
+  // ---------------------------------------------------------------------------
 }
 
 void

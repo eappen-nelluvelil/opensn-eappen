@@ -23,12 +23,11 @@ class Cell;
  * This class manages the storage and access of angular flux data during a CBC sweep.
  *
  * It provides methods to access:
- * - Upwind angular flux data from local neighbor cells (read from `local_psi_data_`)
- * - Storage locations for downwind angular flux data for the current cell (written to
-`local_psi_data_`)
+ * - Upwind angular flux data from local neighbor cells
+ * - Storage locations for downwind angular flux data for the current cell 
  * - Upwind angular flux data received from remote MPI locations.
  *
- * The layout of `local_psi_data_` is spatial DOF major -> angle in set major -> group major
+ * The layout of local cell angular flux data is spatial DOF major -> angle in set major -> group major
  */
 class CBC_FLUDS : public FLUDS
 {

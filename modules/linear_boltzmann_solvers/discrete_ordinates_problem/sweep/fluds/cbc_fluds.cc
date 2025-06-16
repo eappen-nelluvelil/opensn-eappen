@@ -100,7 +100,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   {
     void* initial_chunk = memory_pool_.allocate(max_wavefront_size * single_cell_block_size_);
     memory_pool_.deallocate(initial_chunk, max_wavefront_size * single_cell_block_size_);
-    log.Log() << "[UPR] CBC_FLUDS: Memory pool initialized for maximum wavefront size of"
+    log.Log() << "[UPR] CBC_FLUDS: Memory pool initialized for maximum wavefront size of "
               << max_wavefront_size << " cells.";
   }
   // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ const double*
 CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor) const
 {
   // Stride to jump from one spatial DOF's full block of (angle-group) data to the next
-  // spatial DOF's block within the compact `local_psi_data_`.
+  // spatial DOF's block
   const size_t node_stride_compact = this->num_angles_ * this->num_groups_;
 
   // Use a temporary unitary UnknownManager to get the "flat" spatial DOF index
@@ -128,7 +128,7 @@ CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor) const
   const int64_t node0_spatial_map =
     sdm_.MapDOFLocal(face_neighbor, 0, temp_unitary_uk_man, 0, 0); // Use local temp manager
 
-  // Offset to the start of the neighbor cell's data block in the compact local_psi_data_.
+  // Offset to the start of the neighbor cell's data block
   const int64_t offset = node0_spatial_map * node_stride_compact;
 
   if (offset < 0 || static_cast<size_t>(offset) >= local_psi_data_.size())

@@ -60,8 +60,8 @@ public:
    *
    * This method initializes internal references (like `fluds_`) and calculates
    * necessary strides based on the properties of the given `AngleSet` and its
-   * associated `LBSGroupset`. This includes strides for both the compact
-   * `local_psi_data_` in `CBC_FLUDS` and for remote communication buffers.
+   * associated `LBSGroupset`. This includes strides for both local cell angular fluxes in
+   * `CBC_FLUDS` and for remote communication buffers.
    *
    * @param angle_set Reference to the current `AngleSet` being processed.
    */
@@ -79,44 +79,55 @@ public:
    */
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
 
-  /**
-   * Performs the discrete ordinates sweep calculation for the currently
-   *        set cell, for all angles and groups within the provided `AngleSet`.
-   *
-   * This is the core computational method.
-   * It:
-   * - Assembles the local transport equation system for each angle and group.
-   * - Retrieves upwind angular fluxes from local neighbors (via `CBC_FLUDS::local_psi_data_`),
-   *   remote locations (via MPI data managed by `CBC_FLUDS`), or boundaries.
-   * - Solves the local system for the outgoing angular fluxes at the cell nodes.
-   * - Updates the global scalar flux moments (`destination_phi_`).
-   * - If `save_angular_flux_` is true, stores the computed angular fluxes into
-   *   the global angular flux vector (`destination_psi_`).
-   * - Propagates outgoing angular fluxes to local downwind neighbors (by writing
-   *   to `CBC_FLUDS::local_psi_data_`) or stages them for MPI transmission
-   *   to remote downwind neighbors.
-   *
-   * @param angle_set Reference to the current `AngleSet` being swept.
-   */
-  void Sweep(AngleSet& angle_set) override;
+  // ---------------------------------------------------------------------------
+  // Phase 2: UPR-specific code modifications
+  // ---------------------------------------------------------------------------
+
+  // /**
+  //  * Performs the discrete ordinates sweep calculation for the currently
+  //  *        set cell, for all angles and groups within the provided `AngleSet`.
+  //  *
+  //  * This is the core computational method.
+  //  * It:
+  //  * - Assembles the local transport equation system for each angle and group.
+  //  * - Retrieves upwind angular fluxes from local neighbors.
+  //  *   remote locations (via MPI data managed by `CBC_FLUDS`), or boundaries.
+  //  * - Solves the local system for the outgoing angular fluxes at the cell nodes.
+  //  * - Updates the global scalar flux moments (`destination_phi_`).
+  //  * - If `save_angular_flux_` is true, stores the computed angular fluxes into
+  //  *   the global angular flux vector (`destination_psi_`).
+  //  * - Propagates outgoing angular fluxes to local downwind neighbors or stages them for MPI
+  //  * transmission to remote downwind neighbors.
+  //  *
+  //  * @param angle_set Reference to the current `AngleSet` being swept.
+  //  */
+  // void Sweep(AngleSet& angle_set) override;
+
+  // psi_out_block: pointer to pre-allocated memory block where outgoing angular
+  // for the current cell should be stored
+  void Sweep(AngleSet& angle_set, double* psi_out_block);
+
+  // Override of base class virtual function is a dummy method
+  void Sweep(AngleSet& angle_set) override {}
+
+  // ---------------------------------------------------------------------------
 
 private:
-  CBC_FLUDS* fluds_; //< Pointer to the CBC_FLUDS for the current AngleSet.
-  size_t gs_size_;   //< Number of energy groups in the parent LBSGroupset.
-  int gs_gi_;        //< Global starting group index of the parent LBSGroupset.
+  CBC_FLUDS* fluds_; // Pointer to the CBC_FLUDS for the current AngleSet.
+  size_t gs_size_;   // Number of energy groups in the parent LBSGroupset.
+  int gs_gi_;        // Global starting group index of the parent LBSGroupset.
 
-  // --- Strides for accessing `local_psi_data_` in `CBC_FLUDS` ---
+  // --- Strides for accessing local cell angular fluxes in `CBC_FLUDS` ---
 
   // Number of angular directions managed by the current AngleSet.
   size_t num_angles_in_set_local_;
 
   // Stride to jump between data for different angles (local to AngleSet)
-  // for the same spatial DOF within the compact `local_psi_data_`.
+  // for the same spatial DOF
   // Equal to `gs_size_` (number of groups).
   size_t local_compact_angle_stride_;
 
-  // Stride to jump between data for different spatial DOFs (nodes) within
-  // the compact `local_psi_data_`.
+  // Stride to jump between data for different spatial DOFs (nodes)
   // Equal to `num_angles_in_set_local_ * gs_size_`.
   size_t local_compact_node_stride_;
 
