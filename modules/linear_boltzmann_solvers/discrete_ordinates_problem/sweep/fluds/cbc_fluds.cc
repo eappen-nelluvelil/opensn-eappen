@@ -24,8 +24,6 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     memory_pool_(),
     psi_allocator_(&memory_pool_) // Point the allocator to the memory pool
 {
-  // --- Calculate required size for the optimized `local_psi_data_` ---
-
   // 1. Get number of purely spatial DOFs on this MPI rank.
   //    This is achieved by using a temporary UnknownManager representing a single
   //    scalar unknown per spatial node.
@@ -33,19 +31,15 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                                            UnknownStorageType::NODAL);
   const size_t num_local_spatial_dofs = sdm_.GetNumLocalDOFs(temp_unitary_uk_man);
 
-  // 2. Calculate the required size for the `local_psi_data_` vector.
   //    Layout: spatial DOF major -> angle in set major -> group major
   //    @note `this->num_angles_` = Number of angles specific to this AngleSet
   //    @note `this->num_groups_` = Number of groups specific to this AngleSet
   size_t local_psi_data_size = num_local_spatial_dofs * this->num_angles_ * this->num_groups_;
 
-  // 3. Allocate the local_psi_data_ vector.
-  local_psi_data_.assign(local_psi_data_size, 0.0);
-
   // --- Verification logging ---
   // Calculate what the old size would have been for comparison,
-  // when `local_psi_data_` was sized to account for the number of angles
-  // in the groupset's qaudrature
+  // when previous local cell angular flux storage was sized to account for the
+  // number of angles in the groupset's quadrature
 
   // Number of angles in the parent LBSGroupset's full quadrature
   const size_t num_angles_in_gs_quadrature = psi_uk_man_.GetNumberOfUnknowns();
@@ -56,13 +50,6 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
 
   // For direct comparison, get size using the LBSGroupset's UnknownManager
   size_t size_before_doubles_direct = sdm.GetNumLocalDOFs(psi_uk_man);
-
-  if (local_psi_data_.size() != local_psi_data_size) // Sanity check allocation
-  {
-    log.Log0Warning() << "CBC_FLUDS Warning: Allocated local_psi_data_ size ("
-                      << local_psi_data_.size() << ") does not match calculated size ("
-                      << local_psi_data_size << ").";
-  }
 
   const double mb_divisor = 1024.0 * 1024.0; // For conversion to MBs
   auto size_before_mb = static_cast<double>(size_before_doubles_calc * sizeof(double)) / mb_divisor;
@@ -162,7 +149,8 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
 double*
 CBC_FLUDS::AllocateForCell(uint64_t cell_local_id)
 {
-  if (single_cell_block_size_ == 0) return nullptr;
+  if (single_cell_block_size_ == 0)
+    return nullptr;
 
   // Polymorphic allocator handles getting a block from the pool
   double* block_ptr = psi_allocator_.allocate(single_cell_block_size_);
@@ -173,15 +161,15 @@ CBC_FLUDS::AllocateForCell(uint64_t cell_local_id)
 void
 CBC_FLUDS::DeallocateForCell(uint64_t cell_local_id)
 {
-  if (single_cell_block_size_ == 0) return;
+  if (single_cell_block_size_ == 0)
+    return;
 
   auto it = cell_memory_map_.find(cell_local_id);
   if (it == cell_memory_map_.end())
   {
     std::ostringstream err_stream;
     err_stream << "CBC_FLUDS::DeallocateForCell: Attempted to deallocate memory for cell "
-               << cell_local_id
-               << " that has no allocated block.";
+               << cell_local_id << " that has no allocated block.";
     throw std::runtime_error(err_stream.str());
   }
 
@@ -197,9 +185,8 @@ CBC_FLUDS::GetPsiForCell(uint64_t cell_local_id) const
   if (it == cell_memory_map_.end())
   {
     std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetPsiForCell: Attempted to get psi for cell "
-               << cell_local_id
-               << " that has no allocated block.";   
+    err_stream << "CBC_FLUDS::GetPsiForCell: Attempted to get psi for cell " << cell_local_id
+               << " that has no allocated block.";
     throw std::runtime_error(err_stream.str());
   }
 
