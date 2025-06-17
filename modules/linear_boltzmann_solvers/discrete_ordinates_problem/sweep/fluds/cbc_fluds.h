@@ -36,7 +36,8 @@ public:
             size_t num_angles, // Number of angles in THIS specific AngleSet
             const CBC_FLUDSCommonData& common_data,
             const SpatialDiscretization& sdm,
-            size_t max_wavefront_size);
+            size_t max_wavefront_size,
+            size_t max_num_cell_dofs);
 
   /**
    * Gets the common data associated with this FLUDS instance.

@@ -1042,7 +1042,8 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                       *discretization_,
-                                      max_wavefront_size);
+                                      max_wavefront_size,
+                                      max_cell_dof_count_);
         // ---------------------------------------------------------------------
 
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,

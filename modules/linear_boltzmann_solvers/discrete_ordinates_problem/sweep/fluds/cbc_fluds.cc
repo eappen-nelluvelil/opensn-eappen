@@ -15,7 +15,8 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      size_t num_angles,
                      const CBC_FLUDSCommonData& common_data,
                      const SpatialDiscretization& sdm,
-                     size_t max_wavefront_size)
+                     size_t max_wavefront_size,
+                     size_t max_num_cell_dofs)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     sdm_(sdm),
@@ -25,12 +26,9 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   // ---------------------------------------------------------------------------
   // Phase 2: UPR-specific code modifications
   // ---------------------------------------------------------------------------
-  const auto& grid = sdm_.GetGrid();
-  const auto& first_cell = grid->local_cells[0];
-  const size_t num_nodes_per_cell = sdm_.GetCellNumNodes(first_cell);
-  log.Log() << "[UPR] CBC_FLUDS: Number of nodes per cell: " << num_nodes_per_cell;
+  log.Log() << "[UPR] CBC_FLUDS: Max number of spatial DOFs per cell: " << max_num_cell_dofs;
 
-  single_cell_block_size_ = num_nodes_per_cell * this->num_angles_ * this->num_groups_;
+  single_cell_block_size_ = max_num_cell_dofs * this->num_angles_ * this->num_groups_;
 
   // Allocate memory
   if (max_wavefront_size > 0 and single_cell_block_size_ > 0)
