@@ -36,10 +36,6 @@ CBC_AngleSet::GetCommunicator()
 AngleSetStatus
 CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
 {
-  // ---------------------------------------------------------------------------
-  // Phase 3: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
-
   CALI_CXX_MARK_SCOPE("CBC_AngleSet::AngleSetAdvance");
 
   if (executed_)
@@ -57,7 +53,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     throw std::runtime_error(
       "[UPR] CBC_AngleSet::AngleSetAdvance: Failed to cast FLUDS pointer to CBC_FLUDS.");
   }
-  // Cast to CBCSweepChunk to access new Sweep method
+  // Cast to CBCSweepChunk to access new, overridden Sweep method
   auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);
   cbc_sweep_chunk.SetAngleSet(*this);
 
@@ -85,22 +81,21 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
       if (cell_task.num_dependencies == 0 and not cell_task.completed)
       {
-        // 1. Allocate memory for current cell's outgoing angular fluxes
+        // Allocate memory for current cell's outgoing angular fluxes
         double* psi_out_block = cbc_fluds->AllocateForCell(cell_task.reference_id);
 
-        // 2. Sweep the cell
+        // Sweep the cell
         cbc_sweep_chunk.SetCell(cell_task.cell_ptr, *this);
         cbc_sweep_chunk.Sweep(*this, psi_out_block);
 
         cell_task.completed = true;
         a_task_executed = true;
 
-        // 3. Update successors' dependency counts
+        // Update successors' dependency counts
         for (uint64_t local_task_num : cell_task.successors)
           --current_task_list_[local_task_num].num_dependencies;
 
-        // 4. Update predecessors' consumption counts, and deallocate if
-        // necessary
+        // Update predecessors' consumption counts, and deallocate if necessary
         for (uint64_t predecessor_id : cell_task.predecessors)
         {
           auto& predecessor_task = current_task_list_[predecessor_id];
@@ -131,7 +126,6 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   }
 
   return AngleSetStatus::NOT_FINISHED;
-  // ---------------------------------------------------------------------------
 }
 
 void

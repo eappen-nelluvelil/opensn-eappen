@@ -42,30 +42,25 @@ struct Task
   const Cell* cell_ptr;
   bool completed = false;
 
-  // ---------------------------------------------------------------------------
-  // Phase 2: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
-
   // List of local cells that are upwind of this task
   std::vector<uint64_t> predecessors;
 
   // The number of direct downwind successors that have not yet been swept
   // When this count = 0, this task's data can be deallocated
   unsigned int successor_consumption_count = 0;
-  // ---------------------------------------------------------------------------
 };
 
-/// Stage Task Dependency Graphs
+// Stage Task Dependency Graphs
 struct STDG
 {
   std::vector<int> item_id;
 };
 
-/// Communicates location by location dependencies.
+// Communicates location by location dependencies.
 void CommunicateLocationDependencies(const std::vector<int>& location_dependencies,
                                      std::vector<std::vector<int>>& global_dependencies);
 
-/// Print a sweep ordering to file.
+// Print a sweep ordering to file.
 void PrintSweepOrdering(SPDS* sweep_order, std::shared_ptr<MeshContinuum> vol_continuum);
 
 } // namespace opensn

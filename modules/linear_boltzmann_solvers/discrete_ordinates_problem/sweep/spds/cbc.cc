@@ -70,10 +70,6 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   constexpr auto INCOMING = FaceOrientation::INCOMING;
   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
 
-  // ---------------------------------------------------------------------------
-  // Phase 2: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
-
   task_list_.assign(num_loc_cells, Task());
   std::vector<int> in_degree(num_loc_cells, 0);
 
@@ -150,8 +146,6 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   }
 
   log.Log() << "[UPR] CBC_SPDS: Maximum wavefront size is " << max_wavefront_size_ << " cells.";
-
-  // ---------------------------------------------------------------------------
 }
 
 const std::vector<Task>&

@@ -8,6 +8,8 @@
 #include <map>
 #include <functional>
 #include <memory_resource>
+#include <vector>
+#include <cstddef>
 
 namespace opensn
 {
@@ -16,19 +18,6 @@ class UnknownManager;
 class SpatialDiscretization;
 class Cell;
 
-/**
- * @class CBC_FLUDS
- * Flux data structures (FLUDS) specific to the cell-by-cell (CBC) sweep algorithm.
- *
- * This class manages the storage and access of angular flux data during a CBC sweep.
- *
- * It provides methods to access:
- * - Upwind angular flux data from local neighbor cells
- * - Storage locations for downwind angular flux data for the current cell 
- * - Upwind angular flux data received from remote MPI locations.
- *
- * The layout of local cell angular flux data is spatial DOF major -> angle in set major -> group major
- */
 class CBC_FLUDS : public FLUDS
 {
 public:
@@ -39,9 +28,6 @@ public:
             size_t max_wavefront_size,
             size_t max_num_cell_dofs);
 
-  /**
-   * Gets the common data associated with this FLUDS instance.
-   */
   const FLUDSCommonData& GetCommonData() const;
 
   // --- Methods for non-local (remote) angular flux data ---
@@ -75,14 +61,9 @@ public:
                                      unsigned int face_node_mapped,
                                      unsigned int angle_set_index);
 
-  // ---------------------------------------------------------------------------
-  // Phase 2: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
   double* AllocateForCell(uint64_t cell_local_id);
   void DeallocateForCell(uint64_t cell_local_id);
   const double* GetPsiForCell(uint64_t cell_local_id) const;
-
-  // ---------------------------------------------------------------------------
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -118,12 +99,6 @@ public:
   // Key for messages from deploying locations: pairs a cell's global ID with a face index.
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
-  /**
-   * Gets a reference to the map storing messages received from
-   *        deploying (upwind, off-processor) locations.
-   * @return Mutable reference to the map. Keys are `CellFaceKey` (local cell global ID,
-   *         local face index), values are vectors of angular flux data.
-   */
   std::map<CellFaceKey, std::vector<double>>& GetDeplocsOutgoingMessages()
   {
     return deplocs_outgoing_messages_;
@@ -134,11 +109,15 @@ private:
 
   const SpatialDiscretization& sdm_;
 
+  // Size in doubles for a single cell's full psi data
+  size_t single_cell_block_size_ = 0;
 
-  // ---------------------------------------------------------------------------
-  // Phase 2: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
-  
+  // Raw memory buffer for fixed-size pool allocator memory pool
+  std::vector<std::byte> memory_buffer_;
+
+  // Monotonic buffer resource that manages the memory buffer
+  std::pmr::monotonic_buffer_resource upstream_resource_;
+
   // Memory resource that manages pools of fixed-sized blocks
   std::pmr::unsynchronized_pool_resource memory_pool_;
 
@@ -147,10 +126,6 @@ private:
 
   // Maps a cell local ID to its currently allocated memory block
   std::map<uint64_t, double*> cell_memory_map_;
-
-  // Size in doubles for a single cell's full psi data
-  size_t single_cell_block_size_ = 0;
-  // ---------------------------------------------------------------------------
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;

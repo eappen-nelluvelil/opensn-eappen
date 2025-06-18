@@ -10,38 +10,9 @@ namespace opensn
 {
 class CellMapping;
 
-/**
- * @class CBCSweepChunk
- * Implements the core sweep operation for a single cell within the
- *        cell-by-cell (CBC) sweep algorithm.
- *
- * This class is responsible for performing the discrete ordinates transport
- * calculation on a given cell for all angles and groups managed by its
- * current `AngleSet`. It interacts with a `CBC_FLUDS` object to obtain
- * upwind angular flux data (from local neighbors, MPI remote buffers, or boundaries)
- * and to store outgoing angular flux data (to local neighbors or MPI send buffers).
- */
 class CBCSweepChunk : public SweepChunk
 {
 public:
-  /**
-   * Constructs a CBCSweepChunk object.
-   * @param destination_phi Reference to the global vector for storing scalar flux moments.
-   * @param destination_psi Reference to the global vector for storing angular fluxes
-   *                        (written to if `save_angular_flux` is enabled).
-   *                        This refers to `LBSSolver::psi_new_local_[groupset_id]`.
-   * @param grid Shared pointer to the mesh continuum.
-   * @param discretization Reference to the spatial discretization manager.
-   * @param unit_cell_matrices Vector of precomputed unit cell matrices.
-   * @param cell_transport_views Vector of LBS cell views for transport properties.
-   * @param densities Vector of cell material densities.
-   * @param source_moments Vector of source moments.
-   * @param groupset Reference to the LBS groupset being solved.
-   * @param xs Map of material IDs to multi-group cross sections.
-   * @param num_moments Number of flux moments.
-   * @param max_num_cell_dofs Maximum number of degrees of freedom on any cell
-   *                          (used for sizing local solver matrices).
-   */
   CBCSweepChunk(std::vector<double>& destination_phi,
                 std::vector<double>& destination_psi,
                 const std::shared_ptr<MeshContinuum> grid,
@@ -55,42 +26,15 @@ public:
                 int num_moments,
                 int max_num_cell_dofs);
 
-  /**
-   * Sets the current AngleSet for this sweep chunk.
-   *
-   * This method initializes internal references (like `fluds_`) and calculates
-   * necessary strides based on the properties of the given `AngleSet` and its
-   * associated `LBSGroupset`. This includes strides for both local cell angular fluxes in
-   * `CBC_FLUDS` and for remote communication buffers.
-   *
-   * @param angle_set Reference to the current `AngleSet` being processed.
-   */
   void SetAngleSet(AngleSet& angle_set) override;
 
-  /**
-   * Sets the current cell to be processed by the sweep chunk.
-   *
-   * This method caches pointers and properties related to the `cell_ptr`,
-   * such as its local ID, cell mapping, transport view, and precomputed
-   * unit cell matrices, to optimize access during the `Sweep` operation.
-   *
-   * @param cell_ptr Pointer to the constant `Cell` object to be processed.
-   * @param angle_set Reference to the current `AngleSet`
-   */
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
-
-  // ---------------------------------------------------------------------------
-  // Phase 3: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
 
   // psi_out_block: pointer to pre-allocated memory block where outgoing angular
   // for the current cell should be stored
   void Sweep(AngleSet& angle_set, double* psi_out_block);
 
-  // Override of base class virtual function is a dummy method
   void Sweep(AngleSet& angle_set) override {}
-
-  // ---------------------------------------------------------------------------
 
 private:
   CBC_FLUDS* fluds_; // Pointer to the CBC_FLUDS for the current AngleSet.

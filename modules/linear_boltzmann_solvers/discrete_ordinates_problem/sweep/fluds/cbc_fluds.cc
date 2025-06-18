@@ -20,25 +20,15 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     sdm_(sdm),
-    memory_pool_(),
-    psi_allocator_(&memory_pool_) // Point the allocator to the memory pool
+    single_cell_block_size_(max_num_cell_dofs * num_angles * num_groups),
+    memory_buffer_(max_wavefront_size * single_cell_block_size_ * sizeof(double)),
+    upstream_resource_(memory_buffer_.data(), memory_buffer_.size()),
+    memory_pool_(&upstream_resource_), // Initialize the memory pool with the resource
+    psi_allocator_(&memory_pool_)      // Point the allocator to the memory pool
 {
-  // ---------------------------------------------------------------------------
-  // Phase 2: UPR-specific code modifications
-  // ---------------------------------------------------------------------------
-  log.Log() << "[UPR] CBC_FLUDS: Max number of spatial DOFs per cell: " << max_num_cell_dofs;
-
-  single_cell_block_size_ = max_num_cell_dofs * this->num_angles_ * this->num_groups_;
-
-  // Allocate memory
-  if (max_wavefront_size > 0 and single_cell_block_size_ > 0)
-  {
-    void* initial_chunk = memory_pool_.allocate(max_wavefront_size * single_cell_block_size_);
-    memory_pool_.deallocate(initial_chunk, max_wavefront_size * single_cell_block_size_);
-    log.Log() << "[UPR] CBC_FLUDS: Memory pool initialized for maximum wavefront size of "
-              << max_wavefront_size << " cells.";
-  }
-  // ---------------------------------------------------------------------------
+  log.Log() << "CBC_FLUDS: Max number of spatial DOFs per cell: " << max_num_cell_dofs;
+  log.Log() << "CBC_FLUDS: Fixed-size memory pool initialized with "
+            << memory_buffer_.size() / (1024.0 * 1024.0) << " MB.";
 }
 
 const FLUDSCommonData&

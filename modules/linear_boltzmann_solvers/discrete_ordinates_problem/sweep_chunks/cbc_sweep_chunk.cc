@@ -38,7 +38,6 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
     fluds_(nullptr),
     gs_size_(0),
     gs_gi_(0),
-    // Initialize new stride members
     num_angles_in_set_local_(0),
     local_compact_angle_stride_(0),
     local_compact_node_stride_(0),
@@ -191,10 +190,6 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
 
           const double* psi_upwind_groups_ptr = nullptr;
 
-          // -------------------------------------------------------------------
-          // Phase 3: UPR-specific code modifications
-          // -------------------------------------------------------------------
-
           // Local upwind read
           if (is_local_face)
           {
@@ -209,7 +204,6 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
 
             psi_upwind_groups_ptr = psi_upwind_cell_base_ptr + offset_in_cell_block;
           }
-          // -------------------------------------------------------------------
           else if (not is_boundary_face) // Remote face
           {
             // Remote upwind read (interprets multi-AngleSet-angle packet)
@@ -238,8 +232,8 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
             }
           }
         } // for fj (face basis function)
-      } // for fi (face node)
-    } // for f (face)
+      }   // for fi (face node)
+    }     // for f (face)
 
     // Volumetric source term (Q) and Mass term (Sigma_t * M * psi) assembly
     for (int gsg = 0; gsg < gs_size_; ++gsg)
@@ -400,9 +394,6 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
         // Pointer to start of group data for outgoing psi
         double* psi_downwind_groups_ptr = nullptr;
 
-        // ---------------------------------------------------------------------
-        // Phase 3: UPR-specific code modifications
-        // ---------------------------------------------------------------------
         if (is_local_face)
         {
           // Base pointer is now block allocated by the AngleSet for this cell
@@ -414,7 +405,6 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
                                                      // group block
           psi_downwind_groups_ptr = psi_downwind_cell_base_ptr + offset_in_cell_block;
         }
-        // ---------------------------------------------------------------------
         else if (not is_boundary_face) // Remote face
         {
           // Remote downwind write (indexes into multi-AngleSet-angle packet)
@@ -450,8 +440,8 @@ CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
           }
         }
       } // for fi (face node)
-    } // for f (outgoing face)
-  } // for as_ss_idx (angle in set)
+    }   // for f (outgoing face)
+  }     // for as_ss_idx (angle in set)
 }
 
 } // namespace opensn
