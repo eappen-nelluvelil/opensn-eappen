@@ -51,7 +51,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (!cbc_fluds)
   {
     throw std::runtime_error(
-      "[UPR] CBC_AngleSet::AngleSetAdvance: Failed to cast FLUDS pointer to CBC_FLUDS.");
+      "CBC_AngleSet::AngleSetAdvance: Failed to cast FLUDS pointer to CBC_FLUDS.");
   }
   // Cast to CBCSweepChunk to access new, overridden Sweep method
   auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);

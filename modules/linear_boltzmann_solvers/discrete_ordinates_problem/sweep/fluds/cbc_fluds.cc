@@ -40,6 +40,8 @@ CBC_FLUDS::GetCommonData() const
 const std::vector<double>&
 CBC_FLUDS::GetNonLocalUpwindData(uint64_t cell_global_id, unsigned int face_id) const
 {
+  CALI_CXX_MARK_SCOPE("CBC_FLUDS::GetNonLocalUpwindData");
+
   return deplocs_outgoing_messages_.at({cell_global_id, face_id});
 }
 
@@ -48,6 +50,8 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                 unsigned int face_node_mapped,
                                 unsigned int angle_set_index)
 {
+  CALI_CXX_MARK_SCOPE("CBC_FLUDS::GetNonLocalUpwindPsi");
+
   // Stride to jump from one face node's data block to the next within `psi_data`.
   // Each face node block contains data for all angles in this AngleSet and all groups.
   const size_t num_psi_per_face_node_for_set = this->num_angles_ * this->num_groups_;
@@ -87,6 +91,8 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
 double*
 CBC_FLUDS::AllocateForCell(uint64_t cell_local_id)
 {
+  CALI_CXX_MARK_SCOPE("CBC_FLUDS::AllocateForCell");
+
   if (single_cell_block_size_ == 0)
     return nullptr;
 
@@ -99,6 +105,8 @@ CBC_FLUDS::AllocateForCell(uint64_t cell_local_id)
 void
 CBC_FLUDS::DeallocateForCell(uint64_t cell_local_id)
 {
+  CALI_CXX_MARK_SCOPE("CBC_FLUDS::DeallocateForCell");
+
   if (single_cell_block_size_ == 0)
     return;
 

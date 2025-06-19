@@ -145,7 +145,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     }
   }
 
-  log.Log() << "[UPR] CBC_SPDS: Maximum wavefront size is " << max_wavefront_size_ << " cells.";
+  log.Log() << "CBC_SPDS: Maximum wavefront size is " << max_wavefront_size_ << " cells.";
 }
 
 const std::vector<Task>&
