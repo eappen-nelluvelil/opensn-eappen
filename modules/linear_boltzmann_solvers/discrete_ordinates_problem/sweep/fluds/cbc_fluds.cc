@@ -27,9 +27,13 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     psi_allocator_(&memory_pool_),     
     cell_memory_map_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr)
 {
+  const double bytes_to_mb_converstion_factor = 1024.0 * 1024.0;
+  const auto memory_buffer_size_in_mb = 
+    memory_buffer_.size() / bytes_to_mb_converstion_factor;
+
   log.Log() << "CBC_FLUDS: Max number of spatial DOFs per cell: " << max_num_cell_dofs;
   log.Log() << "CBC_FLUDS: Fixed-size memory pool initialized with "
-            << memory_buffer_.size() / (1024.0 * 1024.0) << " MB.";
+            << memory_buffer_size_in_mb << " MB.";
 }
 
 const FLUDSCommonData&
