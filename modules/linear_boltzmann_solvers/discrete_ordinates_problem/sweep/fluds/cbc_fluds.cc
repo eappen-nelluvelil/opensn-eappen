@@ -23,8 +23,8 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     single_cell_block_size_(max_num_cell_dofs * num_angles * num_groups),
     memory_buffer_(max_wavefront_size * single_cell_block_size_ * sizeof(double)),
     upstream_resource_(memory_buffer_.data(), memory_buffer_.size()),
-    memory_pool_(&upstream_resource_), // Initialize the memory pool with the resource
-    psi_allocator_(&memory_pool_),     // Point the allocator to the memory pool
+    memory_pool_(&upstream_resource_),
+    psi_allocator_(&memory_pool_),     
     cell_memory_map_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr)
 {
   log.Log() << "CBC_FLUDS: Max number of spatial DOFs per cell: " << max_num_cell_dofs;

@@ -12,6 +12,7 @@
 namespace opensn
 {
 
+// /*
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
                    const std::shared_ptr<MeshContinuum> grid,
                    bool allow_cycles)
@@ -62,7 +63,6 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                            "Cycles need to be allowed by the calling application.");
   }
 
-  // Create task list
   std::vector<std::vector<int>> global_dependencies;
   global_dependencies.resize(opensn::mpi_comm.size());
   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
@@ -70,55 +70,20 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   constexpr auto INCOMING = FaceOrientation::INCOMING;
   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
 
-  task_list_.assign(num_loc_cells, Task());
-  std::vector<int> in_degree(num_loc_cells, 0);
+  std::vector<int> local_in_degree(num_loc_cells, 0);
 
   for (const auto& cell : grid_->local_cells)
   {
-    const auto cell_local_id = cell.local_id;
-    auto& task = task_list_[cell_local_id];
-
-    task.reference_id = cell_local_id;
-    task.cell_ptr = &cell;
-
-    unsigned int current_cell_num_dependencies = 0;
-
-    for (size_t f = 0; f < cell.faces.size(); ++f)
-    {
-      if (cell_face_orientations_[cell_local_id][f] == INCOMING)
-      {
-        if (cell.faces[f].has_neighbor)
-        {
-          ++current_cell_num_dependencies;
-
-          // If neighbor is local, it is a predecessor
-          if (grid->IsCellLocal(cell.faces[f].neighbor_id))
-          {
-            const auto& neighbor_cell = grid->cells[cell.faces[f].neighbor_id];
-            task.predecessors.push_back(neighbor_cell.local_id);
-          }
-        }
-      }
-      else if (cell_face_orientations_[cell_local_id][f] == OUTGOING)
-      {
-        const auto& face = cell.faces[f];
-        if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-        {
-          task.successors.push_back(grid->cells[face.neighbor_id].local_id);
-        }
-      }
-    } // for f
-
-    task.num_dependencies = current_cell_num_dependencies;
-    in_degree[cell_local_id] = current_cell_num_dependencies;
-    task.successor_consumption_count = task.successors.size();
-  } // for local cells
+    const auto u = cell.local_id;
+    local_in_degree[u] = boost::in_degree(u, local_DG);
+  }
 
   // Use variant of Kahn's algorithm to find max wavefront width
   std::queue<uint64_t> ready_queue;
+  std::vector<int> kahn_in_degree = local_in_degree;
   for (unsigned int c = 0; c < num_loc_cells; ++c)
   {
-    if (in_degree[c] == 0)
+    if (kahn_in_degree[c] == 0)
     {
       ready_queue.push(c);
     }
@@ -127,16 +92,19 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   size_t live_cells_count = ready_queue.size();
   max_wavefront_size_ = std::max(max_wavefront_size_, live_cells_count);
 
-  while (not ready_queue.empty())
+  while (!ready_queue.empty())
   {
     uint64_t u = ready_queue.front();
     ready_queue.pop();
     --live_cells_count;
 
-    for (uint64_t v_id : task_list_[u].successors)
+    for (auto edge_it = boost::out_edges(u, local_DG).first;
+         edge_it != boost::out_edges(u, local_DG).second;
+         ++edge_it)
     {
-      --in_degree[v_id];
-      if (in_degree[v_id] == 0)
+      uint64_t v_id = boost::target(*edge_it, local_DG);
+      --kahn_in_degree[v_id];
+      if (kahn_in_degree[v_id] == 0)
       {
         ready_queue.push(v_id);
         ++live_cells_count;
@@ -146,7 +114,56 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   }
 
   log.Log() << "CBC_SPDS: Maximum wavefront size is " << max_wavefront_size_ << " cells.";
+
+  task_list_.assign(num_loc_cells, Task());
+
+  for (const auto& cell : grid_->local_cells)
+  {
+    const auto cell_local_id = cell.local_id;
+    auto& task = task_list_[cell_local_id];
+
+    // Get local dependencies from the graph
+    const unsigned int local_deps = local_in_degree[cell_local_id];
+
+    // Calculate remote dependencies
+    unsigned int remote_deps = 0;
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      if (cell_face_orientations_[cell_local_id][f] == INCOMING)
+      {
+        const auto& face = cell.faces[f];
+        if (face.has_neighbor and (not grid_->IsCellLocal(face.neighbor_id)))
+          ++remote_deps;
+      }
+    }
+
+    // Total dependencies for the scheduler
+    task.num_dependencies = local_deps + remote_deps;
+
+    task.reference_id = cell.local_id;
+    task.cell_ptr = &cell;
+
+    // Populate successors and predecessors from the local graph
+    for (auto edge_it = boost::out_edges(cell_local_id, local_DG).first;
+         edge_it != boost::out_edges(cell_local_id, local_DG).second;
+         ++edge_it)
+    {
+      task.successors.push_back(boost::target(*edge_it, local_DG));
+    }
+    for (auto edge_it = boost::in_edges(cell_local_id, local_DG).first;
+         edge_it != boost::in_edges(cell_local_id, local_DG).second;
+         ++edge_it)
+    {
+      task.predecessors.push_back(boost::source(*edge_it, local_DG));
+    }
+
+    task.successor_consumption_count = task.successors.size();
+  }
+
+  log.Log() << "CBC_SPDS: Task list initialized with " << task_list_.size()
+            << " tasks, max wavefront size: " << max_wavefront_size_;
 }
+// */
 
 const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
