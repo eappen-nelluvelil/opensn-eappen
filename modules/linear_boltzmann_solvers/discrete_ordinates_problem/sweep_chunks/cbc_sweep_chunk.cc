@@ -112,6 +112,8 @@ CBCSweepChunk::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
 void
 CBCSweepChunk::Sweep(AngleSet& angle_set, double* psi_out_block)
 {
+  CALI_CXX_MARK_SCOPE("CbcSweepChunk::Sweep");
+
   const auto& m2d_op = groupset_.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset_.quadrature->GetDiscreteToMomentOperator();
 

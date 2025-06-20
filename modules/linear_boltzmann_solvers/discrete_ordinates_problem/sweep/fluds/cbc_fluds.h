@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
+#include "caliper/cali.h"
 #include <map>
 #include <functional>
 #include <memory_resource>
@@ -125,7 +126,8 @@ private:
   std::pmr::polymorphic_allocator<double> psi_allocator_;
 
   // Maps a cell local ID to its currently allocated memory block
-  std::map<uint64_t, double*> cell_memory_map_;
+  // std::map<uint64_t, double*> cell_memory_map_;
+  std::vector<double*> cell_memory_map_;
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;

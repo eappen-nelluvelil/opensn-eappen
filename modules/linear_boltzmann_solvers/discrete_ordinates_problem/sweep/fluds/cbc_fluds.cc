@@ -24,7 +24,8 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     memory_buffer_(max_wavefront_size * single_cell_block_size_ * sizeof(double)),
     upstream_resource_(memory_buffer_.data(), memory_buffer_.size()),
     memory_pool_(&upstream_resource_), // Initialize the memory pool with the resource
-    psi_allocator_(&memory_pool_)      // Point the allocator to the memory pool
+    psi_allocator_(&memory_pool_),     // Point the allocator to the memory pool
+    cell_memory_map_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr)
 {
   log.Log() << "CBC_FLUDS: Max number of spatial DOFs per cell: " << max_num_cell_dofs;
   log.Log() << "CBC_FLUDS: Fixed-size memory pool initialized with "
@@ -41,7 +42,6 @@ const std::vector<double>&
 CBC_FLUDS::GetNonLocalUpwindData(uint64_t cell_global_id, unsigned int face_id) const
 {
   CALI_CXX_MARK_SCOPE("CBC_FLUDS::GetNonLocalUpwindData");
-
   return deplocs_outgoing_messages_.at({cell_global_id, face_id});
 }
 
@@ -51,7 +51,6 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
                                 unsigned int angle_set_index)
 {
   CALI_CXX_MARK_SCOPE("CBC_FLUDS::GetNonLocalUpwindPsi");
-
   // Stride to jump from one face node's data block to the next within `psi_data`.
   // Each face node block contains data for all angles in this AngleSet and all groups.
   const size_t num_psi_per_face_node_for_set = this->num_angles_ * this->num_groups_;
@@ -106,12 +105,28 @@ void
 CBC_FLUDS::DeallocateForCell(uint64_t cell_local_id)
 {
   CALI_CXX_MARK_SCOPE("CBC_FLUDS::DeallocateForCell");
+  
+  // if (single_cell_block_size_ == 0)
+  //   return;
+
+  // auto it = cell_memory_map_.find(cell_local_id);
+  // if (it == cell_memory_map_.end())
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::DeallocateForCell: Attempted to deallocate memory for cell "
+  //              << cell_local_id << " that has no allocated block.";
+  //   throw std::runtime_error(err_stream.str());
+  // }
+
+  // // Return the block to the pool via the allocator
+  // psi_allocator_.deallocate(it->second, single_cell_block_size_);
+  // cell_memory_map_.erase(it);
 
   if (single_cell_block_size_ == 0)
     return;
 
-  auto it = cell_memory_map_.find(cell_local_id);
-  if (it == cell_memory_map_.end())
+  double* block_ptr = cell_memory_map_[cell_local_id];
+  if (block_ptr == nullptr)
   {
     std::ostringstream err_stream;
     err_stream << "CBC_FLUDS::DeallocateForCell: Attempted to deallocate memory for cell "
@@ -120,15 +135,28 @@ CBC_FLUDS::DeallocateForCell(uint64_t cell_local_id)
   }
 
   // Return the block to the pool via the allocator
-  psi_allocator_.deallocate(it->second, single_cell_block_size_);
-  cell_memory_map_.erase(it);
+  psi_allocator_.deallocate(block_ptr, single_cell_block_size_);
+  cell_memory_map_[cell_local_id] = nullptr; // Mark as deallocated
 }
 
 const double*
 CBC_FLUDS::GetPsiForCell(uint64_t cell_local_id) const
 {
-  auto it = cell_memory_map_.find(cell_local_id);
-  if (it == cell_memory_map_.end())
+  CALI_CXX_MARK_SCOPE("CBC_FLUDS::GetPsiForCell");
+
+  // auto it = cell_memory_map_.find(cell_local_id);
+  // if (it == cell_memory_map_.end())
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::GetPsiForCell: Attempted to get psi for cell " << cell_local_id
+  //              << " that has no allocated block.";
+  //   throw std::runtime_error(err_stream.str());
+  // }
+
+  // return it->second;
+
+  double* block_ptr = cell_memory_map_[cell_local_id];
+  if (block_ptr == nullptr)
   {
     std::ostringstream err_stream;
     err_stream << "CBC_FLUDS::GetPsiForCell: Attempted to get psi for cell " << cell_local_id
@@ -136,7 +164,7 @@ CBC_FLUDS::GetPsiForCell(uint64_t cell_local_id) const
     throw std::runtime_error(err_stream.str());
   }
 
-  return it->second;
+  return block_ptr;
 }
 
 } // namespace opensn
