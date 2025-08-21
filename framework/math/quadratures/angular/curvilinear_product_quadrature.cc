@@ -3,6 +3,7 @@
 
 #include "framework/math/quadratures/angular/curvilinear_product_quadrature.h"
 #include "framework/math/quadratures/gausschebyshev_quadrature.h"
+#include "framework/runtime.h"
 #include "framework/logging/log.h"
 #include <algorithm>
 #include <limits>
@@ -14,7 +15,7 @@ namespace opensn
 GLProductQuadrature1DSpherical::GLProductQuadrature1DSpherical(int Npolar,
                                                                int scattering_order,
                                                                bool verbose)
-  : CurvilinearQuadrature(1, scattering_order)
+  : CurvilinearProductQuadrature(1, scattering_order)
 {
   if (Npolar % 2 != 0)
     throw std::invalid_argument("GLProductQuadrature1DSpherical: Npolar must be even.");
@@ -186,7 +187,7 @@ GLCProductQuadrature2DRZ::GLCProductQuadrature2DRZ(int Npolar,
                                                    int Nazimuthal,
                                                    int scattering_order,
                                                    bool verbose)
-  : CurvilinearQuadrature(2, scattering_order)
+  : CurvilinearProductQuadrature(2, scattering_order)
 {
   if (Npolar % 2 != 0)
     throw std::invalid_argument("GLCProductQuadraturee2DRZ: Npolar must be even.");

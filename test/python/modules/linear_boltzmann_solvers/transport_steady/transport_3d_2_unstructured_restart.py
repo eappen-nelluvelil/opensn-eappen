@@ -91,11 +91,11 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0, 1], "xs": xs_1g},
         ],
+        scattering_order=1,
         options={
             "boundary_conditions": [
                 {"name": "zmax", "type": "isotropic", "group_strength": bsrc},
             ],
-            "scattering_order": 1,
             "volumetric_sources": [mg_src1, mg_src2],
             "save_angular_flux": True,
             # restart_writes_enabled = True,
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     )
 
     # Initialize and execute solver
-    ss_solver = SteadyStateSolver(lbs_problem=phys)
+    ss_solver = SteadyStateSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()
 

@@ -100,14 +100,14 @@ if __name__ == "__main__":
             {"block_ids": [0], "xs": xs_graphite},
             {"block_ids": [1], "xs": xs_air},
         ],
+        scattering_order=1,
         options={
-            "scattering_order": 1,
             "max_ags_iterations": 1,
             "volumetric_sources": [mg_src0, mg_src1],
         },
     )
 
     # Initialize and Execute Solver
-    ss_solver = SteadyStateSolver(lbs_problem=phys)
+    ss_solver = SteadyStateSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()

@@ -17,7 +17,7 @@ OpenSnRegisterObjectParametersOnlyInNamespace(lbs, LBSGroupset);
 InputParameters
 LBSGroupset::GetInputParameters()
 {
-  InputParameters params = Object::GetInputParameters();
+  InputParameters params;
 
   params.SetGeneralDescription("Input Parameters for groupsets.");
 
@@ -96,7 +96,7 @@ LBSGroupset::Init(int aid)
   quadrature = nullptr;
   angle_agg = nullptr;
   master_num_ang_subsets = 1;
-  iterative_method = LinearSolver::IterativeMethod::PETSC_RICHARDSON;
+  iterative_method = LinearSystemSolver::IterativeMethod::PETSC_RICHARDSON;
   angleagg_method = AngleAggregationType::POLAR;
   residual_tolerance = 1.0e-6;
   max_iterations = 200;
@@ -125,7 +125,6 @@ LBSGroupset::LBSGroupset(int id)
 }
 
 LBSGroupset::LBSGroupset(const InputParameters& params, const int id, const LBSProblem& lbs_problem)
-  : Object(params)
 {
   Init(id);
 
@@ -157,7 +156,7 @@ LBSGroupset::LBSGroupset(const InputParameters& params, const int id, const LBSP
   }
 
   // Add quadrature
-  quadrature = params.GetParamValue<std::shared_ptr<AngularQuadrature>>("angular_quadrature");
+  quadrature = params.GetSharedPtrParam<AngularQuadrature>("angular_quadrature");
 
   // Angle aggregation
   const auto angle_agg_typestr = params.GetParamValue<std::string>("angle_aggregation_type");
@@ -173,13 +172,13 @@ LBSGroupset::LBSGroupset(const InputParameters& params, const int id, const LBSP
   // Inner solver
   const auto inner_linear_method = params.GetParamValue<std::string>("inner_linear_method");
   if (inner_linear_method == "classic_richardson")
-    iterative_method = LinearSolver::IterativeMethod::CLASSIC_RICHARDSON;
+    iterative_method = LinearSystemSolver::IterativeMethod::CLASSIC_RICHARDSON;
   else if (inner_linear_method == "petsc_richardson")
-    iterative_method = LinearSolver::IterativeMethod::PETSC_RICHARDSON;
+    iterative_method = LinearSystemSolver::IterativeMethod::PETSC_RICHARDSON;
   else if (inner_linear_method == "petsc_gmres")
-    iterative_method = LinearSolver::IterativeMethod::PETSC_GMRES;
+    iterative_method = LinearSystemSolver::IterativeMethod::PETSC_GMRES;
   else if (inner_linear_method == "petsc_bicgstab")
-    iterative_method = LinearSolver::IterativeMethod::PETSC_BICGSTAB;
+    iterative_method = LinearSystemSolver::IterativeMethod::PETSC_BICGSTAB;
 
   gmres_restart_intvl = params.GetParamValue<int>("gmres_restart_interval");
   allow_cycles = params.GetParamValue<bool>("allow_cycles");
@@ -201,6 +200,23 @@ LBSGroupset::LBSGroupset(const InputParameters& params, const int id, const LBSP
 
   wgdsa_string = params.GetParamValue<std::string>("wgdsa_petsc_options");
   tgdsa_string = params.GetParamValue<std::string>("tgdsa_petsc_options");
+}
+
+#ifndef __OPENSN_USE_CUDA__
+void
+LBSGroupset::InitializeGPUCarriers()
+{
+}
+
+void
+LBSGroupset::ResetGPUCarriers()
+{
+}
+#endif // __OPENSN_USE_CUDA__
+
+LBSGroupset::~LBSGroupset()
+{
+  ResetGPUCarriers();
 }
 
 } // namespace opensn

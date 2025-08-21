@@ -59,6 +59,7 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0], "xs": xs1g},
         ],
+        scattering_order=1,
         options={
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
@@ -69,12 +70,11 @@ if __name__ == "__main__":
                 {"name": "zmax", "type": "reflecting"},
             ],
             "volumetric_sources": [mg_src],
-            "scattering_order": 1,
         },
     )
 
     # Initialize and execute solver
-    ss_solver = SteadyStateSolver(lbs_problem=phys)
+    ss_solver = SteadyStateSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()
 

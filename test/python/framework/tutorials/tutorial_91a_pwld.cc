@@ -3,10 +3,11 @@
 
 #include "framework/math/spatial_discretization/finite_element/piecewise_linear/piecewise_linear_discontinuous.h"
 #include "framework/materials/multi_group_xs/multi_group_xs.h"
+#include "framework/materials/multi_group_xs/xsfile.h"
 #include "framework/math/quadratures/angular/product_quadrature.h"
 #include "framework/field_functions/field_function_grid_based.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
-#include "framework/math/math_range.h"
+#include "framework/data_types/range.h"
 #include "framework/data_types/ndarray.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
@@ -97,8 +98,7 @@ SimTest91_PWLD(std::shared_ptr<MeshContinuum> grid)
   opensn::log.Log() << "End ukmanagers." << std::endl;
 
   // Make XSs
-  MultiGroupXS xs;
-  xs.Initialize("xs_graphite_pure.xs");
+  MultiGroupXS xs = MultiGroupXS::LoadFromOpenSn("xs_graphite_pure.xs");
 
   // Initializes vectors
   std::vector<double> phi_old(num_local_phi_dofs, 0.0);
@@ -254,9 +254,9 @@ SimTest91_PWLD(std::shared_ptr<MeshContinuum> grid)
             for (int g = 0; g < num_groups; ++g)
               b[g](i) += upwind_psi[g] * mu_Nij;
           } // for fj
-        }   // for fi
-      }     // if internal incident face
-    }       // for face
+        } // for fi
+      } // if internal incident face
+    } // for face
 
     const auto& sigma_t = cell_xs.GetSigmaTotal();
     for (size_t g = 0; g < num_groups; ++g)
@@ -382,9 +382,9 @@ SimTest91_PWLD(std::shared_ptr<MeshContinuum> grid)
               source_moments[dof_map + g] += inscat_g;
             }
           } // for g
-        }   // for m
-      }     // for node i
-    }       // for cell
+        } // for m
+      } // for node i
+    } // for cell
   };
 
   // Define L-infinite-norm
@@ -427,9 +427,9 @@ SimTest91_PWLD(std::shared_ptr<MeshContinuum> grid)
             else
               pw_change = std::max(delta_phi, pw_change);
           } // for g
-        }   // for m
-      }     // for i
-    }       // for cell
+        } // for m
+      } // for i
+    } // for cell
 
     return pw_change;
   };
@@ -507,7 +507,7 @@ SimTest91_PWLD(std::shared_ptr<MeshContinuum> grid)
   std::vector<std::shared_ptr<const FieldFunctionGridBased>> const_ff_list;
   for (const auto& ff_ptr : ff_list)
     const_ff_list.push_back(ff_ptr);
-  FieldFunctionGridBased::ExportMultipleToVTK("SimTest_91a_PWLD", const_ff_list);
+  FieldFunctionGridBased::ExportMultipleToPVTU("SimTest_91a_PWLD", const_ff_list);
 }
 
 } // namespace unit_tests

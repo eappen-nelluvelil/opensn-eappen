@@ -2,18 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 #include "python/lib/py_wrappers.h"
-#include "framework/event_system/physics_event_publisher.h"
+#include "framework/runtime.h"
 #include "framework/field_functions/field_function_grid_based.h"
-#include "framework/physics/solver.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/acceleration/discrete_ordinates_keigen_acceleration.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/acceleration/scdsa_acceleration.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/acceleration/smm_acceleration.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_curvilinear_problem/discrete_ordinates_curvilinear_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/solvers/steady_state_solver.h"
 #include "modules/linear_boltzmann_solvers/solvers/nl_keigen_solver.h"
 #include "modules/linear_boltzmann_solvers/solvers/pi_keigen_solver.h"
-#include "modules/linear_boltzmann_solvers/solvers/pi_keigen_scdsa_solver.h"
-#include "modules/linear_boltzmann_solvers/solvers/pi_keigen_smm_solver.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/io/lbs_problem_io.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/lbs_compute.h"
+#include "modules/solver.h"
 #include <pybind11/numpy.h>
 #include <algorithm>
 #include <cstddef>
@@ -81,34 +83,22 @@ WrapSolver(py::module& slv)
   );
   solver.def(
     "Initialize",
-    [](Solver & self)
-    {
-      PhysicsEventPublisher::GetInstance().SolverInitialize(self);
-    },
+    &Solver::Initialize,
     "Initialize the solver."
   );
   solver.def(
     "Execute",
-    [](Solver & self)
-    {
-      PhysicsEventPublisher::GetInstance().SolverExecute(self);
-    },
+    &Solver::Execute,
     "Execute the solver."
   );
   solver.def(
     "Step",
-    [](Solver & self)
-    {
-      PhysicsEventPublisher::GetInstance().SolverStep(self);
-    },
+    &Solver::Step,
     "Step the solver."
   );
   solver.def(
     "Advance",
-    [](Solver & self)
-    {
-      PhysicsEventPublisher::GetInstance().SolverAdvance(self);
-    },
+    &Solver::Advance,
     "Advance time values function."
   );
   // clang-format on
@@ -198,10 +188,6 @@ WrapLBS(py::module& slv)
 
     Parameters
     ----------
-    spatial_discretization: str, default='pwld'
-        What spatial discretization to use. Currently only ``pwld`` is supported.
-    scattering_order: int, default=1
-        The level of harmonic expansion for the scattering source.
     max_mpi_message_size: int default=32768
         The maximum MPI message size used during sweeps.
     restart_writes_enabled: bool, default=False
@@ -281,7 +267,7 @@ WrapLBS(py::module& slv)
       {
         throw std::invalid_argument("Unknown scalar_flux_iterate value: \"" + scalar_flux_iterate + "\".");
       }
-      return self.ComputeFissionRate(*phi_ptr);
+      return ComputeFissionRate(self, *phi_ptr);
     },
     R"(
     Computes the total fission rate.
@@ -464,20 +450,28 @@ WrapLBS(py::module& slv)
         The spatial mesh.
     num_groups : int
         The total number of energy groups.
-    groupsets : list of dict
+    groupsets : List[Dict], default=[]
         A list of input parameter blocks, each block provides the iterative properties for a
         groupset.
-    xs_map : list of dict
+    xs_map : List[Dict], default=[]
         A list of mappings from block ids to cross-section definitions.
-    options : dict, optional
+    scattering_order: int, default=0
+        The level of harmonic expansion for the scattering source.
+    options : Dict, default={}
         A block of optional configuration parameters. See `SetOptions` for available settings.
-    sweep_type : str, optional
+    sweep_type : str, default="AAH"
         The sweep type to use. Must be one of `AAH` or `CBC`. Defaults to `AAH`.
+    use_gpus : bool, default=False
+        A flag specifying whether GPU acceleration is used for the sweep. Currently, only ``AAH`` is
+        supported.
     )"
   );
   do_problem.def(
     "ComputeBalance",
-    &DiscreteOrdinatesProblem::ComputeBalance,
+    [](DiscreteOrdinatesProblem& self)
+    {
+      ComputeBalance(self);
+    },
     R"(
     Compute and print particle balance for the problem.
     )"
@@ -503,7 +497,7 @@ WrapLBS(py::module& slv)
         bndry_ids = self.GetGrid()->GetUniqueBoundaryIDs();
       }
       // compute the leakage
-      std::map<std::uint64_t, std::vector<double>> leakage = self.ComputeLeakage(bndry_ids);
+      std::map<std::uint64_t, std::vector<double>> leakage = ComputeLeakage(self, bndry_ids);
       // convert result to native Python
       py::dict result;
       for (const auto& [bndry_id, gr_wise_leakage] : leakage)
@@ -562,6 +556,9 @@ WrapLBS(py::module& slv)
       }
         ),
     R"(
+    .. warning::
+       DiscreteOrdinatesCurvilinearProblem is **experimental** and should be used with caution!
+
     Construct a discrete ordinates problem for curvilinear geometry.
 
     Parameters
@@ -577,6 +574,8 @@ WrapLBS(py::module& slv)
         groupset.
     xs_map : list of dict
         A list of mappings from block ids to cross-section definitions.
+    scattering_order: int, default=0
+        The level of harmonic expansion for the scattering source.
     options : dict, optional
         A block of optional configuration parameters. See `SetOptions` for available settings.
     sweep_type : str, optional
@@ -714,8 +713,10 @@ WrapPIteration(py::module& slv)
 
     Parameters
     ----------
-    lbs_problem: pyopensn.solver.LBSProblem
-        Existing LBSProblem instance.
+    problem: pyopensn.solver.LBSProblem
+        Existing DiscreteOrdinatesProblem instance.
+    acceleration: pyopensn.solver.DiscreteOrdinatesKEigenAcceleration
+        Optional DiscreteOrdinatesKEigenAcceleration instance for acceleration.
     max_iters: int, default = 1000
         Maximum power iterations allowed.
     k_tol: float, default = 1.0e-10
@@ -733,116 +734,116 @@ WrapPIteration(py::module& slv)
     Return the current k‑eigenvalue.
     )"
   );
+  // clang-format on
+}
 
-  // power iteration k-eigen SCDSA solver
-  auto pi_k_eigen_scdsa_solver = py::class_<PowerIterationKEigenSCDSASolver,
-                                            std::shared_ptr<PowerIterationKEigenSCDSASolver>,
-                                            PowerIterationKEigenSolver>(
+// Wrap LBS solver
+void
+WrapDiscreteOrdinatesKEigenAcceleration(py::module& slv)
+{
+  // clang-format off
+  // DiscreteOrdinatesKEigenAcceleration base
+  auto acceleration = py::class_<DiscreteOrdinatesKEigenAcceleration,
+                                     std::shared_ptr<DiscreteOrdinatesKEigenAcceleration>>(
     slv,
-    "PowerIterationKEigenSCDSASolver",
+    "LBSAccelertion",
     R"(
-    Power iteration k-eigenvalue solver with SCDSA.
+    Base class for LBS acceleration methods.
 
-    Wrapper of :cpp:class:`opensn::PowerIterationKEigenSCDSASolver`.
+    Wrapper of :cpp:class:`opensn::DiscreteOrdinatesKEigenAcceleration`.
     )"
   );
-  pi_k_eigen_scdsa_solver.def(
+
+  // SCDSA acceleration
+  auto scdsa_acceleration = py::class_<SCDSAAcceleration,
+                                       std::shared_ptr<SCDSAAcceleration>,
+                                       DiscreteOrdinatesKEigenAcceleration>(
+    slv,
+    "SCDSAAcceleration",
+    R"(
+    Construct an SCDSA accelerator for the power iteration k-eigenvalue solver.
+
+    Wrapper of :cpp:class:`opensn::SCDSAAcceleration`.
+    )"
+  );
+  scdsa_acceleration.def(
     py::init(
       [](py::kwargs& params)
       {
-        return PowerIterationKEigenSCDSASolver::Create(kwargs_to_param_block(params));
+        return SCDSAAcceleration::Create(kwargs_to_param_block(params));
       }
     ),
     R"(
-    Construct a power iteration k-eigenvalue solver with SCDSA.
+    SCDSA acceleration for the power iteration k-eigenvalue solver.
 
     Parameters
     ----------
-    lbs_problem: pyopensn.solver.LBSProblem
-        Existing LBSProblem instance.
-    max_iters: int, default=1000
-        Maximum power iterations allowed.
-    k_tol: float, default=1.0e-10
-        Tolerance on the k-eigenvalue.
-    reset_solution: bool, default=True
-        If true, initialize flux moments to 1.0.
-    reset_phi0: bool, default=True
-        If true, reinitializes scalar fluxes to 1.0.
-    accel_pi_max_its : int, default=50
-        Maximum number of iterations allowed for the inner power iterations used by the
-        acceleration method.
-    accel_pi_k_tol : float, default=1.0e-10
-        Convergence tolerance on the k-eigenvalue within the inner power iterations of the
-        acceleration method.
-    accel_pi_verbose : bool, default=False
-        If True, enables verbose logging output from the acceleration method's inner solver.
-    diff_accel_diffusion_l_abs_tol : float, default=1.0e-10
-        Absolute residual tolerance for convergence of the diffusion accelerator.
-    diff_accel_diffusion_max_iters : int, default=100
-        Maximum number of iterations allowed for the diffusion accelerator solve.
-    diff_accel_diffusion_verbose : bool, default=False
-        If True, enables verbose logging output from the diffusion accelerator.
-    diff_accel_diffusion_petsc_options : str, default="ssss"
-        Additional PETSc options passed to the diffusion accelerator linear solver.
-    diff_accel_sdm : {'pwld', 'pwlc'}, default='pwld'
+    problem: pyopensn.solver.LBSProblem
+        Existing DiscreteOrdinatesProblem instance.
+    l_abs_tol: float, defauilt=1.0e-10
+        Absolute residual tolerance.
+    max_iters: int, default=100
+        Maximum allowable iterations.
+    verbose: bool, default=False
+        If true, enables verbose output.
+    petsc_options: str, default="ssss"
+        Additional PETSc options.
+    pi_max_its: int, default=50
+        Maximum allowable iterations for inner power iterations.
+    pi_k_tol: float, default=1.0e-10
+        k-eigenvalue tolerance for the inner power iterations.
+    sdm: str, default="pwld"
         Spatial discretization method to use for the diffusion solver. Valid choices are:
             - 'pwld' : Piecewise Linear Discontinuous
             - 'pwlc' : Piecewise Linear Continuous
     )"
   );
 
-  // power iteration k-eigen SMM solver
-  auto pi_k_eigen_smm_solver = py::class_<PowerIterationKEigenSMMSolver,
-                                          std::shared_ptr<PowerIterationKEigenSMMSolver>,
-                                          PowerIterationKEigenSolver>(
+  // SMM acceleration
+  auto smm_acceleration = py::class_<SMMAcceleration,
+                                     std::shared_ptr<SMMAcceleration>,
+                                     DiscreteOrdinatesKEigenAcceleration>(
     slv,
-    "PowerIterationKEigenSMMSolver",
+    "SMMAcceleration",
     R"(
-    Power iteration k-eigenvalue solver with SMM acceleration.
+    Construct an SMM accelerator for the power iteration k-eigenvalue solver.
 
-    Wrapper of :cpp:class:`opensn::PowerIterationKEigenSMMSolver`.
+    Wrapper of :cpp:class:`opensn::SMMAcceleration`.
     )"
   );
-  pi_k_eigen_smm_solver.def(
+  smm_acceleration.def(
     py::init(
       [](py::kwargs& params)
       {
-        return PowerIterationKEigenSMMSolver::Create(kwargs_to_param_block(params));
+        return SMMAcceleration::Create(kwargs_to_param_block(params));
       }
     ),
     R"(
-    Construct a power iteration k-eigen SMM solver.
+    SMM acceleration for the power iteration k-eigenvalue solver.
+    .. warning::
+       SMM acceleration is **experimental** and should be used with caution!
+       SMM accleration only supports problems with isotropic scattering.
 
     Parameters
     ----------
-    lbs_problem: pyopensn.solver.LBSProblem
-        Existing LBSProblem instance.
-    max_iters: int, defauilt=1000
-        Maximum power iterations allowed.
-    k_tol: float, default=1.0e-10
-        Tolerance on the k-eigenvalue.
-    reset_solution: bool, default=True
-        If true, initialize flux moments to 1.0.
-    reset_phi0: bool, default=True
-        If true, reinitializes scalar fluxes to 1.0.
-    accel_pi_max_its: int, default=50
-        Maximum number of power iterations allowed for the second-moment method's diffusion solver.
-    accel_pi_k_tol: float, default=1.0e-10
-        Convergence tolerance for the k-eigenvalue in the second-moment method diffusion solver.
-    accel_pi_verbose: bool, default=False
-        If True, enables verbose output from the second-moment method diffusion solver.
-    diff_sdm: {'pwlc', 'pwld'}, default='pwlc'
-        Spatial discretization method for the second-moment method diffusion system.
-            - 'pwlc': Piecewise Linear Continuous
-            - 'pwld': Piecewise Linear Discontinuous
-    diff_l_abs_tol: float, default=1.0e-10
-        Absolute residual tolerance for convergence of the diffusion accelerator linear solver.
-    diff_l_max_its: int, default=100
-        Maximum number of iterations allowed for the diffusion accelerator linear solver.
-    diff_petsc_options: str, default=""
-        Additional PETSc options to pass to the diffusion accelerator solver.
-    diff_verbose: bool, default=False
-        If True, enables verbose output from the diffusion accelerator.
+    problem: pyopensn.solver.LBSProblem
+        Existing DiscreteOrdinatesProblem instance.
+    l_abs_tol: float, defauilt=1.0e-10
+        Absolute residual tolerance.
+    max_iters: int, default=100
+        Maximum allowable iterations.
+    verbose: bool, default=False
+        If true, enables verbose output.
+    petsc_options: str, default="ssss"
+        Additional PETSc options.
+    pi_max_its: int, default=50
+        Maximum allowable iterations for inner power iterations.
+    pi_k_tol: float, default=1.0e-10
+        k-eigenvalue tolerance for the inner power iterations.
+    sdm: str, default="pwld"
+        Spatial discretization method to use for the diffusion solver. Valid choices are:
+            - 'pwld' : Piecewise Linear Discontinuous
+            - 'pwlc' : Piecewise Linear Continuous
     )"
   );
   // clang-format on
@@ -859,6 +860,7 @@ py_solver(py::module& pyopensn)
   WrapSteadyState(slv);
   WrapNLKEigen(slv);
   WrapPIteration(slv);
+  WrapDiscreteOrdinatesKEigenAcceleration(slv);
 }
 
 } // namespace opensn

@@ -76,9 +76,8 @@ if __name__ == "__main__":
         },
     ]
     solver_dict["xs_map"] = xs_map
+    solver_dict["scattering_order"] = 0
     solver_dict["options"] = {
-        "scattering_order": 0,
-        "spatial_discretization": "pwld",
         "boundary_conditions": [
             {"name": "zmin", "type": "vacuum"},
             {"name": "zmax", "type": "vacuum"}
@@ -90,7 +89,7 @@ if __name__ == "__main__":
     phys1 = DiscreteOrdinatesProblem(**solver_dict)
 
     # Initialize and execute solver
-    ss_solver = SteadyStateSolver(lbs_problem=phys1)
+    ss_solver = SteadyStateSolver(problem=phys1)
     ss_solver.Initialize()
     ss_solver.Execute()
 
@@ -99,7 +98,7 @@ if __name__ == "__main__":
     phys1.WriteAngularFluxes("angular_io")
 
     phys2 = DiscreteOrdinatesProblem(**solver_dict)
-    ss_solver_2 = SteadyStateSolver(lbs_problem=phys2)
+    ss_solver_2 = SteadyStateSolver(problem=phys2)
     ss_solver_2.Initialize()
     phys2.ReadAngularFluxes("angular_io")
 

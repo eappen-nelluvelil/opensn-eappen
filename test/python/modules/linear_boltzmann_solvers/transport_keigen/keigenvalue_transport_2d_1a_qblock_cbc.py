@@ -42,12 +42,12 @@ if __name__ == "__main__":
             },
         ],
         xs_map=xs_map,
+        scattering_order=2,
         options={
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
                 {"name": "ymin", "type": "reflecting"},
             ],
-            "scattering_order": 2,
 
             "use_precursors": False,
 
@@ -57,6 +57,6 @@ if __name__ == "__main__":
         },
         sweep_type="CBC",
     )
-    k_solver = PowerIterationKEigenSolver(lbs_problem=phys)
+    k_solver = PowerIterationKEigenSolver(problem=phys)
     k_solver.Initialize()
     k_solver.Execute()

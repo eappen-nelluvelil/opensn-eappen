@@ -64,9 +64,8 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0], "xs": xs_hdpe},
         ],
+        scattering_order=0,
         options={
-            "scattering_order": 0,
-            "spatial_discretization": "pwld",
             "save_angular_flux": True,
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
@@ -81,7 +80,7 @@ if __name__ == "__main__":
     )
 
     # Initialize and execute solver
-    ss_solver = SteadyStateSolver(lbs_problem=phys)
+    ss_solver = SteadyStateSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()
 

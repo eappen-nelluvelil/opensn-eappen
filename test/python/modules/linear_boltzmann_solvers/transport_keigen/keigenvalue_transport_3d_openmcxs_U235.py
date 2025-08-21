@@ -73,6 +73,7 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0], "xs": xs_u235},
         ],
+        scattering_order=1,
         options={
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
@@ -82,14 +83,13 @@ if __name__ == "__main__":
                 {"name": "zmin", "type": "reflecting"},
                 {"name": "zmax", "type": "reflecting"},
             ],
-            "scattering_order": 1,
             "use_precursors": False,
             "verbose_inner_iterations": False,
             "verbose_outer_iterations": True,
         }
     )
     k_solver = NonLinearKEigenSolver(
-        lbs_problem=phys,
+        problem=phys,
         nl_max_its=500,
         nl_abs_tol=1.0e-8,
     )

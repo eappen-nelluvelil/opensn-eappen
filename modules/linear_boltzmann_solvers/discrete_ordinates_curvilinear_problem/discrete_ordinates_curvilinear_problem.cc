@@ -25,7 +25,6 @@ DiscreteOrdinatesCurvilinearProblem::GetInputParameters()
     "Solver for Discrete Ordinates in cylindrical and spherical coordinates");
 
   params.SetClassName("DiscreteOrdinatesCurvilinearProblem");
-  params.SetDocGroup("lbs__LBSSolver");
 
   params.ChangeExistingParamToOptional("name", "DiscreteOrdinatesCurvilinearProblem");
 
@@ -35,6 +34,9 @@ DiscreteOrdinatesCurvilinearProblem::GetInputParameters()
 std::shared_ptr<DiscreteOrdinatesCurvilinearProblem>
 DiscreteOrdinatesCurvilinearProblem::Create(const ParameterBlock& params)
 {
+  log.Log0Warning()
+    << "The curvilinear discrete-ordinates problem type is experimental. USE WITH CAUTION!"
+    << std::endl;
   auto& factory = opensn::ObjectFactory::GetInstance();
   return factory.Create<DiscreteOrdinatesCurvilinearProblem>(
     "lbs::DiscreteOrdinatesCurvilinearProblem", params);
@@ -333,8 +335,8 @@ DiscreteOrdinatesCurvilinearProblem::ComputeSecondaryUnitIntegrals()
                                       fe_vol_data.ShapeValue(i, qp) *
                                       fe_vol_data.ShapeValue(j, qp) * fe_vol_data.JxW(qp);
         } // for qp
-      }   // for j
-    }     // for i
+      } // for j
+    } // for i
 
     return UnitCellMatrices{{},
                             {},

@@ -4,7 +4,7 @@
 #pragma once
 
 #include "framework/parameters/parameter_block.h"
-#include "framework/math/vector.h"
+#include "framework/data_types/vector.h"
 #include <pybind11/pybind11.h>
 #include <unordered_set>
 #include <unordered_map>
@@ -183,12 +183,8 @@ void py_aquad(py::module& pyopensn);
 void WrapQuadraturePointPhiTheta(py::module& aquad);
 void WrapQuadrature(py::module& aquad);
 void WrapProductQuadrature(py::module& aquad);
-void WrapCurvilinearQuadrature(py::module& aquad);
+void WrapCurvilinearProductQuadrature(py::module& aquad);
 void WrapSLDFESQuadrature(py::module& aquad);
-
-// Wrap the diffusion components of OpenSn
-void py_diffusion(py::module& pyopensn);
-void WrapDiffusion(py::module& diffusion);
 
 /// Wrap the field function components of OpenSn.
 void py_ffunc(py::module& pyopensn);
@@ -216,11 +212,6 @@ void WrapGraphPartitioner(py::module& mesh);
 void py_response(py::module& pyopensn);
 void WrapResEval(py::module& response);
 
-/// Wrap the post-processing components of OpenSn (unfinished).
-void py_post(py::module& pyopensn);
-void WrapPostProcessor(py::module& post);
-void WrapPrinter(py::module& post);
-
 /// Wrap the settings components of OpenSn
 void py_settings(py::module& pyopensn);
 
@@ -232,10 +223,7 @@ void WrapLBS(py::module& slv);
 void WrapSteadyState(py::module& slv);
 void WrapNLKEigen(py::module& slv);
 void WrapPIteration(py::module& slv);
-
-// Wrap the diffusion components of OpenSn
-void py_diffusion(py::module& pyopensn);
-void WrapDiffusion(py::module& diffusion);
+void WrapDiscreteOrdinatesKEigenAcceleration(py::module& slv);
 
 /// Wrap the source components of OpenSn.
 void py_source(py::module& pyopensn);

@@ -76,15 +76,15 @@ if __name__ == "__main__":
                 "xs": xs_simple_fissile,
             }
         ],
+        scattering_order=scat_order,
         options={
-            "scattering_order": scat_order,
             "use_precursors": use_precursors,
             "verbose_inner_iterations": False,
             "verbose_outer_iterations": True,
         }
     )
     k_solver = NonLinearKEigenSolver(
-        lbs_problem=phys,
+        problem=phys,
         nl_max_its=kes_max_iterations,
         nl_abs_tol=kes_tolerance,
     )

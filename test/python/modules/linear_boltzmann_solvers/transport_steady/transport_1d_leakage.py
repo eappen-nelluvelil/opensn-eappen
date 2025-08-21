@@ -64,6 +64,7 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0], "xs": xs1g},
         ],
+        scattering_order=0,
         options={
             "boundary_conditions": [
                 {
@@ -72,12 +73,11 @@ if __name__ == "__main__":
                     "group_strength": bsrc,
                 },
             ],
-            "scattering_order": 0,
             "save_angular_flux": True,
         },
     )
 
-    ss_solver = SteadyStateSolver(lbs_problem=phys)
+    ss_solver = SteadyStateSolver(problem=phys)
     # Solve the problem
     ss_solver.Initialize()
     ss_solver.Execute()

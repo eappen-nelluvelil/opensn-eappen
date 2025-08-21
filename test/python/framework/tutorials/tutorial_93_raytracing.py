@@ -47,13 +47,13 @@ phys1 = DiscreteOrdinatesProblem(
     xs_map=[
         {"block_ids": [0], "xs": xs1g},
     ],
+    scattering_order=0,
     options={
-        "scattering_order": 0,
         "point_sources": [pt_src],
         "field_function_prefix": solver_name,
     },
 )
-ss_solver = SteadyStateSolver(lbs_problem=phys1)
+ss_solver = SteadyStateSolver(problem=phys1)
 ss_solver.Initialize()
 ss_solver.Execute()
 

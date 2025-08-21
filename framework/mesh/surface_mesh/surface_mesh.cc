@@ -21,7 +21,7 @@ OpenSnRegisterObjectInNamespace(mesh, SurfaceMesh);
 InputParameters
 SurfaceMesh::GetInputParameters()
 {
-  InputParameters params = Object::GetInputParameters();
+  InputParameters params;
   return params;
 }
 
@@ -32,7 +32,7 @@ SurfaceMesh::Create(const ParameterBlock& params)
   return factory.Create<SurfaceMesh>("mesh::SurfaceMesh", params);
 }
 
-SurfaceMesh::SurfaceMesh(const InputParameters& params) : Object(params)
+SurfaceMesh::SurfaceMesh(const InputParameters& params)
 {
 }
 
@@ -123,7 +123,7 @@ SurfaceMesh::UpdateInternalConnectivity()
             curface_edge[3] = e2;  // edge index
           }
         } // for e2
-      }   // for ofi
+      } // for ofi
 
       // Search cells subscribing to vf
       for (auto ofi : vertex_subscriptions[vf])
@@ -139,9 +139,9 @@ SurfaceMesh::UpdateInternalConnectivity()
             curface_edge[3] = e2;  // edge index
           }
         } // for e2
-      }   // for ofi
-    }     // for current face edges
-  }       // for faces
+      } // for ofi
+    } // for current face edges
+  } // for faces
 
   // Loop over cells and determine connectivity
   // Polygons
@@ -166,7 +166,7 @@ SurfaceMesh::UpdateInternalConnectivity()
             curface_edge[3] = e2;  // edge index
           }
         } // for e2
-      }   // for ofi
+      } // for ofi
 
       // Search cells subscribing to vf
       for (auto ofi : vertex_subscriptions[vf])
@@ -182,9 +182,9 @@ SurfaceMesh::UpdateInternalConnectivity()
             curface_edge[3] = e2;  // edge index
           }
         } // for e2
-      }   // for other faces
-    }     // for current face edges
-  }       // for faces
+      } // for other faces
+    } // for current face edges
+  } // for faces
 }
 
 int

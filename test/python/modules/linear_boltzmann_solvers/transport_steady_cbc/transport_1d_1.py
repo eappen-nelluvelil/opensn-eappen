@@ -93,19 +93,19 @@ if __name__ == "__main__":
                 "xs": xs_3_170
             }
         ],
+        scattering_order=5,
         options={
             "boundary_conditions": [
                 {"name": "zmin", "type": "isotropic", "group_strength": bsrc},
             ],
             "volumetric_sources": [mg_src],
-            "scattering_order": 5,
             "max_ags_iterations": 1,
             "save_angular_flux": True
         },
         sweep_type="CBC"
     )
 
-    ss_solver = SteadyStateSolver(lbs_problem=phys)
+    ss_solver = SteadyStateSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()
 

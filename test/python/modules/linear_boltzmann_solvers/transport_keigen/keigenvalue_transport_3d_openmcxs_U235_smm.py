@@ -17,7 +17,8 @@ if "opensn_console" not in globals():
     from pyopensn.mesh import OrthogonalMeshGenerator
     from pyopensn.xs import MultiGroupXS
     from pyopensn.aquad import GLCProductQuadrature3DXYZ
-    from pyopensn.solver import DiscreteOrdinatesProblem, PowerIterationKEigenSMMSolver
+    from pyopensn.solver import DiscreteOrdinatesProblem, PowerIterationKEigenSolver
+    from pyopensn.solver import SMMAcceleration
 
 if __name__ == "__main__":
 
@@ -63,7 +64,7 @@ if __name__ == "__main__":
                 "angular_quadrature": GLCProductQuadrature3DXYZ(
                     n_polar=2,
                     n_azimuthal=4,
-                    scattering_order=1
+                    scattering_order=0
                 ),
                 "inner_linear_method": "classic_richardson",
                 "l_max_its": 2,
@@ -73,6 +74,7 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0], "xs": xs_u235},
         ],
+        scattering_order=0,
         options={
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
@@ -82,19 +84,22 @@ if __name__ == "__main__":
                 {"name": "zmin", "type": "reflecting"},
                 {"name": "zmax", "type": "reflecting"},
             ],
-            "scattering_order": 1,
             "use_precursors": False,
             "verbose_inner_iterations": False,
             "verbose_outer_iterations": True,
         }
     )
-    k_solver = PowerIterationKEigenSMMSolver(
-        lbs_problem=phys,
-        accel_pi_verbose=True,
+    smm = SMMAcceleration(
+        problem=phys,
+        verbose=True,
+        pi_k_tol=1.0e-8,
+        pi_max_its=30,
+        sdm="pwld"
+    )
+    k_solver = PowerIterationKEigenSolver(
+        problem=phys,
+        acceleration=smm,
         k_tol=1.0e-8,
-        accel_pi_k_tol=1.0e-8,
-        accel_pi_max_its=30,
-        diff_sdm="pwld",
     )
     k_solver.Initialize()
     k_solver.Execute()

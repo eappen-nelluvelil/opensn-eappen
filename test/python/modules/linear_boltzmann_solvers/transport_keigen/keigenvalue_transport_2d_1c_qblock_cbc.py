@@ -16,7 +16,8 @@ if "opensn_console" not in globals():
     rank = MPI.COMM_WORLD.rank
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../")))
     from pyopensn.aquad import GLCProductQuadrature2DXY
-    from pyopensn.solver import DiscreteOrdinatesProblem, PowerIterationKEigenSCDSASolver
+    from pyopensn.solver import DiscreteOrdinatesProblem, PowerIterationKEigenSolver
+    from pyopensn.solver import SCDSAAcceleration
 
 if __name__ == "__main__":
 
@@ -42,12 +43,12 @@ if __name__ == "__main__":
             },
         ],
         xs_map=xs_map,
+        scattering_order=2,
         options={
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
                 {"name": "ymin", "type": "reflecting"},
             ],
-            "scattering_order": 2,
 
             "use_precursors": False,
 
@@ -58,10 +59,13 @@ if __name__ == "__main__":
         sweep_type="CBC",
     )
 
-    k_solver = PowerIterationKEigenSCDSASolver(
-        lbs_problem=phys,
-        diff_accel_sdm="pwld",
-        accel_pi_verbose=False,
+    scdsa = SCDSAAcceleration(
+        problem=phys,
+        sdm="pwld"
+    )
+    k_solver = PowerIterationKEigenSolver(
+        problem=phys,
+        acceleration=scdsa,
         k_tol=1.0e-8,
     )
     k_solver.Initialize()

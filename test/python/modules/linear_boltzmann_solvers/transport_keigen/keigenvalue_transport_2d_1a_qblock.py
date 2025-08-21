@@ -69,17 +69,17 @@ if __name__ == "__main__":
             {"block_ids": [0], "xs": xss["0"]},
             {"block_ids": [1], "xs": xss["1"]},
         ],
+        scattering_order=2,
         options={
             "boundary_conditions": [
                 {"name": "xmin", "type": "reflecting"},
                 {"name": "ymin", "type": "reflecting"},
             ],
-            "scattering_order": 2,
             "use_precursors": False,
             "verbose_inner_iterations": False,
             "verbose_outer_iterations": True,
         }
     )
-    k_solver = PowerIterationKEigenSolver(lbs_problem=phys)
+    k_solver = PowerIterationKEigenSolver(problem=phys)
     k_solver.Initialize()
     k_solver.Execute()
