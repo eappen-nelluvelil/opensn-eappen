@@ -75,31 +75,44 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   {
     const size_t num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
-    std::vector<uint64_t> succesors;
+    std::vector<uint64_t> successors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
-      if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+      const auto& face = cell.faces[f];
+      const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
+
+      if (cell_face_orientation == INCOMING)
       {
-        if (cell.faces[f].has_neighbor)
+        if (face.has_neighbor)
           ++num_dependencies;
       }
-      else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+      else if (cell_face_orientation == OUTGOING)
       {
-        const auto& face = cell.faces[f];
         if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-          succesors.push_back(grid->cells[face.neighbor_id].local_id);
+          successors.push_back(grid->cells[face.neighbor_id].local_id);
       }
     }
 
-    task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
   }
+
+  // Get peak number of alive cells during local sweep
+  SimulateLocalSweep();
 }
 
 const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
 {
   return task_list_;
+}
+
+void
+CBC_SPDS::SimulateLocalSweep()
+{
+  const auto& location_dependencies = GetLocationDependencies();
+  for (const auto& loc_dep : location_dependencies)
+    log.Log() << "Location dependency: " << loc_dep;
 }
 
 } // namespace opensn

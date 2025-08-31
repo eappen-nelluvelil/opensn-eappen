@@ -24,9 +24,16 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
+  void SimulateLocalSweep();
+
+  const size_t GetPeakNumberAliveCells() const { return peak_number_alive_cells_; }
+
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+
+  /// Maximum number of cells that can be solved concurrently
+  size_t peak_number_alive_cells_ = 0;
 };
 
 } // namespace opensn
