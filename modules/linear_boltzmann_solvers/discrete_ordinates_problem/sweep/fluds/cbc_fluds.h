@@ -6,6 +6,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include <map>
+#include <memory_resource>
+#include <stack>
 #include <functional>
 
 namespace opensn
@@ -32,7 +34,9 @@ public:
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
             const UnknownManager& psi_uk_man,
-            const SpatialDiscretization& sdm);
+            const SpatialDiscretization& sdm,
+            const size_t peak_number_alive_cells,
+            const size_t max_cell_dof_count);
 
   const FLUDSCommonData& GetCommonData() const;
 
@@ -105,11 +109,6 @@ public:
 
 private:
   const CBC_FLUDSCommonData& common_data_;
-
-  // Storage for local angular fluxes
-  // Layout: spatial DOF major -> angle in set major -> group major
-  std::vector<double> local_psi_data_;
-
   const UnknownManager& psi_uk_man_;
 
   const SpatialDiscretization& sdm_;
@@ -118,6 +117,21 @@ private:
   size_t num_quadrature_local_dofs_;
   size_t num_local_spatial_dofs_;
   size_t local_psi_data_size_;
+
+  // Storage for local angular fluxes
+  // Layout: spatial DOF major -> angle in set major -> group major
+  std::vector<double> local_psi_data_;
+
+  // ---------------------------------------------------------------
+  // Required objects to implement a free-list memory pool allocator
+  // ---------------------------------------------------------------
+
+  std::vector<std::byte> memory_buffer_;
+  std::pmr::monotonic_buffer_resource memory_resource_;
+  std::pmr::pool_options pool_options_;
+  std::pmr::unsynchronized_pool_resource pool_resource_;
+  std::stack<size_t> free_list_;
+  std::map<size_t, double*> cell_to_chunk_map_;
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;

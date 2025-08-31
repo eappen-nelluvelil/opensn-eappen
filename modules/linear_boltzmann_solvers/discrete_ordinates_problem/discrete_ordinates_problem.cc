@@ -872,12 +872,19 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
       }
       else if (sweep_type_ == "CBC")
       {
+        // Get peak number of concurrent cells that can be solved
+        const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(*sweep_ordering);
+        // const size_t peak_number_alive_cells = cbc_spds.GetPeakNumberAliveCells();
+        const size_t peak_number_alive_cells = 1;
+
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                       groupset.psi_uk_man_,
-                                      *discretization_);
+                                      *discretization_,
+                                      peak_number_alive_cells,
+                                      max_cell_dof_count_);
 
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,
                                                         gs_num_grps,

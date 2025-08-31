@@ -6,6 +6,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
+#include <memory_resource>
 
 namespace opensn
 {
@@ -14,11 +15,20 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      size_t num_angles,
                      const CBC_FLUDSCommonData& common_data,
                      const UnknownManager& psi_uk_man,
-                     const SpatialDiscretization& sdm)
+                     const SpatialDiscretization& sdm,
+                     const size_t peak_number_alive_cells,
+                     const size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
-    sdm_(sdm)
+    sdm_(sdm),
+    memory_buffer_(peak_number_alive_cells * max_cell_dof_count * num_angles * num_groups *
+                   sizeof(double)),
+    memory_resource_(
+      memory_buffer_.data(), memory_buffer_.size(), std::pmr::null_memory_resource()),
+    pool_options_(peak_number_alive_cells,
+                  max_cell_dof_count * num_angles * num_groups * sizeof(double)),
+    pool_resource_(pool_options_, &memory_resource_)
 {
   CALI_CXX_MARK_SCOPE("CBC_FLUDS::CBC_FLUDS");
 
@@ -28,6 +38,11 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   local_psi_data_size_ = num_local_spatial_dofs_ * num_groups_and_angles_;
 
   local_psi_data_.assign(local_psi_data_size_, 0.0);
+
+  // ---------------------------------------------------------------
+  // Required objects to implement a free-list memory pool allocator
+  // ---------------------------------------------------------------
+  
 }
 
 const FLUDSCommonData&
