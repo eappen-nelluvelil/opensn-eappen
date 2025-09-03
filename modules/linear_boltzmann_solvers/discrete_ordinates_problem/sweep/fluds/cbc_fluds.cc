@@ -5,6 +5,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+#include "framework/runtime.h"
+#include "framework/logging/log.h"
 #include "caliper/cali.h"
 #include <memory_resource>
 
@@ -22,13 +24,19 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
-    memory_buffer_(peak_number_alive_cells * max_cell_dof_count * num_angles * num_groups *
-                   sizeof(double)),
-    memory_resource_(
-      memory_buffer_.data(), memory_buffer_.size(), std::pmr::null_memory_resource()),
-    pool_options_(peak_number_alive_cells,
-                  max_cell_dof_count * num_angles * num_groups * sizeof(double)),
-    pool_resource_(pool_options_, &memory_resource_)
+    // pool_(peak_number_alive_cells, 
+    //       max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
+    pool_(sdm.GetNumLocalDOFs(psi_uk_man) / psi_uk_man.GetNumberOfUnknowns() / num_groups_ / max_cell_dof_count, 
+          max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
+    // pool_(30, 
+    //       max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
+    // memory_buffer_(peak_number_alive_cells * max_cell_dof_count * num_angles * num_groups *
+    //                sizeof(double)),
+    // memory_resource_(
+    //   memory_buffer_.data(), memory_buffer_.size(), std::pmr::null_memory_resource()),
+    // pool_options_(peak_number_alive_cells,
+    //               max_cell_dof_count * num_angles * num_groups * sizeof(double)),
+    // pool_resource_(pool_options_, &memory_resource_)
 {
   CALI_CXX_MARK_SCOPE("CBC_FLUDS::CBC_FLUDS");
 
@@ -42,7 +50,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   // ---------------------------------------------------------------
   // Required objects to implement a free-list memory pool allocator
   // ---------------------------------------------------------------
-  
+  opensn::log.Log() << "CBC_FLUDS::CBC_FLUDS: Buffer size before = " << GetBufferSize();
 }
 
 const FLUDSCommonData&
@@ -120,6 +128,75 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
   }
 
   return &psi_data[dof_map];
+}
+
+void
+CBC_FLUDS::Allocate(const uint64_t cell_local_id)
+{
+  if (cell_to_chunk_map_.count(cell_local_id))
+  {
+    // return cell_to_chunk_map_[cell_local_id];
+    return;
+  }
+
+  void* raw_ptr = pool_.Allocate();
+  double* chunk_ptr = static_cast<double*>(raw_ptr);
+  cell_to_chunk_map_[cell_local_id] = chunk_ptr;
+
+  ++num_allocations_;
+  ++num_current_allocations_;
+  num_peak_allocations_ = std::max(num_peak_allocations_, num_current_allocations_);
+  
+  // return chunk_ptr;
+}
+
+void 
+CBC_FLUDS::Deallocate(const uint64_t cell_local_id)
+{
+  auto it = cell_to_chunk_map_.find(cell_local_id);
+  if (it == cell_to_chunk_map_.end())
+  {
+    std::ostringstream err_stream;
+    err_stream << "CBC_FLUDS::Deallocate Cell with local ID " << cell_local_id
+               << " does not have an allocated chunk.";
+    throw std::runtime_error(err_stream.str());
+  }
+
+  pool_.Deallocate(it->second);
+  cell_to_chunk_map_.erase(cell_local_id);
+  
+  ++num_deallocations_;
+  --num_current_allocations_;
+}
+
+const double* 
+CBC_FLUDS::GetChunk(const uint64_t cell_local_id) const
+{
+  auto it = cell_to_chunk_map_.find(cell_local_id);
+  if (it == cell_to_chunk_map_.end())
+  {
+    std::ostringstream err_stream;
+    err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_id
+               << " does not have an allocated chunk.";
+    throw std::runtime_error(err_stream.str());
+  }
+
+  return it->second;
+}
+
+double* 
+CBC_FLUDS::GetChunk(const uint64_t cell_local_id)
+{
+  auto it = cell_to_chunk_map_.find(cell_local_id);
+  if (it == cell_to_chunk_map_.end())
+  {
+    std::ostringstream err_stream;
+    err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_id
+               << " does not have an allocated chunk.";
+    throw std::runtime_error(err_stream.str());
+  }
+
+  return it->second;
 }
 
 } // namespace opensn
