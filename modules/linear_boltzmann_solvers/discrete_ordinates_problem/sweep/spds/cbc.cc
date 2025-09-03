@@ -183,6 +183,10 @@ CBC_SPDS::SimulateSweep()
     } // for task
   }   // while a_task_executed
 
+  // IDEA: 9/3
+  // A conservative estimate of the number of peak alive cells is to sum the
+  // max width of the topologically sorted TDG + the number of unique predecessors
+  // that each of the corresponding cells at the max width level
   peak_number_alive_cells_ = peak_allocated_blocks;
 }
 
