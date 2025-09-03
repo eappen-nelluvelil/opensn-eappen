@@ -191,7 +191,9 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
       {
         AngleSetStatus status = angle_set->AngleSetAdvance(sweep_chunk, AngleSetStatus::EXECUTE);
         if (status != AngleSetStatus::FINISHED)
+        {
           finished = false;
+        }
       } // for angleset
   } // while not finished
 

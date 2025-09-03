@@ -75,6 +75,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   {
     const size_t num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
+    std::vector<uint64_t> local_predecessors;
+    unsigned int num_consumptions = 0;
     std::vector<uint64_t> successors;
 
     for (size_t f = 0; f < num_faces; ++f)
@@ -85,7 +87,12 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       if (cell_face_orientation == INCOMING)
       {
         if (face.has_neighbor)
+        {
           ++num_dependencies;
+          if (grid->IsCellLocal(face.neighbor_id))
+            local_predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+        }
+
       }
       else if (cell_face_orientation == OUTGOING)
       {
@@ -94,11 +101,11 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       }
     }
 
-    task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, local_predecessors, num_consumptions, successors, cell.local_id, &cell, false});
   }
 
   // Get peak number of alive cells during local sweep
-  SimulateLocalSweep();
+  // SimulateLocalSweep();
 }
 
 const std::vector<Task>&

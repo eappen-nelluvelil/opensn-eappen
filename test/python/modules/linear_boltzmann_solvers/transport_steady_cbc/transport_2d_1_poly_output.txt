@@ -1,0 +1,988 @@
+OpenSn version 0.0.1
+2025-09-01 18:15:29 Running OpenSn with 4 processes.
+OpenSn number of arguments supplied: 2
+
+[0]  FromFileMeshGenerator: Generating UnpartitionedMesh
+[0]  Making Unpartitioned mesh from wavefront file ../../../../assets/mesh/SquareMesh2x2QuadsBlock.obj
+[0]  Max material id: -1
+[0]  Done checking cell-center-to-face orientations
+[0]  00:00:00.3 Establishing cell connectivity.
+[0]  00:00:00.3 Vertex cell subscriptions complete.
+[0]  00:00:00.3 Surpassing cell 103 of 1024 (10%)
+[0]  00:00:00.3 Surpassing cell 205 of 1024 (20%)
+[0]  00:00:00.3 Surpassing cell 308 of 1024 (30%)
+[0]  00:00:00.3 Surpassing cell 410 of 1024 (40%)
+[0]  00:00:00.3 Surpassing cell 512 of 1024 (50%)
+[0]  00:00:00.3 Surpassing cell 615 of 1024 (60%)
+[0]  00:00:00.3 Surpassing cell 717 of 1024 (70%)
+[0]  00:00:00.3 Surpassing cell 820 of 1024 (80%)
+[0]  00:00:00.3 Surpassing cell 922 of 1024 (90%)
+[0]  00:00:00.3 Surpassing cell 1024 of 1024 (100%)
+[0]  00:00:00.3 Establishing cell boundary connectivity.
+[0]  00:00:00.3 Done establishing cell connectivity.
+[0]  Number of cells per partition (max,min,avg) = 256,256,256
+[0]  
+[0]  Mesh statistics:
+[0]    Global cell count             : 1024
+[0]    Local cell count (avg,max,min): 256,256,256
+[0]    Ghost-to-local ratio (avg)    : 0.128906
+[0]  
+[0]  Reading OpenSn cross-section file "xs_168g.xs"
+[0]  [33m*** WARNING ***  Negative transport cross section found for group 167 in call to ComputeDiffusionParameters. sigma_t=0 sigma_1=0. Setting sigma_1=0, sigma_tr=sigma_t for this group.[0m
+[0]  Using 2D XY Gauss–Legendre/Chebyshev product quadrature with 8 angles and weight sum of 1.00
+[0]  
+[0]  Initializing LBS SteadyStateSourceSolver with name: LBSDiscreteOrdinatesProblem
+[0]  
+[0]  Scattering order    : 1
+[0]  Number of Groups    : 168
+[0]  Number of Group sets: 2
+[0]  
+[0]  ***** Groupset 0 *****
+[0]  Groups:
+[0]      0     1     2     3     4     5     6     7     8     9    10    11 
+[0]     12    13    14    15    16    17    18    19    20    21    22    23 
+[0]     24    25    26    27    28    29    30    31    32    33    34    35 
+[0]     36    37    38    39    40    41    42    43    44    45    46    47 
+[0]     48    49    50    51    52    53    54    55    56    57    58    59 
+[0]     60    61    62 
+[0]  ***** Groupset 1 *****
+[0]  Groups:
+[0]     63    64    65    66    67    68    69    70    71    72    73    74 
+[0]     75    76    77    78    79    80    81    82    83    84    85    86 
+[0]     87    88    89    90    91    92    93    94    95    96    97    98 
+[0]     99   100   101   102   103   104   105   106   107   108   109   110 
+[0]    111   112   113   114   115   116   117   118   119   120   121   122 
+[0]    123   124   125   126   127   128   129   130   131   132   133   134 
+[0]    135   136   137   138   139   140   141   142   143   144   145   146 
+[0]    147   148   149   150   151   152   153   154   155   156   157   158 
+[0]    159   160   161   162   163   164   165   166   167 
+[0]  
+[0]  Initializing spatial discretization.
+[0]  Computing unit integrals.
+[0]  Ghost cell unit cell-matrix ratio: 12.8906%
+[0]  Cell matrices computed.
+[0]  [33m*** WARNING ***  Computing the flux with fewer scattering moments than are present in the cross-section data for block 0[0m
+[0]  Initializing parallel arrays. G=168 M=3
+[0]  Done with parallel arrays.
+[0]  Volumetric source #0 has 0 total subscribing cells.
+[0]  Volumetric source #1 has 0 total subscribing cells.
+[0]  00:00:00.5 Initializing sweep datastructures.
+[0]  00:00:00.5 Done initializing sweep datastructures.
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  00:00:00.5 Initialized angle aggregation.
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  CBC_FLUDS::CBC_FLUDS: Peak number of alive cells = 47 (NOTE: Right now, this is a hard-coded magic number for debugging purposes - I'm trying to figure out why this number doesn't match the peak alive cell count that the CBC_FLUDS reports)
+[0]  00:00:00.5 Initialized angle aggregation.
+[0]  Initializing WGS and AGS solvers
+[0]  Total number of angular unknowns: 2064384
+[0]  Number of lagged angular unknowns: 0(0%)
+[0]  
+[0]  
+[0]  ********** Solving groupset 0 with PETSC_GMRES
+[0]  
+[0]  Quadrature number of angles: 8
+[0]  Groups 0 62
+[0]  
+[0]  00:00:00.5 Computing b
+[0]  CBC_AngleSet ID 0: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 1: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 2: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 3: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 4: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 5: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 6: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 7: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  00:00:00.7 WGS groups [0-62] Iteration     0 Residual         1
+[0]  CBC_AngleSet ID 0: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 5: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 6: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  00:00:00.9 WGS groups [0-62] Iteration     1 Residual  0.180608
+[0]  CBC_AngleSet ID 0: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 5: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 6: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  00:00:01.2 WGS groups [0-62] Iteration     2 Residual 0.0633515
+[0]  CBC_AngleSet ID 0: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 5: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 6: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  00:00:01.4 WGS groups [0-62] Iteration     3 Residual 0.0349193
+[0]  CBC_AngleSet ID 0: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 26
+[0]  CBC_AngleSet ID 5: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 6: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  00:00:01.6 WGS groups [0-62] Iteration     4 Residual 0.0270138
+[0]  CBC_AngleSet ID 0: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  00:00:01.8 WGS groups [0-62] Iteration     5 Residual 0.0246941
+[0]  CBC_AngleSet ID 0: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  00:00:02.0 WGS groups [0-62] Iteration     6 Residual 0.0227526
+[0]  CBC_AngleSet ID 0: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  00:00:02.1 WGS groups [0-62] Iteration     7 Residual 0.0194151
+[0]  CBC_AngleSet ID 0: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  00:00:02.3 WGS groups [0-62] Iteration     8 Residual 0.0161057
+[0]  CBC_AngleSet ID 0: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  00:00:02.5 WGS groups [0-62] Iteration     9 Residual 0.0131251
+[0]  CBC_AngleSet ID 0: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  00:00:02.7 WGS groups [0-62] Iteration    10 Residual 0.0106459
+[0]  CBC_AngleSet ID 0: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  00:00:02.8 WGS groups [0-62] Iteration    11 Residual 0.00868615
+[0]  CBC_AngleSet ID 0: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  00:00:03.0 WGS groups [0-62] Iteration    12 Residual 0.00747435
+[0]  CBC_AngleSet ID 0: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  00:00:03.2 WGS groups [0-62] Iteration    13 Residual 0.00647653
+[0]  CBC_AngleSet ID 0: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  00:00:03.4 WGS groups [0-62] Iteration    14 Residual 0.00580959
+[0]  CBC_AngleSet ID 0: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  00:00:03.6 WGS groups [0-62] Iteration    15 Residual 0.00519441
+[0]  CBC_AngleSet ID 0: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  00:00:03.8 WGS groups [0-62] Iteration    16 Residual 0.00471249
+[0]  CBC_AngleSet ID 0: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  00:00:03.9 WGS groups [0-62] Iteration    17 Residual 0.00431284
+[0]  CBC_AngleSet ID 0: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  00:00:04.1 WGS groups [0-62] Iteration    18 Residual 0.00391225
+[0]  CBC_AngleSet ID 0: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  00:00:04.3 WGS groups [0-62] Iteration    19 Residual 0.00359697
+[0]  CBC_AngleSet ID 0: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  00:00:04.5 WGS groups [0-62] Iteration    20 Residual 0.00327681
+[0]  CBC_AngleSet ID 0: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  00:00:04.6 WGS groups [0-62] Iteration    21 Residual 0.00296742
+[0]  CBC_AngleSet ID 0: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  00:00:04.8 WGS groups [0-62] Iteration    22 Residual 0.00268115
+[0]  CBC_AngleSet ID 0: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  00:00:04.9 WGS groups [0-62] Iteration    23 Residual 0.0023425
+[0]  CBC_AngleSet ID 0: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  00:00:05.1 WGS groups [0-62] Iteration    24 Residual 0.00196216
+[0]  CBC_AngleSet ID 0: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  00:00:05.3 WGS groups [0-62] Iteration    25 Residual 0.00144222
+[0]  CBC_AngleSet ID 0: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  00:00:05.5 WGS groups [0-62] Iteration    26 Residual 0.000835048
+[0]  CBC_AngleSet ID 0: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  00:00:05.6 WGS groups [0-62] Iteration    27 Residual 0.000437823
+[0]  CBC_AngleSet ID 0: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  00:00:05.9 WGS groups [0-62] Iteration    28 Residual 0.000173929
+[0]  CBC_AngleSet ID 0: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  00:00:06.1 WGS groups [0-62] Iteration    29 Residual 7.23978e-05
+[0]  CBC_AngleSet ID 0: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  00:00:06.3 WGS groups [0-62] Iteration    30 Residual 2.39635e-05
+[0]  CBC_AngleSet ID 0: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  00:00:06.5 WGS groups [0-62] Iteration    31 Residual 8.95689e-06
+[0]  CBC_AngleSet ID 0: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  00:00:06.7 WGS groups [0-62] Iteration    32 Residual 2.74455e-06
+[0]  CBC_AngleSet ID 0: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  00:00:06.8 WGS groups [0-62] Iteration    33 Residual 9.51933e-07 CONVERGED
+[0]  
+[0]  CBC_AngleSet ID 0: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 5: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  
+[0]         Average sweep time (s):        0.121854
+[0]         Sweep Time/Unknown (ns):       236.107
+[0]         Number of unknowns per sweep:  2064384
+[0]  
+[0]  Total number of angular unknowns: 3440640
+[0]  Number of lagged angular unknowns: 0(0%)
+[0]  
+[0]  
+[0]  ********** Solving groupset 1 with PETSC_GMRES
+[0]  
+[0]  Quadrature number of angles: 8
+[0]  Groups 63 167
+[0]  
+[0]  00:00:07.1 Computing b
+[0]  CBC_AngleSet ID 0: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 1: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 24
+[0]  CBC_AngleSet ID 2: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 3: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 4: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 5: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  CBC_AngleSet ID 7: allocations = 256, deallocations = 255, current allocations = 1, peak allocations = 17
+[0]  00:00:07.4 WGS groups [63-167] Iteration     0 Residual         1
+[0]  CBC_AngleSet ID 0: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 5: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 511, deallocations = 510, current allocations = 1, peak allocations = 18
+[0]  00:00:07.7 WGS groups [63-167] Iteration     1 Residual  0.680988
+[0]  CBC_AngleSet ID 0: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 766, deallocations = 765, current allocations = 1, peak allocations = 18
+[0]  00:00:08.0 WGS groups [63-167] Iteration     2 Residual  0.530538
+[0]  CBC_AngleSet ID 0: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1021, deallocations = 1020, current allocations = 1, peak allocations = 18
+[0]  00:00:08.4 WGS groups [63-167] Iteration     3 Residual  0.447626
+[0]  CBC_AngleSet ID 0: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1276, deallocations = 1275, current allocations = 1, peak allocations = 18
+[0]  00:00:08.7 WGS groups [63-167] Iteration     4 Residual   0.38424
+[0]  CBC_AngleSet ID 0: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1531, deallocations = 1530, current allocations = 1, peak allocations = 18
+[0]  00:00:09.0 WGS groups [63-167] Iteration     5 Residual  0.344299
+[0]  CBC_AngleSet ID 0: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 1786, deallocations = 1785, current allocations = 1, peak allocations = 18
+[0]  00:00:09.3 WGS groups [63-167] Iteration     6 Residual  0.302672
+[0]  CBC_AngleSet ID 0: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 28
+[0]  CBC_AngleSet ID 5: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2041, deallocations = 2040, current allocations = 1, peak allocations = 18
+[0]  00:00:09.6 WGS groups [63-167] Iteration     7 Residual  0.273579
+[0]  CBC_AngleSet ID 0: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2296, deallocations = 2295, current allocations = 1, peak allocations = 18
+[0]  00:00:10.0 WGS groups [63-167] Iteration     8 Residual  0.227189
+[0]  CBC_AngleSet ID 0: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2551, deallocations = 2550, current allocations = 1, peak allocations = 18
+[0]  00:00:10.3 WGS groups [63-167] Iteration     9 Residual  0.192159
+[0]  CBC_AngleSet ID 0: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 2806, deallocations = 2805, current allocations = 1, peak allocations = 18
+[0]  00:00:10.6 WGS groups [63-167] Iteration    10 Residual  0.169424
+[0]  CBC_AngleSet ID 0: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 29
+[0]  CBC_AngleSet ID 6: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3061, deallocations = 3060, current allocations = 1, peak allocations = 18
+[0]  00:00:11.0 WGS groups [63-167] Iteration    11 Residual  0.153881
+[0]  CBC_AngleSet ID 0: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3316, deallocations = 3315, current allocations = 1, peak allocations = 18
+[0]  00:00:11.3 WGS groups [63-167] Iteration    12 Residual  0.139973
+[0]  CBC_AngleSet ID 0: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3571, deallocations = 3570, current allocations = 1, peak allocations = 18
+[0]  00:00:11.6 WGS groups [63-167] Iteration    13 Residual  0.127072
+[0]  CBC_AngleSet ID 0: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 3826, deallocations = 3825, current allocations = 1, peak allocations = 18
+[0]  00:00:11.9 WGS groups [63-167] Iteration    14 Residual  0.119097
+[0]  CBC_AngleSet ID 0: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4081, deallocations = 4080, current allocations = 1, peak allocations = 18
+[0]  00:00:12.3 WGS groups [63-167] Iteration    15 Residual  0.107722
+[0]  CBC_AngleSet ID 0: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4336, deallocations = 4335, current allocations = 1, peak allocations = 18
+[0]  00:00:12.6 WGS groups [63-167] Iteration    16 Residual   0.10127
+[0]  CBC_AngleSet ID 0: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4591, deallocations = 4590, current allocations = 1, peak allocations = 18
+[0]  00:00:12.9 WGS groups [63-167] Iteration    17 Residual 0.0934005
+[0]  CBC_AngleSet ID 0: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 4846, deallocations = 4845, current allocations = 1, peak allocations = 18
+[0]  00:00:13.2 WGS groups [63-167] Iteration    18 Residual 0.0839397
+[0]  CBC_AngleSet ID 0: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5101, deallocations = 5100, current allocations = 1, peak allocations = 18
+[0]  00:00:13.5 WGS groups [63-167] Iteration    19 Residual 0.0747308
+[0]  CBC_AngleSet ID 0: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5356, deallocations = 5355, current allocations = 1, peak allocations = 18
+[0]  00:00:13.8 WGS groups [63-167] Iteration    20 Residual 0.0632038
+[0]  CBC_AngleSet ID 0: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5611, deallocations = 5610, current allocations = 1, peak allocations = 18
+[0]  00:00:14.1 WGS groups [63-167] Iteration    21 Residual  0.055906
+[0]  CBC_AngleSet ID 0: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 5866, deallocations = 5865, current allocations = 1, peak allocations = 18
+[0]  00:00:14.5 WGS groups [63-167] Iteration    22 Residual 0.0509142
+[0]  CBC_AngleSet ID 0: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6121, deallocations = 6120, current allocations = 1, peak allocations = 18
+[0]  00:00:14.8 WGS groups [63-167] Iteration    23 Residual 0.0458847
+[0]  CBC_AngleSet ID 0: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6376, deallocations = 6375, current allocations = 1, peak allocations = 18
+[0]  00:00:15.1 WGS groups [63-167] Iteration    24 Residual 0.0403754
+[0]  CBC_AngleSet ID 0: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6631, deallocations = 6630, current allocations = 1, peak allocations = 18
+[0]  00:00:15.5 WGS groups [63-167] Iteration    25 Residual 0.0363764
+[0]  CBC_AngleSet ID 0: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 6886, deallocations = 6885, current allocations = 1, peak allocations = 18
+[0]  00:00:15.8 WGS groups [63-167] Iteration    26 Residual  0.032824
+[0]  CBC_AngleSet ID 0: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7141, deallocations = 7140, current allocations = 1, peak allocations = 18
+[0]  00:00:16.2 WGS groups [63-167] Iteration    27 Residual 0.0298747
+[0]  CBC_AngleSet ID 0: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7396, deallocations = 7395, current allocations = 1, peak allocations = 18
+[0]  00:00:16.5 WGS groups [63-167] Iteration    28 Residual 0.0271533
+[0]  CBC_AngleSet ID 0: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7651, deallocations = 7650, current allocations = 1, peak allocations = 18
+[0]  00:00:16.8 WGS groups [63-167] Iteration    29 Residual 0.0244195
+[0]  CBC_AngleSet ID 0: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 7906, deallocations = 7905, current allocations = 1, peak allocations = 18
+[0]  00:00:17.2 WGS groups [63-167] Iteration    30 Residual 0.0212798
+[0]  CBC_AngleSet ID 0: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8161, deallocations = 8160, current allocations = 1, peak allocations = 18
+[0]  00:00:17.5 WGS groups [63-167] Iteration    31 Residual 0.0182012
+[0]  CBC_AngleSet ID 0: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8416, deallocations = 8415, current allocations = 1, peak allocations = 18
+[0]  00:00:17.8 WGS groups [63-167] Iteration    32 Residual 0.0151853
+[0]  CBC_AngleSet ID 0: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8671, deallocations = 8670, current allocations = 1, peak allocations = 18
+[0]  00:00:18.1 WGS groups [63-167] Iteration    33 Residual 0.0123174
+[0]  CBC_AngleSet ID 0: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 8926, deallocations = 8925, current allocations = 1, peak allocations = 18
+[0]  00:00:18.4 WGS groups [63-167] Iteration    34 Residual 0.00960522
+[0]  CBC_AngleSet ID 0: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 9181, deallocations = 9180, current allocations = 1, peak allocations = 18
+[0]  00:00:18.8 WGS groups [63-167] Iteration    35 Residual 0.00728551
+[0]  CBC_AngleSet ID 0: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 9436, deallocations = 9435, current allocations = 1, peak allocations = 18
+[0]  00:00:19.1 WGS groups [63-167] Iteration    36 Residual 0.00542888
+[0]  CBC_AngleSet ID 0: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 9691, deallocations = 9690, current allocations = 1, peak allocations = 18
+[0]  00:00:19.4 WGS groups [63-167] Iteration    37 Residual 0.00396178
+[0]  CBC_AngleSet ID 0: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 6: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 9946, deallocations = 9945, current allocations = 1, peak allocations = 18
+[0]  00:00:19.7 WGS groups [63-167] Iteration    38 Residual 0.00273246
+[0]  CBC_AngleSet ID 0: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 10201, deallocations = 10200, current allocations = 1, peak allocations = 18
+[0]  00:00:20.0 WGS groups [63-167] Iteration    39 Residual 0.00184249
+[0]  CBC_AngleSet ID 0: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 10456, deallocations = 10455, current allocations = 1, peak allocations = 18
+[0]  00:00:20.3 WGS groups [63-167] Iteration    40 Residual 0.00122988
+[0]  CBC_AngleSet ID 0: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 10711, deallocations = 10710, current allocations = 1, peak allocations = 18
+[0]  00:00:20.6 WGS groups [63-167] Iteration    41 Residual 0.000821292
+[0]  CBC_AngleSet ID 0: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 10966, deallocations = 10965, current allocations = 1, peak allocations = 18
+[0]  00:00:20.9 WGS groups [63-167] Iteration    42 Residual 0.000545384
+[0]  CBC_AngleSet ID 0: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 11221, deallocations = 11220, current allocations = 1, peak allocations = 18
+[0]  00:00:21.3 WGS groups [63-167] Iteration    43 Residual 0.000357752
+[0]  CBC_AngleSet ID 0: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 11476, deallocations = 11475, current allocations = 1, peak allocations = 18
+[0]  00:00:21.7 WGS groups [63-167] Iteration    44 Residual 0.000235234
+[0]  CBC_AngleSet ID 0: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 11731, deallocations = 11730, current allocations = 1, peak allocations = 18
+[0]  00:00:22.0 WGS groups [63-167] Iteration    45 Residual 0.000155753
+[0]  CBC_AngleSet ID 0: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 11986, deallocations = 11985, current allocations = 1, peak allocations = 18
+[0]  00:00:22.4 WGS groups [63-167] Iteration    46 Residual 0.000103393
+[0]  CBC_AngleSet ID 0: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 12241, deallocations = 12240, current allocations = 1, peak allocations = 18
+[0]  00:00:22.7 WGS groups [63-167] Iteration    47 Residual 6.70577e-05
+[0]  CBC_AngleSet ID 0: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 12496, deallocations = 12495, current allocations = 1, peak allocations = 18
+[0]  00:00:23.1 WGS groups [63-167] Iteration    48 Residual 4.36724e-05
+[0]  CBC_AngleSet ID 0: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 12751, deallocations = 12750, current allocations = 1, peak allocations = 18
+[0]  00:00:23.4 WGS groups [63-167] Iteration    49 Residual 2.8627e-05
+[0]  CBC_AngleSet ID 0: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 13006, deallocations = 13005, current allocations = 1, peak allocations = 18
+[0]  00:00:23.7 WGS groups [63-167] Iteration    50 Residual 1.8988e-05
+[0]  CBC_AngleSet ID 0: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 13261, deallocations = 13260, current allocations = 1, peak allocations = 18
+[0]  00:00:24.1 WGS groups [63-167] Iteration    51 Residual 1.23767e-05
+[0]  CBC_AngleSet ID 0: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 13516, deallocations = 13515, current allocations = 1, peak allocations = 18
+[0]  00:00:24.4 WGS groups [63-167] Iteration    52 Residual 8.26642e-06
+[0]  CBC_AngleSet ID 0: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 13771, deallocations = 13770, current allocations = 1, peak allocations = 18
+[0]  00:00:24.8 WGS groups [63-167] Iteration    53 Residual 5.44664e-06
+[0]  CBC_AngleSet ID 0: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 14026, deallocations = 14025, current allocations = 1, peak allocations = 18
+[0]  00:00:25.1 WGS groups [63-167] Iteration    54 Residual 3.54418e-06
+[0]  CBC_AngleSet ID 0: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 14281, deallocations = 14280, current allocations = 1, peak allocations = 18
+[0]  00:00:25.5 WGS groups [63-167] Iteration    55 Residual 2.28227e-06
+[0]  CBC_AngleSet ID 0: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 14536, deallocations = 14535, current allocations = 1, peak allocations = 18
+[0]  00:00:25.8 WGS groups [63-167] Iteration    56 Residual 1.52554e-06
+[0]  CBC_AngleSet ID 0: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 14791, deallocations = 14790, current allocations = 1, peak allocations = 18
+[0]  00:00:26.1 WGS groups [63-167] Iteration    57 Residual 1.04514e-06
+[0]  CBC_AngleSet ID 0: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 15046, deallocations = 15045, current allocations = 1, peak allocations = 18
+[0]  00:00:26.5 WGS groups [63-167] Iteration    58 Residual 7.06152e-07 CONVERGED
+[0]  
+[0]  CBC_AngleSet ID 0: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 1: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 25
+[0]  CBC_AngleSet ID 2: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 3: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 4: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 30
+[0]  CBC_AngleSet ID 5: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 31
+[0]  CBC_AngleSet ID 6: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 18
+[0]  CBC_AngleSet ID 7: allocations = 15301, deallocations = 15300, current allocations = 1, peak allocations = 18
+[0]  
+[0]         Average sweep time (s):        0.154617
+[0]         Sweep Time/Unknown (ns):       179.754
+[0]         Number of unknowns per sweep:  3440640
+[0]  
+[0]  00:00:26.9 AGS Iteration 0     Error Norm 9.38158       
+Max-value1=0.50758
+Max-value2=2.52527e-04
+
+Elapsed execution time: 00:00:27.0
+2025-09-01 18:15:54 OpenSn finished execution.
+[DESKTOP-METQ4TN:227822] *** An error occurred in MPI_Comm_get_attr
+[DESKTOP-METQ4TN:227822] *** reported by process [280166401,2]
+[DESKTOP-METQ4TN:227822] *** on a NULL communicator
+[DESKTOP-METQ4TN:227822] *** Unknown error
+[DESKTOP-METQ4TN:227822] *** MPI_ERRORS_ARE_FATAL (processes in this communicator will now abort,
+[DESKTOP-METQ4TN:227822] ***    and potentially your MPI job)
+[DESKTOP-METQ4TN:227816] 3 more processes have sent help message help-mpi-errors.txt / mpi_errors_are_fatal unknown handle
+[DESKTOP-METQ4TN:227816] Set MCA parameter "orte_base_help_aggregate" to 0 to see all help / error messages
