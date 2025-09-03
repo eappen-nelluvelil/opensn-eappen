@@ -5,7 +5,9 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/memory_pool_allocator.h"
 #include <map>
+#include <unordered_map>
 #include <memory_resource>
 #include <stack>
 #include <functional>
@@ -68,6 +70,24 @@ public:
                                      unsigned int face_node_mapped,
                                      unsigned int angle_set_index);
 
+  void Allocate(const uint64_t cell_local_id);
+
+  void Deallocate(const uint64_t cell_local_id);
+
+  const double* GetChunk(const uint64_t cell_local_id) const;
+
+  double* GetChunk(const uint64_t cell_local_id);
+
+  unsigned int GetNumAllocations() const { return num_allocations_; }
+
+  unsigned int GetNumDeallocations() const { return num_deallocations_; }
+
+  unsigned int GetNumCurrentAllocations() const { return num_current_allocations_; }
+
+  unsigned int GetNumPeakAllocations() const { return num_peak_allocations_; }
+
+  size_t GetBufferSize() const { return pool_.GetBufferSize(); }
+
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi(size_t num_grps, size_t num_angles) override {}
@@ -125,13 +145,13 @@ private:
   // ---------------------------------------------------------------
   // Required objects to implement a free-list memory pool allocator
   // ---------------------------------------------------------------
+  MemoryPoolAllocator pool_;
+  std::unordered_map<size_t, double*> cell_to_chunk_map_;
 
-  std::vector<std::byte> memory_buffer_;
-  std::pmr::monotonic_buffer_resource memory_resource_;
-  std::pmr::pool_options pool_options_;
-  std::pmr::unsynchronized_pool_resource pool_resource_;
-  std::stack<size_t> free_list_;
-  std::map<size_t, double*> cell_to_chunk_map_;
+  unsigned int num_allocations_ = 0;
+  unsigned int num_deallocations_ = 0;
+  unsigned int num_current_allocations_ = 0;
+  unsigned int num_peak_allocations_ = 0;
 
   std::vector<double> delayed_local_psi_;
   std::vector<double> delayed_local_psi_old_;
