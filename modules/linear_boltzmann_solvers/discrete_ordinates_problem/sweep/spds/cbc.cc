@@ -130,7 +130,7 @@ CBC_SPDS::SimulateSweep()
   uint64_t currently_allocated_blocks = 0;
   uint64_t peak_allocated_blocks = 0;
 
-  // Simluate that all remote dependencies have been met.
+  // Simluate that all remote dependencies have been met
   for (auto& task : sim_task_list)
   {
     const auto& cell = *task.cell_ptr;
@@ -145,7 +145,7 @@ CBC_SPDS::SimulateSweep()
     task.num_dependencies -= remote_deps;
   }
 
-  // Simulate the local sweep execution, which mirrors AngleSetAdvance.
+  // Simulate the local sweep execution, which mirrors AngleSetAdvance
   bool a_task_executed = true;
   while (a_task_executed)
   {
@@ -154,36 +154,36 @@ CBC_SPDS::SimulateSweep()
     {
       if (task.num_dependencies == 0 and not task.completed)
       {
-        // Simulate allocation for the current task.
+        // Simulate allocation for the current task
         ++currently_allocated_blocks;
         peak_allocated_blocks = std::max(peak_allocated_blocks, currently_allocated_blocks);
 
-        // Mark task as complete and update its successors.
+        // Mark task as complete and update its successors
         task.completed = true;
         a_task_executed = true;
 
         for (const uint64_t succ_idx : task.successors)
           --sim_task_list[succ_idx].num_dependencies;
 
-        // Simulate deallocation for predecessors whose data is now fully consumed.
+        // Simulate deallocation for predecessors whose data is now fully consumed
         for (const uint64_t pred_idx : task.predecessors)
         {
           auto& predecessor_task = sim_task_list[pred_idx];
-          --predecessor_task.successor_consumption_count;
+          --predecessor_task.num_consumptions;
 
-          if (predecessor_task.successor_consumption_count == 0)
+          if (predecessor_task.num_consumptions == sim_task_list[pred_idx].successors.size())
             --currently_allocated_blocks;
         }
 
         // If this task is a sink (no local successors), its memory
-        // is deallocated immediately after execution.
-        if (task.successor_consumption_count == 0)
+        // is deallocated immediately after execution
+        if (task.num_consumptions == 0)
           --currently_allocated_blocks;
       }
     } // for task
   }   // while a_task_executed
 
-  max_concurrent_mem_ = peak_allocated_blocks;
+  peak_number_alive_cells_ = peak_allocated_blocks;
 }
 
 } // namespace opensn
