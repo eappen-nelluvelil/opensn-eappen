@@ -114,12 +114,77 @@ CBC_SPDS::GetTaskList() const
   return task_list_;
 }
 
+// void
+// CBC_SPDS::SimulateLocalSweep()
+// {
+//   const auto& location_dependencies = GetLocationDependencies();
+//   for (const auto& loc_dep : location_dependencies)
+//     log.Log() << "Location dependency: " << loc_dep;
+// }
+
 void
-CBC_SPDS::SimulateLocalSweep()
+CBC_SPDS::SimulateSweep()
 {
-  const auto& location_dependencies = GetLocationDependencies();
-  for (const auto& loc_dep : location_dependencies)
-    log.Log() << "Location dependency: " << loc_dep;
+  std::vector<Task> sim_task_list = task_list_;
+  const size_t num_local_tasks = sim_task_list.size();
+
+  uint64_t currently_allocated_blocks = 0;
+  uint64_t peak_allocated_blocks = 0;
+
+  // Simluate that all remote dependencies have been met.
+  for (auto& task : sim_task_list)
+  {
+    const auto& cell = *task.cell_ptr;
+    unsigned int remote_deps = 0;
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+      if (cell_face_orientations_[cell.local_id][f] == FaceOrientation::INCOMING)
+      {
+        const auto& face = cell.faces[f];
+        if (face.has_neighbor and not grid_->IsCellLocal(face.neighbor_id))
+          ++remote_deps;
+      }
+    task.num_dependencies -= remote_deps;
+  }
+
+  // Simulate the local sweep execution, which mirrors AngleSetAdvance.
+  bool a_task_executed = true;
+  while (a_task_executed)
+  {
+    a_task_executed = false;
+    for (auto& task : sim_task_list)
+    {
+      if (task.num_dependencies == 0 and not task.completed)
+      {
+        // Simulate allocation for the current task.
+        ++currently_allocated_blocks;
+        peak_allocated_blocks = std::max(peak_allocated_blocks, currently_allocated_blocks);
+
+        // Mark task as complete and update its successors.
+        task.completed = true;
+        a_task_executed = true;
+
+        for (const uint64_t succ_idx : task.successors)
+          --sim_task_list[succ_idx].num_dependencies;
+
+        // Simulate deallocation for predecessors whose data is now fully consumed.
+        for (const uint64_t pred_idx : task.predecessors)
+        {
+          auto& predecessor_task = sim_task_list[pred_idx];
+          --predecessor_task.successor_consumption_count;
+
+          if (predecessor_task.successor_consumption_count == 0)
+            --currently_allocated_blocks;
+        }
+
+        // If this task is a sink (no local successors), its memory
+        // is deallocated immediately after execution.
+        if (task.successor_consumption_count == 0)
+          --currently_allocated_blocks;
+      }
+    } // for task
+  }   // while a_task_executed
+
+  max_concurrent_mem_ = peak_allocated_blocks;
 }
 
 } // namespace opensn
