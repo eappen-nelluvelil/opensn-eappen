@@ -83,22 +83,24 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         a_task_executed = true;
         async_comm_.SendData();
 
+        // Update predecessor consumption counts
         for (uint64_t local_task_num : cell_task.local_predecessors)
         {
           ++current_task_list_[local_task_num].num_consumptions;
-          if (current_task_list_[local_task_num].num_consumptions == current_task_list_[local_task_num].successors.size())
+
+          // Deallocate if predecessor has satisfied its immediate downwind 
+          // dependencies
+          if (current_task_list_[local_task_num].num_consumptions == 
+              current_task_list_[local_task_num].successors.size())
             cbc_fluds_->Deallocate(current_task_list_[local_task_num].cell_ptr->local_id);
         }
 
+        // Deallocate if no successors remain
         if (cell_task.successors.empty())
           cbc_fluds_->Deallocate(cell_task.cell_ptr->local_id);
       }
     } // for cell_task
     async_comm_.SendData();
-
-    // for (auto& cell_task : current_task_list_)
-    //   if (cell_task.successors.empty())
-    //     cbc_fluds_->Deallocate(cell_task.cell_ptr->local_id);
   }
 
   const bool all_messages_sent = async_comm_.SendData();
@@ -127,6 +129,8 @@ CBC_AngleSet::ResetSweepBuffers()
                     << ", peak allocations = " << cbc_fluds_->GetNumPeakAllocations()
                     << ", allocations = " << cbc_fluds_->GetNumAllocations()
                     << ", deallocations = " << cbc_fluds_->GetNumDeallocations();
+
+  cbc_fluds_->ResetCounters();
 
   executed_ = false;
 }

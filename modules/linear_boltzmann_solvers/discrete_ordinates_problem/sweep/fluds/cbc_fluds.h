@@ -86,6 +86,14 @@ public:
 
   unsigned int GetNumPeakAllocations() const { return num_peak_allocations_; }
 
+  void ResetCounters()
+  {
+    num_allocations_ = 0;
+    num_deallocations_ = 0;
+    num_current_allocations_ = 0;
+    num_peak_allocations_ = 0;
+  }
+
   size_t GetBufferSize() const { return pool_.GetBufferSize(); }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
