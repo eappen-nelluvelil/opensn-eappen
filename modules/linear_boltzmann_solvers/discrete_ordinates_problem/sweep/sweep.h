@@ -36,6 +36,7 @@ enum class AngleSetStatus
 struct Task
 {
   unsigned int num_dependencies;
+  std::vector<uint64_t> remote_predecessors;
   std::vector<uint64_t> local_predecessors;
   unsigned int num_consumptions;
   std::vector<uint64_t> successors;

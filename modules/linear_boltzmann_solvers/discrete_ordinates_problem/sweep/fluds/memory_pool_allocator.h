@@ -1,6 +1,7 @@
 #include <stdexcept>
 #include <stack>
 #include <vector>
+#include <sstream>
 
 class MemoryPoolAllocator
 {
@@ -34,18 +35,28 @@ public:
     auto byte_ptr = static_cast<std::byte*>(ptr);
 
     if (byte_ptr < base || byte_ptr >= base + buffer_.size())
-      throw std::runtime_error("Pointer does not belong to this pool");
+    {
+      std::ostringstream err_stream;
+      err_stream << "MemoryPoolAllocator::Deallocate: Pointer " << ptr
+                 << " is out of pool bounds.";
+      throw std::runtime_error(err_stream.str());
+    }
 
     size_t offset = byte_ptr - base;
     if (offset % block_size_bytes_ != 0)
-      throw std::runtime_error("Pointer not aligned to block boundary");
+    {
+      std::ostringstream err_stream;
+      err_stream << "MemoryPoolAllocator::Deallocate: Pointer " << ptr
+                 << " is not aligned to block size " << block_size_bytes_ << ".";
+      throw std::runtime_error(err_stream.str());
+    }
 
     size_t block_index = offset / block_size_bytes_;
     free_list_.push(block_index);
   }
 
-  size_t Capacity() const { return num_blocks_; }
-  size_t FreeBlocks() const { return free_list_.size(); }
+  size_t GetCapacity() const { return num_blocks_; }
+  size_t GetNumFreeBlocks() const { return free_list_.size(); }
   size_t GetBufferSize() const { return buffer_.size(); }
 
 private:

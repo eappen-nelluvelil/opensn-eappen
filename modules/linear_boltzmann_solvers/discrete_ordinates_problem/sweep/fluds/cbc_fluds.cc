@@ -24,10 +24,10 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
-    // pool_(peak_number_alive_cells, 
-    //       max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
-    pool_(sdm.GetNumLocalDOFs(psi_uk_man) / psi_uk_man.GetNumberOfUnknowns() / num_groups_ / max_cell_dof_count, 
+    pool_(peak_number_alive_cells, 
           max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
+    // pool_(sdm.GetNumLocalDOFs(psi_uk_man) / psi_uk_man.GetNumberOfUnknowns() / num_groups_ / max_cell_dof_count, 
+    //      max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
     // pool_(30, 
     //       max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
     // memory_buffer_(peak_number_alive_cells * max_cell_dof_count * num_angles * num_groups *
@@ -135,19 +135,16 @@ CBC_FLUDS::Allocate(const uint64_t cell_local_id)
 {
   if (cell_to_chunk_map_.count(cell_local_id))
   {
-    // return cell_to_chunk_map_[cell_local_id];
     return;
   }
 
   void* raw_ptr = pool_.Allocate();
-  double* chunk_ptr = static_cast<double*>(raw_ptr);
+  auto chunk_ptr = static_cast<double*>(raw_ptr);
   cell_to_chunk_map_[cell_local_id] = chunk_ptr;
 
   ++num_allocations_;
   ++num_current_allocations_;
   num_peak_allocations_ = std::max(num_peak_allocations_, num_current_allocations_);
-  
-  // return chunk_ptr;
 }
 
 void 
@@ -157,7 +154,7 @@ CBC_FLUDS::Deallocate(const uint64_t cell_local_id)
   if (it == cell_to_chunk_map_.end())
   {
     std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::Deallocate Cell with local ID " << cell_local_id
+    err_stream << "CBC_FLUDS::Deallocate: Cell with local ID " << cell_local_id
                << " does not have an allocated chunk.";
     throw std::runtime_error(err_stream.str());
   }
