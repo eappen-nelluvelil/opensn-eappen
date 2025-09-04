@@ -8,6 +8,8 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <boost/graph/topological_sort.hpp>
+#include <boost/graph/transitive_reduction.hpp>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -62,6 +64,51 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                            "Cycles need to be allowed by the calling application.");
   }
 
+  // Generate levelized SPLS
+  // NOTE: I'm fairly sure a levelized SPLS is the same thing as the transitive 
+  // reduction of a DAG
+  // Double-check with Daryl on this
+  int max_level = 0;
+  std::vector<int> levels(num_vertices(local_DG), 0);
+  for (auto& v : spls_)
+  {
+    for (auto ei = out_edges(v, local_DG); ei.first != ei.second; ++ei.first)
+    {
+      auto u = target(*ei.first, local_DG);
+      levels[u] = std::max(levels[u], levels[v] + 1);
+      max_level = std::max(max_level, levels[u]);
+    }
+  }
+
+  levelized_spls_.resize(max_level + 1);
+  for (auto v = 0; v < num_vertices(local_DG); ++v)
+    levelized_spls_[levels[v]].push_back(v);
+
+  // Regenerate SPLS to match levelized SPLS
+  spls_.clear();
+  std::vector<size_t> num_cells_per_level(levelized_spls_.size(), 0);
+  unsigned int max_wavefront_size = 0;
+  unsigned int max_predecessor_wavefront_size = 0;
+  int level_idx = 0;
+  for (auto& level : levelized_spls_)
+  {
+    for (auto& cell : level)
+    {
+      spls_.push_back(cell);
+      ++num_cells_per_level[level_idx];
+    }
+    max_predecessor_wavefront_size = max_wavefront_size;
+    max_wavefront_size = std::max(max_wavefront_size, 
+                                  static_cast<unsigned int>(level.size()));
+
+    // opensn::log.Log() << "CBC_SPDS: Level " << level_idx << ", size = " << level.size();
+    ++level_idx;
+  }
+
+  std::sort(num_cells_per_level.begin(), num_cells_per_level.end());
+  size_t max_wavefront_size_2 = num_cells_per_level.back();
+  size_t max_predecessor_wavefront_size_2 = num_cells_per_level.at(num_cells_per_level.size() - 2);
+
   // Create task list
   std::vector<std::vector<int>> global_dependencies;
   global_dependencies.resize(opensn::mpi_comm.size());
@@ -75,6 +122,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   {
     const size_t num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
+    std::vector<uint64_t> remote_predecessors;
     std::vector<uint64_t> local_predecessors;
     unsigned int num_consumptions = 0;
     std::vector<uint64_t> successors;
@@ -91,6 +139,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
           ++num_dependencies;
           if (grid->IsCellLocal(face.neighbor_id))
             local_predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+          else
+            remote_predecessors.push_back(face.neighbor_id);
         }
       }
       else if (cell_face_orientation == OUTGOING)
@@ -100,11 +150,17 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       }
     }
 
-    task_list_.push_back({num_dependencies, local_predecessors, num_consumptions, successors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, remote_predecessors, 
+                          local_predecessors, num_consumptions, 
+                          successors, cell.local_id, &cell, false});
   }
 
   // Get peak number of alive cells during local sweep
-  SimulateLocalSweep();
+  // SimulateLocalSweep();
+  // opensn::log.Log() << "CBC_SPDS: Max wavefront size: " << max_wavefront_size_2
+  //                   << ", Max predecessor wavefront size: " << max_predecessor_wavefront_size_2;
+  peak_number_alive_cells_ = max_wavefront_size_2 + max_predecessor_wavefront_size_2;
+  opensn::log.Log() << "CBC_SPDS::CBC_SPDS: Peak alive cells = " << peak_number_alive_cells_;
 }
 
 const std::vector<Task>&
@@ -113,16 +169,8 @@ CBC_SPDS::GetTaskList() const
   return task_list_;
 }
 
-// void
-// CBC_SPDS::SimulateLocalSweep()
-// {
-//   const auto& location_dependencies = GetLocationDependencies();
-//   for (const auto& loc_dep : location_dependencies)
-//     log.Log() << "Location dependency: " << loc_dep;
-// }
-
 void
-CBC_SPDS::SimulateSweep()
+CBC_SPDS::SimulateLocalSweep()
 {
   std::vector<Task> sim_task_list = task_list_;
   const size_t num_local_tasks = sim_task_list.size();
@@ -131,21 +179,31 @@ CBC_SPDS::SimulateSweep()
   uint64_t peak_allocated_blocks = 0;
 
   // Simluate that all remote dependencies have been met
+  // for (auto& task : sim_task_list)
+  // {
+  //   const auto& cell = *task.cell_ptr;
+  //   unsigned int remote_deps = 0;
+  //   for (size_t f = 0; f < cell.faces.size(); ++f)
+  //     if (cell_face_orientations_[cell.local_id][f] == FaceOrientation::INCOMING)
+  //     {
+  //       const auto& face = cell.faces[f];
+  //       if (face.has_neighbor and not grid_->IsCellLocal(face.neighbor_id))
+  //         ++remote_deps;
+  //     }
+  //   task.num_dependencies -= remote_deps;
+  // }
+
   for (auto& task : sim_task_list)
-  {
-    const auto& cell = *task.cell_ptr;
-    unsigned int remote_deps = 0;
-    for (size_t f = 0; f < cell.faces.size(); ++f)
-      if (cell_face_orientations_[cell.local_id][f] == FaceOrientation::INCOMING)
-      {
-        const auto& face = cell.faces[f];
-        if (face.has_neighbor and not grid_->IsCellLocal(face.neighbor_id))
-          ++remote_deps;
-      }
-    task.num_dependencies -= remote_deps;
-  }
+    if (not task.remote_predecessors.empty())
+    {
+      // task.num_dependencies -= task.remote_predecessors.size();
+      task.num_dependencies = 0;
+    }
 
   // Simulate the local sweep execution, which mirrors AngleSetAdvance
+  std::vector<bool> has_allocated_block;
+  has_allocated_block.assign(num_local_tasks, false);
+
   bool a_task_executed = true;
   while (a_task_executed)
   {
@@ -155,9 +213,13 @@ CBC_SPDS::SimulateSweep()
       if (task.num_dependencies == 0 and not task.completed)
       {
         // Simulate allocation for the current task
-        ++currently_allocated_blocks;
-        peak_allocated_blocks = std::max(peak_allocated_blocks, currently_allocated_blocks);
-
+        if (not has_allocated_block[task.reference_id])
+        {
+          has_allocated_block[task.reference_id] = true;
+          ++currently_allocated_blocks;
+          peak_allocated_blocks = std::max(peak_allocated_blocks, currently_allocated_blocks);
+        }
+        
         // Mark task as complete and update its successors
         task.completed = true;
         a_task_executed = true;
@@ -166,19 +228,23 @@ CBC_SPDS::SimulateSweep()
           --sim_task_list[succ_idx].num_dependencies;
 
         // Simulate deallocation for predecessors whose data is now fully consumed
-        for (const uint64_t pred_idx : task.predecessors)
+        for (const uint64_t pred_idx : task.local_predecessors)
         {
           auto& predecessor_task = sim_task_list[pred_idx];
-          --predecessor_task.num_consumptions;
+          ++predecessor_task.num_consumptions;
 
-          if (predecessor_task.num_consumptions == sim_task_list[pred_idx].successors.size())
+          if ((predecessor_task.num_consumptions == predecessor_task.successors.size()))
+          {
             --currently_allocated_blocks;
+          }
         }
 
         // If this task is a sink (no local successors), its memory
         // is deallocated immediately after execution
-        if (task.num_consumptions == 0)
+        if (task.successors.empty())
+        {
           --currently_allocated_blocks;
+        }
       }
     } // for task
   }   // while a_task_executed
