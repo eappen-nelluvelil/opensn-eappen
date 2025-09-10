@@ -198,65 +198,63 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       }
     }
 
-    // if (active_edges.size() > peak_number_alive_local_cells_estimate)
-    // {
-    //   max_set_of_active_edges = active_edges;
-    //   peak_number_alive_local_cells_estimate = active_edges.size();
-    // }
-
-    peak_number_alive_local_cells_estimate = std::max(peak_number_alive_local_cells_estimate, active_edges.size());
+    if (active_edges.size() > peak_number_alive_local_cells_estimate)
+    {
+      max_set_of_active_edges = active_edges;
+      peak_number_alive_local_cells_estimate = active_edges.size();
+    }
   }
 
-  // std::set<int> unique_predecessors;
-  // std::set<int> unique_successors;
-  // for (const auto& edge : max_set_of_active_edges)
-  // {
-  //   unique_predecessors.insert(edge.first);
-  //   unique_successors.insert(edge.second);
-  // }
+  std::set<int> unique_predecessors;
+  std::set<int> unique_successors;
+  for (const auto& edge : max_set_of_active_edges)
+  {
+    unique_predecessors.insert(edge.first);
+    unique_successors.insert(edge.second);
+  }
 
-  // const size_t num_unique_predecessors = unique_predecessors.size();
-  // const size_t num_unique_successors = unique_successors.size();
+  const size_t num_unique_predecessors = unique_predecessors.size();
+  const size_t num_unique_successors = unique_successors.size();
 
-  // std::vector<uint64_t> remote_predecessors;
-  // std::vector<uint64_t> remote_successors;
+  std::vector<uint64_t> remote_predecessors;
+  std::vector<uint64_t> remote_successors;
 
-  // size_t remote_predecessors_count = 0;
-  // size_t remote_successors_count = 0;
+  size_t remote_predecessors_count = 0;
+  size_t remote_successors_count = 0;
 
-  // auto start_level = levelized_spls_.front();
-  // auto end_level = levelized_spls_.back();
+  auto start_level = levelized_spls_.front();
+  auto end_level = levelized_spls_.back();
 
-  // for (const auto& cell_local_id : start_level)
-  // {
-  //   const auto& cell = grid_->local_cells[cell_local_id];
-  //   const auto num_faces = cell.faces.size();
-  //   for (size_t f = 0; f < num_faces; ++f)
-  //   {
-  //     const auto& face = cell.faces[f];
-  //     const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
-  //     if (cell_face_orientation == INCOMING)
-  //       if (face.has_neighbor and (not grid_->IsCellLocal(face.neighbor_id)))
-  //         remote_predecessors.push_back(face.neighbor_id);
-  //   }
-  // }
+  for (const auto& cell_local_id : start_level)
+  {
+    const auto& cell = grid_->local_cells[cell_local_id];
+    const auto num_faces = cell.faces.size();
+    for (size_t f = 0; f < num_faces; ++f)
+    {
+      const auto& face = cell.faces[f];
+      const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
+      if (cell_face_orientation == INCOMING)
+        if (face.has_neighbor and (not grid_->IsCellLocal(face.neighbor_id)))
+          remote_predecessors.push_back(face.neighbor_id);
+    }
+  }
 
-  // for (const auto& cell_local_id : end_level)
-  // {
-  //   const auto& cell = grid_->local_cells[cell_local_id];
-  //   const auto num_faces = cell.faces.size();
-  //   for (size_t f = 0; f < num_faces; ++f)
-  //   {
-  //     const auto& face = cell.faces[f];
-  //     const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
-  //     if (cell_face_orientation == OUTGOING)
-  //       if (face.has_neighbor and (not grid_->IsCellLocal(face.neighbor_id)))
-  //         remote_successors.push_back(face.neighbor_id);
-  //   }
-  // }
+  for (const auto& cell_local_id : end_level)
+  {
+    const auto& cell = grid_->local_cells[cell_local_id];
+    const auto num_faces = cell.faces.size();
+    for (size_t f = 0; f < num_faces; ++f)
+    {
+      const auto& face = cell.faces[f];
+      const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
+      if (cell_face_orientation == OUTGOING)
+        if (face.has_neighbor and (not grid_->IsCellLocal(face.neighbor_id)))
+          remote_successors.push_back(face.neighbor_id);
+    }
+  }
 
-  // remote_predecessors_count = remote_predecessors.size();
-  // remote_successors_count = remote_successors.size();
+  remote_predecessors_count = remote_predecessors.size();
+  remote_successors_count = remote_successors.size();
   
   // opensn::log.Log() << "\nCBC_SPDS: Number of cells in first level of levelized SPLS = " << levelized_spls_.front().size();
   // opensn::log.Log() << "CBC_SPDS: Number of cells in last level of levelized SPLS = " << levelized_spls_.back().size();
@@ -287,63 +285,63 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   else
     peak_number_alive_cells_ = spls_.size();
 
-  // const auto& dep_procs = GetLocationDependencies();
-  // const auto& succ_procs = GetLocationSuccessors();
-  // const auto& delayed_dep_procs = GetDelayedLocationDependencies();
-  // const auto& delayed_succ_procs = GetDelayedLocationSuccessors();
+  const auto& dep_procs = GetLocationDependencies();
+  const auto& succ_procs = GetLocationSuccessors();
+  const auto& delayed_dep_procs = GetDelayedLocationDependencies();
+  const auto& delayed_succ_procs = GetDelayedLocationSuccessors();
 
-  // std::set<int> dep_proc_set(dep_procs.begin(), dep_procs.end());
-  // std::set<int> succ_proc_set(succ_procs.begin(), succ_procs.end());
-  // std::set<int> delayed_dep_proc_set(delayed_dep_procs.begin(), delayed_dep_procs.end());
-  // std::set<int> delayed_succ_proc_set(delayed_succ_procs.begin(), delayed_succ_procs.end());
+  std::set<int> dep_proc_set(dep_procs.begin(), dep_procs.end());
+  std::set<int> succ_proc_set(succ_procs.begin(), succ_procs.end());
+  std::set<int> delayed_dep_proc_set(delayed_dep_procs.begin(), delayed_dep_procs.end());
+  std::set<int> delayed_succ_proc_set(delayed_succ_procs.begin(), delayed_succ_procs.end());
 
-  // // Initialize counters for each category of face edge
-  // size_t incoming_face_edges = 0;
-  // size_t outgoing_face_edges = 0;
-  // size_t delayed_incoming_face_edges = 0;
-  // size_t delayed_outgoing_face_edges = 0;
+  // Initialize counters for each category of face edge
+  size_t incoming_face_edges = 0;
+  size_t outgoing_face_edges = 0;
+  size_t delayed_incoming_face_edges = 0;
+  size_t delayed_outgoing_face_edges = 0;
 
-  // // Iterate over cells in the first level to count incoming edges
-  // for (const auto& cell_local_id : start_level)
-  // {
-  //   const auto& cell = grid_->local_cells[cell_local_id];
-  //   for (size_t f = 0; f < cell.faces.size(); ++f)
-  //   {
-  //     const auto& face = cell.faces[f];
-  //     const auto& orientation = cell_face_orientations_[cell.local_id][f];
+  // Iterate over cells in the first level to count incoming edges
+  for (const auto& cell_local_id : start_level)
+  {
+    const auto& cell = grid_->local_cells[cell_local_id];
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      const auto& orientation = cell_face_orientations_[cell.local_id][f];
 
-  //     if (orientation == FaceOrientation::INCOMING && face.has_neighbor &&
-  //         !grid_->IsCellLocal(face.neighbor_id))
-  //     {
-  //       const int neighbor_pid = grid_->cells[face.neighbor_id].partition_id;
-  //       if (dep_proc_set.count(neighbor_pid))
-  //         ++incoming_face_edges;
-  //       else if (delayed_dep_proc_set.count(neighbor_pid))
-  //         ++delayed_incoming_face_edges;
-  //     }
-  //   }
-  // }
+      if (orientation == FaceOrientation::INCOMING && face.has_neighbor &&
+          !grid_->IsCellLocal(face.neighbor_id))
+      {
+        const int neighbor_pid = grid_->cells[face.neighbor_id].partition_id;
+        if (dep_proc_set.count(neighbor_pid))
+          ++incoming_face_edges;
+        else if (delayed_dep_proc_set.count(neighbor_pid))
+          ++delayed_incoming_face_edges;
+      }
+    }
+  }
 
    // Iterate over cells in the last level to count outgoing edges
-  // for (const auto& cell_local_id : end_level)
-  // {
-  //   const auto& cell = grid_->local_cells[cell_local_id];
-  //   for (size_t f = 0; f < cell.faces.size(); ++f)
-  //   {
-  //     const auto& face = cell.faces[f];
-  //     const auto& orientation = cell_face_orientations_[cell.local_id][f];
+  for (const auto& cell_local_id : end_level)
+  {
+    const auto& cell = grid_->local_cells[cell_local_id];
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      const auto& orientation = cell_face_orientations_[cell.local_id][f];
 
-  //     if (orientation == FaceOrientation::OUTGOING && face.has_neighbor &&
-  //         !grid_->IsCellLocal(face.neighbor_id))
-  //     {
-  //       const int neighbor_pid = grid_->cells[face.neighbor_id].partition_id;
-  //       if (succ_proc_set.count(neighbor_pid))
-  //         ++outgoing_face_edges;
-  //       else if (delayed_succ_proc_set.count(neighbor_pid))
-  //         ++delayed_outgoing_face_edges;
-  //     }
-  //   }
-  // }
+      if (orientation == FaceOrientation::OUTGOING && face.has_neighbor &&
+          !grid_->IsCellLocal(face.neighbor_id))
+      {
+        const int neighbor_pid = grid_->cells[face.neighbor_id].partition_id;
+        if (succ_proc_set.count(neighbor_pid))
+          ++outgoing_face_edges;
+        else if (delayed_succ_proc_set.count(neighbor_pid))
+          ++delayed_outgoing_face_edges;
+      }
+    }
+  }
 
   // opensn::log.Log() << "--- Face Edge Count Details ---";
   // opensn::log.Log() << "Incoming faces from dependencies: " << incoming_face_edges;
@@ -354,11 +352,11 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   // ---------------------------------------------------------------------------
   // Simulate local sweep
 
-  std::vector<std::pair<uint64_t, std::string>> active_cells;
+  std::set<std::pair<uint64_t, std::string>> active_cells;
   
-  std::unordered_map<uint64_t, std::vector<std::pair<uint64_t, std::string>>> children_map;
+  std::unordered_map<std::vector<std::pair<uint64_t, std::string>>> children_map;
 
-  std::unordered_map<uint64_t, std::vector<std::pair<uint64_t, std::string>>> parent_map;
+  std::unordered_map<std::vector<std::pair<uint64_t, std::string>>> parent_map;
 
   size_t peak_number_of_active_cells = 0;
   size_t current_number_of_active_cells = 0;
@@ -386,96 +384,43 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   for (auto cell : spls_)
   {
     // Add current cell to active set
-    active_cells.push_back(std::make_pair(cell, "local"));
+    active_cells.insert(std::make_pair(cell, "local"));
 
     // Add current cell's remote parents to active set
-    for (const auto& remote_parent : remote_parent_to_local_children_map[cell])
-      active_cells.push_back(remote_parent);
+    for (const auto& remote_parent : remote_parent_map[cell])
+      active_cells.insert(remote_parent);
 
-    for (const auto& remote_children : local_parent_to_remote_children_map[cell])
-      active_cells.push_back(remote_children);
+    peak_number_of_active_cells = std::max(peak_number_of_active_cells, active_cells.size());
 
     // Check if any local parents can be removed from active set
     for (const auto& parent : parent_map[cell])
     {
       bool all_children_processed = true;
-      for (const auto& child : children_map[parent.first])
+      for (const auto& child : children_map[parent])
       {
-        auto it = std::find(active_cells.begin(), active_cells.end(), child);
-        if (it == active_cells.end())
+        if (active_cells.find(child) == active_cells.end())
         {
           all_children_processed = false;
           break;
         }
       }
 
-      // Remove parent from active set
       if (all_children_processed)
       {
-        auto it = std::find(active_cells.begin(), active_cells.end(), parent);
-        if (it != active_cells.end())
-          active_cells.erase(it);
+        // Remove parent from active set
+        active_cells.erase(parent);
       }
     }
 
-    // IDEA: Adding remote parents and remote children to the active set and never removing
-    // them during the simulated sweep could lead to an overestimate of the 
-    // number of blocks needed for the allocator
-    // I could remove remote parents as they're no longer needed and local cells
-    // once they've satisfied their downwind dependencies
-
-    // Check if any remote parents can be removed from active set
-    for (const auto& remote_parent : local_children_to_remote_parent_map[cell])
+    // Check if any remote parents can be removed from the active set 
+    for (const auto& remote_parent : remote_parent_map[cell])
     {
       bool all_children_processed = true;
-      for (const auto& local_child : remote_parent_to_local_children_map[remote_parent.first])
-      {
-        auto it = std::find(active_cells.begin(), active_cells.end(), local_child);
-        if (it == active_cells.end())
-        {
-          all_children_processed = false;
-          break;
-        }
-      }
-
-      if (all_children_processed)
-      {
-        auto it = std::find(active_cells.begin(), active_cells.end(), remote_parent);
-        if (it != active_cells.end())
-          active_cells.erase(it);
-      }
+      for (const auto& child : )
     }
-
-    // Check if any local cells can be removed from the active set
-    for (const auto& local_parent : remote_children_to_local_parent_map[cell])
-    {
-      bool all_children_processed = true;
-      for (const auto& remote_child : local_parent_to_remote_children_map[local_parent.first])
-      {
-        auto it = std::find(active_cells.begin(), active_cells.end(), remote_child);
-        if (it == active_cells.end())
-        {
-          all_children_processed = false;
-          break;
-        }
-      }
-
-      if (all_children_processed)
-      {
-        auto it = std::find(active_cells.begin(), active_cells.end(), local_parent);
-        if (it != active_cells.end())
-          active_cells.erase(it);
-      }
-    }
-
-    peak_number_of_active_cells = std::max(peak_number_of_active_cells, active_cells.size());
-
   }
 
-  peak_number_alive_cells_ = std::min(peak_number_of_active_cells, spls_.size());
-
-  opensn::log.Log() << "\nCBC_SPDS: Peak number of active local and remote cells during simulated sweep = " << peak_number_alive_cells_;
-
+  // opensn::log.Log() << "CBC_SPDS: Peak number of alive local cells (simulation) = " << peak_number_of_active_cells;
 }
 
 const std::vector<Task>&

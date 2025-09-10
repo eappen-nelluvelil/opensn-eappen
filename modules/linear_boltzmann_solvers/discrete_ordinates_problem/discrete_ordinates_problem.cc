@@ -592,6 +592,8 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
+    size_t peak_number_alive_cells = 0;
+
     // Build SPDS
     for (const auto& [quadrature, info] : quadrature_unq_so_grouping_map_)
     {
@@ -605,9 +607,15 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
         const auto& omega = quadrature->omegas[master_dir_id];
         const auto new_swp_order =
           std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]);
+        peak_number_alive_cells = std::max(peak_number_alive_cells, new_swp_order->GetPeakNumberAliveCells());
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
       }
     }
+
+    // Set the peak number of alive cells for each CBC_SPDS to be the one found across all CBC_SPDS
+    for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
+      for (const auto& spds : spds_list)
+        std::static_pointer_cast<CBC_SPDS>(spds)->SetPeakNumberAliveCells(peak_number_alive_cells);
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");
@@ -876,7 +884,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
         const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(*sweep_ordering);
         const size_t peak_number_alive_cells = cbc_spds.GetPeakNumberAliveCells();
         // log.Log() << "DOP: Peak number alive cells = " << peak_number_alive_cells;
-        // const size_t peak_number_alive_cells = 1;
+        // const size_t peak_number_alive_cells = 30;
 
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,

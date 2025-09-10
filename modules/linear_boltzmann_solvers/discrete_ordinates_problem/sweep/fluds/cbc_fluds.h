@@ -86,6 +86,8 @@ public:
 
   unsigned int GetNumPeakAllocations() const { return num_peak_allocations_; }
 
+  size_t GetPeakNumberAliveCells() const { return peak_number_alive_cells_; }
+
   void ResetCounters()
   {
     num_allocations_ = 0;
@@ -95,6 +97,12 @@ public:
   }
 
   size_t GetBufferSize() const { return pool_.GetBufferSize(); }
+
+  void ResetPool() 
+  { 
+    cell_to_chunk_map_.clear();
+    pool_.ResetPool(); 
+  }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -153,6 +161,7 @@ private:
   // ---------------------------------------------------------------
   // Required objects to implement a free-list memory pool allocator
   // ---------------------------------------------------------------
+  size_t peak_number_alive_cells_ = 0;
   MemoryPoolAllocator pool_;
   std::unordered_map<size_t, double*> cell_to_chunk_map_;
 

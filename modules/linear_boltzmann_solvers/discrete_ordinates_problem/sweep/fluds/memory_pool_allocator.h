@@ -1,3 +1,6 @@
+#include "framework/runtime.h"
+#include "framework/logging/log.h"
+#include "caliper/cali.h"
 #include <stdexcept>
 #include <stack>
 #include <vector>
@@ -18,10 +21,14 @@ public:
   }
 
   // Allocate one fixed-size block
-  void* Allocate()
+  void* Allocate(const uint64_t cell_local_id)
   {
-    if (free_list_.empty())
-      throw std::bad_alloc();
+    // if (free_list_.empty())
+    // {
+    //   std::ostringstream err_stream;
+    //   err_stream << "MemoryPoolAllocator::Allocate: Tried to allocate memory for cell " << cell_local_id << ", but ran out of memory.";
+    //   throw std::runtime_error(err_stream.str());
+    // }
 
     size_t block_index = free_list_.top();
     free_list_.pop();
@@ -34,22 +41,22 @@ public:
     auto base = buffer_.data();
     auto byte_ptr = static_cast<std::byte*>(ptr);
 
-    if (byte_ptr < base || byte_ptr >= base + buffer_.size())
-    {
-      std::ostringstream err_stream;
-      err_stream << "MemoryPoolAllocator::Deallocate: Pointer " << ptr
-                 << " is out of pool bounds.";
-      throw std::runtime_error(err_stream.str());
-    }
+    // if (byte_ptr < base || byte_ptr >= base + buffer_.size())
+    // {
+    //   std::ostringstream err_stream;
+    //   err_stream << "MemoryPoolAllocator::Deallocate: Pointer " << ptr
+    //              << " is out of pool bounds.";
+    //   throw std::runtime_error(err_stream.str());
+    // }
 
     size_t offset = byte_ptr - base;
-    if (offset % block_size_bytes_ != 0)
-    {
-      std::ostringstream err_stream;
-      err_stream << "MemoryPoolAllocator::Deallocate: Pointer " << ptr
-                 << " is not aligned to block size " << block_size_bytes_ << ".";
-      throw std::runtime_error(err_stream.str());
-    }
+    // if (offset % block_size_bytes_ != 0)
+    // {
+    //   std::ostringstream err_stream;
+    //   err_stream << "MemoryPoolAllocator::Deallocate: Pointer " << ptr
+    //              << " is not aligned to block size " << block_size_bytes_ << ".";
+    //   throw std::runtime_error(err_stream.str());
+    // }
 
     size_t block_index = offset / block_size_bytes_;
     free_list_.push(block_index);
@@ -58,6 +65,13 @@ public:
   size_t GetCapacity() const { return num_blocks_; }
   size_t GetNumFreeBlocks() const { return free_list_.size(); }
   size_t GetBufferSize() const { return buffer_.size(); }
+
+  void ResetPool()
+  {
+    free_list_ = std::stack<size_t>();
+    for (size_t i = 0; i < num_blocks_; ++i)
+      free_list_.push(i);
+  }
 
 private:
   size_t num_blocks_;

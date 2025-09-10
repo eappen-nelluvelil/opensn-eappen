@@ -24,6 +24,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
+    peak_number_alive_cells_(peak_number_alive_cells),
     pool_(peak_number_alive_cells, 
           max_cell_dof_count * num_groups_and_angles_ * sizeof(double))
     // pool_(sdm.GetNumLocalDOFs(psi_uk_man) / psi_uk_man.GetNumberOfUnknowns() / num_groups_ / max_cell_dof_count, 
@@ -40,17 +41,21 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
 {
   CALI_CXX_MARK_SCOPE("CBC_FLUDS::CBC_FLUDS");
 
-  num_angles_in_gs_quadrature_ = psi_uk_man_.GetNumberOfUnknowns();
-  num_quadrature_local_dofs_ = sdm_.GetNumLocalDOFs(psi_uk_man_);
-  num_local_spatial_dofs_ = num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ / num_groups_;
-  local_psi_data_size_ = num_local_spatial_dofs_ * num_groups_and_angles_;
+  // num_angles_in_gs_quadrature_ = psi_uk_man_.GetNumberOfUnknowns();
+  // num_quadrature_local_dofs_ = sdm_.GetNumLocalDOFs(psi_uk_man_);
+  // num_local_spatial_dofs_ = num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ / num_groups_;
+  // local_psi_data_size_ = num_local_spatial_dofs_ * num_groups_and_angles_;
 
-  local_psi_data_.assign(local_psi_data_size_, 0.0);
+  // local_psi_data_.assign(local_psi_data_size_, 0.0);
 
   // ---------------------------------------------------------------
   // Required objects to implement a free-list memory pool allocator
   // ---------------------------------------------------------------
-  opensn::log.Log() << "CBC_FLUDS::CBC_FLUDS: Buffer size before = " << GetBufferSize();
+  // opensn::log.Log() << "CBC_FLUDS::CBC_FLUDS: Buffer size before = " << GetBufferSize()
+
+  // opensn::log.Log() << "CBC_FLUDS: Allocating memory pool for "
+  //                   << peak_number_alive_cells_ << " cells, each with a chunk size of "
+  //                   << max_cell_dof_count * num_groups_and_angles_ * sizeof(double) << " bytes.\n";
 }
 
 const FLUDSCommonData&
@@ -71,13 +76,13 @@ CBC_FLUDS::GetLocalUpwindPsi(const Cell& face_neighbor) const
   // Index to start of neighbor cell's data block in local_psi_data_
   const size_t face_nbr_data_start_index = face_nbr_spatial_dof_0_index * num_groups_and_angles_;
 
-  if ((face_nbr_data_start_index < 0) or (face_nbr_data_start_index >= local_psi_data_.size()))
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetLocalUpwindPsi: Invalid index " << face_nbr_data_start_index
-               << " (max allowed = " << local_psi_data_.size() << ")";
-    throw std::runtime_error(err_stream.str());
-  }
+  // if ((face_nbr_data_start_index < 0) or (face_nbr_data_start_index >= local_psi_data_.size()))
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::GetLocalUpwindPsi: Invalid index " << face_nbr_data_start_index
+  //              << " (max allowed = " << local_psi_data_.size() << ")";
+  //   throw std::runtime_error(err_stream.str());
+  // }
 
   return &local_psi_data_[face_nbr_data_start_index];
 }
@@ -93,13 +98,13 @@ CBC_FLUDS::GetLocalDownwindPsi(const Cell& cell)
   // Index to start of current cell's data block in local_psi_data_
   const size_t cur_cell_data_start_index = cur_cell_spatial_dof_0_index * num_groups_and_angles_;
 
-  if ((cur_cell_data_start_index < 0) or (cur_cell_data_start_index >= local_psi_data_.size()))
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetLocalDownwindPsi: Invalid index " << cur_cell_data_start_index
-               << " (max allowed = " << local_psi_data_.size() << ")";
-    throw std::runtime_error(err_stream.str());
-  }
+  // if ((cur_cell_data_start_index < 0) or (cur_cell_data_start_index >= local_psi_data_.size()))
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::GetLocalDownwindPsi: Invalid index " << cur_cell_data_start_index
+  //              << " (max allowed = " << local_psi_data_.size() << ")";
+  //   throw std::runtime_error(err_stream.str());
+  // }
 
   return &local_psi_data_[cur_cell_data_start_index];
 }
@@ -119,13 +124,13 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
     face_node_mapped * num_groups_and_angles_ + //  Offset to start of data for face_node_mapped
     angle_set_index * num_groups_;              // Offset to start of data for angle_set_index
 
-  if ((dof_map < 0) or (dof_map > psi_data.size()))
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetNonLocalUpwindPsi: Invalid index " << dof_map
-               << " (max allowed = " << psi_data.size() << ")";
-    throw std::runtime_error(err_stream.str());
-  }
+  // if ((dof_map < 0) or (dof_map > psi_data.size()))
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::GetNonLocalUpwindPsi: Invalid index " << dof_map
+  //              << " (max allowed = " << psi_data.size() << ")";
+  //   throw std::runtime_error(err_stream.str());
+  // }
 
   return &psi_data[dof_map];
 }
@@ -138,7 +143,9 @@ CBC_FLUDS::Allocate(const uint64_t cell_local_id)
     return;
   }
 
-  void* raw_ptr = pool_.Allocate();
+  // opensn::log.Log() << "CBC_FLUDS::Allocate: Allocating chunk for cell local ID "
+  //                   << cell_local_id << "\n";
+  void* raw_ptr = pool_.Allocate(cell_local_id);
   auto chunk_ptr = static_cast<double*>(raw_ptr);
   cell_to_chunk_map_[cell_local_id] = chunk_ptr;
 
@@ -151,13 +158,13 @@ void
 CBC_FLUDS::Deallocate(const uint64_t cell_local_id)
 {
   auto it = cell_to_chunk_map_.find(cell_local_id);
-  if (it == cell_to_chunk_map_.end())
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::Deallocate: Cell with local ID " << cell_local_id
-               << " does not have an allocated chunk.";
-    throw std::runtime_error(err_stream.str());
-  }
+  // if (it == cell_to_chunk_map_.end())
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::Deallocate: Cell with local ID " << cell_local_id
+  //              << " does not have an allocated chunk.";
+  //   throw std::runtime_error(err_stream.str());
+  // }
 
   pool_.Deallocate(it->second);
   cell_to_chunk_map_.erase(cell_local_id);
@@ -170,13 +177,13 @@ const double*
 CBC_FLUDS::GetChunk(const uint64_t cell_local_id) const
 {
   auto it = cell_to_chunk_map_.find(cell_local_id);
-  if (it == cell_to_chunk_map_.end())
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_id
-               << " does not have an allocated chunk.";
-    throw std::runtime_error(err_stream.str());
-  }
+  // if (it == cell_to_chunk_map_.end())
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_id
+  //              << " does not have an allocated chunk.";
+  //   throw std::runtime_error(err_stream.str());
+  // }
 
   return it->second;
 }
@@ -185,13 +192,13 @@ double*
 CBC_FLUDS::GetChunk(const uint64_t cell_local_id)
 {
   auto it = cell_to_chunk_map_.find(cell_local_id);
-  if (it == cell_to_chunk_map_.end())
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_id
-               << " does not have an allocated chunk.";
-    throw std::runtime_error(err_stream.str());
-  }
+  // if (it == cell_to_chunk_map_.end())
+  // {
+  //   std::ostringstream err_stream;
+  //   err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_id
+  //              << " does not have an allocated chunk.";
+  //   throw std::runtime_error(err_stream.str());
+  // }
 
   return it->second;
 }

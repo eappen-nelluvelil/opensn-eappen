@@ -28,6 +28,8 @@ public:
 
   const size_t GetPeakNumberAliveCells() const { return peak_number_alive_cells_; }
 
+  void SetPeakNumberAliveCells(const size_t peak) { peak_number_alive_cells_ = peak; }
+
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;

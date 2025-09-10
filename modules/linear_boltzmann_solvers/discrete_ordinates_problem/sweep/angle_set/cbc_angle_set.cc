@@ -93,11 +93,17 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
           if (current_task_list_[local_task_num].num_consumptions == 
               current_task_list_[local_task_num].successors.size())
             cbc_fluds_->Deallocate(current_task_list_[local_task_num].cell_ptr->local_id);
+
+          // if (current_task_list_[local_task_num].num_consumptions == 
+          //     (current_task_list_[local_task_num].successors.size() + current_task_list_[local_task_num].remote_successors.size()))
+          //   cbc_fluds_->Deallocate(current_task_list_[local_task_num].cell_ptr->local_id);
         }
 
         // Deallocate if no successors remain
         if (cell_task.successors.empty())
           cbc_fluds_->Deallocate(cell_task.cell_ptr->local_id);
+        // if (cell_task.successors.empty() and cell_task.remote_successors.empty())
+        //   cbc_fluds_->Deallocate(cell_task.cell_ptr->local_id);
       }
     } // for cell_task
     async_comm_.SendData();
@@ -124,14 +130,19 @@ CBC_AngleSet::ResetSweepBuffers()
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
 
-  opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
-                    << ", buffer size = " << cbc_fluds_->GetBufferSize()
-                    << ", peak allocations = " << cbc_fluds_->GetNumPeakAllocations()
-                    << ", allocations = " << cbc_fluds_->GetNumAllocations()
-                    << ", deallocations = " << cbc_fluds_->GetNumDeallocations();
+  // if (cbc_fluds_->GetPeakNumberAliveCells() < cbc_fluds_->GetNumPeakAllocations())
+  //   opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSetID = " << id_ << ": Warning! Peak number of alive cells ("
+  //                       << cbc_fluds_->GetPeakNumberAliveCells()
+  //                       << ") is less than peak number of allocations ("
+  //                       << cbc_fluds_->GetNumPeakAllocations() << ").\n";
+  // opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
+  //                   << ", buffer size = " << cbc_fluds_->GetBufferSize()
+  //                   << ", peak allocations = " << cbc_fluds_->GetNumPeakAllocations()
+  //                   << ", allocations = " << cbc_fluds_->GetNumAllocations()
+  //                   << ", deallocations = " << cbc_fluds_->GetNumDeallocations() << "\n";
 
   cbc_fluds_->ResetCounters();
-
+  cbc_fluds_->ResetPool();
   executed_ = false;
 }
 

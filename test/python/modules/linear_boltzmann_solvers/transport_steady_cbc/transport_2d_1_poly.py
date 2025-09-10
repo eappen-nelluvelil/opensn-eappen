@@ -103,7 +103,7 @@ if __name__ == "__main__":
             ],
             "volumetric_sources": [mg_src1, mg_src2],
             "max_ags_iterations": 1,
-            "save_angular_flux": True
+            "save_angular_flux": False
         },
         sweep_type="CBC"
     )

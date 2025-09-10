@@ -40,6 +40,7 @@ struct Task
   std::vector<uint64_t> local_predecessors;
   unsigned int num_consumptions;
   std::vector<uint64_t> successors;
+  std::vector<uint64_t> remote_successors;
   uint64_t reference_id;
   const Cell* cell_ptr;
   bool completed = false;
