@@ -183,6 +183,14 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     }
   }
 
+  size_t total_number_of_remote_parents = 0;
+  for (const auto& [cell, remote_parents] : remote_parent_to_local_children_map)
+    ++total_number_of_remote_parents;
+
+  size_t total_number_of_remote_children = 0;
+  for (const auto& [cell, remote_children] : local_parent_to_remote_children_map)
+    ++total_number_of_remote_children;
+
   size_t peak_number_of_active_cells = 0;
   for (auto cell : spls_)
   {
@@ -190,11 +198,11 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     active_cells.push_back(std::make_pair(cell, "local"));
 
     // Add current cell's remote parents to active set
-    for (const auto& remote_parent : remote_parent_to_local_children_map[cell])
-      active_cells.push_back(remote_parent);
+    // for (const auto& remote_parent : remote_parent_to_local_children_map[cell])
+    //   active_cells.push_back(remote_parent);
 
-    for (const auto& remote_children : local_parent_to_remote_children_map[cell])
-      active_cells.push_back(remote_children);
+    // for (const auto& remote_children : local_parent_to_remote_children_map[cell])
+    //   active_cells.push_back(remote_children);
 
     peak_number_of_active_cells = std::max(peak_number_of_active_cells, active_cells.size());
 
@@ -212,6 +220,20 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
         }
       }
 
+      // bool all_remote_children_processed = true;
+      // for (const auto& remote_child : local_parent_to_remote_children_map[parent.first])
+      // {
+      //   auto it = std::find(active_cells.begin(), active_cells.end(), remote_child);
+      //   if (it == active_cells.end())
+      //   {
+      //     all_remote_children_processed = false;
+      //     opensn::log.Log() << "CBC_SPDS::SimulateLocalSweep: Remote child "
+      //                   << remote_child.first << " of parent " << parent.first
+      //                   << " has not been processed yet.\n";
+      //     break;
+      //   }
+      // }
+
       // Remove parent from active set
       if (all_children_processed)
       {
@@ -219,69 +241,27 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
         if (it != active_cells.end())
           active_cells.erase(it);
       }
+
+      // if (all_children_processed && all_remote_children_processed)
+      // {
+      //   auto it = std::find(active_cells.begin(), active_cells.end(), parent);
+      //   if (it != active_cells.end())
+      //     active_cells.erase(it);
+      // }
     }
-
-    // peak_number_of_active_cells = std::max(peak_number_of_active_cells, active_cells.size());
-
-    // IDEA: Adding remote parents and remote children to the active set and never removing
-    // them during the simulated sweep could lead to an overestimate of the 
-    // number of blocks needed for the allocator
-    // I could remove remote parents as they're no longer needed and local cells
-    // once they've satisfied their downwind dependencies
-
-    // Check if any remote parents can be removed from active set
-    // for (const auto& remote_parent : local_children_to_remote_parent_map[cell])
-    // {
-    //   bool all_children_processed = true;
-    //   for (const auto& local_child : remote_parent_to_local_children_map[remote_parent.first])
-    //   {
-    //     auto it = std::find(active_cells.begin(), active_cells.end(), local_child);
-    //     if (it == active_cells.end())
-    //     {
-    //       all_children_processed = false;
-    //       break;
-    //     }
-    //   }
-
-    //   if (all_children_processed)
-    //   {
-    //     auto it = std::find(active_cells.begin(), active_cells.end(), remote_parent);
-    //     if (it != active_cells.end())
-    //       active_cells.erase(it);
-    //   }
-    // }
-
-    // peak_number_of_active_cells = std::max(peak_number_of_active_cells, active_cells.size());
-
-    // Check if any local cells can be removed from the active set
-    // for (const auto& local_parent : remote_children_to_local_parent_map[cell])
-    // {
-    //   bool all_children_processed = true;
-    //   for (const auto& remote_child : local_parent_to_remote_children_map[local_parent.first])
-    //   {
-    //     auto it = std::find(active_cells.begin(), active_cells.end(), remote_child);
-    //     if (it == active_cells.end())
-    //     {
-    //       all_children_processed = false;
-    //       break;
-    //     }
-    //   }
-
-    //   if (all_children_processed)
-    //   {
-    //     auto it = std::find(active_cells.begin(), active_cells.end(), local_parent);
-    //     if (it != active_cells.end())
-    //       active_cells.erase(it);
-    //   }
-    // }
-
-    // peak_number_of_active_cells = std::max(peak_number_of_active_cells, active_cells.size());
   }
 
+  opensn::log.Log() << "CBC_SPDS: Total # of remote parents = " 
+                    << total_number_of_remote_parents 
+                    << ", remote children = " 
+                    << total_number_of_remote_children 
+                    << ", local active cells = " 
+                    << peak_number_of_active_cells << ", alive cells = " 
+                    << (peak_number_of_active_cells + total_number_of_remote_parents + total_number_of_remote_children) << "\n";
+
+  peak_number_of_active_cells += total_number_of_remote_parents;
+  peak_number_of_active_cells += total_number_of_remote_children;
   peak_number_alive_cells_ = std::min(peak_number_of_active_cells, spls_.size());
-
-  opensn::log.Log() << "\nCBC_SPDS: Peak number of active local and remote cells during simulated sweep = " << peak_number_alive_cells_;
-
 }
 
 const std::vector<Task>&

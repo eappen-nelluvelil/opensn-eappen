@@ -613,9 +613,13 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
     }
 
     // Set the peak number of alive cells for each CBC_SPDS to be the one found across all CBC_SPDS
-    for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
-      for (const auto& spds : spds_list)
-        std::static_pointer_cast<CBC_SPDS>(spds)->SetPeakNumberAliveCells(peak_number_alive_cells);
+    // size_t offset = 0;
+    // peak_number_alive_cells += offset;
+    // for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
+    //   for (const auto& spds : spds_list)
+    //     std::static_pointer_cast<CBC_SPDS>(spds)->SetPeakNumberAliveCells(peak_number_alive_cells);
+
+    opensn::log.Log() << "\nDOP::ISDS: Peak number of active local and remote cells during simulated sweep = " << peak_number_alive_cells << "\n\n";
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");
