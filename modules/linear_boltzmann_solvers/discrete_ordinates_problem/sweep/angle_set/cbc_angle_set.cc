@@ -92,7 +92,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
           // dependencies
           if (current_task_list_[local_task_num].num_consumptions == 
               current_task_list_[local_task_num].successors.size())
+          {
             cbc_fluds_->Deallocate(current_task_list_[local_task_num].cell_ptr->local_id);
+          }
 
           // if (current_task_list_[local_task_num].num_consumptions == 
           //     (current_task_list_[local_task_num].successors.size() + current_task_list_[local_task_num].remote_successors.size()))
@@ -102,6 +104,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         // Deallocate if no successors remain
         if (cell_task.successors.empty())
           cbc_fluds_->Deallocate(cell_task.cell_ptr->local_id);
+
         // if (cell_task.successors.empty() and cell_task.remote_successors.empty())
         //   cbc_fluds_->Deallocate(cell_task.cell_ptr->local_id);
       }
