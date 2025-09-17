@@ -20,6 +20,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      const CBC_FLUDSCommonData& common_data,
                      const UnknownManager& psi_uk_man,
                      const SpatialDiscretization& sdm,
+                     const size_t num_local_cells,
                      const size_t peak_number_alive_cells,
                      const size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
@@ -27,15 +28,19 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
     num_blocks_(peak_number_alive_cells),
-    block_size_in_bytes_(max_cell_dof_count * num_groups_and_angles_ * sizeof(double)),
-    buffer_(num_blocks_ * block_size_in_bytes_)
+    block_size_(max_cell_dof_count * num_groups_and_angles_),
+    backing_buffer_(num_blocks_ * block_size_)
 {
-  storage_.add_block(buffer_.data(), buffer_.size(), block_size_in_bytes_);
-  cell_local_ID_to_ptr_map_.reserve(num_blocks_);
+  storage_.add_block(backing_buffer_.data(), // Pointer to starting address for buffer
+                    (num_blocks_ * block_size_) * sizeof(double), // Total size of buffer in bytes
+                    block_size_ * sizeof(double));  // Size of each block in buffer in bytes
+
+  cell_local_ID_to_ptr_map_.resize(num_local_cells, nullptr);
   
-  opensn::log.Log() << "CBC_FLUDS: Allocated for " << num_blocks_ << ", each of size "
-                    << block_size_in_bytes_ << " bytes, "
-                    << " buffer size: " << buffer_.size() << " bytes";
+  opensn::log.Log() << "CBC_FLUDS: Allocated for " << num_blocks_ << "blocks , block size = "
+                    << block_size_ << " doubles,"
+                    << " buffer size: " << backing_buffer_.size() << " doubles"
+                    << ", # of local cells = " << num_local_cells;
 }
 
 const FLUDSCommonData&
@@ -65,7 +70,7 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
 void
 CBC_FLUDS::Allocate(const uint64_t cell_local_ID)
 {
-  if (cell_local_ID_to_ptr_map_.count(cell_local_ID))
+  if (cell_local_ID_to_ptr_map_[cell_local_ID] != nullptr)
     return;
 
   void* cell_block_ptr = storage_.malloc();
@@ -79,8 +84,7 @@ CBC_FLUDS::Allocate(const uint64_t cell_local_ID)
 void
 CBC_FLUDS::Deallocate(const uint64_t cell_local_ID)
 {
-  auto it = cell_local_ID_to_ptr_map_.find(cell_local_ID);
-  if (it == cell_local_ID_to_ptr_map_.end())
+  if (cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr)
   {
     std::ostringstream err_stream;
     err_stream << "CBC_FLUDS::Deallocate: Cell with local ID " << cell_local_ID
@@ -88,9 +92,8 @@ CBC_FLUDS::Deallocate(const uint64_t cell_local_ID)
     throw std::runtime_error(err_stream.str());
   }
 
-  double* cell_block_ptr = it->second;
-  storage_.free(cell_block_ptr);
-  cell_local_ID_to_ptr_map_.erase(it);
+  storage_.free(cell_local_ID_to_ptr_map_[cell_local_ID]);
+  cell_local_ID_to_ptr_map_[cell_local_ID] = nullptr;
 
   ++num_deallocations_;
   --num_current_allocations_;
@@ -99,8 +102,7 @@ CBC_FLUDS::Deallocate(const uint64_t cell_local_ID)
 double* 
 CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID)
 {
-  auto it = cell_local_ID_to_ptr_map_.find(cell_local_ID);
-  if (it == cell_local_ID_to_ptr_map_.end())
+  if (cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr)
   {
     std::ostringstream err_stream;
     err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_ID
@@ -108,14 +110,13 @@ CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID)
     throw std::runtime_error(err_stream.str());
   }
 
-  return it->second;
+  return cell_local_ID_to_ptr_map_[cell_local_ID];
 }
 
 const double* 
 CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID) const
 {
-  auto it = cell_local_ID_to_ptr_map_.find(cell_local_ID);
-  if (it == cell_local_ID_to_ptr_map_.end())
+  if (cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr)
   {
     std::ostringstream err_stream;
     err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_ID
@@ -123,7 +124,7 @@ CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID) const
     throw std::runtime_error(err_stream.str());
   }
 
-  return it->second;
+  return cell_local_ID_to_ptr_map_[cell_local_ID];
 }
 
 } // namespace opensn

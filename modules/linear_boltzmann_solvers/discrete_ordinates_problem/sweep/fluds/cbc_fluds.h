@@ -36,6 +36,7 @@ public:
             const CBC_FLUDSCommonData& common_data,
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm,
+            const size_t num_local_cells,
             const size_t peak_number_alive_cells,
             const size_t max_cell_dof_count);
 
@@ -77,6 +78,8 @@ public:
 
   size_t GetPeakNumberAliveCells() const { return num_blocks_; }
 
+  size_t GetNumberOfMemoryMapElements() const { return cell_local_ID_to_ptr_map_.size(); }
+
   void ResetCounters()
   {
     num_allocations_ = 0;
@@ -85,11 +88,11 @@ public:
     num_peak_allocations_ = 0;
   }
 
-  size_t GetBufferSize() const { return buffer_.size(); }
+  size_t GetBufferSize() const { return backing_buffer_.size(); }
 
   void ResetPool()
   {
-    cell_local_ID_to_ptr_map_.clear();
+    std::fill(cell_local_ID_to_ptr_map_.begin(), cell_local_ID_to_ptr_map_.end(), nullptr);
   }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
@@ -141,13 +144,13 @@ private:
   // Required objects to implement a free-list memory pool allocator
   // ---------------------------------------------------------------  
   size_t num_blocks_;
-  size_t block_size_in_bytes_;
+  size_t block_size_;
 
   // Storage for local angular fluxes
   // Layout: spatial DOF major -> angle in set major -> group major
-  std::vector<std::byte> buffer_;
+  std::vector<double> backing_buffer_;
   boost::simple_segregated_storage<size_t> storage_;
-  std::unordered_map<uint64_t, double*> cell_local_ID_to_ptr_map_;
+  std::vector<double*> cell_local_ID_to_ptr_map_;
 
   unsigned int num_allocations_ = 0;
   unsigned int num_deallocations_ = 0;
