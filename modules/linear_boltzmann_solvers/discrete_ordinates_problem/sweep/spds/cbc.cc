@@ -10,6 +10,8 @@
 #include <boost/graph/topological_sort.hpp>
 #include <boost/graph/transitive_reduction.hpp>
 #include <unordered_map>
+#include <set>
+#include <algorithm>
 
 namespace opensn
 {
@@ -65,10 +67,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   }
 
   // Generate levelized SPLS
-  // NOTE: I'm fairly sure a levelized SPLS is the same thing as the transitive 
-  // reduction of a DAG
-  // Double-check with Daryl on this
-  int max_level = 0;
+  levelized_spls_max_level_ = 0;
   std::vector<int> levels(num_vertices(local_DG), 0);
   for (auto& v : spls_)
   {
@@ -76,38 +75,23 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     {
       auto u = target(*ei.first, local_DG);
       levels[u] = std::max(levels[u], levels[v] + 1);
-      max_level = std::max(max_level, levels[u]);
+      levelized_spls_max_level_ = std::max(levelized_spls_max_level_, levels[u]);
     }
   }
 
-  levelized_spls_.resize(max_level + 1);
+  levelized_spls_.resize(levelized_spls_max_level_ + 1);
   for (auto v = 0; v < num_vertices(local_DG); ++v)
     levelized_spls_[levels[v]].push_back(v);
 
   // Regenerate SPLS to match levelized SPLS
   spls_.clear();
-  std::vector<size_t> num_cells_per_level(levelized_spls_.size(), 0);
-  unsigned int max_wavefront_size = 0;
-  unsigned int max_predecessor_wavefront_size = 0;
-  int level_idx = 0;
+  levelized_spls_max_level_width_ = 0;
   for (auto& level : levelized_spls_)
   {
+    levelized_spls_max_level_width_ = std::max(levelized_spls_max_level_width_, level.size());
     for (auto& cell : level)
-    {
       spls_.push_back(cell);
-      ++num_cells_per_level[level_idx];
-    }
-    max_predecessor_wavefront_size = max_wavefront_size;
-    max_wavefront_size = std::max(max_wavefront_size, 
-                                  static_cast<unsigned int>(level.size()));
-
-    // opensn::log.Log() << "CBC_SPDS: Level " << level_idx << ", size = " << level.size();
-    ++level_idx;
   }
-
-  std::sort(num_cells_per_level.begin(), num_cells_per_level.end());
-  size_t max_wavefront_size_2 = num_cells_per_level.back();
-  size_t max_predecessor_wavefront_size_2 = num_cells_per_level.at(num_cells_per_level.size() - 2);
 
   // Create task list
   std::vector<std::vector<int>> global_dependencies;
@@ -126,6 +110,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     std::vector<uint64_t> local_predecessors;
     unsigned int num_consumptions = 0;
     std::vector<uint64_t> successors;
+    std::vector<uint64_t> remote_successors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
@@ -145,22 +130,89 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       }
       else if (cell_face_orientation == OUTGOING)
       {
-        if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-          successors.push_back(grid->cells[face.neighbor_id].local_id);
+        if (face.has_neighbor)
+        {
+          if (grid->IsCellLocal(face.neighbor_id))
+            successors.push_back(grid->cells[face.neighbor_id].local_id);
+          else
+            remote_successors.push_back(face.neighbor_id);
+        }
       }
     }
 
     task_list_.push_back({num_dependencies, remote_predecessors, 
                           local_predecessors, num_consumptions, 
-                          successors, cell.local_id, &cell, false});
+                          successors, remote_successors, cell.local_id, &cell, 
+                          false});
   }
 
-  // Get peak number of alive cells during local sweep
+  // Estimate peak number of alive cells during sweep
   // SimulateLocalSweep();
-  // opensn::log.Log() << "CBC_SPDS: Max wavefront size: " << max_wavefront_size_2
-  //                   << ", Max predecessor wavefront size: " << max_predecessor_wavefront_size_2;
-  peak_number_alive_cells_ = max_wavefront_size_2 + max_predecessor_wavefront_size_2;
-  opensn::log.Log() << "CBC_SPDS::CBC_SPDS: Peak alive cells = " << peak_number_alive_cells_;
+
+  size_t total_number_of_remote_parents = 0;
+  size_t total_number_of_remote_children = 0;
+
+  std::unordered_set<uint64_t> unique_remote_parents;
+  std::unordered_set<uint64_t> unique_remote_children;
+  
+  for (const auto& task : task_list_)
+  {
+    total_number_of_remote_parents += task.remote_predecessors.size();
+    total_number_of_remote_children += task.remote_successors.size();
+    
+    for (const auto& remote_predecessor : task.remote_predecessors)
+      unique_remote_parents.insert(static_cast<uint64_t>(remote_predecessor));
+
+    for (const auto& remote_successor : task.remote_successors)
+      unique_remote_children.insert(static_cast<uint64_t>(remote_successor));
+  }
+
+  size_t number_of_unique_remote_parents = unique_remote_parents.size();
+  size_t number_of_unique_remote_children = unique_remote_children.size();
+
+  size_t peak_number_local_active_edges = 0;
+  std::set<std::pair<uint64_t, uint64_t>> local_active_edges;
+
+  for (int i = levelized_spls_max_level_; i >= 0; --i)
+  {
+    for (const auto& cell : levelized_spls_[i])
+    {
+      // Remove edges going out of cell
+      const auto& successors = task_list_[cell].successors;
+
+      for (const auto& successor : successors)
+      {
+        const auto& cell_to_successor_edge = std::make_pair(static_cast<uint64_t>(cell), static_cast<uint64_t>(successor));
+        auto it = local_active_edges.find(cell_to_successor_edge);
+        if (it != local_active_edges.end())
+          local_active_edges.erase(cell_to_successor_edge);
+      }
+
+      // Add edges going into cell
+      const auto& predecessors = task_list_[cell].local_predecessors;
+      for (const auto& predecessor : predecessors)
+      {
+        const auto& predecessor_to_cell_edge = std::make_pair(static_cast<uint64_t>(predecessor), static_cast<uint64_t>(cell));
+        auto it = local_active_edges.find(predecessor_to_cell_edge);
+        if (it == local_active_edges.end())
+          local_active_edges.insert(predecessor_to_cell_edge);
+      }
+    }
+
+    peak_number_local_active_edges = std::max(peak_number_local_active_edges, local_active_edges.size());
+  }
+
+  // This is a fudge factor for 
+  if (levelized_spls_max_level_width_ == 1)
+    ++peak_number_local_active_edges;
+
+  size_t estimated_number_of_peak_active_edges = 
+    peak_number_local_active_edges + number_of_unique_remote_parents + number_of_unique_remote_children;
+
+  peak_number_alive_cells_ = std::min(estimated_number_of_peak_active_edges, spls_.size());
+
+  opensn::log.Log() << "CBC_SPDS: Peak number of alive cells during sweep: "
+                     << peak_number_alive_cells_ << "\n";
 }
 
 const std::vector<Task>&
@@ -169,91 +221,118 @@ CBC_SPDS::GetTaskList() const
   return task_list_;
 }
 
+// void
+// CBC_SPDS::SimulateLocalSweep()
+// {
+//   std::vector<std::pair<uint64_t, std::string>> active_cells;
+
+//   size_t peak = 0;
+//   for (const auto& cell : spls_)
+//   {
+//     // Add current cell to active cell list
+//     active_cells.push_back(std::make_pair(cell, std::string("local")));
+
+//     // Add current cell's remote predecessors to active cell list
+//     for (const auto& remote_predecessor : local_children_to_remote_parent_map_[cell])
+//       active_cells.push_back(remote_predecessor);
+
+//     // Add current cell's remote successors to active cell list
+//     for (const auto& remote_successor : local_parent_to_remote_children_map_[cell])
+//       active_cells.push_back(remote_successor);
+
+//     peak = std::max(peak, active_cells.size());
+
+//     // Check if any local predecessors can be removed from active cell list
+//     for (const auto& local_predecessor : local_children_to_local_parent_map_[cell])
+//     {
+//       bool all_local_successors_processed = true;
+//       for (const auto& local_successor : local_parent_to_local_children_map_[local_predecessor.first])
+//       {
+//         auto it = std::find(active_cells.begin(), active_cells.end(),
+//                               local_successor);
+//         if (it == active_cells.end())
+//         {
+//           all_local_successors_processed = false;
+//           break;
+//         }
+//       }
+
+//       if (all_local_successors_processed)
+//       {
+//         auto it = std::find(active_cells.begin(), active_cells.end(),
+//                              local_predecessor);
+//         if (it != active_cells.end())
+//           active_cells.erase(it);
+//       }
+//     }
+//   }
+
+//   peak_number_alive_cells_ = std::min(peak, spls_.size());
+// }
+
 void
-CBC_SPDS::SimulateLocalSweep()
+SimulateLocalSweep()
 {
-  std::vector<Task> sim_task_list = task_list_;
-  const size_t num_local_tasks = sim_task_list.size();
+  // size_t total_number_of_remote_parents = 0;
+  // size_t total_number_of_remote_children = 0;
 
-  uint64_t currently_allocated_blocks = 0;
-  uint64_t peak_allocated_blocks = 0;
-
-  // Simluate that all remote dependencies have been met
-  // for (auto& task : sim_task_list)
+  // std::unordered_set<uint64_t> unique_remote_parents;
+  // std::unordered_set<uint64_t> unique_remote_children;
+  
+  // for (const auto& task : task_list_)
   // {
-  //   const auto& cell = *task.cell_ptr;
-  //   unsigned int remote_deps = 0;
-  //   for (size_t f = 0; f < cell.faces.size(); ++f)
-  //     if (cell_face_orientations_[cell.local_id][f] == FaceOrientation::INCOMING)
-  //     {
-  //       const auto& face = cell.faces[f];
-  //       if (face.has_neighbor and not grid_->IsCellLocal(face.neighbor_id))
-  //         ++remote_deps;
-  //     }
-  //   task.num_dependencies -= remote_deps;
+  //   total_number_of_remote_parents += task.remote_predecessors.size();
+  //   total_number_of_remote_children += task.remote_successors.size();
+    
+  //   for (const auto& remote_predecessor : task.remote_predecessors)
+  //     unique_remote_parents.insert(static_cast<uint64_t>(remote_predecessor));
+
+  //   for (const auto& remote_successor : task.remote_successors)
+  //     unique_remote_children.insert(static_cast<uint64_t>(remote_successor));
   // }
 
-  for (auto& task : sim_task_list)
-    if (not task.remote_predecessors.empty())
-    {
-      // task.num_dependencies -= task.remote_predecessors.size();
-      task.num_dependencies = 0;
-    }
+  // size_t number_of_unique_remote_parents = unique_remote_parents.size();
+  // size_t number_of_unique_remote_children = unique_remote_children.size();
 
-  // Simulate the local sweep execution, which mirrors AngleSetAdvance
-  std::vector<bool> has_allocated_block;
-  has_allocated_block.assign(num_local_tasks, false);
+  // size_t peak_number_local_active_edges = 0;
 
-  bool a_task_executed = true;
-  while (a_task_executed)
-  {
-    a_task_executed = false;
-    for (auto& task : sim_task_list)
-    {
-      if (task.num_dependencies == 0 and not task.completed)
-      {
-        // Simulate allocation for the current task
-        if (not has_allocated_block[task.reference_id])
-        {
-          has_allocated_block[task.reference_id] = true;
-          ++currently_allocated_blocks;
-          peak_allocated_blocks = std::max(peak_allocated_blocks, currently_allocated_blocks);
-        }
-        
-        // Mark task as complete and update its successors
-        task.completed = true;
-        a_task_executed = true;
+  // for (int i = levelized_spls_max_level_; i >= 0; --i)
+  // {
+  //   for (const auto& cell : levelized_spls_[i])
+  //   {
+  //     // Remove edges going out of cell
+  //     const auto& successors = task_list_[cell].successors;
 
-        for (const uint64_t succ_idx : task.successors)
-          --sim_task_list[succ_idx].num_dependencies;
+  //     for (const auto& successor : successors)
+  //     {
+  //       const auto& cell_to_successor_edge = std::make_pair(static_cast<uint64_t>(cell), static_cast<uint64_t>(successor));
+  //       auto it = local_active_edges.find(cell_to_successor_edge);
+  //       if (it != local_active_edges.end())
+  //         local_active_edges.erase(cell_to_successor_edge);
+  //     }
 
-        // Simulate deallocation for predecessors whose data is now fully consumed
-        for (const uint64_t pred_idx : task.local_predecessors)
-        {
-          auto& predecessor_task = sim_task_list[pred_idx];
-          ++predecessor_task.num_consumptions;
+  //     // Add edges going into cell
+  //     const auto& predecessors = task_list_[cell].local_predecessors;
+  //     for (const auto& predecessor : predecessors)
+  //     {
+  //       const auto& predecessor_to_cell_edge = std::make_pair(static_cast<uint64_t>(predecessor), static_cast<uint64_t>(cell));
+  //       auto it = local_active_edges.find(predecessor_to_cell_edge);
+  //       if (it == local_active_edges.end())
+  //         local_active_edges.insert(predecessor_to_cell_edge);
+  //     }
+  //   }
 
-          if ((predecessor_task.num_consumptions == predecessor_task.successors.size()))
-          {
-            --currently_allocated_blocks;
-          }
-        }
+  //   peak_number_local_active_edges = std::max(peak_number_local_active_edges, local_active_edges.size());
+  // }
 
-        // If this task is a sink (no local successors), its memory
-        // is deallocated immediately after execution
-        if (task.successors.empty())
-        {
-          --currently_allocated_blocks;
-        }
-      }
-    } // for task
-  }   // while a_task_executed
+  // // This is a fudge factor for 
+  // if (levelized_spls_max_level_width_ == 1)
+  //   ++peak_number_local_active_edges;
 
-  // IDEA: 9/3
-  // A conservative estimate of the number of peak alive cells is to sum the
-  // max width of the topologically sorted TDG + the number of unique predecessors
-  // that each of the corresponding cells at the max width level
-  peak_number_alive_cells_ = peak_allocated_blocks;
+  // size_t estimated_number_of_peak_active_edges = 
+  //   peak_number_local_active_edges + number_of_unique_remote_parents + number_of_unique_remote_children;
+
+  // peak_number_alive_cells_ = std::min(estimated_number_of_peak_active_edges, spls_.size());
 }
 
 } // namespace opensn
