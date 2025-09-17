@@ -165,8 +165,7 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
             const unsigned int adj_cell_node = face_nodal_mapping->cell_node_mapping_[fj];
 
             // Get base pointer to the start of upwind_cell's data block in local_psi_data_
-            // const double* psi_local_upwind_cell_base_ptr = fluds_->GetLocalUpwindPsi(*upwind_cell);
-            const double* psi_local_upwind_cell_base_ptr = fluds_->GetChunk(upwind_cell->local_id);
+            const double* psi_local_upwind_cell_base_ptr = fluds_->GetCellBlock(upwind_cell->local_id);
 
             // Calculate relative offset to the specific node and angle within that block
             const size_t addr_offset =
@@ -308,8 +307,7 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
         if (is_local_face)
         {
           // Local downwind write
-          // double* psi_downwind_cell_base_ptr = fluds_->GetLocalDownwindPsi(*cell_);
-          double* psi_downwind_cell_base_ptr = fluds_->GetChunk(cell_->local_id);
+          double* psi_downwind_cell_base_ptr = fluds_->GetCellBlock(cell_->local_id);
           const size_t addr_offset = i * group_angle_stride_ + as_ss_idx * group_stride_;
           psi_downwind_groups_ptr = psi_downwind_cell_base_ptr + addr_offset;
         }

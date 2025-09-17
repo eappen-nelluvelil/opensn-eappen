@@ -5,12 +5,11 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/memory_pool_allocator.h"
-#include <map>
-#include <unordered_map>
-#include <memory_resource>
-#include <stack>
+#include <boost/pool/simple_segregated_storage.hpp>
 #include <functional>
+#include <map>
+#include <memory_resource>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -43,18 +42,6 @@ public:
   const FLUDSCommonData& GetCommonData() const;
 
   /**
-   * Given a local upwind neighbor cell, this function returns a base pointer to
-   * the start of its data block
-   */
-  const double* GetLocalUpwindPsi(const Cell& face_neighbor) const;
-
-  /**
-   * Given a local cell, this function returns a base pointer to the start of
-   * the cell's data block for writing its just solved angular fluxes
-   */
-  double* GetLocalDownwindPsi(const Cell& cell);
-
-  /**
    * Given a remote upwind cell's global ID and local face index, this function
    * returns the pre-received angular flux data for the face on the upwind cell
    */
@@ -70,13 +57,15 @@ public:
                                      unsigned int face_node_mapped,
                                      unsigned int angle_set_index);
 
-  void Allocate(const uint64_t cell_local_id);
+  void Allocate(const uint64_t cell_local_ID);
 
-  void Deallocate(const uint64_t cell_local_id);
+  void Deallocate(const uint64_t cell_local_ID);
 
-  const double* GetChunk(const uint64_t cell_local_id) const;
+  double* GetCellBlock(const uint64_t cell_local_ID);
 
-  double* GetChunk(const uint64_t cell_local_id);
+  const double* GetCellBlock(const uint64_t cell_local_ID) const;
+
+  size_t GetNumBlocks() const { return num_blocks_; }
 
   unsigned int GetNumAllocations() const { return num_allocations_; }
 
@@ -86,6 +75,8 @@ public:
 
   unsigned int GetNumPeakAllocations() const { return num_peak_allocations_; }
 
+  size_t GetPeakNumberAliveCells() const { return num_blocks_; }
+
   void ResetCounters()
   {
     num_allocations_ = 0;
@@ -94,7 +85,12 @@ public:
     num_peak_allocations_ = 0;
   }
 
-  size_t GetBufferSize() const { return pool_.GetBufferSize(); }
+  size_t GetBufferSize() const { return buffer_.size(); }
+
+  void ResetPool()
+  {
+    cell_local_ID_to_ptr_map_.clear();
+  }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -141,20 +137,17 @@ private:
 
   const SpatialDiscretization& sdm_;
 
-  size_t num_angles_in_gs_quadrature_;
-  size_t num_quadrature_local_dofs_;
-  size_t num_local_spatial_dofs_;
-  size_t local_psi_data_size_;
+  // ---------------------------------------------------------------
+  // Required objects to implement a free-list memory pool allocator
+  // ---------------------------------------------------------------  
+  size_t num_blocks_;
+  size_t block_size_in_bytes_;
 
   // Storage for local angular fluxes
   // Layout: spatial DOF major -> angle in set major -> group major
-  std::vector<double> local_psi_data_;
-
-  // ---------------------------------------------------------------
-  // Required objects to implement a free-list memory pool allocator
-  // ---------------------------------------------------------------
-  MemoryPoolAllocator pool_;
-  std::unordered_map<size_t, double*> cell_to_chunk_map_;
+  std::vector<std::byte> buffer_;
+  boost::simple_segregated_storage<size_t> storage_;
+  std::unordered_map<uint64_t, double*> cell_local_ID_to_ptr_map_;
 
   unsigned int num_allocations_ = 0;
   unsigned int num_deallocations_ = 0;
