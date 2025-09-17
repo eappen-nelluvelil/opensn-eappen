@@ -207,7 +207,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     ++peak_number_local_active_edges;
 
   size_t estimated_number_of_peak_active_edges = 
-    peak_number_local_active_edges + number_of_unique_remote_parents + number_of_unique_remote_children;
+    peak_number_local_active_edges + total_number_of_remote_parents + total_number_of_remote_children;
 
   peak_number_alive_cells_ = std::min(estimated_number_of_peak_active_edges, spls_.size());
 

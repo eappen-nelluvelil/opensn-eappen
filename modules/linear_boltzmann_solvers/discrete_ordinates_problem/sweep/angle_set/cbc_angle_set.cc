@@ -124,11 +124,11 @@ CBC_AngleSet::ResetSweepBuffers()
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
 
-  opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
-                    << ", buffer size = " << cbc_fluds_->GetBufferSize()
-                    << ", peak allocations = " << cbc_fluds_->GetNumPeakAllocations()
-                    << ", allocations = " << cbc_fluds_->GetNumAllocations()
-                    << ", deallocations = " << cbc_fluds_->GetNumDeallocations();
+  // opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
+  //                   << ", buffer size = " << cbc_fluds_->GetBufferSize()
+  //                   << ", peak allocations = " << cbc_fluds_->GetNumPeakAllocations()
+  //                   << ", allocations = " << cbc_fluds_->GetNumAllocations()
+  //                   << ", deallocations = " << cbc_fluds_->GetNumDeallocations();
 
   cbc_fluds_->ResetCounters();
 
