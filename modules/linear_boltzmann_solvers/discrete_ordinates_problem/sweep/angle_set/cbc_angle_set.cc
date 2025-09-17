@@ -130,6 +130,11 @@ CBC_AngleSet::ResetSweepBuffers()
   //                   << ", allocations = " << cbc_fluds_->GetNumAllocations()
   //                   << ", deallocations = " << cbc_fluds_->GetNumDeallocations();
 
+  opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
+                    << ", max number of blocks = " << cbc_fluds_->GetPeakNumberAliveCells()
+                    << ", unordered map size = " << cbc_fluds_->GetNumberOfMemoryMapElements()
+                    << "\n";
+
   cbc_fluds_->ResetCounters();
 
   executed_ = false;

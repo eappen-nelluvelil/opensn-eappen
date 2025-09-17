@@ -874,9 +874,8 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
       {
         // Get peak number of concurrent cells that can be solved
         const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(*sweep_ordering);
+        const size_t num_local_cells = grid_->local_cells.size();
         const size_t peak_number_alive_cells = cbc_spds.GetPeakNumberAliveCells();
-        // log.Log() << "DOP: Peak number alive cells = " << peak_number_alive_cells;
-        // const size_t peak_number_alive_cells = 1;
 
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
@@ -884,6 +883,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                       groupset.psi_uk_man_,
                                       *discretization_,
+                                      num_local_cells,
                                       peak_number_alive_cells,
                                       max_cell_dof_count_);
 
