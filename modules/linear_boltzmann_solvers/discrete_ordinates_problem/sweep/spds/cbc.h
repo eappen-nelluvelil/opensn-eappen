@@ -28,6 +28,8 @@ public:
 
   void SimulateLocalSweep();
 
+  size_t ComputePeakActiveEdgesExtendedGraph() const;
+
   const size_t GetPeakNumberAliveCells() const { return peak_number_alive_cells_; }
 
   void SetPeakNumberAliveCells(const size_t peak) { peak_number_alive_cells_ = peak; }

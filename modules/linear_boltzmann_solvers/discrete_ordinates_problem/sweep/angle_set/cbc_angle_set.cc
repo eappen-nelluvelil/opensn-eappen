@@ -60,6 +60,24 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
+  // bool all_cells_ready = true;
+  // for (size_t task_idx = 0; task_idx < current_task_list_.size(); ++task_idx)
+  // {
+  //   const auto& cell_task = current_task_list_[task_idx];
+  //   auto it = std::find(tasks_who_received_data.begin(),
+  //                       tasks_who_received_data.end(),
+  //                       task_idx);
+  //   if ((not cell_task.remote_predecessors.empty()) and it == tasks_who_received_data.end())
+  //   {
+  //     // This task has remote dependencies that have not yet been satisfied
+  //     all_cells_ready = false;
+  //     break;
+  //   }
+  // }
+
+  // if (not all_cells_ready)
+  //   return AngleSetStatus::NOT_FINISHED;
+
   bool all_tasks_completed = true;
   bool a_task_executed = true;
   while (a_task_executed)
@@ -130,12 +148,19 @@ CBC_AngleSet::ResetSweepBuffers()
   //                   << ", allocations = " << cbc_fluds_->GetNumAllocations()
   //                   << ", deallocations = " << cbc_fluds_->GetNumDeallocations();
 
-  opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
-                    << ", max number of blocks = " << cbc_fluds_->GetPeakNumberAliveCells()
-                    << ", unordered map size = " << cbc_fluds_->GetNumberOfMemoryMapElements()
-                    << "\n";
+  // opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
+  //                   << ", max number of blocks = " << cbc_fluds_->GetPeakNumberAliveCells()
+  //                   << ", unordered map size = " << cbc_fluds_->GetNumberOfMemoryMapElements()
+  //                   << "\n";
+
+  // opensn::log.Log() << "CBC_AngleSet::ResetSweepBuffers: AngleSet = " << id_
+  //                   << ", peak allocations = " << cbc_fluds_->GetNumPeakAllocations()
+  //                   << ", allocations = " << cbc_fluds_->GetNumAllocations()
+  //                   << ", deallocations = " << cbc_fluds_->GetNumDeallocations()
+  //                   << "\n\n";
 
   cbc_fluds_->ResetCounters();
+  cbc_fluds_->ResetPool();
 
   executed_ = false;
 }

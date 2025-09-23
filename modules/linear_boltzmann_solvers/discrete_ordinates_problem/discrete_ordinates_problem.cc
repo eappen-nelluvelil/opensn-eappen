@@ -592,6 +592,8 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
+    size_t peak_number_alive_cells = 0;
+
     // Build SPDS
     for (const auto& [quadrature, info] : quadrature_unq_so_grouping_map_)
     {
@@ -605,9 +607,22 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
         const auto& omega = quadrature->omegas[master_dir_id];
         const auto new_swp_order =
           std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]);
+        peak_number_alive_cells = std::max(peak_number_alive_cells, new_swp_order->GetPeakNumberAliveCells());
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
       }
     }
+
+    int num_spds = 0;
+    for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
+      for (const auto& spds : spds_list)
+      {
+        ++num_spds;     
+        // std::static_pointer_cast<CBC_SPDS>(spds)->SetPeakNumberAliveCells(peak_number_alive_cells);
+      }
+
+    opensn::log.Log() << "# of CBC_SPDS = " << num_spds
+                      << ", max peak number of alive cells across all directions: "
+                      << peak_number_alive_cells << "\n";
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");
