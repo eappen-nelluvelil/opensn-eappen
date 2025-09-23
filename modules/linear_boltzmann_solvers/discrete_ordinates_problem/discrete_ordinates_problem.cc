@@ -592,6 +592,7 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
+    size_t min_number_alive_cells = std::numeric_limits<size_t>::max();
     size_t peak_number_alive_cells = 0;
 
     // Build SPDS
@@ -608,6 +609,7 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
         const auto new_swp_order =
           std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]);
         peak_number_alive_cells = std::max(peak_number_alive_cells, new_swp_order->GetPeakNumberAliveCells());
+        min_number_alive_cells = std::min(min_number_alive_cells, new_swp_order->GetPeakNumberAliveCells());
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
       }
     }
@@ -621,6 +623,8 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       }
 
     opensn::log.Log() << "# of CBC_SPDS = " << num_spds
+                      << ", min number of alive cells across all directions: "
+                      << min_number_alive_cells
                       << ", max peak number of alive cells across all directions: "
                       << peak_number_alive_cells << "\n";
   }
