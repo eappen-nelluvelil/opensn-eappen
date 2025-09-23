@@ -28,6 +28,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
     num_blocks_(peak_number_alive_cells),
+    // num_blocks_(num_local_cells),
     block_size_(max_cell_dof_count * num_groups_and_angles_),
     backing_buffer_(num_blocks_ * block_size_)
 {
@@ -37,10 +38,10 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
 
   cell_local_ID_to_ptr_map_.resize(num_local_cells, nullptr);
   
-  opensn::log.Log() << "CBC_FLUDS: Allocated for " << num_blocks_ << "blocks , block size = "
-                    << block_size_ << " doubles,"
-                    << " buffer size: " << backing_buffer_.size() << " doubles"
-                    << ", # of local cells = " << num_local_cells;
+  // opensn::log.Log() << "CBC_FLUDS: Allocated for " << num_blocks_ << " blocks" 
+  //                   << ", block size = "<< block_size_ << " doubles"
+  //                   << ", buffer size: " << backing_buffer_.size() << " doubles"
+  //                   << ", # of local cells = " << num_local_cells;
 }
 
 const FLUDSCommonData&
@@ -70,12 +71,10 @@ CBC_FLUDS::GetNonLocalUpwindPsi(const std::vector<double>& psi_data,
 void
 CBC_FLUDS::Allocate(const uint64_t cell_local_ID)
 {
-  if (cell_local_ID_to_ptr_map_[cell_local_ID] != nullptr)
-    return;
+  assert(cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr);
 
   void* cell_block_ptr = storage_.malloc();
   cell_local_ID_to_ptr_map_[cell_local_ID] = static_cast<double*>(cell_block_ptr);
-
   ++num_allocations_;
   ++num_current_allocations_;
   num_peak_allocations_ = std::max(num_peak_allocations_, num_current_allocations_);
@@ -84,17 +83,10 @@ CBC_FLUDS::Allocate(const uint64_t cell_local_ID)
 void
 CBC_FLUDS::Deallocate(const uint64_t cell_local_ID)
 {
-  if (cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr)
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::Deallocate: Cell with local ID " << cell_local_ID
-               << " does not have an allocated chunk.";
-    throw std::runtime_error(err_stream.str());
-  }
+  assert(cell_local_ID_to_ptr_map_[cell_local_ID] != nullptr);
 
   storage_.free(cell_local_ID_to_ptr_map_[cell_local_ID]);
   cell_local_ID_to_ptr_map_[cell_local_ID] = nullptr;
-
   ++num_deallocations_;
   --num_current_allocations_;
 }
@@ -102,13 +94,7 @@ CBC_FLUDS::Deallocate(const uint64_t cell_local_ID)
 double* 
 CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID)
 {
-  if (cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr)
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_ID
-               << " does not have an allocated chunk.";
-    throw std::runtime_error(err_stream.str());
-  }
+  assert(cell_local_ID_to_ptr_map_[cell_local_ID] != nullptr);
 
   return cell_local_ID_to_ptr_map_[cell_local_ID];
 }
@@ -116,14 +102,8 @@ CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID)
 const double* 
 CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID) const
 {
-  if (cell_local_ID_to_ptr_map_[cell_local_ID] == nullptr)
-  {
-    std::ostringstream err_stream;
-    err_stream << "CBC_FLUDS::GetChunk: Cell with local ID " << cell_local_ID
-               << " does not have an allocated chunk.";
-    throw std::runtime_error(err_stream.str());
-  }
-
+  assert(cell_local_ID_to_ptr_map_[cell_local_ID] != nullptr);
+  
   return cell_local_ID_to_ptr_map_[cell_local_ID];
 }
 
