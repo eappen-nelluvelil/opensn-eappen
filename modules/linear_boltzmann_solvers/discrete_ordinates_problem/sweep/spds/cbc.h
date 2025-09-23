@@ -26,9 +26,7 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
-  void SimulateLocalSweep();
-
-  size_t ComputePeakActiveEdgesExtendedGraph() const;
+  size_t SimulateLocalSweep() const;
 
   const size_t GetPeakNumberAliveCells() const { return peak_number_alive_cells_; }
 
