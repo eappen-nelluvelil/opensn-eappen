@@ -14,6 +14,8 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/view/quadrature_view.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/view/xs_view.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+#include "framework/runtime.h"
+#include "framework/logging/log.h"
 #include "caliper/cali.h"
 #include "caribou/caribou.h"
 
@@ -401,7 +403,7 @@ AAHSweepChunk::GPUSweep(AngleSet& angle_set)
   // check arguments
   if (max_num_cell_dofs_ > max_dof)
   {
-    log.Log0Warning() << "GPU sweep expects max number of DOF to be " << max_dof
+    opensn::log.Log0Warning() << "GPU sweep expects max number of DOF to be " << max_dof
                       << ", but got a mesh with cell(s) requiring upto " << max_num_cell_dofs_
                       << " DOFs.\n";
     throw std::runtime_error("Max DOF exceeded. Cannot run this mesh on GPU!\n");

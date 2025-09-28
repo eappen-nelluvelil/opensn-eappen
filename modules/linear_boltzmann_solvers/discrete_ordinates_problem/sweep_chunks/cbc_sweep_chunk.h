@@ -35,7 +35,8 @@ public:
                 const LBSGroupset& groupset,
                 const std::map<int, std::shared_ptr<MultiGroupXS>>& xs,
                 int num_moments,
-                int max_num_cell_dofs);
+                int max_num_cell_dofs,
+                bool use_gpus);
 
   void SetAngleSet(AngleSet& angle_set) override;
 
@@ -58,8 +59,13 @@ public:
    */
   void Sweep(AngleSet& angle_set) override;
 
+  void CPUSweep(AngleSet& angle_set);
+
+  void GPUSweep(AngleSet& angle_set);
+
 private:
   CBC_FLUDS* fluds_;
+  bool use_gpus_;
   size_t gs_size_;
   int gs_gi_;
   size_t num_angles_in_as_;

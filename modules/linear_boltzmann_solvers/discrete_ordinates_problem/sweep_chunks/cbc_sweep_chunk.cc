@@ -12,6 +12,9 @@
 namespace opensn
 {
 
+inline constexpr std::uint32_t max_dof = 8;
+inline constexpr std::uint32_t matrix_size = max_dof * max_dof;
+
 CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                              std::vector<double>& destination_psi,
                              const std::shared_ptr<MeshContinuum>& grid,
@@ -23,7 +26,8 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                              const LBSGroupset& groupset,
                              const std::map<int, std::shared_ptr<MultiGroupXS>>& xs,
                              int num_moments,
-                             int max_num_cell_dofs)
+                             int max_num_cell_dofs,
+                             bool use_gpus)
   : SweepChunk(destination_phi,
                destination_psi,
                grid,
@@ -37,6 +41,7 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                num_moments,
                max_num_cell_dofs),
     fluds_(nullptr),
+    use_gpus_(use_gpus),
     gs_size_(0),
     gs_gi_(0),
     num_angles_in_as_(0),
@@ -87,6 +92,17 @@ CBCSweepChunk::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
 
 void
 CBCSweepChunk::Sweep(AngleSet& angle_set)
+{
+  CALI_CXX_MARK_SCOPE("CBCSweepChunk::Sweep");
+
+  if (use_gpus_)
+    GPUSweep(angle_set);
+  else
+    CPUSweep(angle_set);
+}
+
+void
+CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 {
   const auto& m2d_op = groupset_.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset_.quadrature->GetDiscreteToMomentOperator();
@@ -232,6 +248,10 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
       GaussElimination(Atemp, b[gsg], static_cast<int>(cell_num_nodes_));
     } // for gsg
 
+    // Ensure that if GPUs are used, get the kernel running in the constructor
+    // IDEA: CellSweepKernel<<<1, gs_size>>>(args);
+
+    // IDEA: Take care of updating phi on the device as well within the CellSweepKernel
     // Update phi
     for (int m = 0; m < num_moments_; ++m)
     {
@@ -244,21 +264,22 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
       }
     }
 
+    // IDEA: Deal with saving angular fluxes at a later point
     // If requested, save angular fluxes during sweep
-    if (save_angular_flux_)
-    {
-      double* cell_psi_data_base_ptr =
-        &destination_psi_[discretization_.MapDOFLocal(*cell_, 0, groupset_.psi_uk_man_, 0, 0)];
+    // if (save_angular_flux_)
+    // {
+    //   double* cell_psi_data_base_ptr =
+    //     &destination_psi_[discretization_.MapDOFLocal(*cell_, 0, groupset_.psi_uk_man_, 0, 0)];
 
-      for (size_t i = 0; i < cell_num_nodes_; ++i)
-      {
-        const size_t addr_offset =
-          i * groupset_angle_group_stride_ + direction_num * groupset_group_stride_;
+    //   for (size_t i = 0; i < cell_num_nodes_; ++i)
+    //   {
+    //     const size_t addr_offset =
+    //       i * groupset_angle_group_stride_ + direction_num * groupset_group_stride_;
 
-        for (size_t gsg = 0; gsg < gs_size_; ++gsg)
-          cell_psi_data_base_ptr[addr_offset + gsg] = b[gsg](i);
-      }
-    }
+    //     for (size_t gsg = 0; gsg < gs_size_; ++gsg)
+    //       cell_psi_data_base_ptr[addr_offset + gsg] = b[gsg](i);
+    //   }
+    // }
 
     // Perform outgoing surface operations
     for (size_t f = 0; f < cell_num_faces_; ++f)
@@ -329,6 +350,12 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
       } // for fi
     } // for face
   } // for angleset/subset
+}
+
+void
+CBCSweepChunk::GPUSweep(AngleSet& angle_set)
+{
+
 }
 
 } // namespace opensn
