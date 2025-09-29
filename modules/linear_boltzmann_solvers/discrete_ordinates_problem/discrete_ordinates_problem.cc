@@ -78,12 +78,6 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
     verbose_sweep_angles_(params.GetParamVectorValue<int>("directions_sweep_order_to_print")),
     sweep_type_(params.GetParamValue<std::string>("sweep_type"))
 {
-  if (use_gpus_ && sweep_type_ == "CBC")
-  {
-    log.Log0Warning() << "Sweep computation on GPUs has not yet been supported for CBC. "
-                      << "Falling back to CPU sweep.\n";
-    use_gpus_ = false;
-  }
 }
 
 DiscreteOrdinatesProblem::~DiscreteOrdinatesProblem()
@@ -617,16 +611,14 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
     int num_spds = 0;
     for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
       for (const auto& spds : spds_list)
-      {
         ++num_spds;     
-        // std::static_pointer_cast<CBC_SPDS>(spds)->SetPeakNumberAliveCells(peak_number_alive_cells);
-      }
 
-    opensn::log.Log() << "# of CBC_SPDS = " << num_spds
-                      << ", min number of alive cells across all directions: "
-                      << min_number_alive_cells
-                      << ", max peak number of alive cells across all directions: "
-                      << peak_number_alive_cells << "\n";
+    // opensn::log.Log() << "# of CBC_SPDS = " << num_spds
+    //                   << ", min number of alive cells across all directions: "
+    //                   << min_number_alive_cells
+    //                   << ", max peak number of alive cells across all directions: "
+    //                   << peak_number_alive_cells << "\n";
+
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");
@@ -971,7 +963,8 @@ DiscreteOrdinatesProblem::SetSweepChunk(LBSGroupset& groupset)
                                                        block_id_to_xs_map_,
                                                        num_moments_,
                                                        max_cell_dof_count_,
-                                                       use_gpus_);
+                                                       use_gpus_,
+                                                       *this);
 
     return sweep_chunk;
   }

@@ -5,9 +5,13 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
+#include "framework/math/spatial_discretization/spatial_discretization.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 
 namespace opensn
 {
+
 class CellMapping;
 
 /**
@@ -36,7 +40,8 @@ public:
                 const std::map<int, std::shared_ptr<MultiGroupXS>>& xs,
                 int num_moments,
                 int max_num_cell_dofs,
-                bool use_gpus);
+                bool use_gpus,
+                DiscreteOrdinatesProblem& problem);
 
   void SetAngleSet(AngleSet& angle_set) override;
 
@@ -66,6 +71,8 @@ public:
 private:
   CBC_FLUDS* fluds_;
   bool use_gpus_;
+  DiscreteOrdinatesProblem& problem_;
+
   size_t gs_size_;
   int gs_gi_;
   size_t num_angles_in_as_;

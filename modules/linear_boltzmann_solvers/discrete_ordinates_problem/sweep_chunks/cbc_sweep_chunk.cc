@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mesh/cell/cell.h"
 #include "framework/logging/log.h"
+#include "framework/runtime.h"
 #include "caliper/cali.h"
 
 namespace opensn
 {
-
-inline constexpr std::uint32_t max_dof = 8;
-inline constexpr std::uint32_t matrix_size = max_dof * max_dof;
 
 CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                              std::vector<double>& destination_psi,
@@ -27,7 +27,8 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                              const std::map<int, std::shared_ptr<MultiGroupXS>>& xs,
                              int num_moments,
                              int max_num_cell_dofs,
-                             bool use_gpus)
+                             bool use_gpus,
+                             DiscreteOrdinatesProblem& problem)
   : SweepChunk(destination_phi,
                destination_psi,
                grid,
@@ -42,6 +43,7 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                max_num_cell_dofs),
     fluds_(nullptr),
     use_gpus_(use_gpus),
+    problem_(problem),
     gs_size_(0),
     gs_gi_(0),
     num_angles_in_as_(0),
@@ -350,12 +352,6 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
       } // for fi
     } // for face
   } // for angleset/subset
-}
-
-void
-CBCSweepChunk::GPUSweep(AngleSet& angle_set)
-{
-
 }
 
 } // namespace opensn

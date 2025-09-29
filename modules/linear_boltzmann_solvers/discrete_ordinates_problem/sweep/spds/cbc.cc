@@ -149,15 +149,15 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   peak_number_alive_cells_ = std::min(SimulateLocalSweep(),
                                       spls_.size());
 
-  opensn::log.Log() << "CBC_SPDS: est. # of required cells = " << peak_number_alive_cells_
-                    << ", # of local active cells = " << SimulateLocalSweep()
-                    // << ", # of max active edges = "
-                    // << peak_number_local_active_edges
-                    // << ", remote parents = " << total_number_of_remote_parents
-                    // << ", unique remote parents = " << unique_remote_parents.size()
-                    // << ", remote children = " << total_number_of_remote_children 
-                    // << ", unique remote children = " << unique_remote_children.size()
-                    << "\n";
+  // opensn::log.Log() << "CBC_SPDS: est. # of required cells = " << peak_number_alive_cells_
+  //                   << ", # of local active cells = " << SimulateLocalSweep()
+  //                   // << ", # of max active edges = "
+  //                   // << peak_number_local_active_edges
+  //                   // << ", remote parents = " << total_number_of_remote_parents
+  //                   // << ", unique remote parents = " << unique_remote_parents.size()
+  //                   // << ", remote children = " << total_number_of_remote_children 
+  //                   // << ", unique remote children = " << unique_remote_children.size()
+  //                   << "\n";
 }
 
 const std::vector<Task>&
