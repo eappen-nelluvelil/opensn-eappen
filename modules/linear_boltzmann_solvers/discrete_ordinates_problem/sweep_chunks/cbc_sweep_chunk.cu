@@ -104,6 +104,7 @@ namespace opensn
 //   }
 // }
 
+/*
 __device__ inline void
 DeviceGaussElimination(double* sweep_matrix,
                        double* psi,
@@ -139,6 +140,50 @@ DeviceGaussElimination(double* sweep_matrix,
     double* A_j = sweep_matrix + j * cell_num_nodes;
     for (std::int32_t i = j + 1; i < cell_num_nodes; ++i)
       psi[j] -= A_j[i] * psi[i];
+  }
+}
+*/
+
+__device__ inline void
+DeviceGaussElimination(double* A,
+                       double* b,
+                       const std::uint32_t n)
+{
+  // Forward elimination
+  for (std::uint32_t i = 0; i < n - 1; ++i)
+  {
+    double bi = b[i];
+    
+    double pivot = A[i * n + i];
+
+    double factor = 1.0 / pivot;
+
+    for (std::uint32_t j = i + 1; j < n; ++j)
+    {
+      double val = A[j * n + i] * factor;
+      
+      b[j] -= val * bi;
+      
+      for (std::uint32_t k = i + 1; k < n; ++k)
+      {
+        A[j * n + k] -= val * A[i * n + k];
+      }
+    }
+  }
+
+  // Back substitution
+  for (std::int32_t i = n - 1; i >= 0; --i)
+  {
+    double bi = b[i];
+    
+    for (std::uint32_t j = i + 1; j < n; ++j)
+    {
+      bi -= A[i * n + j] * b[j];
+    }
+
+    double pivot = A[i * n + i];
+
+    b[i] = bi / pivot;
   }
 }
 
@@ -343,21 +388,23 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
                             b_gsg_host, 
                             static_cast<int>(cell_num_nodes_));
 
+      cudaDeviceSynchronize();
+
       // Copy solution back to host
       // b_storage.CopyFromDevice();
 
       // Copy solution to b[gsg]
       // const auto& b_host = b_storage.GetHostVector();
-      // for (size_t i = 0; i < cell_num_nodes_; ++i)
-      //   b[gsg](i) = b_gsg_host[i];
+      for (size_t i = 0; i < cell_num_nodes_; ++i)
+        b[gsg](i) = b_gsg_host[i];
 
-      GaussElimination(Atemp, b[gsg], cell_num_nodes_);
+      // GaussElimination(Atemp, b[gsg], cell_num_nodes_);
 
       // Check that b_gsg_host and b[gsg] are the same
-      for (size_t i = 0; i < cell_num_nodes_; ++i)
-        if (std::abs(b[gsg](i) - b_gsg_host[i]) > 1e-6)
-          opensn::log.Log() << "Mismatch in GPU and CPU solutions: " 
-                            << b[gsg](i) << " vs " << b_gsg_host[i] << "\n";
+      // for (size_t i = 0; i < cell_num_nodes_; ++i)
+      //   if (std::abs(b[gsg](i) - b_gsg_host[i]) > 1e-6)
+      //     opensn::log.Log() << "Mismatch in GPU and CPU solutions: " 
+      //                       << b[gsg](i) << " vs " << b_gsg_host[i] << "\n";
     } // for gsg
 
     // Ensure that if GPUs are used, get the kernel running in the constructor
