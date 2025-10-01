@@ -143,11 +143,11 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
         double mu_Nij = -mu * face.M_surf_data[fi * face.num_face_nodes + fj];
         Ai[j] += mu_Nij;
         
-        const size_t offset = as_ss_idx * args.stride_as + 
+        const size_t base_offset = as_ss_idx * args.stride_as + 
                               f * args.stride_f + 
-                              fj * args.stride_fj + 
-                              gsg;
-        const double upwind_psi_val = args.upwind_psi[offset];
+                              fj * args.stride_fj;
+
+        const double upwind_psi_val = args.upwind_psi[base_offset + gsg];
 
         psi[i] += upwind_psi_val * mu_Nij;
       }
@@ -195,38 +195,6 @@ DeviceGaussianElimination(std::array<double, cbc_matrix_size>& sweep_matrix,
   }
 }
 
-__device__ inline void
-DeviceGaussElimination(double* A,
-                       double* b,
-                       const std::uint32_t n)
-{
-  // Forward elimination
-  for (std::uint32_t i = 0; i < n - 1; ++i)
-  {
-    double bi = b[i];
-    double pivot = A[i * n + i];
-    double factor = 1.0 / pivot;
-
-    for (std::uint32_t j = i + 1; j < n; ++j)
-    {
-      double val = A[j * n + i] * factor;
-      b[j] -= val * bi;
-      for (std::uint32_t k = i + 1; k < n; ++k)
-        A[j * n + k] -= val * A[i * n + k];
-    }
-  }
-
-  // Back substitution
-  for (std::int32_t i = n - 1; i >= 0; --i)
-  {
-    double bi = b[i];
-    for (std::uint32_t j = i + 1; j < n; ++j)
-      bi -= A[i * n + j] * b[j];
-    double pivot = A[i * n + i];
-    b[i] = bi / pivot;
-  }
-}
-
 __device__ void
 DeviceComputePhi(const std::array<double, cbc_max_dof>& psi,
            const std::uint32_t& cell_num_nodes,
@@ -267,14 +235,6 @@ DeviceRecordPsi(const std::array<double, cbc_max_dof>& psi,
 
   for (std::uint32_t i = 0; i < cell_num_nodes; ++i)
     dest_psi[i] = psi[i];
-}
-
-__global__ void
-SolveKernel(double* sweep_matrix,
-            double* psi,
-            const std::uint32_t cell_num_nodes)
-{
-  DeviceGaussElimination(sweep_matrix, psi, cell_num_nodes);
 }
 
 __global__ void
@@ -355,26 +315,9 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
 
-  // These operators are handled by QuadratureCarrier
-	const auto& m2d_op = groupset_.quadrature->GetMomentToDiscreteOperator();	// type is std::vector<std::vector<double>> const&
-	const auto& d2m_op = groupset_.quadrature->GetDiscreteToMomentOperator(); // type is std::vector<std::vector<double>> const&
-
-	DenseMatrix<double> Amat(max_num_cell_dofs_, max_num_cell_dofs_);
-  DenseMatrix<double> Atemp(max_num_cell_dofs_, max_num_cell_dofs_);  
-  std::vector<Vector<double>> b(gs_size_, Vector<double>(max_num_cell_dofs_));
-
-  // Use MemoryPinner 
-  std::vector<double> source(max_num_cell_dofs_);
-
 	// type is const std::vector<std::vector<FaceOrientation>>&
   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell_local_id_];
   std::vector<double> face_mu_values(cell_num_faces_);
-
-	// type is double
-  const auto& rho = densities_[cell_local_id_];
-
-	// type is const std::vector<double>&
-  const auto& sigma_t = xs_.at(cell_->block_id)->GetSigmaTotal();
 
 	// as = angle set
   // ss = subset
@@ -443,7 +386,9 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 
   const auto upwind_psi_size = angleset_size * cell_num_faces_ * max_num_face_nodes * gs_size_;
   crb::HostVector<double> upwind_psi_host(upwind_psi_size);
-  crb::DeviceMemory<double> upwind_psi_device(upwind_psi_size);
+
+  for (std::uint32_t i = 0; i < upwind_psi_size; ++i)
+    upwind_psi_host[i] = 0.0;
 
   const size_t stride_g = 1;
   const size_t stride_fj = gs_size_ * stride_g;
@@ -453,11 +398,13 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as_; ++as_ss_idx)
   {
     auto direction_num = as_angle_indices[as_ss_idx];
+    auto omega = groupset_.quadrature->omegas[direction_num];
 
     // Surface integrals
     for (size_t f = 0; f < cell_num_faces_; ++f)
     {
-      if (face_orientations[f] != FaceOrientation::INCOMING)
+      const double mu = omega.Dot(cell_->faces[f].normal);
+      if (mu >= 0.0)
         continue;
 
       const auto& face = cell_->faces[f];
@@ -519,6 +466,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
     } // for f
   }
 
+  crb::DeviceMemory<double> upwind_psi_device(upwind_psi_size);
   crb::copy(upwind_psi_device, upwind_psi_host, upwind_psi_size);
   args.upwind_psi = upwind_psi_device.get();
   args.stride_as = stride_as;
@@ -532,11 +480,6 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 
   // Copy phi back to CPU
   phi->CopyFromDevice();
-
-  // Retrieve outflow 
-  // OutflowCarrier* outflow = reinterpret_cast<OutflowCarrier*>(problem_.GetCarrier(1));
-  // outflow->AccumulateBack(cell_transport_views_);
-  // outflow->Reset();
 
   if (psi_device)
   {
@@ -609,8 +552,8 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
           {
             for (size_t gsg = 0; gsg < gs_size_; ++gsg)
             {
-              const size_t offset = (as_ss_idx * gs_size_ + gsg) * max_num_cell_dofs_;
-              psi_downwind_groups_ptr[gsg] = psi_host[offset + i];
+              const size_t offset = (as_ss_idx * gs_size_ + gsg) * max_num_cell_dofs_ + i;
+              psi_downwind_groups_ptr[gsg] = psi_host[offset];
             }
           }
 
@@ -619,10 +562,10 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
           {
             for (size_t gsg = 0; gsg < gs_size_; ++gsg)
             {
-              const size_t offset = (as_ss_idx * gs_size_ + gsg) * max_num_cell_dofs_;
+              const size_t offset = (as_ss_idx * gs_size_ + gsg) * max_num_cell_dofs_ + i;
               cell_transport_view_->AddOutflow(f,
                                                gs_gi_ + gsg,
-                                               wt * face_mu_values[f] * psi_host[offset + i] *
+                                               wt * face_mu_values[f] * psi_host[offset] *
                                                IntF_shapeI(i));
             }
           }

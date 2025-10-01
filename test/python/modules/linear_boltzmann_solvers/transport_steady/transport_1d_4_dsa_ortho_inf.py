@@ -90,6 +90,8 @@ if __name__ == "__main__":
         ],
         scattering_order=1,
         volumetric_sources=[mg_src],
+        sweep_type="CBC",
+        use_gpus=True
     )
 
     # Initialize and Execute Solver

@@ -100,6 +100,8 @@ if __name__ == "__main__":
             "max_ags_iterations": 100,
             "ags_tolerance": 1.0e-6,
         },
+        sweep_type="CBC",
+        use_gpus=True
     )
 
     # Initialize and Execute Solver

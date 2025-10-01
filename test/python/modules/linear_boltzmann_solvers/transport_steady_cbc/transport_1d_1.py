@@ -100,9 +100,10 @@ if __name__ == "__main__":
         volumetric_sources=[mg_src],
         options={
             "max_ags_iterations": 1,
-            "save_angular_flux": True
+            "save_angular_flux": False
         },
-        sweep_type="CBC"
+        sweep_type="CBC",
+        use_gpus=True
     )
 
     ss_solver = SteadyStateSourceSolver(problem=phys)

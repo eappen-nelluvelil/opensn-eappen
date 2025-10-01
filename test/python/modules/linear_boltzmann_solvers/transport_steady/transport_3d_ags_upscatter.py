@@ -108,6 +108,8 @@ if __name__ == "__main__":
             "max_ags_iterations": 30,
             "ags_tolerance": 1.0e-6,
         },
+        sweep_type="CBC",
+        use_gpus=True
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)
     ss_solver.Initialize()
