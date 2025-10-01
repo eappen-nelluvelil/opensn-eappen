@@ -8,9 +8,13 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include <memory>
 
 namespace opensn
 {
+
+// Experimental
+inline constexpr std::uint32_t cbc_max_dof = 8;
 
 class CellMapping;
 
