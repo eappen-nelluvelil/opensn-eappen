@@ -6,7 +6,6 @@
 #include "framework/mesh/mesh.h"
 #include "framework/runtime.h"
 #include "framework/logging/log.h"
-#include <format>
 #include <cmath>
 
 namespace opensn
@@ -61,11 +60,8 @@ KBAGraphPartitioner::KBAGraphPartitioner(const InputParameters& params)
 
     // Check number of items
     if (cuts.size() != (n - 1))
-    {
-      auto err = std::format(
-        "The number of cuts supplied for \"{}cuts\" is not equal to n{}-1.", name, name);
-      OpenSnInvalidArgument(err);
-    }
+      OpenSnInvalidArgument("The number of cuts supplied for \"" + name +
+                            "cuts\" is not equal to n" + name + "-1.");
     if (cuts.empty())
       continue;
 
@@ -83,7 +79,7 @@ KBAGraphPartitioner::KBAGraphPartitioner(const InputParameters& params)
   } // for each coordinate
 }
 
-std::vector<int>
+std::vector<int64_t>
 KBAGraphPartitioner::Partition(const std::vector<std::vector<uint64_t>>& graph,
                                const std::vector<Vector3>& centroids,
                                int number_of_parts)
@@ -93,7 +89,7 @@ KBAGraphPartitioner::Partition(const std::vector<std::vector<uint64_t>>& graph,
   OpenSnLogicalErrorIf(centroids.size() != graph.size(),
                        "Graph number of entries not equal to centroids' number of entries.");
   const size_t num_cells = graph.size();
-  std::vector<size_t> pids(num_cells, 0);
+  std::vector<int64_t> pids(num_cells, 0);
   for (size_t c = 0; c < num_cells; ++c)
   {
     const auto& point = centroids[c];
@@ -132,13 +128,13 @@ KBAGraphPartitioner::Partition(const std::vector<std::vector<uint64_t>>& graph,
 
   const auto pid_subsets = MakeSubSets(nx_ * ny_ * nz_, number_of_parts);
 
-  std::vector<int> real_pids(num_cells, 0);
+  std::vector<int64_t> real_pids(num_cells, 0);
   for (size_t c = 0; c < num_cells; ++c)
   {
     for (int p = 0; p < number_of_parts; ++p)
     {
       if (pids[c] >= pid_subsets[p].ss_begin and pids[c] <= pid_subsets[p].ss_end)
-        real_pids[c] = p;
+        real_pids[c] = static_cast<int64_t>(p);
     }
   }
 

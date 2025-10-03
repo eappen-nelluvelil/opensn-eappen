@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/response_evaluator/response_evaluator.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/point_source/point_source.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/volumetric_source/volumetric_source.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/io/lbs_problem_io.h"
@@ -44,7 +43,7 @@ ResponseEvaluator::Create(const ParameterBlock& params)
 }
 
 ResponseEvaluator::ResponseEvaluator(const InputParameters& params)
-  : do_problem_(params.GetSharedPtrParam<Problem, DiscreteOrdinatesProblem>("problem"))
+  : lbs_problem_(params.GetSharedPtrParam<Problem, LBSProblem>("problem"))
 {
   if (params.IsParameterValid("options"))
   {
@@ -137,12 +136,12 @@ ResponseEvaluator::SetBufferOptions(const InputParameters& input)
   std::vector<double> phi;
   if (prefixes.Has("flux_moments"))
     LBSSolverIO::ReadFluxMoments(
-      *do_problem_, prefixes.GetParamValue<std::string>("flux_moments"), false, phi);
+      *lbs_problem_, prefixes.GetParamValue<std::string>("flux_moments"), false, phi);
 
   std::vector<std::vector<double>> psi;
   if (prefixes.Has("angular_fluxes"))
     LBSSolverIO::ReadAngularFluxes(
-      *do_problem_, prefixes.GetParamValue<std::string>("angular_fluxes"), psi);
+      *lbs_problem_, prefixes.GetParamValue<std::string>("angular_fluxes"), psi);
 
   adjoint_buffers_[name] = {phi, psi};
   log.Log0Verbose1() << "Adjoint buffer " << name << " added to the stack.";
@@ -199,7 +198,7 @@ ResponseEvaluator::SetSourceOptions(const InputParameters& input)
     {
       point_sources_.push_back(
         user_psrc_params.GetParam(p).GetValue<std::shared_ptr<PointSource>>());
-      point_sources_.back()->Initialize(*do_problem_);
+      point_sources_.back()->Initialize(*lbs_problem_);
     }
   }
 
@@ -211,7 +210,7 @@ ResponseEvaluator::SetSourceOptions(const InputParameters& input)
     {
       volumetric_sources_.push_back(
         user_dsrc_params.GetParam(p).GetValue<std::shared_ptr<VolumetricSource>>());
-      volumetric_sources_.back()->Initialize(*do_problem_);
+      volumetric_sources_.back()->Initialize(*lbs_problem_);
     }
   }
 
@@ -250,11 +249,11 @@ ResponseEvaluator::SetMaterialSourceOptions(const InputParameters& params)
                             " already exists.");
 
   const auto values = params.GetParamVectorValue<double>("strength");
-  OpenSnInvalidArgumentIf(values.size() != do_problem_->GetNumGroups(),
+  OpenSnInvalidArgumentIf(values.size() != lbs_problem_->GetNumGroups(),
                           "The number of material source values and groups "
                           "in the underlying solver do not match. "
                           "Expected " +
-                            std::to_string(do_problem_->GetNumGroups()) + " but got " +
+                            std::to_string(lbs_problem_->GetNumGroups()) + " but got " +
                             std::to_string(values.size()) + ".");
 
   material_sources_[blkid] = values;
@@ -331,11 +330,11 @@ ResponseEvaluator::EvaluateResponse(const std::string& buffer) const
                        "If boundary sources are set, adjoint angular fluxes "
                        "must be available for response evaluation.");
 
-  const auto& grid = do_problem_->GetGrid();
-  const auto& discretization = do_problem_->GetSpatialDiscretization();
-  const auto& transport_views = do_problem_->GetCellTransportViews();
-  const auto& unit_cell_matrices = do_problem_->GetUnitCellMatrices();
-  const auto num_groups = do_problem_->GetNumGroups();
+  const auto& grid = lbs_problem_->GetGrid();
+  const auto& discretization = lbs_problem_->GetSpatialDiscretization();
+  const auto& transport_views = lbs_problem_->GetCellTransportViews();
+  const auto& unit_cell_matrices = lbs_problem_->GetUnitCellMatrices();
+  const auto num_groups = lbs_problem_->GetNumGroups();
 
   double local_response = 0.0;
 
@@ -367,7 +366,7 @@ ResponseEvaluator::EvaluateResponse(const std::string& buffer) const
   if (not boundary_sources_.empty())
   {
     size_t gs = 0;
-    for (const auto& groupset : do_problem_->GetGroupsets())
+    for (const auto& groupset : lbs_problem_->GetGroupsets())
     {
       const auto& uk_man = groupset.psi_uk_man_;
       const auto& quadrature = groupset.quadrature;

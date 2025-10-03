@@ -5,6 +5,6 @@ Linear Boltzmann Solver
 .. toctree::
    :maxdepth: 1
 
-   primer/index
-   keigen/index
-   src_driven/index
+   first/first_example
+   mg_src_driven/hdpe_example
+   mg_keigen/pincell_example

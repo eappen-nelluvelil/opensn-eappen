@@ -23,10 +23,9 @@ PETScLinearSolver::PETScLinearSolver(IterativeMethod method,
 
 PETScLinearSolver::~PETScLinearSolver()
 {
-  KSPDestroy(&ksp_);
-  MatDestroy(&A_);
   VecDestroy(&x_);
   VecDestroy(&b_);
+  KSPDestroy(&ksp_);
 }
 
 void
@@ -148,7 +147,7 @@ int
 PETScLinearSolver::LinearSolverMatrixAction(Mat matrix, Vec vector, Vec action)
 {
   LinearSystemContext* context;
-  MatShellGetContext(matrix, static_cast<void*>(&context));
+  MatShellGetContext(matrix, &context);
 
   context->MatrixAction(matrix, vector, action);
 

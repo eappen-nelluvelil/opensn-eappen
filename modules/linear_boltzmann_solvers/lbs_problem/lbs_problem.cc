@@ -56,8 +56,8 @@ LBSProblem::GetInputParameters()
   params.AddRequiredParameterArray("xs_map",
                                    "Cross-section map from block IDs to cross-section objects.");
 
-  params.AddRequiredParameter<unsigned int>(
-    "scattering_order", "The level of harmonic expansion for the scattering source.");
+  params.AddRequiredParameter<size_t>("scattering_order",
+                                      "The level of harmonic expansion for the scattering source.");
 
   params.AddOptionalParameterArray<std::shared_ptr<VolumetricSource>>(
     "volumetric_sources", {}, "An array of handles to volumetric sources.");
@@ -80,7 +80,7 @@ LBSProblem::GetInputParameters()
 
 LBSProblem::LBSProblem(const InputParameters& params)
   : Problem(params),
-    scattering_order_(params.GetParamValue<unsigned int>("scattering_order")),
+    scattering_order_(params.GetParamValue<size_t>("scattering_order")),
     grid_(params.GetSharedPtrParam<MeshContinuum>("mesh")),
     use_gpus_(params.GetParamValue<bool>("use_gpus"))
 {
@@ -195,7 +195,7 @@ LBSProblem::GetNumGroups() const
   return num_groups_;
 }
 
-unsigned int
+size_t
 LBSProblem::GetScatteringOrder() const
 {
   return scattering_order_;
@@ -404,6 +404,18 @@ const std::vector<double>&
 LBSProblem::GetPrecursorsNewLocal() const
 {
   return precursor_new_local_;
+}
+
+std::vector<std::vector<double>>&
+LBSProblem::GetPsiNewLocal()
+{
+  return psi_new_local_;
+}
+
+const std::vector<std::vector<double>>&
+LBSProblem::GetPsiNewLocal() const
+{
+  return psi_new_local_;
 }
 
 std::vector<double>&
@@ -628,7 +640,8 @@ LBSProblem::SetOptions(const InputParameters& input)
         // Set all solutions to zero.
         phi_old_local_.assign(phi_old_local_.size(), 0.0);
         phi_new_local_.assign(phi_new_local_.size(), 0.0);
-        ZeroSolutions();
+        for (auto& psi : psi_new_local_)
+          psi.assign(psi.size(), 0.0);
         precursor_new_local_.assign(precursor_new_local_.size(), 0.0);
       }
     }
@@ -1032,17 +1045,19 @@ LBSProblem::ValidateAndComputeScatteringMoments()
     laq: Legendre order supported by the angular quadrature
   */
 
-  unsigned int lfs = scattering_order_;
+  int lfs = scattering_order_;
+  if (lfs < 0)
+    throw std::invalid_argument("LBSProblem: Scattering order must be >= 0");
 
   for (size_t gs = 1; gs < groupsets_.size(); ++gs)
     if (groupsets_[gs].quadrature->GetScatteringOrder() !=
         groupsets_[0].quadrature->GetScatteringOrder())
       throw std::logic_error("LBSProblem: Number of scattering moments differs between groupsets");
-  auto laq = groupsets_[0].quadrature->GetScatteringOrder();
+  int laq = groupsets_[0].quadrature->GetScatteringOrder();
 
   for (const auto& [blk_id, mat] : block_id_to_xs_map_)
   {
-    auto lxs = block_id_to_xs_map_[blk_id]->GetScatteringOrder();
+    int lxs = block_id_to_xs_map_[blk_id]->GetScatteringOrder();
 
     if (laq > lxs)
     {
@@ -1119,6 +1134,18 @@ LBSProblem::InitializeParrays()
   q_moments_local_.assign(local_unknown_count, 0.0);
   phi_old_local_.assign(local_unknown_count, 0.0);
   phi_new_local_.assign(local_unknown_count, 0.0);
+
+  // Setup groupset psi vectors
+  psi_new_local_.clear();
+  for (auto& groupset : groupsets_)
+  {
+    psi_new_local_.emplace_back();
+    if (options_.save_angular_flux)
+    {
+      size_t num_ang_unknowns = discretization_->GetNumLocalDOFs(groupset.psi_uk_man_);
+      psi_new_local_.back().assign(num_ang_unknowns, 0.0);
+    }
+  }
 
   // Setup precursor vector
   if (options_.use_precursors)

@@ -70,9 +70,9 @@ PieceWiseLinearContinuous::OrderNodes()
   // node. We build this list here.
   // We start by adding the current location id
   // as the first subscription
-  std::map<uint64_t, std::set<int>> ls_node_ids_psubs;
+  std::map<uint64_t, std::set<uint64_t>> ls_node_ids_psubs;
   for (const uint64_t node_id : ls_node_ids_set)
-    ls_node_ids_psubs[node_id] = {opensn::mpi_comm.rank()};
+    ls_node_ids_psubs[node_id] = {static_cast<uint64_t>(opensn::mpi_comm.rank())};
 
   // Now we add the partitions associated with the
   // ghost cells.
@@ -90,8 +90,8 @@ PieceWiseLinearContinuous::OrderNodes()
   std::map<uint64_t, std::vector<uint64_t>> nonlocal_node_ids_map;
   for (const uint64_t node_id : ls_node_ids_set)
   {
-    auto smallest_partition_id = opensn::mpi_comm.rank();
-    for (const auto pid : ls_node_ids_psubs[node_id]) // pid = partition id
+    uint64_t smallest_partition_id = opensn::mpi_comm.rank();
+    for (const uint64_t pid : ls_node_ids_psubs[node_id]) // pid = partition id
       smallest_partition_id = std::min(smallest_partition_id, pid);
 
     if (smallest_partition_id == opensn::mpi_comm.rank())
@@ -118,12 +118,14 @@ PieceWiseLinearContinuous::OrderNodes()
   local_base_block_size_ = local_num_nodes;
   global_base_block_size_ = global_num_nodes;
 
-  // Build node mapping for local nodes
+  // Build node mapping for local
+  //                                              nodes
   node_mapping_.clear();
   for (uint64_t i = 0; i < local_num_nodes; ++i)
     node_mapping_[local_node_ids[i]] = static_cast<int64_t>(local_block_address_ + i);
 
-  // Communicate nodes in need of mapping
+  // Communicate nodes in need
+  //                                              of mapping
   std::map<uint64_t, std::vector<uint64_t>> query_node_ids = MapAllToAll(nonlocal_node_ids_map);
 
   // Map the query nodes
@@ -474,7 +476,7 @@ PieceWiseLinearContinuous::MapDOF(const Cell& cell,
     {
       const int64_t local_id = global_id - static_cast<int64_t>(locJ_block_address_[locJ]);
 
-      if (local_id < 0 or std::cmp_greater_equal(local_id, locJ_block_size_[locJ]))
+      if (local_id < 0 or local_id >= locJ_block_size_[locJ])
         continue;
 
       address = static_cast<int64_t>(locJ_block_address_[locJ] * num_unknowns) +
@@ -505,7 +507,7 @@ PieceWiseLinearContinuous::MapDOFLocal(const Cell& cell,
   auto storage = unknown_manager.dof_storage_type;
 
   const int64_t local_id = node_global_id - static_cast<int64_t>(local_block_address_);
-  const bool is_local = local_id >= 0 and std::cmp_less(local_id, local_base_block_size_);
+  const bool is_local = local_id >= 0 and local_id < local_base_block_size_;
 
   int64_t address = -1;
   if (is_local)
@@ -581,7 +583,7 @@ PieceWiseLinearContinuous::GetGhostDOFIndices(const UnknownManager& unknown_mana
           {
             const int64_t local_id = global_id - static_cast<int64_t>(locJ_block_address_[locJ]);
 
-            if (local_id < 0 or std::cmp_greater_equal(local_id, locJ_block_size_[locJ]))
+            if (local_id < 0 or local_id >= locJ_block_size_[locJ])
               continue;
 
             address = static_cast<int64_t>(locJ_block_address_[locJ] * num_unknown_comps) +

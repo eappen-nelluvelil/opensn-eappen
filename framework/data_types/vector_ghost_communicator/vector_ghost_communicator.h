@@ -27,7 +27,7 @@ public:
   VectorGhostCommunicator(const VectorGhostCommunicator& other);
 
   /// Move constructor.
-  VectorGhostCommunicator(VectorGhostCommunicator&& other) = default;
+  VectorGhostCommunicator(VectorGhostCommunicator&& other) noexcept;
 
   uint64_t GetLocalSize() const { return local_size_; }
   uint64_t GetGlobalSize() const { return global_size_; }
@@ -37,7 +37,7 @@ public:
 
   const mpi::Communicator& GetCommunicator() const { return comm_; }
 
-  uint64_t MapGhostToLocal(int64_t ghost_id) const;
+  int64_t MapGhostToLocal(int64_t ghost_id) const;
 
   void CommunicateGhostEntries(std::vector<double>& ghosted_vector) const;
 
@@ -61,14 +61,14 @@ protected:
     std::vector<int> recvcounts;
     std::vector<int> recvdispls;
 
-    std::vector<uint64_t> local_ids_to_send;
+    std::vector<int64_t> local_ids_to_send;
     std::map<int64_t, size_t> ghost_to_recv_map;
   };
 
   const CachedParallelData cached_parallel_data_;
 
 private:
-  int FindOwnerPID(uint64_t global_id) const;
+  int FindOwnerPID(int64_t global_id) const;
   CachedParallelData MakeCachedParallelData();
 };
 

@@ -10,16 +10,6 @@
 namespace opensn
 {
 
-static inline void
-UpdateRange(std::vector<std::vector<double>>& target, std::vector<std::span<double>>& view)
-{
-  view.resize(target.size());
-  for (std::size_t i = 0; i < target.size(); ++i)
-  {
-    view[i] = std::span<double>(target[i]);
-  }
-}
-
 AAH_FLUDS::AAH_FLUDS(size_t num_groups, size_t num_angles, const AAH_FLUDSCommonData& common_data)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
@@ -180,116 +170,122 @@ AAH_FLUDS::GetDeplocIFaceDOFCount(int deplocI) const
 void
 AAH_FLUDS::ClearLocalAndReceivePsi()
 {
-  local_psi_.clear();
-  prelocI_outgoing_psi_.clear();
-  prelocI_outgoing_psi_view_.clear();
+  auto empty_vector = std::vector<std::vector<double>>(0);
+  local_psi_.swap(empty_vector);
+
+  empty_vector = std::vector<std::vector<double>>(0);
+  prelocI_outgoing_psi_.swap(empty_vector);
 }
 
 void
 AAH_FLUDS::ClearSendPsi()
 {
   deplocI_outgoing_psi_.clear();
-  deplocI_outgoing_psi_view_.clear();
 }
 
 void
-AAH_FLUDS::AllocateInternalLocalPsi()
+AAH_FLUDS::AllocateInternalLocalPsi(size_t num_grps, size_t num_angles)
 {
   local_psi_.resize(common_data_.num_face_categories_);
   // fc = face category
   for (size_t fc = 0; fc < common_data_.num_face_categories_; ++fc)
   {
     local_psi_[fc].resize(common_data_.local_psi_stride_[fc] *
-                            common_data_.local_psi_max_elements_[fc] * num_groups_and_angles_,
+                            common_data_.local_psi_max_elements_[fc] * num_grps * num_angles,
                           0.0);
   }
 }
 
 void
-AAH_FLUDS::AllocateOutgoingPsi()
+AAH_FLUDS::AllocateOutgoingPsi(size_t num_grps, size_t num_angles, size_t num_loc_sucs)
 {
-  std::size_t num_loc_sucs = spds_.GetLocationSuccessors().size();
   deplocI_outgoing_psi_.resize(num_loc_sucs, std::vector<double>());
   for (size_t deplocI = 0; deplocI < num_loc_sucs; ++deplocI)
   {
     deplocI_outgoing_psi_[deplocI].resize(
-      common_data_.deplocI_face_dof_count_[deplocI] * num_groups_and_angles_, 0.0);
+      common_data_.deplocI_face_dof_count_[deplocI] * num_grps * num_angles, 0.0);
   }
-  UpdateRange(deplocI_outgoing_psi_, deplocI_outgoing_psi_view_);
 }
 
 void
-AAH_FLUDS::AllocateDelayedLocalPsi()
+AAH_FLUDS::AllocateDelayedLocalPsi(size_t num_grps, size_t num_angles)
 {
-  std::size_t delayed_local_psi_size = common_data_.delayed_local_psi_stride_ *
-                                       common_data_.delayed_local_psi_max_elements_ *
-                                       num_groups_and_angles_;
-  delayed_local_psi_.resize(delayed_local_psi_size, 0.0);
-  delayed_local_psi_view_ = std::span<double>(delayed_local_psi_);
+  delayed_local_psi_.resize(common_data_.delayed_local_psi_stride_ *
+                              common_data_.delayed_local_psi_max_elements_ * num_grps * num_angles,
+                            0.0);
 
-  delayed_local_psi_old_.resize(delayed_local_psi_size, 0.0);
-  delayed_local_psi_old_view_ = std::span<double>(delayed_local_psi_old_);
+  delayed_local_psi_old_.resize(common_data_.delayed_local_psi_stride_ *
+                                  common_data_.delayed_local_psi_max_elements_ * num_grps *
+                                  num_angles,
+                                0.0);
 }
 
 void
-AAH_FLUDS::AllocatePrelocIOutgoingPsi()
+AAH_FLUDS::AllocatePrelocIOutgoingPsi(size_t num_grps, size_t num_angles, size_t num_loc_deps)
 {
-  std::size_t num_loc_deps = spds_.GetLocationDependencies().size();
   prelocI_outgoing_psi_.resize(num_loc_deps, std::vector<double>());
   for (size_t prelocI = 0; prelocI < num_loc_deps; ++prelocI)
   {
     prelocI_outgoing_psi_[prelocI].resize(
-      common_data_.prelocI_face_dof_count_[prelocI] * num_groups_and_angles_, 0.0);
+      common_data_.prelocI_face_dof_count_[prelocI] * num_grps * num_angles, 0.0);
   }
-  UpdateRange(prelocI_outgoing_psi_, prelocI_outgoing_psi_view_);
 }
 
 void
-AAH_FLUDS::AllocateDelayedPrelocIOutgoingPsi()
+AAH_FLUDS::AllocateDelayedPrelocIOutgoingPsi(size_t num_grps,
+                                             size_t num_angles,
+                                             size_t num_loc_deps)
 {
-  std::size_t num_loc_deps = spds_.GetDelayedLocationDependencies().size();
+  delayed_prelocI_outgoing_psi_.clear();
   delayed_prelocI_outgoing_psi_.resize(num_loc_deps);
+
+  delayed_prelocI_outgoing_psi_old_.clear();
   delayed_prelocI_outgoing_psi_old_.resize(num_loc_deps);
 
   for (size_t prelocI = 0; prelocI < num_loc_deps; ++prelocI)
   {
     const int num_nodes = common_data_.delayed_prelocI_face_dof_count_[prelocI];
 
-    uint64_t buff_size = num_nodes * num_groups_and_angles_;
+    uint64_t buff_size = num_nodes * num_grps * num_angles;
 
     delayed_prelocI_outgoing_psi_[prelocI].resize(buff_size, 0.0);
     delayed_prelocI_outgoing_psi_old_[prelocI].resize(buff_size, 0.0);
   }
-  UpdateRange(delayed_prelocI_outgoing_psi_, delayed_prelocI_outgoing_psi_view_);
-  UpdateRange(delayed_prelocI_outgoing_psi_old_, delayed_prelocI_outgoing_psi_old_view_);
 }
 
-void
-AAH_FLUDS::SetDelayedOutgoingPsiNewToOld()
+std::vector<double>&
+AAH_FLUDS::DelayedLocalPsi()
 {
-  delayed_prelocI_outgoing_psi_old_ = delayed_prelocI_outgoing_psi_;
-  UpdateRange(delayed_prelocI_outgoing_psi_old_, delayed_prelocI_outgoing_psi_old_view_);
+  return delayed_local_psi_;
 }
 
-void
-AAH_FLUDS::SetDelayedOutgoingPsiOldToNew()
+std::vector<double>&
+AAH_FLUDS::DelayedLocalPsiOld()
 {
-  delayed_prelocI_outgoing_psi_ = delayed_prelocI_outgoing_psi_old_;
-  UpdateRange(delayed_prelocI_outgoing_psi_, delayed_prelocI_outgoing_psi_view_);
+  return delayed_local_psi_old_;
 }
 
-void
-AAH_FLUDS::SetDelayedLocalPsiNewToOld()
+std::vector<std::vector<double>>&
+AAH_FLUDS::DeplocIOutgoingPsi()
 {
-  delayed_local_psi_old_ = delayed_local_psi_;
-  delayed_local_psi_old_view_ = std::span<double>(delayed_local_psi_old_);
+  return deplocI_outgoing_psi_;
 }
 
-void
-AAH_FLUDS::SetDelayedLocalPsiOldToNew()
+std::vector<std::vector<double>>&
+AAH_FLUDS::PrelocIOutgoingPsi()
 {
-  delayed_local_psi_ = delayed_local_psi_old_;
-  delayed_local_psi_view_ = std::span<double>(delayed_local_psi_);
+  return prelocI_outgoing_psi_;
+}
+
+std::vector<std::vector<double>>&
+AAH_FLUDS::DelayedPrelocIOutgoingPsi()
+{
+  return delayed_prelocI_outgoing_psi_;
+}
+std::vector<std::vector<double>>&
+AAH_FLUDS::DelayedPrelocIOutgoingPsiOld()
+{
+  return delayed_prelocI_outgoing_psi_old_;
 }
 
 } // namespace opensn

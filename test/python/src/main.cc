@@ -4,7 +4,6 @@
 #include "python/lib/py_app.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include "test/python/src/bindings.h"
-#include "petsc.h"
 
 namespace mpi = mpicpp_lite;
 
@@ -63,24 +62,9 @@ int
 main(int argc, char** argv)
 {
   mpi::Environment env(argc, argv);
-
-  PetscCall(PetscInitializeNoArguments());
-
-  int retval = EXIT_SUCCESS;
-  try
-  {
-    py::scoped_interpreter guard{};
-    register_bindings();
-    opensnpy::PyApp app(MPI_COMM_WORLD);
-    retval = app.Run(argc, argv);
-  }
-  catch (...)
-  {
-    std::fprintf(stderr, "Unknown fatal error\n");
-    retval = EXIT_FAILURE;
-  }
-
-  PetscFinalize();
-
-  return retval;
+  py::scoped_interpreter guard{};
+  register_bindings();
+  opensnpy::PyApp app(MPI_COMM_WORLD);
+  int error_code = app.Run(argc, argv);
+  return error_code;
 }

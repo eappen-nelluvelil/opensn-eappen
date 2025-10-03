@@ -15,7 +15,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aah_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/iterative_methods/sweep_wgs_context.h"
-#include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_vecops.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/iterative_methods/wgs_linear_solver.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/iterative_methods/classic_richardson.h"
@@ -131,18 +130,6 @@ DiscreteOrdinatesProblem::GetSweepBoundaries() const
   return sweep_boundaries_;
 }
 
-std::vector<std::vector<double>>&
-DiscreteOrdinatesProblem::GetPsiNewLocal()
-{
-  return psi_new_local_;
-}
-
-const std::vector<std::vector<double>>&
-DiscreteOrdinatesProblem::GetPsiNewLocal() const
-{
-  return psi_new_local_;
-}
-
 void
 DiscreteOrdinatesProblem::Initialize()
 {
@@ -152,18 +139,6 @@ DiscreteOrdinatesProblem::Initialize()
 
   // Make face histogram
   grid_face_histogram_ = grid_->MakeGridFaceHistogram();
-
-  // Setup groupset psi vectors
-  psi_new_local_.clear();
-  for (auto& groupset : groupsets_)
-  {
-    psi_new_local_.emplace_back();
-    if (options_.save_angular_flux)
-    {
-      size_t num_ang_unknowns = discretization_->GetNumLocalDOFs(groupset.psi_uk_man_);
-      psi_new_local_.back().assign(num_ang_unknowns, 0.0);
-    }
-  }
 
   const auto grid_dim = grid_->GetDimension();
   for (auto& groupset : groupsets_)
@@ -180,7 +155,7 @@ DiscreteOrdinatesProblem::Initialize()
   using namespace std::placeholders;
   auto src_function = std::make_shared<SourceFunction>(*this);
   active_set_source_function_ =
-    std::bind(&SourceFunction::operator(), src_function, _1, _2, _3, _4); // NOLINT
+    std::bind(&SourceFunction::operator(), src_function, _1, _2, _3, _4);
 
   // Initialize groupsets for sweeping
   InitializeSweepDataStructures();
@@ -617,6 +592,9 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
+    size_t min_number_alive_cells = std::numeric_limits<size_t>::max();
+    size_t peak_number_alive_cells = 0;
+
     // Build SPDS
     for (const auto& [quadrature, info] : quadrature_unq_so_grouping_map_)
     {
@@ -630,9 +608,25 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
         const auto& omega = quadrature->omegas[master_dir_id];
         const auto new_swp_order =
           std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]);
+        peak_number_alive_cells = std::max(peak_number_alive_cells, new_swp_order->GetPeakNumberAliveCells());
+        min_number_alive_cells = std::min(min_number_alive_cells, new_swp_order->GetPeakNumberAliveCells());
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
       }
     }
+
+    int num_spds = 0;
+    for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
+      for (const auto& spds : spds_list)
+      {
+        ++num_spds;     
+        // std::static_pointer_cast<CBC_SPDS>(spds)->SetPeakNumberAliveCells(peak_number_alive_cells);
+      }
+
+    opensn::log.Log() << "# of CBC_SPDS = " << num_spds
+                      << ", min number of alive cells across all directions: "
+                      << min_number_alive_cells
+                      << ", max peak number of alive cells across all directions: "
+                      << peak_number_alive_cells << "\n";
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");
@@ -707,7 +701,7 @@ DiscreteOrdinatesProblem::AssociateSOsAndDirections(const std::shared_ptr<MeshCo
     case AngleAggregationType::POLAR:
     {
       // Check geometry types
-      if (grid->GetType() != ORTHOGONAL and grid->GetDimension() != 2 and not grid->Extruded())
+      if (not(grid->GetType() == ORTHOGONAL or grid->GetDimension() == 2 or grid->Extruded()))
         throw std::logic_error(
           fname + ": The simulation is using polar angle aggregation for which only certain "
                   "geometry types are supported, i.e., ORTHOGONAL, 2D or 3D EXTRUDED.");
@@ -771,8 +765,8 @@ DiscreteOrdinatesProblem::AssociateSOsAndDirections(const std::shared_ptr<MeshCo
     case AngleAggregationType::AZIMUTHAL:
     {
       // Check geometry types
-      if (lbs_geo_type != GeometryType::ONED_SPHERICAL and
-          lbs_geo_type != GeometryType::TWOD_CYLINDRICAL)
+      if (not(lbs_geo_type == GeometryType::ONED_SPHERICAL or
+              lbs_geo_type == GeometryType::TWOD_CYLINDRICAL))
         throw std::logic_error(
           fname + ": The simulation is using azimuthal angle aggregation for which only "
                   "ONED_SPHERICAL or TWOD_CYLINDRICAL derived geometry types are supported.");
@@ -897,16 +891,20 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
       }
       else if (sweep_type_ == "CBC")
       {
-        OpenSnLogicalErrorIf(not options_.save_angular_flux,
-                             "When using sweep_type \"CBC\" then "
-                             "\"save_angular_flux\" must be true.");
+        // Get peak number of concurrent cells that can be solved
+        const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(*sweep_ordering);
+        const size_t num_local_cells = grid_->local_cells.size();
+        const size_t peak_number_alive_cells = cbc_spds.GetPeakNumberAliveCells();
+
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
-                                      psi_new_local_[groupset.id],
                                       groupset.psi_uk_man_,
-                                      *discretization_);
+                                      *discretization_,
+                                      num_local_cells,
+                                      peak_number_alive_cells,
+                                      max_cell_dof_count_);
 
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,
                                                         gs_num_grps,
@@ -978,13 +976,6 @@ DiscreteOrdinatesProblem::SetSweepChunk(LBSGroupset& groupset)
   }
   else
     OpenSnLogicalError("Unsupported sweep_type_ \"" + sweep_type_ + "\"");
-}
-
-void
-DiscreteOrdinatesProblem::ZeroSolutions()
-{
-  for (auto& psi : psi_new_local_)
-    psi.assign(psi.size(), 0.0);
 }
 
 } // namespace opensn

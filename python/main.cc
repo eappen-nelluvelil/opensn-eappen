@@ -5,31 +5,22 @@
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <cstdio>
 #include <cstdlib>
-#include "petsc.h"
 
 namespace mpi = mpicpp_lite;
 
 int
 main(int argc, char** argv)
 {
-  mpi::Environment env(argc, argv);
-
-  PetscCall(PetscInitializeNoArguments());
-
-  int retval = EXIT_SUCCESS;
   try
   {
+    mpi::Environment env(argc, argv);
     py::scoped_interpreter guard{};
     opensnpy::PyApp app(MPI_COMM_WORLD);
-    retval = app.Run(argc, argv);
+    return app.Run(argc, argv);
   }
   catch (...)
   {
     std::fprintf(stderr, "Unknown fatal error\n");
-    retval = EXIT_FAILURE;
+    return EXIT_FAILURE;
   }
-
-  PetscFinalize();
-
-  return retval;
 }

@@ -73,7 +73,7 @@ SplitFileMeshGenerator::Execute()
 }
 
 void
-SplitFileMeshGenerator::WriteSplitMesh(const std::vector<int>& cell_pids,
+SplitFileMeshGenerator::WriteSplitMesh(const std::vector<int64_t>& cell_pids,
                                        const UnpartitionedMesh& umesh,
                                        const int num_partitions) const
 {
@@ -178,19 +178,21 @@ SplitFileMeshGenerator::WriteSplitMesh(const std::vector<int>& cell_pids,
     for (const auto& cell_global_id : cells_needed)
     {
       const auto& cell = *raw_cells[cell_global_id];
-      serial_data.Write(cell_pids[cell_global_id]);
-      serial_data.Write(cell_global_id);
+      serial_data.Write(static_cast<int>(cell_pids[cell_global_id])); // int
+      serial_data.Write(cell_global_id);                              // uint64_t
       SerializeCell(cell, serial_data);
       if (serial_data.Size() > BUFFER_SIZE)
       {
-        WriteBinaryValue(ofile, serial_data);
+        ofile.write(reinterpret_cast<char*>(serial_data.Data().data()),
+                    static_cast<int>(serial_data.Size()));
         serial_data.Clear();
         serial_data.Data().reserve(serial_data.Data().capacity());
       }
     }
     if (serial_data.Size() > 0)
     {
-      WriteBinaryValue(ofile, serial_data);
+      ofile.write(reinterpret_cast<char*>(serial_data.Data().data()),
+                  static_cast<int>(serial_data.Size()));
 
       serial_data.Clear();
     }
@@ -202,14 +204,16 @@ SplitFileMeshGenerator::WriteSplitMesh(const std::vector<int>& cell_pids,
       serial_data.Write(raw_vertices[vid]);
       if (serial_data.Size() > BUFFER_SIZE)
       {
-        WriteBinaryValue(ofile, serial_data);
+        ofile.write(reinterpret_cast<char*>(serial_data.Data().data()),
+                    static_cast<int>(serial_data.Size()));
 
         serial_data.Clear();
       }
     }
     if (serial_data.Size() > 0)
     {
-      WriteBinaryValue(ofile, serial_data);
+      ofile.write(reinterpret_cast<char*>(serial_data.Data().data()),
+                  static_cast<int>(serial_data.Size()));
 
       serial_data.Clear();
     }

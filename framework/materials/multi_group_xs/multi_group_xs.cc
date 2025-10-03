@@ -34,7 +34,7 @@ MultiGroupXS::Combine(
   std::vector<std::shared_ptr<MultiGroupXS>> xsecs;
   xsecs.reserve(combinations.size());
 
-  size_t n_grps = 0;
+  unsigned int n_grps = 0;
   unsigned int n_precs = 0;
   double Nf_total = 0.0; // Total density of fissile materials
 
@@ -194,7 +194,7 @@ MultiGroupXS::Combine(
 
     if (not xsecs[x]->GetTransferMatrices().empty())
     {
-      for (unsigned int m = 0; m < xsecs[x]->GetScatteringOrder() + 1; ++m)
+      for (size_t m = 0; m < xsecs[x]->GetScatteringOrder() + 1; ++m)
       {
         auto& Sm = mgxs.transfer_matrices_[m];
         const auto& Sm_other = xsecs[x]->GetTransferMatrix(m);

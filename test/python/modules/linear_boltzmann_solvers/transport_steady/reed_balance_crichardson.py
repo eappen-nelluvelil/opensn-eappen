@@ -38,8 +38,7 @@ if __name__ == "__main__":
     z_max = widths[1]
     for imat in range(Nmat):
         z_max = z_min + widths[imat]
-        if rank == 0:
-            print("imat=", imat, ", zmin=", z_min, ", zmax=", z_max)
+        print("imat=", imat, ", zmin=", z_min, ", zmax=", z_max)
         lv = RPPLogicalVolume(infx=True, infy=True, zmin=z_min, zmax=z_max)
         grid.SetBlockIDFromLogicalVolume(lv, imat, True)
         z_min = z_max

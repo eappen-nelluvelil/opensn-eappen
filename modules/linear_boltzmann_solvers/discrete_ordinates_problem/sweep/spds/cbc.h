@@ -5,6 +5,8 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
+#include <algorithm>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -24,9 +26,21 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
-protected:
+  size_t SimulateLocalSweep() const;
+
+  const size_t GetPeakNumberAliveCells() const { return peak_number_alive_cells_; }
+
+  void SetPeakNumberAliveCells(const size_t peak) { peak_number_alive_cells_ = peak; }
+
+private:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+
+  int levelized_spls_max_level_;
+  size_t levelized_spls_max_level_width_;
+
+  /// Maximum number of cell blocks need for CBC_FLUDs memory pool allocator during sweep
+  size_t peak_number_alive_cells_ = 0;
 };
 
 } // namespace opensn

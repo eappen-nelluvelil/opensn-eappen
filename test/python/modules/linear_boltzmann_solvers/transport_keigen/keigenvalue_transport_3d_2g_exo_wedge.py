@@ -83,5 +83,4 @@ if __name__ == "__main__":
     k_solver.Execute()
 
     k = k_solver.GetEigenvalue()
-    if rank == 0:
-        print(f"Python k-eigenvalue: {k}")
+    print(f"Python k-eigenvalue: {k}")

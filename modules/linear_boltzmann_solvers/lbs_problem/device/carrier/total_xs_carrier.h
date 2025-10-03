@@ -6,7 +6,6 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/carrier.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include <cstdint>
-#include <limits>
 #include <map>
 
 namespace opensn
@@ -27,7 +26,7 @@ public:
   double* GetXSGPUData(int block_id);
 
   /// Number of groups.
-  std::size_t num_groups = std::numeric_limits<std::size_t>::max();
+  std::uint32_t num_groups = UINT32_MAX;
   /// Number of block IDs.
   std::uint32_t num_block_ids;
   /// Map from block ID to flatten index.

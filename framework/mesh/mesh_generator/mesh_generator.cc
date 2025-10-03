@@ -52,7 +52,7 @@ MeshGenerator::Execute()
   // Generate final umesh and convert it
   current_umesh = GenerateUnpartitionedMesh(current_umesh);
 
-  std::vector<int> cell_pids;
+  std::vector<int64_t> cell_pids;
   const auto num_partitions = mpi_comm.size();
 
   if (mpi_comm.rank() == 0)
@@ -87,7 +87,7 @@ MeshGenerator::Execute()
   return grid_ptr;
 }
 
-std::vector<int>
+std::vector<int64_t>
 MeshGenerator::PartitionMesh(const UnpartitionedMesh& input_umesh, const int num_partitions) const
 {
   const auto& raw_cells = input_umesh.GetRawCells();
@@ -119,7 +119,8 @@ MeshGenerator::PartitionMesh(const UnpartitionedMesh& input_umesh, const int num
   // to produce suboptimal partitions
 
   // Execute partitioner
-  auto cell_pids = partitioner_->Partition(cell_graph, cell_centroids, num_partitions);
+  std::vector<int64_t> cell_pids =
+    partitioner_->Partition(cell_graph, cell_centroids, num_partitions);
 
   RebalancePartitions(cell_pids, num_partitions);
 
@@ -128,7 +129,7 @@ MeshGenerator::PartitionMesh(const UnpartitionedMesh& input_umesh, const int num
 
 std::shared_ptr<MeshContinuum>
 MeshGenerator::SetupMesh(const std::shared_ptr<UnpartitionedMesh>& input_umesh,
-                         const std::vector<int>& cell_pids) const
+                         const std::vector<int64_t>& cell_pids) const
 {
   // Convert mesh
   auto grid_ptr = MeshContinuum::New();
@@ -170,13 +171,13 @@ MeshGenerator::CellHasLocalScope(const int location_id,
                                  const UnpartitionedMesh::LightWeightCell& lwcell,
                                  const uint64_t cell_global_id,
                                  const std::vector<std::set<uint64_t>>& vertex_subscriptions,
-                                 const std::vector<int>& cell_partition_ids) const
+                                 const std::vector<int64_t>& cell_partition_ids) const
 {
   if (replicated_)
     return true;
 
   // First determine if the cell is a local cell
-  if (cell_partition_ids[cell_global_id] == location_id)
+  if (static_cast<int>(cell_partition_ids[cell_global_id]) == location_id)
     return true;
 
   // Now determine if the cell is a ghost cell
@@ -186,7 +187,7 @@ MeshGenerator::CellHasLocalScope(const int location_id,
       if (cid == cell_global_id)
         continue;
 
-      if (cell_partition_ids[cid] == location_id)
+      if (static_cast<int>(cell_partition_ids[cid]) == location_id)
         return true;
     }
   return false;
@@ -195,7 +196,7 @@ MeshGenerator::CellHasLocalScope(const int location_id,
 std::unique_ptr<Cell>
 MeshGenerator::SetupCell(const UnpartitionedMesh::LightWeightCell& raw_cell,
                          const uint64_t global_id,
-                         const int partition_id)
+                         const uint64_t partition_id)
 {
   auto cell = std::make_unique<Cell>(raw_cell.type, raw_cell.sub_type);
   cell->centroid = raw_cell.centroid;
@@ -294,7 +295,7 @@ MeshGenerator::ComputeAndPrintStats(const std::shared_ptr<MeshContinuum>& grid)
 }
 
 void
-MeshGenerator::BroadcastPIDs(std::vector<int>& cell_pids,
+MeshGenerator::BroadcastPIDs(std::vector<int64_t>& cell_pids,
                              const int root,
                              const mpi::Communicator& communicator)
 {
@@ -303,7 +304,7 @@ MeshGenerator::BroadcastPIDs(std::vector<int>& cell_pids,
 }
 
 void
-MeshGenerator::RebalancePartitions(std::vector<int>& cell_pids, const int num_partitions)
+MeshGenerator::RebalancePartitions(std::vector<int64_t>& cell_pids, const int num_partitions)
 {
   // Count the number of cells in each partition
   std::vector<int> cells_per_partition(num_partitions, 0);
@@ -320,7 +321,7 @@ MeshGenerator::RebalancePartitions(std::vector<int>& cell_pids, const int num_pa
 
   // Redistributed cells from heavy partitions
   const auto total_cells = cell_pids.size();
-  const int target = total_cells / num_partitions;
+  const auto target = total_cells / num_partitions;
 
   for (int partition = 0; partition < num_partitions; ++partition)
   {

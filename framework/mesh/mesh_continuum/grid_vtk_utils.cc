@@ -13,7 +13,6 @@
 #include <vtkAppendFilter.h>
 #include <vtkXMLUnstructuredGridWriter.h>
 #include <vtkXMLPUnstructuredGridWriter.h>
-#include <format>
 
 namespace opensn
 {
@@ -305,13 +304,8 @@ ConsolidateGridBlocks(std::vector<vtkUGridPtrAndName>& ugrid_blocks,
       has_global_ids = false;
 
     if (not has_block_ids)
-    {
-      auto err = std::format("{}: Grid block {} does not have \"{}\" array.",
-                             fname,
-                             ugrid_name.second,
-                             block_id_array_name);
-      throw std::logic_error(err);
-    }
+      throw std::logic_error(fname + ": Grid block " + ugrid_name.second + " does not have \"" +
+                             block_id_array_name + "\" array.");
   } // for grid_name pairs
 
   if (has_global_ids)
@@ -533,7 +527,7 @@ PrepareVtkUnstructuredGrid(const std::shared_ptr<MeshContinuum> grid, bool disco
   vtkNew<vtkUnstructuredGrid> ugrid;
   vtkNew<vtkPoints> points;
   vtkNew<vtkIntArray> block_array;
-  vtkNew<vtkIntArray> partition_id_array;
+  vtkNew<vtkUnsignedIntArray> partition_id_array;
 
   points->SetDataType(VTK_DOUBLE);
 

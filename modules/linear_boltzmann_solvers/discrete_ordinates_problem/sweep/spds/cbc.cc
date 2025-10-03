@@ -8,6 +8,10 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <boost/graph/topological_sort.hpp>
+#include <boost/graph/transitive_reduction.hpp>
+#include <unordered_map>
+#include <set>
+#include <algorithm>
 
 namespace opensn
 {
@@ -62,6 +66,33 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                            "Cycles need to be allowed by the calling application.");
   }
 
+  // Generate levelized SPLS
+  levelized_spls_max_level_ = 0;
+  std::vector<int> levels(num_vertices(local_DG), 0);
+  for (auto& v : spls_)
+  {
+    for (auto ei = out_edges(v, local_DG); ei.first != ei.second; ++ei.first)
+    {
+      auto u = target(*ei.first, local_DG);
+      levels[u] = std::max(levels[u], levels[v] + 1);
+      levelized_spls_max_level_ = std::max(levelized_spls_max_level_, levels[u]);
+    }
+  }
+
+  levelized_spls_.resize(levelized_spls_max_level_ + 1);
+  for (auto v = 0; v < num_vertices(local_DG); ++v)
+    levelized_spls_[levels[v]].push_back(v);
+
+  // Regenerate SPLS to match levelized SPLS
+  spls_.clear();
+  levelized_spls_max_level_width_ = 0;
+  for (auto& level : levelized_spls_)
+  {
+    levelized_spls_max_level_width_ = std::max(levelized_spls_max_level_width_, level.size());
+    for (auto& cell : level)
+      spls_.push_back(cell);
+  }
+
   // Create task list
   std::vector<std::vector<int>> global_dependencies;
   global_dependencies.resize(opensn::mpi_comm.size());
@@ -75,31 +106,163 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   {
     const size_t num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
-    std::vector<uint64_t> succesors;
+    std::vector<uint64_t> remote_predecessors;
+    std::vector<uint64_t> local_predecessors;
+    unsigned int num_consumptions = 0;
+    std::vector<uint64_t> successors;
+    std::vector<uint64_t> remote_successors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
-      if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+      const auto& face = cell.faces[f];
+      const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
+
+      if (cell_face_orientation == INCOMING)
       {
-        if (cell.faces[f].has_neighbor)
+        if (face.has_neighbor)
+        {
           ++num_dependencies;
+          if (grid->IsCellLocal(face.neighbor_id))
+            local_predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+          else
+            remote_predecessors.push_back(face.neighbor_id);
+        }
       }
-      else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+      else if (cell_face_orientation == OUTGOING)
       {
-        const auto& face = cell.faces[f];
-        if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-          succesors.push_back(grid->cells[face.neighbor_id].local_id);
+        if (face.has_neighbor)
+        {
+          if (grid->IsCellLocal(face.neighbor_id))
+            successors.push_back(grid->cells[face.neighbor_id].local_id);
+          else
+            remote_successors.push_back(face.neighbor_id);
+        }
       }
     }
 
-    task_list_.push_back({num_dependencies, succesors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, remote_predecessors, 
+                          local_predecessors, num_consumptions, 
+                          successors, remote_successors, cell.local_id, &cell, 
+                          false});
   }
+
+  peak_number_alive_cells_ = std::min(SimulateLocalSweep(),
+                                      spls_.size());
+
+  opensn::log.Log() << "CBC_SPDS: est. # of required cells = " << peak_number_alive_cells_
+                    << ", # of local active cells = " << SimulateLocalSweep()
+                    // << ", # of max active edges = "
+                    // << peak_number_local_active_edges
+                    // << ", remote parents = " << total_number_of_remote_parents
+                    // << ", unique remote parents = " << unique_remote_parents.size()
+                    // << ", remote children = " << total_number_of_remote_children 
+                    // << ", unique remote children = " << unique_remote_children.size()
+                    << "\n";
 }
 
 const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
 {
   return task_list_;
+}
+
+size_t
+CBC_SPDS::SimulateLocalSweep() const
+{
+   // Create mapping from cell local ID to task index
+  std::unordered_map<uint64_t, size_t> cell_id_to_task_idx;
+  for (size_t i = 0; i < task_list_.size(); ++i)
+    cell_id_to_task_idx[task_list_[i].reference_id] = i;
+  
+  // Create local simulation tasks
+  std::vector<Task> sim_tasks = task_list_;
+  
+  size_t peak_allocated = 0;
+  size_t currently_allocated = 0;
+  std::unordered_set<size_t> tasks_with_remote_predecessors;
+  std::unordered_set<size_t> tasks_with_remote_successors;
+
+  for (size_t task_idx = 0; task_idx < sim_tasks.size(); ++task_idx)
+  {
+    auto& task = sim_tasks[task_idx];
+    if ((not task.remote_predecessors.empty()))
+    {
+      tasks_with_remote_predecessors.insert(task_idx);
+    }
+    if ((not task.remote_successors.empty()))
+    {
+      tasks_with_remote_successors.insert(task_idx);
+    }
+  }
+
+  // Assume all remote dependencies are satisfied 
+  for (size_t task_idx = 0; task_idx < sim_tasks.size(); ++task_idx)
+  {
+    auto& task = sim_tasks[task_idx];
+    if (not task.remote_predecessors.empty() and (task.num_dependencies >= task.remote_predecessors.size()))
+    {
+      task.num_dependencies -= task.remote_predecessors.size();
+    }
+  }
+
+  currently_allocated = tasks_with_remote_predecessors.size() + tasks_with_remote_successors.size();
+  
+  bool a_task_executed = true;
+  while (a_task_executed)
+  {
+    a_task_executed = false;
+    
+    // Process tasks sequentially within the iteration
+    for (size_t task_idx = 0; task_idx < sim_tasks.size(); ++task_idx)
+    {
+      auto& task = sim_tasks[task_idx];
+
+      if (task.num_dependencies == 0 and (not task.completed))
+      {
+        // Allocate cell
+        if ((not tasks_with_remote_predecessors.contains(task_idx)) and 
+            (not tasks_with_remote_successors.contains(task_idx)))
+        {
+          ++currently_allocated;
+        }
+
+        peak_allocated = std::max(peak_allocated, currently_allocated);
+        a_task_executed = true;
+        
+        // Reduce dependencies for local successors
+        for (uint64_t succ_cell_id : task.successors)
+        {
+          size_t succ_task_idx = cell_id_to_task_idx[succ_cell_id];
+          --sim_tasks[succ_task_idx].num_dependencies;
+        }
+        
+        task.completed = true;
+        
+        // Update predecessor consumption counts
+        for (uint64_t pred_cell_id : task.local_predecessors)
+        {
+          size_t pred_task_idx = cell_id_to_task_idx[pred_cell_id];
+          auto& pred_task = sim_tasks[pred_task_idx];
+          ++pred_task.num_consumptions;
+          
+          const auto local_successor_size = pred_task.successors.size();
+          if ((pred_task.num_consumptions >= local_successor_size) and
+              (not tasks_with_remote_successors.contains(pred_task_idx)) and
+              (not tasks_with_remote_predecessors.contains(pred_task_idx)))
+          {
+            --currently_allocated;
+          }
+        }
+
+        if (task.successors.empty() and 
+            (not tasks_with_remote_successors.contains(task_idx)) and 
+            (not tasks_with_remote_predecessors.contains(task_idx)))
+          --currently_allocated;
+      }
+    }
+  }
+
+  return peak_allocated;
 }
 
 } // namespace opensn

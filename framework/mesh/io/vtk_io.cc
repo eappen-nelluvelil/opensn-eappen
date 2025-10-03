@@ -845,9 +845,9 @@ MeshIO::ToOBJ(const std::shared_ptr<MeshContinuum>& grid, const char* file_name,
 {
   if (not per_material)
   {
-    std::ofstream of(file_name);
+    FILE* of = fopen(file_name, "w");
 
-    if (!of)
+    if (of == nullptr)
       throw std::logic_error("Could not open file '" + std::string(file_name) + "' for writing.");
 
     // Develop list of faces and nodes
@@ -871,10 +871,10 @@ MeshIO::ToOBJ(const std::shared_ptr<MeshContinuum>& grid, const char* file_name,
     } // for local cell
 
     // Write header
-    of << "# Exported mesh file from Extrusion script\n";
+    fprintf(of, "# Exported mesh file from Extrusion script\n");
     std::string str_file_name(file_name);
     std::string file_base_name = str_file_name.substr(0, str_file_name.find('.'));
-    of << "o " << file_base_name << "\n";
+    fprintf(of, "o %s\n", file_base_name.c_str());
 
     // Develop node mapping and write them
     std::vector<int> node_mapping(grid->GetGlobalVertexCount(), -1);
@@ -888,24 +888,13 @@ MeshIO::ToOBJ(const std::shared_ptr<MeshContinuum>& grid, const char* file_name,
 
       Vector3 cur_v = grid->vertices[node_g_index];
 
-      // clang-format off
-      of << "v "
-        << std::fixed << std::setw(9) << std::setprecision(6) << cur_v.x << " "
-        << std::fixed << std::setw(9) << std::setprecision(6) << cur_v.y << " "
-        << std::fixed << std::setw(9) << std::setprecision(6) << cur_v.z << "\n";
-      // clang-format on
+      fprintf(of, "v %9.6f %9.6f %9.6f\n", cur_v.x, cur_v.y, cur_v.z);
     }
 
     // Write face normals
     for (const auto& face : faces_to_export)
     {
-      // clang-format off
-      of << "vn "
-        << std::fixed << std::setprecision(4)
-        << face.normal.x << " "
-        << face.normal.y << " "
-        << face.normal.z << "\n";
-      // clang-format on
+      fprintf(of, "vn %.4f %.4f %.4f\n", face.normal.x, face.normal.y, face.normal.z);
     }
 
     // Write faces
@@ -913,13 +902,15 @@ MeshIO::ToOBJ(const std::shared_ptr<MeshContinuum>& grid, const char* file_name,
     for (const auto& face : faces_to_export)
     {
       normal_counter++;
-      of << "f";
+      fprintf(of, "f");
 
       for (auto v_g_index : face.vertex_ids)
-        of << " " << node_mapping[v_g_index] << "//" << normal_counter;
+        fprintf(of, " %d//%d", node_mapping[v_g_index], normal_counter);
 
-      of << "\n";
+      fprintf(of, "\n");
     }
+
+    fclose(of);
 
     log.Log() << "Exported Volume mesh to " << str_file_name;
   } // Whole mesh

@@ -84,6 +84,5 @@ if __name__ == "__main__":
 
     # Compute the leakage
     leakage = phys.ComputeLeakage([])
-    if rank == 0:
-        for k, v in leakage.items():
-            print(f"{k}={v[0]:.5e}")
+    for k, v in leakage.items():
+        print(f"{k}={v[0]:.5e}")

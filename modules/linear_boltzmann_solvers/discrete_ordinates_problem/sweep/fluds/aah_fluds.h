@@ -69,18 +69,24 @@ public:
 
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override;
-  void AllocateInternalLocalPsi() override;
-  void AllocateOutgoingPsi() override;
+  void AllocateInternalLocalPsi(size_t num_grps, size_t num_angles) override;
+  void AllocateOutgoingPsi(size_t num_grps, size_t num_angles, size_t num_loc_sucs) override;
 
-  void AllocateDelayedLocalPsi() override;
-  void AllocatePrelocIOutgoingPsi() override;
-  void AllocateDelayedPrelocIOutgoingPsi() override;
+  void AllocateDelayedLocalPsi(size_t num_grps, size_t num_angles) override;
+  void AllocatePrelocIOutgoingPsi(size_t num_grps, size_t num_angles, size_t num_loc_deps) override;
+  void AllocateDelayedPrelocIOutgoingPsi(size_t num_grps,
+                                         size_t num_angles,
+                                         size_t num_loc_deps) override;
 
-  void SetDelayedOutgoingPsiOldToNew() override;
-  void SetDelayedOutgoingPsiNewToOld() override;
+  std::vector<double>& DelayedLocalPsi() override;
+  std::vector<double>& DelayedLocalPsiOld() override;
 
-  void SetDelayedLocalPsiOldToNew() override;
-  void SetDelayedLocalPsiNewToOld() override;
+  std::vector<std::vector<double>>& DeplocIOutgoingPsi() override;
+
+  std::vector<std::vector<double>>& PrelocIOutgoingPsi() override;
+
+  std::vector<std::vector<double>>& DelayedPrelocIOutgoingPsi() override;
+  std::vector<std::vector<double>>& DelayedPrelocIOutgoingPsiOld() override;
 };
 
 } // namespace opensn
