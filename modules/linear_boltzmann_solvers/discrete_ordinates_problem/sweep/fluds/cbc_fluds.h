@@ -98,6 +98,27 @@ public:
     std::fill(cell_local_ID_to_ptr_map_.begin(), cell_local_ID_to_ptr_map_.end(), nullptr);
   }
 
+  /// Initialize GPU memory structures
+  void InitializeGPUMemory();
+
+  /// Cleanup GPU memory 
+  void DestroyGPUMemory();
+
+  /// Copy a local cell's angular fluxes from host to the GPU
+  void CopyCellToDevice(uint64_t cell_local_id);
+
+  /// Copy a cell's angular fluxes from GPU to host
+  void CopyCellFromDevice(uint64_t cell_local_id);
+
+  /// Copy non-local upwind data for a specific cell face to GPU
+  void CopyNLUpwindToDevice(uint64_t cell_local_id, unsigned int face_id);
+
+  /// Copy boundary data to GPU
+  void CopyBoundaryDataToDevice();
+
+  /// Get device pointer for accessing GPU memory
+  void* GetDeviceMemoryPtr() { return gpu_cbc_fluds_; }
+
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi(size_t num_grps, size_t num_angles) override {}

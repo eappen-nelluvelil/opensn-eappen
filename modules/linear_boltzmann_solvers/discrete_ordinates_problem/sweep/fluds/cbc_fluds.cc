@@ -114,4 +114,49 @@ CBC_FLUDS::~CBC_FLUDS()
   
 }
 
+#ifndef __OPENSN_USE_CUDA__
+void 
+CBC_FLUDS::InitializeGPUMemory()
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+
+void 
+CBC_FLUDS::DestroyGPUMemory()
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+
+void 
+CBC_FLUDS::CopyCellToDevice(uint64_t cell_local_id)
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+
+void 
+CBC_FLUDS::CopyCellFromDevice(uint64_t cell_local_id)
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+
+void 
+CBC_FLUDS::CopyCellToDevice(uint64_t cell_local_id)
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+
+
+void
+CBC_FLUDS::CopyCellFromDevice(uint64_t cell_local_id)
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+
+void
+CBC_FLUDS::CopyNLUpwindToDevice(uint64_t cell_local_id, unsigned int face_id)
+{
+  throw std::runtime_error("CBC_FLUDS: OpenSn was not compiled with CUDA support");
+}
+#endif
+
 } // namespace opensn
