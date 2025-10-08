@@ -38,7 +38,10 @@ public:
             const SpatialDiscretization& sdm,
             const size_t num_local_cells,
             const size_t peak_number_alive_cells,
-            const size_t max_cell_dof_count);
+            const size_t max_cell_dof_count,
+            bool use_gpus = false);
+
+  ~CBC_FLUDS();
 
   const FLUDSCommonData& GetCommonData() const;
 
@@ -137,8 +140,8 @@ public:
 private:
   const CBC_FLUDSCommonData& common_data_;
   const UnknownManager& psi_uk_man_;
-
   const SpatialDiscretization& sdm_;
+  bool use_gpus_;
 
   // ---------------------------------------------------------------
   // Required objects to implement a free-list memory pool allocator
@@ -167,6 +170,9 @@ private:
   std::vector<std::vector<double>> delayed_prelocI_outgoing_psi_old_;
 
   std::map<CellFaceKey, std::vector<double>> deplocs_outgoing_messages_;
+
+  /// Pointer to GPU memory structures
+  void* gpu_cbc_fluds_ = nullptr;
 };
 
 } // namespace opensn

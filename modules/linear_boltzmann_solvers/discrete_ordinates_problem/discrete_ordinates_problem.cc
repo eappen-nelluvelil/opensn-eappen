@@ -896,7 +896,8 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                       *discretization_,
                                       num_local_cells,
                                       peak_number_alive_cells,
-                                      max_cell_dof_count_);
+                                      max_cell_dof_count_,
+                                      use_gpus_);
 
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,
                                                         gs_num_grps,

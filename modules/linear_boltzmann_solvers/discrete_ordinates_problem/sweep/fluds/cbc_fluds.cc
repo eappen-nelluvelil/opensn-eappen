@@ -22,11 +22,13 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      const SpatialDiscretization& sdm,
                      const size_t num_local_cells,
                      const size_t peak_number_alive_cells,
-                     const size_t max_cell_dof_count)
+                     const size_t max_cell_dof_count,
+                     bool use_gpus)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
+    use_gpus_(use_gpus),
     num_blocks_(peak_number_alive_cells),
     // num_blocks_(num_local_cells),
     block_size_(max_cell_dof_count * num_groups_and_angles_),
@@ -105,6 +107,11 @@ CBC_FLUDS::GetCellBlock(const uint64_t cell_local_ID) const
   assert(cell_local_ID_to_ptr_map_[cell_local_ID] != nullptr);
   
   return cell_local_ID_to_ptr_map_[cell_local_ID];
+}
+
+CBC_FLUDS::~CBC_FLUDS()
+{
+  
 }
 
 } // namespace opensn

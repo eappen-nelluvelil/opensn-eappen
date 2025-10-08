@@ -78,7 +78,7 @@ if __name__ == "__main__":
             "save_angular_flux": False,
         },
         sweep_type="CBC",
-        use_gpus=True
+        use_gpus=False
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)
     ss_solver.Initialize()

@@ -97,6 +97,8 @@ if __name__ == "__main__":
         options={
             "max_ags_iterations": 1,
         },
+        sweep_type="CBC",
+        use_gpus=False
     )
 
     # Initialize and Execute Solver

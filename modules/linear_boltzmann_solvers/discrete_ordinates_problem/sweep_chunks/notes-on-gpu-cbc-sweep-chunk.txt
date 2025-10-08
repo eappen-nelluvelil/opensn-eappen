@@ -1,0 +1,10 @@
+Idea for packing and sending upwind psi data:
+  - We loop through each angle in the angle set (num_angles_in_as_)
+    - We loop through each face of the cell (num_faces)
+      - We loop through each face node of the current face (num_face_nodes)
+        -We loop through each face node of the current face (num_face_nodes)
+          
+
+- This means that there are a total of (num_angles_in_as_) * (num_faces) * (num_face_nodes) * (gs_size_) total upwind angular fluxes
+  - Some of these will be zero
+

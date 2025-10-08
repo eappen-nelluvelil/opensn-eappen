@@ -558,7 +558,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
           }
 
           // Tally outflow for particle balance on non-reflecting boundaries
-          if (is_boundary_face && (not is_reflecting_boundary_face))
+          if (is_boundary_face)
           {
             for (size_t gsg = 0; gsg < gs_size_; ++gsg)
             {
