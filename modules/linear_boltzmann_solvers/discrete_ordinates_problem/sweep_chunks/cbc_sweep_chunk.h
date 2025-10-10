@@ -3,13 +3,33 @@
 
 #pragma once
 
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
+#include "framework/math/spatial_discretization/spatial_discretization.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include <memory>
 
 namespace opensn
 {
+
+// Experimental
+inline constexpr std::uint32_t cbc_max_dof = 8;
+
 class CellMapping;
 
+/**
+ * Implements the core sweep operation for a single cell within the
+ *        cell-by-cell (CBC) sweep algorithm
+ *
+ * This class is responsible for performing the discrete ordinates transport
+ * calculation on a given cell for all angles and groups managed by its
+ * current AngleSet
+ * It interacts with a CBC_FLUDS object to obtain upwind angular flux data
+ * (from local neighbors, MPI remote buffers, or boundaries) and to store
+ * outgoing angular flux data (to local neighbors or MPI send buffers)
+ */
 /**
  * Implements the core sweep operation for a single cell within the
  *        cell-by-cell (CBC) sweep algorithm
@@ -36,11 +56,15 @@ public:
                 const std::map<int, std::shared_ptr<MultiGroupXS>>& xs,
                 int num_moments,
                 int max_num_cell_dofs,
-                int min_num_cell_dofs);
+                int min_num_cell_dofs,
+                bool use_gpus,
+                DiscreteOrdinatesProblem& problem);
 
   void SetAngleSet(AngleSet& angle_set) override;
 
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
+
+  void SetTaskList(const std::vector<Task>& task_list);
 
   /**
    * Performs the discrete ordinates sweep calculation for the currently
@@ -59,13 +83,19 @@ public:
    */
   void Sweep(AngleSet& angle_set) override;
 
+  void CPUSweep(AngleSet& angle_set);
+
+  void GPUSweep(AngleSet& angle_set);
+
 private:
   CBC_FLUDS* fluds_;
   size_t gs_size_;
   int gs_gi_;
   size_t num_angles_in_as_;
-  size_t group_stride_;       // Stride for consecutive angles
-  size_t group_angle_stride_; // Stride for consecutive spatial DOFs
+  /// Stride for consecutive angles
+  size_t group_stride_;
+  /// Stride for consecutive spatial DOFs
+  size_t group_angle_stride_;
   bool surface_source_active_;
 
   const Cell* cell_;
@@ -74,6 +104,11 @@ private:
   CellLBSView* cell_transport_view_;
   size_t cell_num_faces_;
   size_t cell_num_nodes_;
+
+  std::vector<Task*> tasks_to_execute_;
+
+  bool use_gpus_ = false;
+  DiscreteOrdinatesProblem& problem_;
 
   DenseMatrix<Vector3> G_;
   DenseMatrix<double> M_;

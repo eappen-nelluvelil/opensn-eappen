@@ -24,7 +24,9 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
                              const std::map<int, std::shared_ptr<MultiGroupXS>>& xs,
                              int num_moments,
                              int max_num_cell_dofs,
-                             int min_num_cell_dofs)
+                             int min_num_cell_dofs,
+                             bool use_gpus,
+                             DiscreteOrdinatesProblem& problem)
   : SweepChunk(destination_phi,
                destination_psi,
                grid,
@@ -42,6 +44,7 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
     gs_size_(0),
     gs_gi_(0),
     num_angles_in_as_(0),
+    num_angles_in_as_(0),
     group_stride_(0),
     group_angle_stride_(0),
     surface_source_active_(false),
@@ -50,7 +53,9 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
     cell_mapping_(nullptr),
     cell_transport_view_(nullptr),
     cell_num_faces_(0),
-    cell_num_nodes_(0)
+    cell_num_nodes_(0),
+    use_gpus_(use_gpus),
+    problem_(problem)
 {
 }
 
@@ -66,7 +71,9 @@ CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
 
   surface_source_active_ = IsSurfaceSourceActive();
   num_angles_in_as_ = angle_set.GetNumAngles();
+  num_angles_in_as_ = angle_set.GetNumAngles();
   group_stride_ = angle_set.GetNumGroups();
+  group_angle_stride_ = group_stride_ * num_angles_in_as_;
   group_angle_stride_ = group_stride_ * num_angles_in_as_;
 }
 
@@ -88,7 +95,24 @@ CBCSweepChunk::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
 }
 
 void
+CBCSweepChunk::SetTaskList(const std::vector<Task>& task_list)
+{
+  tasks_to_execute_.clear();
+  for (const auto& task : task_list)
+    tasks_to_execute_.push_back(const_cast<Task*>(&task));
+}
+
+void
 CBCSweepChunk::Sweep(AngleSet& angle_set)
+{
+  if (use_gpus_)
+    GPUSweep(angle_set);
+  else
+    CPUSweep(angle_set);
+}
+
+void
+CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 {
   const auto& m2d_op = groupset_.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset_.quadrature->GetDiscreteToMomentOperator();
@@ -154,13 +178,14 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
 
           const double* psi = nullptr;
 
+          const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
+          const unsigned int adj_cell_node = face_nodal_mapping->cell_node_mapping_[fj];
+          const unsigned int adj_face_node = face_nodal_mapping->face_node_mapping_[fj];
+
           if (is_local_face)
-            psi = fluds_->UpwindPsi(*cell_transport_view_->FaceNeighbor(f),
-                                    face_nodal_mapping->cell_node_mapping_[fj],
-                                    as_ss_idx);
+            psi = fluds_->UpwindPsi(upwind_cell->local_id, adj_cell_node, as_ss_idx);
           else if (not is_boundary_face)
-            psi = fluds_->NLUpwindPsi(
-              cell_->global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+            psi = fluds_->NLUpwindPsi(cell_->global_id, f, adj_face_node, as_ss_idx);
           else
             psi = angle_set.PsiBoundary(face.neighbor_id,
                                         direction_num,
@@ -260,9 +285,16 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
         fluds_->GetCommonData().GetFaceNodalMapping(cell_local_id_, f);
       std::vector<double>* psi_nonlocal_outgoing = nullptr;
 
-      if (not is_boundary_face and not is_local_face)
+      if ((not is_boundary_face) and (not is_local_face))
       {
         auto& async_comm = *angle_set.GetCommunicator();
+        const size_t data_size_for_msg = num_face_nodes * group_angle_stride_;
+        psi_nonlocal_outgoing =
+          &async_comm.InitGetDownwindMessageData(locality,
+                                                 face.neighbor_id,
+                                                 face_nodal_mapping.associated_face_,
+                                                 angle_set.GetID(),
+                                                 data_size_for_msg);
         const size_t data_size_for_msg = num_face_nodes * group_angle_stride_;
         psi_nonlocal_outgoing =
           &async_comm.InitGetDownwindMessageData(locality,
@@ -287,8 +319,9 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
         double* psi = nullptr;
 
         if (is_local_face)
-          psi = fluds_->OutgoingPsi(*cell_, i, as_ss_idx);
+          psi = fluds_->OutgoingPsi(cell_local_id_, i, as_ss_idx);
         else if (not is_boundary_face)
+          psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
           psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)
           psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id_, f, fi);
@@ -301,5 +334,13 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
     } // for face
   } // for angleset/subset
 }
+
+#ifndef __OPENSN_USE_CUDA__
+void
+CBCSweepChunk::GPUSweep(AngleSet& angle_set)
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
+#endif // __OPENSN_USE_CUDA__
 
 } // namespace opensn

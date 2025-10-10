@@ -1013,12 +1013,21 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
       }
       else if (sweep_type_ == "CBC")
       {
+        const size_t num_local_cells = grid_->local_cells.size();
+        const auto cbc_sweep_ordering = std::static_pointer_cast<CBC_SPDS>(sweep_ordering);
+        const auto& min_num_pool_allocator_slots =
+          cbc_sweep_ordering->GetMinNumPoolAllocatorSlots();
+
         std::shared_ptr<FLUDS> fluds =
           std::make_shared<CBC_FLUDS>(gs_num_grps,
                                       angle_indices.size(),
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                       groupset.psi_uk_man_,
-                                      *discretization_);
+                                      *discretization_,
+                                      num_local_cells,
+                                      max_cell_dof_count_,
+                                      min_num_pool_allocator_slots,
+                                      use_gpus_);
 
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,
                                                         gs_num_grps,
@@ -1086,7 +1095,9 @@ DiscreteOrdinatesProblem::SetSweepChunk(LBSGroupset& groupset)
                                                        block_id_to_xs_map_,
                                                        num_moments_,
                                                        max_cell_dof_count_,
-                                                       min_cell_dof_count_);
+                                                       min_cell_dof_count_,\
+                                                       use_gpus_,
+                                                       *this);
 
     return sweep_chunk;
   }

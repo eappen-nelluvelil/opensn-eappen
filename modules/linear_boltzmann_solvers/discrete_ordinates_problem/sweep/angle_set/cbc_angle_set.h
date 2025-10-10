@@ -5,6 +5,8 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 
 namespace opensn
 {
@@ -18,6 +20,8 @@ protected:
   const CBC_SPDS& cbc_spds_;
   std::vector<Task> current_task_list_;
   CBC_ASynchronousCommunicator async_comm_;
+  CBC_FLUDS& cbc_fluds_;
+  bool use_gpu_ = false;
 
 public:
   CBC_AngleSet(size_t id,
@@ -38,6 +42,10 @@ public:
   void SetMaxBufferMessages(int new_max) override {}
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
+
+  AngleSetStatus CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission);
+
+  AngleSetStatus GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission);
 
   AngleSetStatus FlushSendBuffers() override
   {

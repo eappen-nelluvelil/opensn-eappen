@@ -6,6 +6,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
+#include <cstddef>
 
 namespace opensn
 {
@@ -14,7 +15,11 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      size_t num_angles,
                      const CBC_FLUDSCommonData& common_data,
                      const UnknownManager& psi_uk_man,
-                     const SpatialDiscretization& sdm)
+                     const SpatialDiscretization& sdm,
+                     size_t num_local_cells,
+                     size_t max_cell_dof_count,
+                     size_t min_num_pool_allocator_slots,
+                     bool use_gpus)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
@@ -23,9 +28,18 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
-    local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    local_psi_data_(local_psi_data_size_)
+    gpu_local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
+    use_gpus_(use_gpus),
+    slot_size_(max_cell_dof_count * num_groups_and_angles_),
+    cell_local_ID_to_psi_map_(num_local_cells, nullptr),
+    local_psi_data_backing_buffer_(min_num_pool_allocator_slots * slot_size_),
+    gpu_boundary_data_(nullptr),
+    gpu_reflecting_data_(nullptr),
+    gpu_nonlocal_data_(nullptr)
 {
+  local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
+                            (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
+                            slot_size_ * sizeof(double));
 }
 
 const FLUDSCommonData&
@@ -34,41 +48,36 @@ CBC_FLUDS::GetCommonData() const
   return common_data_;
 }
 
-double*
-CBC_FLUDS::UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx)
+void
+CBC_FLUDS::Allocate(uint64_t cell_local_ID)
 {
-  // Map to face neighbor cell's first spatial DOF index
-  // (0 to (num_local_spatial_dofs_ - 1))
-  const size_t face_nbr_spatial_dof_0_index =
-    (sdm_.MapDOFLocal(face_neighbor, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ /
-     num_groups_);
+  assert(cell_local_ID_to_psi_map_[cell_local_ID] == nullptr);
+  void* cell_block_ptr = local_psi_data_.malloc();
+  cell_local_ID_to_psi_map_[cell_local_ID] = static_cast<double*>(cell_block_ptr);
+}
 
-  // Index to start of neighbor cell's data block in local_psi_data_
-  const size_t face_nbr_data_start_index = face_nbr_spatial_dof_0_index * num_groups_and_angles_;
-  const size_t addr_offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  const size_t face_nbr_data_index = face_nbr_data_start_index + addr_offset;
-
-  assert((face_nbr_data_index >= 0) and (face_nbr_data_index < local_psi_data_.size()));
-
-  return &local_psi_data_[face_nbr_data_index];
+void
+CBC_FLUDS::Deallocate(uint64_t cell_local_ID)
+{
+  assert(cell_local_ID_to_psi_map_[cell_local_ID] != nullptr);
+  local_psi_data_.free(cell_local_ID_to_psi_map_[cell_local_ID]);
+  cell_local_ID_to_psi_map_[cell_local_ID] = nullptr;
 }
 
 double*
-CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx)
+CBC_FLUDS::UpwindPsi(uint64_t cell_local_id, unsigned int adj_cell_node, size_t as_ss_idx)
 {
-  // Map to current cell's first spatial DOF index
-  // (0 to (num_local_spatial_dofs_ - 1))
-  const size_t cur_cell_spatial_dof_0_index =
-    (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_);
+  assert(cell_local_ID_to_psi_map_[cell_local_id] != nullptr);
+  const size_t addr_offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  return cell_local_ID_to_psi_map_[cell_local_id] + addr_offset;
+}
 
-  // Index to start of current cell's data block in local_psi_data_
-  const size_t cur_cell_data_start_index = cur_cell_spatial_dof_0_index * num_groups_and_angles_;
+double*
+CBC_FLUDS::OutgoingPsi(uint64_t cell_local_ID, unsigned int cell_node, size_t as_ss_idx)
+{
+  assert(cell_local_ID_to_psi_map_[cell_local_ID] != nullptr);
   const size_t addr_offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  const size_t cur_cell_data_index = cur_cell_data_start_index + addr_offset;
-
-  assert((cur_cell_data_index >= 0) and (cur_cell_data_index < local_psi_data_.size()));
-
-  return &local_psi_data_[cur_cell_data_index];
+  return cell_local_ID_to_psi_map_[cell_local_ID] + addr_offset;
 }
 
 double*
@@ -81,7 +90,6 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
   const size_t dof_map =
     face_node_mapped * num_groups_and_angles_ + //  Offset to start of data for face_node_mapped
     as_ss_idx * num_groups_;                    // Offset to start of data for angle_set_index
-
   assert((dof_map >= 0) and (dof_map < psi.size()));
   return &psi[dof_map];
 }
