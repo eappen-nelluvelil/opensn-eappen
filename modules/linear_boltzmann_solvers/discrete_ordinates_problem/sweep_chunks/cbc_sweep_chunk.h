@@ -64,7 +64,7 @@ public:
 
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
 
-  void SetTaskList(const std::vector<Task>& task_list);
+  void SetTaskList(const std::vector<Task*>& task_list);
 
   /**
    * Performs the discrete ordinates sweep calculation for the currently

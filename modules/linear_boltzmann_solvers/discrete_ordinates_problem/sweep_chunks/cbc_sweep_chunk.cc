@@ -95,11 +95,9 @@ CBCSweepChunk::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
 }
 
 void
-CBCSweepChunk::SetTaskList(const std::vector<Task>& task_list)
+CBCSweepChunk::SetTaskList(const std::vector<Task*>& task_list)
 {
-  tasks_to_execute_.clear();
-  for (const auto& task : task_list)
-    tasks_to_execute_.push_back(const_cast<Task*>(&task));
+  tasks_to_execute_ = task_list;
 }
 
 void

@@ -30,12 +30,10 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                             num_groups_),
     gpu_local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     use_gpus_(use_gpus),
+    local_psi_data_gpu_buffer_(gpu_local_psi_data_size_),
     slot_size_(max_cell_dof_count * num_groups_and_angles_),
     cell_local_ID_to_psi_map_(num_local_cells, nullptr),
-    local_psi_data_backing_buffer_(min_num_pool_allocator_slots * slot_size_),
-    gpu_boundary_data_(nullptr),
-    gpu_reflecting_data_(nullptr),
-    gpu_nonlocal_data_(nullptr)
+    local_psi_data_backing_buffer_(min_num_pool_allocator_slots * slot_size_)
 {
   local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
                             (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
@@ -73,11 +71,48 @@ CBC_FLUDS::UpwindPsi(uint64_t cell_local_id, unsigned int adj_cell_node, size_t 
 }
 
 double*
+CBC_FLUDS::GPUUpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx)
+{
+  // Map to face neighbor cell's first spatial DOF index
+  // (0 to (num_local_spatial_dofs_ - 1))
+  const size_t face_nbr_spatial_dof_0_index =
+    (sdm_.MapDOFLocal(face_neighbor, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ /
+     num_groups_);
+
+  // Index to start of neighbor cell's data block in local_psi_data_
+  const size_t face_nbr_data_start_index = face_nbr_spatial_dof_0_index * num_groups_and_angles_;
+  const size_t addr_offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  const size_t face_nbr_data_index = face_nbr_data_start_index + addr_offset;
+
+  assert((face_nbr_data_index >= 0) and (face_nbr_data_index < local_psi_data_gpu_buffer_.size()));
+
+  return &local_psi_data_gpu_buffer_[face_nbr_data_index];
+}
+
+double*
 CBC_FLUDS::OutgoingPsi(uint64_t cell_local_ID, unsigned int cell_node, size_t as_ss_idx)
 {
   assert(cell_local_ID_to_psi_map_[cell_local_ID] != nullptr);
   const size_t addr_offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return cell_local_ID_to_psi_map_[cell_local_ID] + addr_offset;
+}
+
+double*
+CBC_FLUDS::GPUOutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx)
+{
+  // Map to current cell's first spatial DOF index
+  // (0 to (num_local_spatial_dofs_ - 1))
+  const size_t cur_cell_spatial_dof_0_index =
+    (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_);
+
+  // Index to start of current cell's data block in local_psi_data_
+  const size_t cur_cell_data_start_index = cur_cell_spatial_dof_0_index * num_groups_and_angles_;
+  const size_t addr_offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  const size_t cur_cell_data_index = cur_cell_data_start_index + addr_offset;
+
+  assert((cur_cell_data_index >= 0) and (cur_cell_data_index < local_psi_data_gpu_buffer_.size()));
+
+  return &local_psi_data_gpu_buffer_[cur_cell_data_index];
 }
 
 double*

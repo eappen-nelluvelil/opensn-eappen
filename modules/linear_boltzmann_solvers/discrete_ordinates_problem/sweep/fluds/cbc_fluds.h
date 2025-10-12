@@ -20,10 +20,6 @@ class LBSProblem;
 class LBSGroupset;
 class AngleSet;
 
-struct GPUBoundaryData;
-struct GPUReflectingData;
-struct GPUNonLocalData;
-
 /**
  * Flux data structures (FLUDS) specific to the cell-by-cell (CBC) sweep algorithm
  *
@@ -47,8 +43,6 @@ public:
             size_t min_num_pool_allocator_slots,
             bool use_gpus);
 
-  ~CBC_FLUDS() override;
-
   const FLUDSCommonData& GetCommonData() const;
 
   /**
@@ -70,12 +64,16 @@ public:
    */
   double* UpwindPsi(uint64_t cell_local_id, unsigned int adj_cell_node, size_t as_ss_idx);
 
+  double* GPUUpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
+
   /**
    * Given a local cell's local ID, a node index on this cell, and an angleset subset index,
    * this function returns a pointer to the start of the group data for the specified
    * node and angle for writing its just solved angular fluxes.
    */
   double* OutgoingPsi(uint64_t cell_local_id, unsigned int cell_node, size_t as_ss_idx);
+
+  double* GPUOutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
 
   /**
    * Given a remote upwind cell's global ID, a face ID on this cell,
@@ -96,17 +94,6 @@ public:
    */
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
-
-  void CreateGPUFluds(LBSProblem& lbs_problem,
-             const LBSGroupset& group_set,
-             AngleSet& angle_set,
-             bool is_surface_source_active);
-
-  void UpdateGPUNonLocalData(const std::vector<Task*>& tasks);
-
-  GPUBoundaryData* GetGPUBoundaryData() { return gpu_boundary_data_; }
-  GPUReflectingData* GetGPUReflectingData() { return gpu_reflecting_data_; }
-  GPUNonLocalData* GetGPUNonLocalData() { return gpu_nonlocal_data_; }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -134,14 +121,11 @@ private:
   size_t num_local_spatial_dofs_;
   size_t gpu_local_psi_data_size_;
   bool use_gpus_ = false;
+  std::vector<double> local_psi_data_gpu_buffer_;
   size_t slot_size_;
   std::vector<double*> cell_local_ID_to_psi_map_;
   std::vector<double> local_psi_data_backing_buffer_;
   boost::simple_segregated_storage<size_t> local_psi_data_;
-
-  GPUBoundaryData* gpu_boundary_data_;
-  GPUReflectingData* gpu_reflecting_data_;
-  GPUNonLocalData* gpu_nonlocal_data_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
 

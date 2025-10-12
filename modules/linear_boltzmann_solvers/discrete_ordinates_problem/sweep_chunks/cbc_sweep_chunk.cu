@@ -412,6 +412,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
       const bool is_boundary_face = not face.has_neighbor;
       const auto* face_nodal_mapping =
         &fluds_->GetCommonData().GetFaceNodalMapping(cell_local_id_, f);
+      const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
 
       const size_t num_face_nodes = cell_mapping_->GetNumFaceNodes(f);
 
@@ -419,22 +420,21 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
       {
         const double* psi = nullptr;
 
-        const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
         const unsigned int adj_cell_node = face_nodal_mapping->cell_node_mapping_[fj];
         const unsigned int adj_face_node = face_nodal_mapping->face_node_mapping_[fj];
 
         if (is_local_face)
-          psi = fluds_->UpwindPsi(upwind_cell->local_id, adj_cell_node, as_ss_idx);
-        else if (not is_boundary_face)
-          psi = fluds_->NLUpwindPsi(cell_->global_id, f, adj_face_node, as_ss_idx);
-        else
-          psi = angle_set.PsiBoundary(face.neighbor_id,
-                                    direction_num,
-                                    cell_local_id_,
-                                    f,
-                                    fj,
-                                    gs_gi_,
-                                    surface_source_active_);
+            psi = fluds_->GPUUpwindPsi(*upwind_cell, adj_cell_node, as_ss_idx);
+          else if (not is_boundary_face)
+            psi = fluds_->NLUpwindPsi(cell_->global_id, f, adj_face_node, as_ss_idx);
+          else
+            psi = angle_set.PsiBoundary(face.neighbor_id,
+                                        direction_num,
+                                        cell_local_id_,
+                                        f,
+                                        fj,
+                                        gs_gi_,
+                                        surface_source_active_);
 
         // Calculate desination address in host upwind psi buffer
         const size_t dest_offset = as_ss_idx * stride_as + f * stride_f + fj * stride_fj;
@@ -499,11 +499,11 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
           auto& async_comm = *angle_set.GetCommunicator();
           const size_t data_size_for_msg = num_face_nodes * group_angle_stride_;
           psi_nonlocal_outgoing =
-            &async_comm.InitGetDownwindMessageData(locality,
-                                                  face.neighbor_id,
-                                                  face_nodal_mapping.associated_face_,
-                                                  angle_set.GetID(),
-                                                  data_size_for_msg);
+          &async_comm.InitGetDownwindMessageData(locality,
+                                                 face.neighbor_id,
+                                                 face_nodal_mapping.associated_face_,
+                                                 angle_set.GetID(),
+                                                 data_size_for_msg);
         }
 
         for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -512,21 +512,21 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
           double* psi = nullptr;
 
           if (is_local_face)
-						psi = fluds_->OutgoingPsi(cell_local_id_, i, as_ss_idx);
-					else if (not is_boundary_face)
-						psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
-					else if (is_reflecting_boundary_face)
-						psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id_, f, fi);
+            psi = fluds_->GPUOutgoingPsi(*cell_, i, as_ss_idx);
+          else if (not is_boundary_face)
+            psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
+          else if (is_reflecting_boundary_face)
+            psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id_, f, fi);
 
-        // Write the solved angular flux to the determined location
-        if (psi != nullptr)
-        {
-					for (size_t gsg = 0; gsg < gs_size_; ++gsg)
-					{
-						const size_t offset = (as_ss_idx * gs_size_ + gsg) * max_num_cell_dofs_ + i;
-						psi[gsg] = psi_host[offset];
-					}
-        }
+          // Write the solved angular flux to the determined location
+          if (psi != nullptr)
+          {
+            for (size_t gsg = 0; gsg < gs_size_; ++gsg)
+            {
+              const size_t offset = (as_ss_idx * gs_size_ + gsg) * max_num_cell_dofs_ + i;
+              psi[gsg] = psi_host[offset];
+            }
+          }
 
           // Tally outflow for particle balance on non-reflecting boundaries
           if (is_boundary_face)
