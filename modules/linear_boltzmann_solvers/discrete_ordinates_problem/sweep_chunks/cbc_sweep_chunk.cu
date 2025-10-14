@@ -33,10 +33,18 @@ struct Index
                                  const std::uint32_t& angleset_size,
                                  const std::uint32_t& groupset_size)
   {
+    // /*
     const auto angle_group_stride = angleset_size * groupset_size;
     cell_idx = thread_idx / angle_group_stride;
     angle_idx = (thread_idx % angle_group_stride) / groupset_size;
     group_idx = (thread_idx % angle_group_stride) % groupset_size;
+    // */
+
+    /*
+    cell_idx = thread_idx / (groupset_size * angleset_size);
+    group_idx = (thread_idx / angleset_size) % groupset_size;
+    angle_idx = thread_idx % angleset_size;
+    */
   }
 
   /// @brief Index of the cell associated to the current thread in the current level vector.
@@ -201,11 +209,11 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
         // psi[i] += upwind_psi_val * mu_Nij;
 
         const size_t upwind_offset = offset + 
-                                     fi * args.upwind_face_stride + 
+                                     fj * args.upwind_face_stride + 
                                      angle_idx * args.groupset_size + 
                                      group_idx;
 
-        psi[i] -= args.upwind_psi_data[upwind_offset] * mu_Nij;
+        psi[i] += args.upwind_psi_data[upwind_offset] * mu_Nij;
       }
     }
   }
