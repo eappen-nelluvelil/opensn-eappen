@@ -104,6 +104,10 @@ struct CBCSweepKernelArgs
   double* destination_psi;
   size_t groupset_angle_group_stride;
   size_t groupset_group_stride;
+
+  // Outflow psi buffers and offsets
+  double* outflow_data;
+  const int* outflow_face_map;
 };
 
 __device__ inline void
@@ -260,13 +264,13 @@ DeviceGaussianElimination(std::array<double, cbc_matrix_size>& sweep_matrix,
 }
 
 __device__ inline void
-DeviceRecordDownwindPsi(const std::array<double, cbc_max_dof>& psi,
+DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
                         CellView& cell,
                         const CBCSweepKernelArgs& args,
                         const Index& idx,
                         DirectionView& direction)
 {
-  const int face_offset = args.cell_face_offset_map[idx.cell_idx];
+  const int face_offset_base = args.cell_face_offset_map[idx.cell_idx];
   
   for (std::uint32_t f = 0; f < cell.num_faces; ++f)
   {
@@ -276,20 +280,38 @@ DeviceRecordDownwindPsi(const std::array<double, cbc_max_dof>& psi,
                 direction.omega[1] * face.normal[1] + 
                 direction.omega[2] * face.normal[2];
 
+    // Outgoing face
     if (mu > 0.0)
     {
-      const int offset = args.downwind_psi_offsets[face_offset + f];
-      if (offset < 0)
-        continue;
+      const int buffer_offset = args.downwind_psi_offsets[face_offset_base + f];
+      // if (offset < 0)
+      //   continue;
     
-      for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
+      if (buffer_offset >= 0)
       {
-        const int i = face.cell_mapping_data[fi];
-        const size_t downwind_offset = offset + 
-                                       fi * args.downwind_face_stride + 
-                                       idx.angle_idx * args.groupset_size + 
-                                       idx.group_idx;
-        args.downwind_psi_data[downwind_offset] = psi[i];
+        for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
+        {
+          const int i = face.cell_mapping_data[fi];
+          const size_t downwind_offset = buffer_offset + 
+                                         fi * args.downwind_face_stride + 
+                                         idx.angle_idx * args.groupset_size + 
+                                         idx.group_idx;
+          args.downwind_psi_data[downwind_offset] = psi[i];
+        }
+      }
+
+      // Tally outflow for boundary faces
+      const int outflow_map_idx = args.outflow_face_map[face_offset_base + f];
+      if (outflow_map_idx >= 0)
+      {
+        double* outflow_ptr = args.outflow_data +
+                              outflow_map_idx * args.groupset_size;
+        for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
+        {
+          const int i = face.cell_mapping_data[fi];
+          const double outflow = direction.weight * mu * face.IntS_shapeI_data[fi] * psi[i];
+          crb::atomic_add(outflow_ptr + idx.group_idx, outflow);
+        }
       }
     }
   }
@@ -412,7 +434,7 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                    args.num_groups,
                    num_moments);
 
-  DeviceRecordDownwindPsi(psi, cell, args, idx, direction);
+  DeviceRecordDownwindPsiAndOutflow(psi, cell, args, idx, direction);
 
   // Post-processing
   // if (args.save_angular_flux)
@@ -685,6 +707,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   size_t total_faces = 0;
   size_t total_upwind_buffer_size = 0;
   size_t total_downwind_buffer_size = 0;
+  size_t total_outflow_faces = 0;
   for (const auto* task : tasks_to_execute_)
   {
     const auto& cell = *task->cell_ptr;
@@ -699,7 +722,11 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
       if (face_orientations[f] == FaceOrientation::INCOMING)
         total_upwind_buffer_size += face_data_size;
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
+      {
         total_downwind_buffer_size += face_data_size;
+        if (not cell.faces[f].has_neighbor)
+          ++total_outflow_faces;
+      }
     }
   }
 
@@ -713,12 +740,16 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   std::vector<double> downwind_psi_buffer(total_downwind_buffer_size);
   std::vector<int> downwind_psi_offsets(total_faces, -1);
 
+  std::vector<double> outflow_buffer(total_outflow_faces * gs_size, 0.0);
+  std::vector<int> outflow_face_map(total_faces, -1);
+
   std::vector<int> cell_face_offset_map;
   cell_face_offset_map.reserve(tasks_to_execute_.size());
 
   size_t face_offset_stride = 0;
   size_t upwind_buffer_offset = 0;
   size_t downwind_buffer_offset = 0;
+  size_t outflow_face_counter = 0;
 
   for (auto* task : tasks_to_execute_)
   {
@@ -777,6 +808,12 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
       {
         downwind_psi_offsets[face_offset_stride + f] = downwind_buffer_offset;
         downwind_buffer_offset += face_data_size;
+
+        if (not cell.faces[f].has_neighbor)
+        {
+          outflow_face_map[face_offset_stride + f] = outflow_face_counter;
+          ++outflow_face_counter;
+        }
       }
     }
     face_offset_stride += cell.faces.size();
@@ -847,6 +884,15 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   downwind_offset_storage.Copy(downwind_psi_offsets.begin(), downwind_psi_offsets.end());
   args.downwind_psi_offsets = downwind_offset_storage.GetDevicePtr();
 
+  // Outflow buffers
+  Storage<double> outflow_storage(outflow_buffer.size());
+  outflow_storage.Copy(outflow_buffer.begin(), outflow_buffer.end());
+  args.outflow_data = outflow_storage.GetDevicePtr();
+
+  Storage<int> outflow_map_storage(outflow_face_map.size());
+  outflow_map_storage.Copy(outflow_face_map.begin(), outflow_face_map.end());
+  args.outflow_face_map = outflow_map_storage.GetDevicePtr();
+
   args.batch_size = args.num_cells * args.angleset_size * args.groupset_size;
   std::uint32_t threads_per_block = 128;
   std::uint32_t num_blocks = (args.batch_size + threads_per_block - 1) / threads_per_block;
@@ -858,6 +904,29 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   if (save_angular_flux_)
     reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
 
+  // Copy outflow results from device to host
+  outflow_storage.CopyFromDevice();
+  const auto& outflow_results = outflow_storage.GetHostVector();
+  outflow_face_counter = 0;
+
+  for (const auto* task : tasks_to_execute_)
+  {
+    const auto& cell = *task->cell_ptr;
+    auto& cell_transport_view = cell_transport_views_[cell.local_id];
+    const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      if (face_orientations[f] == FaceOrientation::OUTGOING and (not cell.faces[f].has_neighbor))
+      {
+        const double* outflow_result_ptr = &outflow_results[outflow_face_counter * gs_size];
+        for (size_t gsg = 0; gsg < gs_size; ++gsg)
+          cell_transport_view.AddOutflow(f, gs_gi + gsg, outflow_result_ptr[gsg]);
+        ++outflow_face_counter;
+      }
+    }
+  }
+
+  // Copy downwind angular flux data from device to host
   downwind_psi_storage.CopyFromDevice();
   const auto& downwind_results = downwind_psi_storage.GetHostVector();
 
