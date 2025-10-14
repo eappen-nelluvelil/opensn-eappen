@@ -260,28 +260,41 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
+  std::vector<Task*> ready_tasks;
+
   bool all_tasks_completed = true;
-  bool a_task_executed = true;
-  while (a_task_executed)
+  bool tasks_were_executed = true;
+  while (tasks_were_executed)
   {
-    a_task_executed = false;
+    tasks_were_executed = false;
+
     for (auto& cell_task : current_task_list_)
     {
       if (not cell_task.completed)
         all_tasks_completed = false;
       if (cell_task.num_dependencies == 0 and not cell_task.completed)
-      {
-        cbc_sweep_chunk.SetCell(cell_task.cell_ptr, *this);
-        cbc_sweep_chunk.GPUSweep(*this);
+        ready_tasks.push_back(&cell_task);
+    }
 
-        for (uint64_t local_task_num : cell_task.local_successors)
+    if (not ready_tasks.empty())
+    {
+      cbc_sweep_chunk.SetTaskList(ready_tasks);
+      cbc_sweep_chunk.GPUSweep(*this);
+
+      for (auto* cell_task : ready_tasks)
+      {
+        for (uint64_t local_task_num : cell_task->local_successors)
           --current_task_list_[local_task_num].num_dependencies;
 
-        cell_task.completed = true;
-        a_task_executed = true;
-        async_comm_.SendData();
+        cell_task->completed = true;
+        tasks_were_executed = true;
+        async_comm_.SendData(); // Need to play around with when to send data
       }
-    } // for cell_task
+
+      tasks_were_executed = true;
+      ready_tasks.clear();
+    }
+
     async_comm_.SendData();
   }
 
