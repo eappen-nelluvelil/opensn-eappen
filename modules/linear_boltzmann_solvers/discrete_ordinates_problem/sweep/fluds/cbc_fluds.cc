@@ -38,6 +38,15 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
                             (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
                             slot_size_ * sizeof(double));
+
+  if (use_gpus_)
+    Create_CBCD_FLUDS();
+}
+
+CBC_FLUDS::~CBC_FLUDS()
+{
+  if (use_gpus_)
+    Destroy_CBCD_FLUDS();
 }
 
 const FLUDSCommonData&
@@ -138,5 +147,17 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
   const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return &(*psi_nonlocal_outgoing)[addr_offset];
 }
+
+#ifndef __OPENSN_USE_CUDA__
+void
+CBC_FLUDS::Create_CBCD_FLUDS()
+{
+}
+
+void
+CBC_FLUDS::Destroy_CBCD_FLUDS()
+{
+}
+#endif // __OPENSN_USE_CUDA__
 
 } // namespace opensn

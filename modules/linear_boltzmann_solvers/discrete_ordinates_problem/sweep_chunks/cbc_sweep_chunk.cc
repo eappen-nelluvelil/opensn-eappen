@@ -339,6 +339,12 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 {
   throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
 }
+
+void
+CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
 #endif // __OPENSN_USE_CUDA__
 
 } // namespace opensn

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
@@ -86,6 +87,8 @@ public:
   void CPUSweep(AngleSet& angle_set);
 
   void GPUSweep(AngleSet& angle_set);
+
+  void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
 private:
   CBC_FLUDS* fluds_;

@@ -2,6 +2,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/outflow_carrier.h"
@@ -47,7 +48,7 @@ struct Index
   std::uint32_t group_idx;
 };
 
-struct CBCSweepKernelArgs
+struct CBCSweepKernelArgs_WITH_CBCD_FLUDS
 {
   // Mesh and quadrature
   const char* mesh_data;
@@ -69,6 +70,9 @@ struct CBCSweepKernelArgs
   const uint64_t* cell_local_ids;
   const int* cell_face_offset_map;
   std::uint32_t num_cells;
+
+  // Local angular flux buffer
+  double* local_psi_data;
 
   // Upwind/downwind psi buffers
   const double* upwind_psi_data;
@@ -92,7 +96,7 @@ struct CBCSweepKernelArgs
 };
 
 __device__ inline void
-ComputeGMS(std::array<double, cbc_matrix_size>& sweep_matrix,
+ComputeGMS_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
            std::array<double, cbc_max_dof>& psi,
            const std::uint32_t& cell_num_nodes,
            DirectionView& direction,
@@ -144,9 +148,9 @@ ComputeGMS(std::array<double, cbc_matrix_size>& sweep_matrix,
 }
 
 __device__ inline void
-ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
+ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
                        std::array<double, cbc_max_dof>& psi,
-                       const CBCSweepKernelArgs& args,
+                       const CBCSweepKernelArgs_WITH_CBCD_FLUDS& args,
                        const std::uint32_t cell_idx,
                        const std::uint32_t angle_idx,
                        const std::uint32_t group_idx,
@@ -197,7 +201,7 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
 }
 
 __device__ inline void
-DeviceGaussianElimination(std::array<double, cbc_matrix_size>& sweep_matrix,
+DeviceGaussianElimination_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
                           std::array<double, cbc_max_dof>& psi,
                           const std::uint32_t& cell_num_nodes)
 {
@@ -237,9 +241,9 @@ DeviceGaussianElimination(std::array<double, cbc_matrix_size>& sweep_matrix,
 }
 
 __device__ inline void
-DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
+DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(const std::array<double, cbc_max_dof>& psi,
                         CellView& cell,
-                        const CBCSweepKernelArgs& args,
+                        const CBCSweepKernelArgs_WITH_CBCD_FLUDS& args,
                         const Index& idx,
                         DirectionView& direction)
 {
@@ -291,7 +295,7 @@ DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
 }
 
 __device__ void
-DeviceComputePhi(const std::array<double, cbc_max_dof>& psi,
+DeviceComputePhi_WITH_CBCD_FLUDS(const std::array<double, cbc_max_dof>& psi,
            const std::uint32_t& cell_num_nodes,
            DirectionView& direction,
            CellView& cell,
@@ -313,7 +317,7 @@ DeviceComputePhi(const std::array<double, cbc_max_dof>& psi,
 }
 
 __global__ void
-CBCSweepKernel(CBCSweepKernelArgs args)
+CBCSweepKernel_WITH_CBCD_FLUDS(CBCSweepKernelArgs_WITH_CBCD_FLUDS args)
 {
   // Compute index (cell, angle, group) from thread flattened index
   Index idx;
@@ -350,7 +354,7 @@ CBCSweepKernel(CBCSweepKernelArgs args)
     sweep_matrix.fill(0.0);
 
     // Prepare the linear system
-    ComputeGMS(sweep_matrix,
+    ComputeGMS_WITH_CBCD_FLUDS(sweep_matrix,
                psi,
                cell.num_nodes,
                direction,
@@ -361,7 +365,7 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                args.num_groups,
                num_moments);
 
-    ComputeSurfaceIntegral(sweep_matrix,
+    ComputeSurfaceIntegral_WITH_CBCD_FLUDS(sweep_matrix,
                            psi,
                            args,
                            idx.cell_idx,
@@ -371,10 +375,10 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                            cell);
 
     // Solve
-    DeviceGaussianElimination(sweep_matrix, psi, cell.num_nodes);
+    DeviceGaussianElimination_WITH_CBCD_FLUDS(sweep_matrix, psi, cell.num_nodes);
   }
   // Update scalar flux
-  DeviceComputePhi(psi,
+  DeviceComputePhi_WITH_CBCD_FLUDS(psi,
                    cell.num_nodes,
                    direction,
                    cell,
@@ -384,11 +388,11 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                    args.num_groups,
                    num_moments);
 
-  DeviceRecordDownwindPsiAndOutflow(psi, cell, args, idx, direction);
+  DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(psi, cell, args, idx, direction);
 }
 
 void
-CBCSweepChunk::GPUSweep(AngleSet& angle_set)
+CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
 
@@ -397,8 +401,9 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 
   // This part seems fine
   // Determine sizes for host and device vectors
-  auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
-  auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
+  auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set); // Replace dynamic_cast with static_cast at a later point
+  auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_); // Replace dynamic_cast with static_cast at a later point
+	auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr()); // Replace dynamic_cast with static_cast at a later point
   const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
   const auto num_angles_in_as = as_angle_indices.size();
   const auto gs_size = groupset_.groups.size();
@@ -415,6 +420,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
     total_faces += cell.faces.size();
     const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
     const auto& cell_mapping = discretization_.GetCellMapping(cell);
+		auto& cell_transport_view = cell_transport_views_[cell.local_id];
 
     for (size_t f = 0; f < cell.faces.size(); ++f)
     {
@@ -521,7 +527,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   }
 
   // Set up kernel arguments
-  CBCSweepKernelArgs args;
+  CBCSweepKernelArgs_WITH_CBCD_FLUDS args;
   MeshCarrier* mesh = reinterpret_cast<MeshCarrier*>(problem_.GetCarrier(2));
   args.mesh_data = mesh->GetDevicePtr();
 
@@ -568,6 +574,8 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   cell_face_offset_storage.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
   args.cell_face_offset_map = cell_face_offset_storage.GetDevicePtr();
 
+  args.local_psi_data = cbcd_fluds.GetDevicePtr();
+
   Storage<double> upwind_psi_storage(upwind_psi_buffer.size());
   upwind_psi_storage.Copy(upwind_psi_buffer.begin(), upwind_psi_buffer.end());
   args.upwind_psi_data = upwind_psi_storage.GetDevicePtr();
@@ -598,7 +606,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   std::uint32_t threads_per_block = 128;
   std::uint32_t num_blocks = (args.batch_size + threads_per_block - 1) / threads_per_block;
 
-  CBCSweepKernel<<<num_blocks, threads_per_block>>>(args);
+  CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks, threads_per_block>>>(args);
 
   // Post-kernel processing
   phi->CopyFromDevice();

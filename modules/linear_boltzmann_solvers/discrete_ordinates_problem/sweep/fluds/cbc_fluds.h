@@ -43,6 +43,8 @@ public:
             size_t min_num_pool_allocator_slots,
             bool use_gpus);
 
+  ~CBC_FLUDS();
+
   const FLUDSCommonData& GetCommonData() const;
 
   /**
@@ -95,6 +97,14 @@ public:
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
+  size_t GetGPULocalPsiDataSize() const { return gpu_local_psi_data_size_; }
+
+  void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
+
+  void Create_CBCD_FLUDS();
+
+  void Destroy_CBCD_FLUDS();
+
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
@@ -126,6 +136,8 @@ private:
   std::vector<double*> cell_local_ID_to_psi_map_;
   std::vector<double> local_psi_data_backing_buffer_;
   boost::simple_segregated_storage<size_t> local_psi_data_;
+
+  void* cbcd_fluds_ = nullptr;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
 

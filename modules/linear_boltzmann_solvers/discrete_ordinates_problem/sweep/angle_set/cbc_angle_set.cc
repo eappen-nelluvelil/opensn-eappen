@@ -126,112 +126,6 @@ CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   return AngleSetStatus::NOT_FINISHED;
 }
 
-/*
-AngleSetStatus
-CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
-{
-  CALI_CXX_MARK_SCOPE("CBC_AngleSet::GPUAngleSetAdvance");
-
-  if (executed_)
-    return AngleSetStatus::FINISHED;
-
-  if (current_task_list_.empty())
-    current_task_list_ = cbc_spds_.GetTaskList();
-
-  // Cast SweepChunk to CBCSweepChunk to access GPU-specific methods
-  auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);
-
-  cbc_sweep_chunk.SetAngleSet(*this);
-
-  auto tasks_who_received_data = async_comm_.ReceiveData();
-
-  for (const uint64_t task_number : tasks_who_received_data)
-    --current_task_list_[task_number].num_dependencies;
-
-  async_comm_.SendData();
-
-  // Check if boundaries allow for execution
-  for (auto& [bid, boundary] : boundaries_)
-    if (not boundary->CheckAnglesReadyStatus(angles_))
-      return AngleSetStatus::NOT_FINISHED;
-
-  // Vector of tasks that can be simultaneously executed
-  std::vector<Task*> tasks_to_execute;
-
-  bool all_tasks_completed = true;
-  bool tasks_were_executed = true;
-  while (tasks_were_executed)
-  {
-    tasks_were_executed = false;
-    for (auto& cell_task : current_task_list_)
-    {
-      if (not cell_task.completed)
-        all_tasks_completed = false;
-      if (cell_task.num_dependencies == 0 and not cell_task.completed)
-      {
-        tasks_to_execute.push_back(&cell_task);
-      }
-    } // for cell_task
-
-    // Execute all ready tasks on the GPU
-    if (not tasks_to_execute.empty())
-    {
-      // Allocate slots for all tasks to be executed
-      for (const auto* task : tasks_to_execute)
-        cbc_fluds_.Allocate(task->cell_ptr->local_id);
-
-      cbc_sweep_chunk.SetTaskList(tasks_to_execute);
-      cbc_sweep_chunk.Sweep(*this);
-
-      // Update successor dependency counts
-      for (auto* task : tasks_to_execute)
-        for (uint64_t local_task_num : task->local_successors)
-          --current_task_list_[local_task_num].num_dependencies;
-
-      for (auto* task : tasks_to_execute)
-        task->completed = true;
-
-      tasks_were_executed = true;
-      async_comm_.SendData();
-
-      // Update predecessor dependency consumption counts
-      for (auto* task : tasks_to_execute)
-      {
-        for (uint64_t local_task_num : task->local_predecessors)
-        {
-          ++current_task_list_[local_task_num].num_satisfied_downwind_deps;
-
-          if (current_task_list_[local_task_num].num_satisfied_downwind_deps >=
-              current_task_list_[local_task_num].local_successors.size())
-            cbc_fluds_.Deallocate(current_task_list_[local_task_num].cell_ptr->local_id);
-        }
-      }
-
-      // Deallocate if cell has no local successors
-      for (auto* task : tasks_to_execute)
-        if (task->local_successors.empty())
-          cbc_fluds_.Deallocate(task->cell_ptr->local_id);
-
-      tasks_to_execute.clear();
-    }
-    async_comm_.SendData();
-  }
-
-  const bool all_messages_sent = async_comm_.SendData();
-
-  if (all_tasks_completed and all_messages_sent)
-  {
-    // Update boundary readiness
-    for (auto& [bid, boundary] : boundaries_)
-      boundary->UpdateAnglesReadyStatus(angles_);
-    executed_ = true;
-    return AngleSetStatus::FINISHED;
-  }
-
-  return AngleSetStatus::NOT_FINISHED;
-}
-*/
-
 AngleSetStatus
 CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
 {
@@ -279,7 +173,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not ready_tasks.empty())
     {
       cbc_sweep_chunk.SetTaskList(ready_tasks);
-      cbc_sweep_chunk.GPUSweep(*this);
+      // cbc_sweep_chunk.GPUSweep(*this);
+      cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
 
       for (auto* cell_task : ready_tasks)
       {
