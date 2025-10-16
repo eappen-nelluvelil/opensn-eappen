@@ -17,6 +17,7 @@ namespace opensn
 
 // Experimental
 inline constexpr std::uint32_t cbc_max_dof = 8;
+inline constexpr std::uint32_t cbc_max_face_dofs = 4;
 
 class CellMapping;
 

@@ -148,6 +148,22 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
   return &(*psi_nonlocal_outgoing)[addr_offset];
 }
 
+std::vector<size_t>
+CBC_FLUDS::BuildDeviceCellDOFMap()
+{
+  const auto& grid = sdm_.GetGrid();
+  std::vector<size_t> cell_dof_map(grid->local_cells.size());
+  for (const auto& cell : grid->local_cells)
+  {
+    const size_t dof_map_idx = cell.local_id;
+    const size_t spatial_dof_0_idx = 
+      (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / 
+        num_angles_in_gs_quadrature_ / num_groups_);
+    cell_dof_map[dof_map_idx] = spatial_dof_0_idx * num_groups_and_angles_;
+  }
+  return cell_dof_map;
+}
+
 #ifndef __OPENSN_USE_CUDA__
 void
 CBC_FLUDS::Create_CBCD_FLUDS()

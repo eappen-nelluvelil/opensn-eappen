@@ -105,6 +105,8 @@ public:
 
   void Destroy_CBCD_FLUDS();
 
+  std::vector<size_t> BuildDeviceCellDOFMap();
+
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
