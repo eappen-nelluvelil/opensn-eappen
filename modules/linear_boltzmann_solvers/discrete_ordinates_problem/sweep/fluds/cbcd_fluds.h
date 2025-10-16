@@ -8,6 +8,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/device/storage.h"
 #include "caribou/caribou.h"
 #include <vector>
 #include <utility>
@@ -23,16 +24,22 @@ public:
 	CBCD_FLUDS(CBC_FLUDS& cbc_fluds);
 
 	/// Get the device memory.
-  inline double* GetDevicePtr() { return device_buffer_.get(); }
+	inline double* GetDevicePtr() { return device_buffer_.get(); }
 
 	/// Get the host memory.
 	inline double* GetHostPtr() { return host_buffer_.data(); }
+
+	/// Get device pointer to cell DOF map
+	inline const size_t* GetCellDOFMapDevicePtr() { return cell_dof_map_storage_.GetDevicePtr(); }
 
 protected:
 	/// Contiguous memory on the host (CPU) for angular flux.
   crb::HostVector<double> host_buffer_;
   /// Contiguous memory on the device (GPU) for angular flux.
   crb::DeviceMemory<double> device_buffer_;
+
+	/// Device storage for cell DOF map
+	Storage<size_t> cell_dof_map_storage_;
 };
 
 } // namespace opensn

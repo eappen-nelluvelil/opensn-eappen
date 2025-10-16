@@ -105,7 +105,9 @@ public:
 
   void Destroy_CBCD_FLUDS();
 
-  std::vector<size_t> BuildDeviceCellDOFMap();
+  void BuildDeviceCellDOFMap();
+
+  std::vector<size_t>& GetCellDOFMap() { return cell_dof_map_; }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}
@@ -139,6 +141,7 @@ private:
   std::vector<double> local_psi_data_backing_buffer_;
   boost::simple_segregated_storage<size_t> local_psi_data_;
 
+  std::vector<size_t> cell_dof_map_;
   void* cbcd_fluds_ = nullptr;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;

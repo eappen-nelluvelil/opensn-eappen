@@ -8,6 +8,9 @@ namespace opensn
 
 CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds)
 {
+	cell_dof_map_storage_ = Storage<size_t>(cbc_fluds.GetCellDOFMap().size());
+	cell_dof_map_storage_.Copy(cbc_fluds.GetCellDOFMap().begin(),
+	                          cbc_fluds.GetCellDOFMap().end());
 	device_buffer_ = crb::DeviceMemory<double>(cbc_fluds.GetGPULocalPsiDataSize());
 	device_buffer_.zero_fill();
 }

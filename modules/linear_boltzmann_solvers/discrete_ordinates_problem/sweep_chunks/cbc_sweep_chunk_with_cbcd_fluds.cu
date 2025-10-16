@@ -648,14 +648,10 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   cell_face_offset_storage.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
   args.cell_face_offset_map = cell_face_offset_storage.GetDevicePtr();
 
-	const auto& cell_dof_map = cbc_fluds.BuildDeviceCellDOFMap();
-
   args.local_psi_data = cbcd_fluds.GetDevicePtr();
-	Storage<size_t> cell_dof_map_storage(cell_dof_map.size());
-	cell_dof_map_storage.Copy(cell_dof_map.begin(), cell_dof_map.end());
-	args.cell_dof_map = cell_dof_map_storage.GetDevicePtr();
-	args.num_angles_in_as = num_angles_in_as;
-	args.num_groups_and_angles = num_angles_in_as * gs_size;
+  args.cell_dof_map = cbcd_fluds.GetCellDOFMapDevicePtr();
+  args.num_angles_in_as = num_angles_in_as;
+  args.num_groups_and_angles = num_angles_in_as * gs_size;
 
 	Storage<unsigned int> face_neighbor_cell_node_map_storage(face_neighbor_cell_node_map.size());
 	face_neighbor_cell_node_map_storage.Copy(face_neighbor_cell_node_map.begin(), 

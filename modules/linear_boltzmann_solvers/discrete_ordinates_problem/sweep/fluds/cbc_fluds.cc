@@ -33,14 +33,18 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     local_psi_data_gpu_buffer_(gpu_local_psi_data_size_),
     slot_size_(max_cell_dof_count * num_groups_and_angles_),
     cell_local_ID_to_psi_map_(num_local_cells, nullptr),
-    local_psi_data_backing_buffer_(min_num_pool_allocator_slots * slot_size_)
+    local_psi_data_backing_buffer_(min_num_pool_allocator_slots * slot_size_),
+    cell_dof_map_(sdm.GetGrid()->local_cells.size())
 {
   local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
                             (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
                             slot_size_ * sizeof(double));
 
   if (use_gpus_)
+  {
+    BuildDeviceCellDOFMap();
     Create_CBCD_FLUDS();
+  }
 }
 
 CBC_FLUDS::~CBC_FLUDS()
@@ -130,7 +134,8 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
                        unsigned int face_node_mapped,
                        size_t as_ss_idx)
 {
-  std::vector<double>& psi = deplocs_outgoing_messages_.at({cell_global_id, face_id});
+  // std::vector<double>& psi = deplocs_outgoing_messages_.at({cell_global_id, face_id});
+  std::vector<double>& psi = deplocs_outgoing_messages_[{cell_global_id, face_id}];
   const size_t dof_map =
     face_node_mapped * num_groups_and_angles_ + //  Offset to start of data for face_node_mapped
     as_ss_idx * num_groups_;                    // Offset to start of data for angle_set_index
@@ -148,20 +153,18 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
   return &(*psi_nonlocal_outgoing)[addr_offset];
 }
 
-std::vector<size_t>
+void
 CBC_FLUDS::BuildDeviceCellDOFMap()
 {
   const auto& grid = sdm_.GetGrid();
-  std::vector<size_t> cell_dof_map(grid->local_cells.size());
   for (const auto& cell : grid->local_cells)
   {
     const size_t dof_map_idx = cell.local_id;
     const size_t spatial_dof_0_idx = 
       (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / 
         num_angles_in_gs_quadrature_ / num_groups_);
-    cell_dof_map[dof_map_idx] = spatial_dof_0_idx * num_groups_and_angles_;
+    cell_dof_map_[dof_map_idx] = spatial_dof_0_idx * num_groups_and_angles_;
   }
-  return cell_dof_map;
 }
 
 #ifndef __OPENSN_USE_CUDA__
