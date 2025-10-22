@@ -415,19 +415,16 @@ CBCSweepKernel_WITH_CBCD_FLUDS(CBCSweepKernelArgs_WITH_CBCD_FLUDS args)
 void
 CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
+  CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep_With_CBCD_FLUDS");
 
   if (tasks_to_execute_.empty())
     return;
 
   // This part seems fine
   // Determine sizes for host and device vectors
-  auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(
-    angle_set); // Replace dynamic_cast with static_cast at a later point
-  auto& cbc_fluds =
-    dynamic_cast<CBC_FLUDS&>(*fluds_); // Replace dynamic_cast with static_cast at a later point
-  auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(
-    cbc_fluds.Get_CBCD_FLUDS_Ptr()); // Replace dynamic_cast with static_cast at a later point
+  auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+  auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
+  auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr());
   const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
   const auto num_angles_in_as = as_angle_indices.size();
   const auto gs_size = groupset_.groups.size();
