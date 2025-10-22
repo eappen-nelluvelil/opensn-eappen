@@ -269,6 +269,9 @@ DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(const std::array<double, cbc_m
                                                   const std::uint32_t group_idx,
                                                   DirectionView& direction)
 {
+  const size_t cur_cell_local_id = args.cell_local_ids[cell_idx];
+  const size_t cur_cell_data_start_idx = args.cell_dof_map[cur_cell_local_id];
+
   const int face_offset_base = args.cell_face_offset_map[cell_idx];
 
   for (std::uint32_t f = 0; f < cell.num_faces; ++f)
@@ -278,50 +281,40 @@ DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(const std::array<double, cbc_m
     double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                 direction.omega[2] * face.normal[2];
 
+    if (mu <= 0.0)
+      continue;
+
     // Outgoing face
-    if (mu > 0.0)
+    const int buffer_offset = args.downwind_psi_offsets[face_offset_base + f];
+
+    // Differentiate between local and non-local/boundary downwind outgoing fluxes
+    // If the offset is negative, the face is a local face, and we write the fluxes
+    // directly to the on-device local_psi_data buffer
+    // Otherewise, the face is a non-local or boundary face, and we write to the
+    // downwind_psi_data buffer for a device-to-host transfer
+
+    for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
     {
-      const int buffer_offset = args.downwind_psi_offsets[face_offset_base + f];
-
-      // Differentiate between local and non-local/boundary downwind outgoing fluxes
-      // If the offset is negative, the face is a local face, and we write the fluxes
-      // directly to the on-device local_psi_data buffer
-      // Otherewise, the face is a non-local or boundary face, and we write to the
-      // downwind_psi_data buffer for a device-to-host transfer
-
-      if (buffer_offset >= 0) // Non-local or reflecting boundary face
+      const int i = face.cell_mapping_data[fi];
+      if (buffer_offset >= 0)
       {
-        for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
-        {
-          const int i = face.cell_mapping_data[fi];
-          const size_t downwind_offset = buffer_offset + fi * args.downwind_face_stride +
-                                         angle_idx * args.groupset_size + group_idx;
-          args.downwind_psi_data[downwind_offset] = psi[i];
-        }
+        const size_t downwind_offset = buffer_offset + fi * args.downwind_face_stride +
+                                       angle_idx * args.groupset_size + group_idx;
+        args.downwind_psi_data[downwind_offset] = psi[i];
       }
-      else // Local face
+      else
       {
-        const size_t cur_cell_local_id = args.cell_local_ids[cell_idx];
-        const size_t cur_cell_data_start_idx = args.cell_dof_map[cur_cell_local_id];
-        for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
-        {
-          const int i = face.cell_mapping_data[fi];
-          const size_t addr_offset =
-            i * args.num_groups_and_angles + angle_idx * args.groupset_size + group_idx;
-          const size_t cur_cell_data_idx = cur_cell_data_start_idx + addr_offset;
-          args.local_psi_data[cur_cell_data_idx] = psi[i];
-        }
+        const size_t addr_offset =
+          i * args.num_groups_and_angles + angle_idx * args.groupset_size + group_idx;
+        const size_t cur_cell_data_idx = cur_cell_data_start_idx + addr_offset;
+        args.local_psi_data[cur_cell_data_idx] = psi[i];
       }
 
       // Tally outflow for boundary faces
       if (face.outflow != nullptr)
       {
-        for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
-        {
-          std::uint32_t i = face.cell_mapping_data[fi];
-          double outflow = direction.weight * mu * face.IntS_shapeI_data[fi] * psi[i];
-          crb::atomic_add(face.outflow + group_idx, outflow);
-        }
+        double outflow = direction.weight * mu * face.IntS_shapeI_data[fi] * psi[i];
+        crb::atomic_add(face.outflow + group_idx, outflow);
       }
     }
   }
@@ -415,7 +408,8 @@ CBCSweepKernel_WITH_CBCD_FLUDS(CBCSweepKernelArgs_WITH_CBCD_FLUDS args)
                                    args.num_groups,
                                    num_moments);
 
-  DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(psi, cell, args, idx.cell_idx, idx.angle_idx, idx.group_idx, direction);
+  DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(
+    psi, cell, args, idx.cell_idx, idx.angle_idx, idx.group_idx, direction);
 }
 
 void
@@ -607,7 +601,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   // Allocate data for saving angular fluxes if needed
   // Storage<double> psi_storage;
   // double* psi_device_ptr = nullptr;
-  
+
   // if (save_angular_flux_)
   // {
   //   auto* psi_pinner = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2));
