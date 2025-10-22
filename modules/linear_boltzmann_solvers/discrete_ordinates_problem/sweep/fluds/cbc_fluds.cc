@@ -30,20 +30,23 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                             num_groups_),
     gpu_local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     use_gpus_(use_gpus),
-    local_psi_data_gpu_buffer_(gpu_local_psi_data_size_),
-    slot_size_(max_cell_dof_count * num_groups_and_angles_),
-    cell_local_ID_to_psi_map_(num_local_cells, nullptr),
-    local_psi_data_backing_buffer_(min_num_pool_allocator_slots * slot_size_),
-    cell_dof_map_(sdm.GetGrid()->local_cells.size())
+    slot_size_(max_cell_dof_count * num_groups_and_angles_)
 {
-  local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
-                            (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
-                            slot_size_ * sizeof(double));
-
   if (use_gpus_)
   {
+    local_psi_data_gpu_buffer_.resize(gpu_local_psi_data_size_);
+    cell_dof_map_.resize(sdm.GetGrid()->local_cells.size());
     BuildDeviceCellDOFMap();
     Create_CBCD_FLUDS();
+  }
+  else
+  {
+    cell_local_ID_to_psi_map_.resize(num_local_cells, nullptr);
+    std::fill(cell_local_ID_to_psi_map_.begin(), cell_local_ID_to_psi_map_.end(), nullptr);
+    local_psi_data_backing_buffer_.resize(min_num_pool_allocator_slots * slot_size_);
+    local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
+                            (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
+                            slot_size_ * sizeof(double));
   }
 }
 

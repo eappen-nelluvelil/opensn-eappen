@@ -176,14 +176,13 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 
           const double* psi = nullptr;
 
-          const Cell* upwind_cell = cell_transport_view_->FaceNeighbor(f);
-          const unsigned int adj_cell_node = face_nodal_mapping->cell_node_mapping_[fj];
-          const unsigned int adj_face_node = face_nodal_mapping->face_node_mapping_[fj];
-
           if (is_local_face)
-            psi = fluds_->UpwindPsi(upwind_cell->local_id, adj_cell_node, as_ss_idx);
+            psi = fluds_->UpwindPsi(cell_transport_view_->FaceNeighbor(f)->local_id,
+                                    face_nodal_mapping->cell_node_mapping_[fj],
+                                    as_ss_idx);
           else if (not is_boundary_face)
-            psi = fluds_->NLUpwindPsi(cell_->global_id, f, adj_face_node, as_ss_idx);
+            psi = fluds_->NLUpwindPsi(
+              cell_->global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
           else
             psi = angle_set.PsiBoundary(face.neighbor_id,
                                         direction_num,

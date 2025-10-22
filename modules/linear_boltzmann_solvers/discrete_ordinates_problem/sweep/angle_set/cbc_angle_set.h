@@ -21,7 +21,7 @@ protected:
   std::vector<Task> current_task_list_;
   CBC_ASynchronousCommunicator async_comm_;
   CBC_FLUDS& cbc_fluds_;
-  bool use_gpu_ = false;
+  bool use_gpus_ = false;
 
 public:
   CBC_AngleSet(size_t id,

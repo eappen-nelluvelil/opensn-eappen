@@ -27,7 +27,7 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
     async_comm_(id, *fluds, comm_set),
     cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds_)),
-    use_gpu_(use_gpu)
+    use_gpus_(use_gpu)
 {
 }
 
@@ -40,7 +40,7 @@ CBC_AngleSet::GetCommunicator()
 AngleSetStatus
 CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
 {
-  if (use_gpu_)
+  if (use_gpus_)
     return GPUAngleSetAdvance(sweep_chunk, permission);
   else
     return CPUAngleSetAdvance(sweep_chunk, permission);
@@ -73,6 +73,9 @@ CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
 
   bool all_tasks_completed = true;
   bool a_task_executed = true;
+
+  // int num_ready_tasks_per_while_loop = 0;
+
   while (a_task_executed)
   {
     a_task_executed = false;
@@ -82,6 +85,8 @@ CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
         all_tasks_completed = false;
       if (cell_task.num_dependencies == 0 and not cell_task.completed)
       {
+        // ++num_ready_tasks_per_while_loop;
+
         cbc_fluds_.Allocate(cell_task.cell_ptr->local_id);
 
         sweep_chunk.SetCell(cell_task.cell_ptr, *this);
@@ -109,6 +114,12 @@ CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
           cbc_fluds_.Deallocate(cell_task.cell_ptr->local_id);
       }
     } // for cell_task
+
+    // opensn::log.Log() << "CBC_AngleSet::CPUAngleSetAdvance - "
+    //                   << "Number of ready tasks this iteration: " << num_ready_tasks_per_while_loop
+    //                   << "\n";
+    // num_ready_tasks_per_while_loop = 0;
+
     async_comm_.SendData();
   }
 
@@ -165,13 +176,22 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     for (auto& cell_task : current_task_list_)
     {
       if (not cell_task.completed)
+      {
         all_tasks_completed = false;
-      if (cell_task.num_dependencies == 0 and not cell_task.completed)
-        ready_tasks.push_back(&cell_task);
+        if (cell_task.num_dependencies == 0)
+          ready_tasks.push_back(&cell_task);
+      }
     }
 
-    if (not ready_tasks.empty())
+    // Note that if any tasks received data this iteration, we skip execution
+    // This is to make sure that we can pass in as many ready tasks as possible to the GPU,
+    // rather than executing a smaller batch, then receiving data, and having more ready tasks
+    if (not ready_tasks.empty() and tasks_who_received_data.empty())
+    // if (not ready_tasks.empty())
     {
+      // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - "
+      //                   << "Number of ready tasks: " << ready_tasks.size() << "\n";
+
       cbc_sweep_chunk.SetTaskList(ready_tasks);
       // cbc_sweep_chunk.GPUSweep(*this);
       cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
@@ -182,7 +202,6 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
           --current_task_list_[local_task_num].num_dependencies;
 
         cell_task->completed = true;
-        tasks_were_executed = true;
         async_comm_.SendData(); // Need to play around with when to send data
       }
 
