@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
-#include "_deps/googletest-src/googletest/include/gtest/gtest.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
@@ -83,7 +83,7 @@ CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
     {
       boundary_data_initialized_map_[as_id] = true;
       
-      const auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+      auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
       const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS());
       const auto& grid = cbc_spds.GetGrid();
       const auto& angle_indices = angle_set.GetAngleIndices();
