@@ -21,7 +21,7 @@ namespace opensn
 class CBCD_FLUDS
 {
 public:
-	CBCD_FLUDS(CBC_FLUDS& cbc_fluds);
+	CBCD_FLUDS(CBC_FLUDS& cbc_fluds, const std::vector<double>& boundary_psi, const std::vector<int>& boundary_psi_map);
 
 	/// Get the device memory.
 	inline double* GetDevicePtr() { return device_buffer_.get(); }
@@ -32,6 +32,12 @@ public:
 	/// Get device pointer to cell DOF map
 	inline const size_t* GetCellDOFMapDevicePtr() { return cell_dof_map_storage_.GetDevicePtr(); }
 
+	/// Get device pointer to boundary psi data
+	inline const double* GetBoundaryPsiDevicePtr() { return boundary_psi_buffer_.GetDevicePtr(); }
+
+	/// Get device pointer to boundary psi map
+	inline const int* GetBoundaryPsiMapDevicePtr() { return boundary_psi_map_storage_.GetDevicePtr(); }
+
 protected:
 	/// Contiguous memory on the host (CPU) for angular flux.
   crb::HostVector<double> host_buffer_;
@@ -40,6 +46,12 @@ protected:
 
 	/// Device storage for cell DOF map
 	Storage<size_t> cell_dof_map_storage_;
+
+	/// Device storage for boundary angular fluxes
+	Storage<double> boundary_psi_buffer_;
+
+	/// Device storage for mapping into the boundary psi buffer
+	Storage<int> boundary_psi_map_storage_;
 };
 
 } // namespace opensn

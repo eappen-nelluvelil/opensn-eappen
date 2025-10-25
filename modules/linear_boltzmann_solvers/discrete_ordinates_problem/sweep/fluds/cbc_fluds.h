@@ -101,13 +101,15 @@ public:
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
-  void Create_CBCD_FLUDS();
+  void Create_CBCD_FLUDS(const std::vector<double>& boundary_psi, const std::vector<int>& boundary_psi_map);
 
   void Destroy_CBCD_FLUDS();
 
   void BuildDeviceCellDOFMap();
 
   std::vector<size_t>& GetCellDOFMap() { return cell_dof_map_; }
+
+  const SpatialDiscretization& GetSDM() const { return sdm_; }
 
   void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
   void ClearSendPsi() override {}

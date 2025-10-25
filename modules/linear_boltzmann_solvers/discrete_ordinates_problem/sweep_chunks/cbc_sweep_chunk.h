@@ -4,12 +4,14 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include <map>
 #include <memory>
 
 namespace opensn
@@ -113,6 +115,9 @@ private:
 
   bool use_gpus_ = false;
   DiscreteOrdinatesProblem& problem_;
+
+  /// Map to track if boundary data has been initialized for an angle set
+  std::map<size_t, bool> boundary_data_initialized_map_;
 
   DenseMatrix<Vector3> G_;
   DenseMatrix<double> M_;

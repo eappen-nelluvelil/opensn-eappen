@@ -417,8 +417,8 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep_With_CBCD_FLUDS");
 
-  if (tasks_to_execute_.empty())
-    return;
+  // if (tasks_to_execute_.empty())
+  //   return;
 
   // This part seems fine
   // Determine sizes for host and device vectors

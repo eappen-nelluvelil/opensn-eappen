@@ -32,14 +32,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     use_gpus_(use_gpus),
     slot_size_(max_cell_dof_count * num_groups_and_angles_)
 {
-  if (use_gpus_)
-  {
-    local_psi_data_gpu_buffer_.resize(gpu_local_psi_data_size_);
-    cell_dof_map_.resize(sdm.GetGrid()->local_cells.size());
-    BuildDeviceCellDOFMap();
-    Create_CBCD_FLUDS();
-  }
-  else
+  if (not use_gpus_)
   {
     cell_local_ID_to_psi_map_.resize(num_local_cells, nullptr);
     std::fill(cell_local_ID_to_psi_map_.begin(), cell_local_ID_to_psi_map_.end(), nullptr);
@@ -160,6 +153,8 @@ void
 CBC_FLUDS::BuildDeviceCellDOFMap()
 {
   const auto& grid = sdm_.GetGrid();
+  cell_dof_map_.resize(grid->local_cells.size());
+
   for (const auto& cell : grid->local_cells)
   {
     const size_t dof_map_idx = cell.local_id;
