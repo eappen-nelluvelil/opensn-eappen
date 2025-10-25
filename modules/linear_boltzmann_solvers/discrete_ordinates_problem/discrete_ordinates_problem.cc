@@ -77,12 +77,8 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
     verbose_sweep_angles_(params.GetParamVectorValue<int>("directions_sweep_order_to_print")),
     sweep_type_(params.GetParamValue<std::string>("sweep_type"))
 {
-  if (use_gpus_ && sweep_type_ == "CBC")
-  {
-    log.Log0Warning() << "Sweep computation on GPUs is not supported for the CBC sweep."
-                      << "Falling back to CPU sweep.\n";
-    use_gpus_ = false;
-  }
+  scattering_order_ = params.GetParamValue<int>("scattering_order");
+  ValidateAndComputeScatteringMoments();
 
   // Check for consistency between quadrature sets
   auto& groupset0 = groupsets_[0];
