@@ -167,7 +167,7 @@ CBC_FLUDS::BuildDeviceCellDOFMap()
 
 #ifndef __OPENSN_USE_CUDA__
 void
-CBC_FLUDS::Create_CBCD_FLUDS()
+CBC_FLUDS::Create_CBCD_FLUDS(const std::vector<double>& boundary_psi, const std::vector<int>& boundary_psi_map)
 {
 }
 
