@@ -37,6 +37,8 @@ private:
    */
   size_t SimulateLocalSweep() const;
 
+  size_t SimulateDeviceLocalSweep() const;
+
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;

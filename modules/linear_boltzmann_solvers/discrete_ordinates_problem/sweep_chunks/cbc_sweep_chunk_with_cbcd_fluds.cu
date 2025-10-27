@@ -439,7 +439,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   {
     const auto& cell = *task->cell_ptr;
     total_faces += cell.faces.size();
-    const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+    const auto& face_orientations = cbc_angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
     const auto& cell_mapping = discretization_.GetCellMapping(cell);
     auto& cell_transport_view = cell_transport_views_[cell.local_id];
 
@@ -449,6 +449,8 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
       const bool is_local_face = cell_transport_view.IsFaceLocal(f);
       const bool is_boundary_face = not cell.faces[f].has_neighbor;
+      const bool is_reflecting_boundary_face =
+        (is_boundary_face) and (cbc_angle_set.GetBoundaries().at(cell.faces[f].neighbor_id)->IsReflecting());
 
       // Size upwind/downwind buffers for only non-local and boundary faces
       if ((face_orientations[f] == FaceOrientation::INCOMING))
@@ -458,7 +460,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       }
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
       {
-        if (not is_local_face)
+        if (((not is_local_face) and (not is_boundary_face)) or (is_reflecting_boundary_face))
           total_downwind_buffer_size += face_data_size;
       }
     }
@@ -511,6 +513,8 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
       const bool is_local_face = cell_transport_view.IsFaceLocal(f);
       const bool is_boundary_face = not face.has_neighbor;
+      const bool is_reflecting_boundary_face =
+        (is_boundary_face) and (cbc_angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
 
       // Upwind data packing
       if (face_orientations[f] == FaceOrientation::INCOMING)
@@ -525,50 +529,49 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
           for (size_t fj = 0; fj < num_face_nodes; ++fj)
             face_neighbor_cell_node_map[neighbor_node_map_ffset + fj] =
               face_nodal_mapping->cell_node_mapping_[fj];
-          continue;
         }
-
-        upwind_psi_offsets[face_offset_stride + f] = upwind_buffer_offset;
-
-        for (size_t fj = 0; fj < num_face_nodes; ++fj)
+        else
         {
-          const double* psi_in = nullptr;
-          const unsigned int adj_face_node = face_nodal_mapping->face_node_mapping_[fj];
+          upwind_psi_offsets[face_offset_stride + f] = upwind_buffer_offset;
 
-          for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
+          for (size_t fj = 0; fj < num_face_nodes; ++fj)
           {
-            const auto direction_num = as_angle_indices[as_ss_idx];
+            const double* psi_in = nullptr;
+            const unsigned int adj_face_node = face_nodal_mapping->face_node_mapping_[fj];
 
-            if (not is_boundary_face)
-              psi_in = cbc_fluds.NLUpwindPsi(cell.global_id, f, adj_face_node, as_ss_idx);
-            else
-              psi_in = angle_set.PsiBoundary(face.neighbor_id,
-                                             direction_num,
-                                             cell.local_id,
-                                             f,
-                                             fj,
-                                             gs_gi,
-                                             surface_source_active_);
+            for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
+            {
+              const auto direction_num = as_angle_indices[as_ss_idx];
 
-            const size_t offset = fj * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
-            double* buffer_ptr = &upwind_psi_buffer[upwind_buffer_offset + offset];
+              if (not is_boundary_face)
+                psi_in = cbc_fluds.NLUpwindPsi(cell.global_id, f, adj_face_node, as_ss_idx);
+              else
+                psi_in = angle_set.PsiBoundary(face.neighbor_id,
+                                              direction_num,
+                                              cell.local_id,
+                                              f,
+                                              fj,
+                                              gs_gi,
+                                              surface_source_active_);
 
-            if (psi_in)
-              std::copy(psi_in, psi_in + gs_size, buffer_ptr);
-            else
-              std::fill(buffer_ptr, buffer_ptr + gs_size, 0.0);
+              const size_t offset = fj * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
+              double* buffer_ptr = &upwind_psi_buffer[upwind_buffer_offset + offset];
+
+              if (psi_in)
+                std::copy(psi_in, psi_in + gs_size, buffer_ptr);
+              else
+                std::fill(buffer_ptr, buffer_ptr + gs_size, 0.0);
+            }
           }
+          upwind_buffer_offset += face_data_size;
         }
-        upwind_buffer_offset += face_data_size;
       }
       // Downwind data packing
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
       {
-        const bool is_local_face = cell_transport_view.IsFaceLocal(f);
-
         if (is_local_face)
           downwind_psi_offsets[face_offset_stride + f] = -1;
-        else
+        else if ((not is_boundary_face) or (is_reflecting_boundary_face))
         {
           downwind_psi_offsets[face_offset_stride + f] = downwind_buffer_offset;
           downwind_buffer_offset += face_data_size;
@@ -622,14 +625,16 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   args.groupset_group_stride = groupset_group_stride_;
   args.save_angular_flux = save_angular_flux_;
 
-  Storage<uint64_t> cell_id_storage(cell_local_ids.size());
-  cell_id_storage.Copy(cell_local_ids.begin(), cell_local_ids.end());
-  args.cell_local_ids = cell_id_storage.GetDevicePtr();
+  // Storage<uint64_t> cell_id_storage(cell_local_ids.size());
+  // cell_id_storage.Copy(cell_local_ids.begin(), cell_local_ids.end());
+  // args.cell_local_ids = cell_id_storage.GetDevicePtr();
+  cbcd_fluds.cell_id_storage_.Copy(cell_local_ids.begin(), cell_local_ids.end());
+  args.cell_local_ids = cbcd_fluds.cell_id_storage_.GetDevicePtr();
   args.num_cells = cell_local_ids.size();
 
-  Storage<int> cell_face_offset_storage(cell_face_offset_map.size());
-  cell_face_offset_storage.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
-  args.cell_face_offset_map = cell_face_offset_storage.GetDevicePtr();
+  // Storage<int> cell_face_offset_storage(cell_face_offset_map.size());
+  cbcd_fluds.cell_face_offset_storage_.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
+  args.cell_face_offset_map = cbcd_fluds.cell_face_offset_storage_.GetDevicePtr();
 
   args.local_psi_data = cbcd_fluds.GetDevicePtr();
   args.cell_dof_map = cbcd_fluds.GetCellDOFMapDevicePtr();

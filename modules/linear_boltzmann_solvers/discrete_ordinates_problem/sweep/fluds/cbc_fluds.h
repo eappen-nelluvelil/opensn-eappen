@@ -99,6 +99,8 @@ public:
 
   size_t GetGPULocalPsiDataSize() const { return gpu_local_psi_data_size_; }
 
+  size_t GetNumLocalCells() const { return num_local_cells_; }
+
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
   void Create_CBCD_FLUDS(const std::vector<double>& boundary_psi, const std::vector<int>& boundary_psi_map);
@@ -132,6 +134,7 @@ private:
   const CBC_FLUDSCommonData& common_data_;
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
+  size_t num_local_cells_;
   size_t num_angles_in_gs_quadrature_;
   size_t num_quadrature_local_dofs_;
   size_t num_local_spatial_dofs_;

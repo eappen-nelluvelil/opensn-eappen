@@ -8,6 +8,7 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <boost/graph/topological_sort.hpp>
+#include <cstddef>
 
 namespace opensn
 {
@@ -196,6 +197,13 @@ CBC_SPDS::SimulateLocalSweep() const
   }
 
   return (min_num_slots + num_permanent_slots);
+}
+
+size_t
+CBC_SPDS::SimulateDeviceLocalSweep() const
+{
+  // Currently identical to SimulateLocalSweep
+  return SimulateLocalSweep();
 }
 
 } // namespace opensn

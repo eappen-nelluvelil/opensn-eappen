@@ -36,7 +36,13 @@ public:
 	inline const double* GetBoundaryPsiDevicePtr() { return boundary_psi_buffer_.GetDevicePtr(); }
 
 	/// Get device pointer to boundary psi map
-	inline const int* GetBoundaryPsiMapDevicePtr() { return boundary_psi_map_storage_.GetDevicePtr(); }
+  inline const int* GetBoundaryPsiMapDevicePtr()
+  {
+    return boundary_psi_map_storage_.GetDevicePtr();
+  }
+
+  Storage<uint64_t> cell_id_storage_;
+  Storage<int> cell_face_offset_storage_;
 
 protected:
 	/// Contiguous memory on the host (CPU) for angular flux.
@@ -51,7 +57,7 @@ protected:
 	Storage<double> boundary_psi_buffer_;
 
 	/// Device storage for mapping into the boundary psi buffer
-	Storage<int> boundary_psi_map_storage_;
+  Storage<int> boundary_psi_map_storage_;
 };
 
 } // namespace opensn

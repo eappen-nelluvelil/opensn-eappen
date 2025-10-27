@@ -24,6 +24,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
+    num_local_cells_(num_local_cells),
     num_angles_in_gs_quadrature_(psi_uk_man_.GetNumberOfUnknowns()),
     num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /

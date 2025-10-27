@@ -22,7 +22,8 @@ CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds, const std::vector<double>& boundary
 	boundary_psi_map_storage_ = Storage<int>(boundary_psi_map.size());
 	boundary_psi_map_storage_.Copy(boundary_psi_map.begin(), boundary_psi_map.end());
 
-				
+  cell_id_storage_ = Storage<uint64_t>(cbc_fluds.GetNumLocalCells());
+  cell_face_offset_storage_ = Storage<int>(cbc_fluds.GetNumLocalCells());
 }
 
 void
