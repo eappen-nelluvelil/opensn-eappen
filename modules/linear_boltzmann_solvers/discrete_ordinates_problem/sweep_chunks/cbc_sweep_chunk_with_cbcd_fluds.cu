@@ -202,7 +202,7 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
             offset + fj * args.upwind_face_stride + angle_idx * args.groupset_size + group_idx;
           psi_in_ptr = &args.upwind_psi_data[upwind_offset];
         }
-        else // Local face
+        else if (offset == -1) // Local face
         {
           const size_t nbr_cell_local_id = args.face_neighbor_local_ids[current_face_offset];
           const size_t nbr_cell_data_start_idx = args.cell_dof_map[nbr_cell_local_id];
@@ -212,6 +212,10 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
             adj_cell_node * args.num_groups_and_angles + angle_idx * args.groupset_size + group_idx;
           const size_t nbr_cell_data_idx = nbr_cell_data_start_idx + addr_offset;
           psi_in_ptr = &args.local_psi_data[nbr_cell_data_idx];
+        }
+        else if (offset == -2)
+        {
+          
         }
 
         psi[i] += (*psi_in_ptr) * mu_Nij;
@@ -287,10 +291,10 @@ DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS(const std::array<double, cbc_m
     // Outgoing face
     const int buffer_offset = args.downwind_psi_offsets[face_offset_base + f];
 
-    // Differentiate between local and non-local/boundary downwind outgoing fluxes
+    // Differentiate between local and non-local/reflecting boundary downwind outgoing fluxes
     // If the offset is negative, the face is a local face, and we write the fluxes
     // directly to the on-device local_psi_data buffer
-    // Otherewise, the face is a non-local or boundary face, and we write to the
+    // Otherwise, the face is a non-local or reflecting boundary face, and we write to the
     // downwind_psi_data buffer for a device-to-host transfer
 
     for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
@@ -455,12 +459,15 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       // Size upwind/downwind buffers for only non-local and boundary faces
       if ((face_orientations[f] == FaceOrientation::INCOMING))
       {
-        if (not is_local_face)
+        if ((not is_local_face))
           total_upwind_buffer_size += face_data_size;
+        // if ((not is_local_face) and (not is_boundary_face))
+        //   total_upwind_buffer_size += face_data_size;
       }
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
       {
-        if (((not is_local_face) and (not is_boundary_face)) or (is_reflecting_boundary_face))
+        if (((not is_local_face) and (not is_boundary_face)) or 
+            (is_reflecting_boundary_face))
           total_downwind_buffer_size += face_data_size;
       }
     }

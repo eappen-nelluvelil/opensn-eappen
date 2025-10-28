@@ -95,7 +95,7 @@ public:
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
   std::tuple<std::vector<double>, std::vector<int>, std::vector<int>>
-  PrepareBoundaryPsiBuffer(AngleSet& angle_set);
+  PrepareBoundaryPsiData(AngleSet& angle_set);
 
 private:
   CBC_FLUDS* fluds_;

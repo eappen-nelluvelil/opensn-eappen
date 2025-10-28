@@ -33,7 +33,11 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     use_gpus_(use_gpus),
     slot_size_(max_cell_dof_count * num_groups_and_angles_)
 {
-  if (not use_gpus_)
+  if (use_gpus_)
+  {
+    local_psi_data_gpu_buffer_.resize(gpu_local_psi_data_size_);
+  }
+  else
   {
     cell_local_ID_to_psi_map_.resize(num_local_cells, nullptr);
     std::fill(cell_local_ID_to_psi_map_.begin(), cell_local_ID_to_psi_map_.end(), nullptr);
@@ -168,7 +172,14 @@ CBC_FLUDS::BuildDeviceCellDOFMap()
 
 #ifndef __OPENSN_USE_CUDA__
 void
-CBC_FLUDS::Create_CBCD_FLUDS(const std::vector<double>& boundary_psi, const std::vector<int>& boundary_psi_map)
+CBC_FLUDS::Create_CBCD_FLUDS()
+{
+}
+
+void
+CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi,
+                              const std::vector<int>& boundary_psi_map,
+                              const std::vector<int>& cell_to_local_face_offset_map)
 {
 }
 

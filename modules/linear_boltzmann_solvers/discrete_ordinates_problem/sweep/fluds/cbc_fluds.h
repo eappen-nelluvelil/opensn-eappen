@@ -103,7 +103,11 @@ public:
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
-  void Create_CBCD_FLUDS(const std::vector<double>& boundary_psi, const std::vector<int>& boundary_psi_map);
+  void Create_CBCD_FLUDS();
+
+  void SetBoundaryPsiData(const std::vector<double>& boundary_psi,
+                          const std::vector<int>& boundary_psi_map,
+                          const std::vector<int>& cell_to_local_face_offset_map);
 
   void Destroy_CBCD_FLUDS();
 
