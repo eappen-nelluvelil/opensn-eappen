@@ -167,11 +167,11 @@ CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
     {
       boundary_data_initialized_map_[as_id] = true;
       fluds_->Create_CBCD_FLUDS();
-      auto [boundary_psi_buffer,
+    }
+    auto [boundary_psi_buffer,
           boundary_psi_map,
           cell_boundary_face_offsets] = PrepareBoundaryPsiData(angle_set);
-      fluds_->SetBoundaryPsiData(boundary_psi_buffer, boundary_psi_map, cell_boundary_face_offsets);
-    }
+    fluds_->SetBoundaryPsiData(boundary_psi_buffer, boundary_psi_map, cell_boundary_face_offsets);
   }
   // */
 }

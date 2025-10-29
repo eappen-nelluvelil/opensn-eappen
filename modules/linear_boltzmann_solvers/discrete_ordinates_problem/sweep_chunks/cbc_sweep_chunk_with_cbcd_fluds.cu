@@ -80,6 +80,11 @@ struct CBCSweepKernelArgs_WITH_CBCD_FLUDS
   const uint64_t* face_neighbor_local_ids;
   const unsigned int* face_neighbor_cell_node_map;
 
+  // Boundary angular flux buffers
+  const double* boundary_psi_data;
+  const int* boundary_psi_map;
+  const int* cell_to_local_face_offset_map;
+
   // Upwind/downwind psi buffers
   const double* upwind_psi_data;
   const int* upwind_psi_offsets;
@@ -159,6 +164,7 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
                                        DirectionView& direction,
                                        CellView& cell)
 {
+  const size_t cell_local_id = args.cell_local_ids[cell_idx];
   const int face_offset = args.cell_face_offset_map[cell_idx];
 
   // Loop over each face
@@ -215,7 +221,13 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
         }
         else if (offset == -2)
         {
-          
+          const int local_face_offset = args.cell_to_local_face_offset_map[cell_local_id];
+          const size_t boundary_psi_map_idx =
+            local_face_offset + f; // Map from cell face to boundary psi index
+          const int boundary_psi_data_idx = args.boundary_psi_map[boundary_psi_map_idx];
+          psi_in_ptr = &args.boundary_psi_data[boundary_psi_data_idx +
+                                              fj * args.num_groups_and_angles +
+                                              angle_idx * args.groupset_size + group_idx];
         }
 
         psi[i] += (*psi_in_ptr) * mu_Nij;
@@ -459,10 +471,10 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       // Size upwind/downwind buffers for only non-local and boundary faces
       if ((face_orientations[f] == FaceOrientation::INCOMING))
       {
-        if ((not is_local_face))
+        // if ((not is_local_face))
+          // total_upwind_buffer_size += face_data_size;
+        if ((not is_local_face) and (not is_boundary_face))
           total_upwind_buffer_size += face_data_size;
-        // if ((not is_local_face) and (not is_boundary_face))
-        //   total_upwind_buffer_size += face_data_size;
       }
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
       {
@@ -523,12 +535,13 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       const bool is_reflecting_boundary_face =
         (is_boundary_face) and (cbc_angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
 
+      const size_t current_face_offset = face_offset_stride + f;
+
       // Upwind data packing
       if (face_orientations[f] == FaceOrientation::INCOMING)
       {
         if (is_local_face)
         {
-          const size_t current_face_offset = face_offset_stride + f;
           upwind_psi_offsets[current_face_offset] = -1;
           face_neighbor_local_ids[current_face_offset] =
             face.GetNeighborLocalID(discretization_.GetGrid().get());
@@ -537,9 +550,9 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
             face_neighbor_cell_node_map[neighbor_node_map_ffset + fj] =
               face_nodal_mapping->cell_node_mapping_[fj];
         }
-        else
+        else if (not is_boundary_face)
         {
-          upwind_psi_offsets[face_offset_stride + f] = upwind_buffer_offset;
+          upwind_psi_offsets[current_face_offset] = upwind_buffer_offset;
 
           for (size_t fj = 0; fj < num_face_nodes; ++fj)
           {
@@ -548,39 +561,31 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
             for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
             {
-              const auto direction_num = as_angle_indices[as_ss_idx];
-
-              if (not is_boundary_face)
-                psi_in = cbc_fluds.NLUpwindPsi(cell.global_id, f, adj_face_node, as_ss_idx);
-              else
-                psi_in = angle_set.PsiBoundary(face.neighbor_id,
-                                              direction_num,
-                                              cell.local_id,
-                                              f,
-                                              fj,
-                                              gs_gi,
-                                              surface_source_active_);
-
+              psi_in = cbc_fluds.NLUpwindPsi(cell.global_id, f, adj_face_node, as_ss_idx);
               const size_t offset = fj * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
               double* buffer_ptr = &upwind_psi_buffer[upwind_buffer_offset + offset];
 
-              if (psi_in)
-                std::copy(psi_in, psi_in + gs_size, buffer_ptr);
-              else
-                std::fill(buffer_ptr, buffer_ptr + gs_size, 0.0);
+              // if (psi_in)
+              std::copy(psi_in, psi_in + gs_size, buffer_ptr);
+              // else
+                // std::fill(buffer_ptr, buffer_ptr + gs_size, 0.0);
             }
           }
           upwind_buffer_offset += face_data_size;
+        }
+        else
+        {
+          upwind_psi_offsets[current_face_offset] = -2;
         }
       }
       // Downwind data packing
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
       {
         if (is_local_face)
-          downwind_psi_offsets[face_offset_stride + f] = -1;
+          downwind_psi_offsets[current_face_offset] = -1;
         else if ((not is_boundary_face) or (is_reflecting_boundary_face))
         {
-          downwind_psi_offsets[face_offset_stride + f] = downwind_buffer_offset;
+          downwind_psi_offsets[current_face_offset] = downwind_buffer_offset;
           downwind_buffer_offset += face_data_size;
         }
       }
@@ -657,6 +662,11 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   face_neighbor_local_ids_storage.Copy(face_neighbor_local_ids.begin(),
                                        face_neighbor_local_ids.end());
   args.face_neighbor_local_ids = face_neighbor_local_ids_storage.GetDevicePtr();
+
+  // Boundary angular flux buffers
+  args.boundary_psi_data = cbcd_fluds.GetBoundaryPsiDevicePtr();
+  args.boundary_psi_map = cbcd_fluds.GetBoundaryPsiMapDevicePtr();
+  args.cell_to_local_face_offset_map = cbcd_fluds.cell_to_local_face_offset_storage_.GetDevicePtr();
 
   Storage<double> upwind_psi_storage(upwind_psi_buffer.size());
   upwind_psi_storage.Copy(upwind_psi_buffer.begin(), upwind_psi_buffer.end());
