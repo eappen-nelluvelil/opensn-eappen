@@ -94,8 +94,10 @@ public:
 
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
-  std::tuple<std::vector<double>, std::vector<int>, std::vector<int>>
-  PrepareBoundaryPsiData(AngleSet& angle_set);
+  std::tuple<size_t, size_t, std::vector<int>, std::vector<int>>
+  SizeBoundaryPsiData(AngleSet& angle_set);
+
+  std::vector<double> PrepareBoundaryPsiData(AngleSet& angle_set, int buffer_size);
 
 private:
   CBC_FLUDS* fluds_;
@@ -122,6 +124,7 @@ private:
 
   /// Map to track if boundary data has been initialized for an angle set
   std::map<size_t, bool> boundary_data_initialized_map_;
+  std::map<size_t, int> boundary_data_buffer_size_map_;
 
   DenseMatrix<Vector3> G_;
   DenseMatrix<double> M_;

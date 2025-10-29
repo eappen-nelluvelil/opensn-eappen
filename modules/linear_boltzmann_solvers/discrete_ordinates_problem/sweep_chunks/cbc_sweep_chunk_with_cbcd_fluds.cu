@@ -471,8 +471,6 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       // Size upwind/downwind buffers for only non-local and boundary faces
       if ((face_orientations[f] == FaceOrientation::INCOMING))
       {
-        // if ((not is_local_face))
-          // total_upwind_buffer_size += face_data_size;
         if ((not is_local_face) and (not is_boundary_face))
           total_upwind_buffer_size += face_data_size;
       }

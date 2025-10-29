@@ -103,11 +103,12 @@ public:
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
-  void Create_CBCD_FLUDS();
+  void Create_CBCD_FLUDS(size_t num_total_faces,
+                         size_t incoming_boundary_psi_buffer_size,
+                         const std::vector<int>& cell_to_local_face_offset_map,
+                         const std::vector<int>& boundary_psi_map);
 
-  void SetBoundaryPsiData(const std::vector<double>& boundary_psi,
-                          const std::vector<int>& boundary_psi_map,
-                          const std::vector<int>& cell_to_local_face_offset_map);
+  void SetBoundaryPsiData(const std::vector<double>& boundary_psi);
 
   void Destroy_CBCD_FLUDS();
 

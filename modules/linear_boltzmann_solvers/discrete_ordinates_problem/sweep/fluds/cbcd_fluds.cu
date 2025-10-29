@@ -6,7 +6,11 @@
 namespace opensn
 {
 
-CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds)
+CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds,
+                       size_t num_total_faces,
+                       size_t incoming_boundary_psi_buffer_size,
+                       const std::vector<int>& cell_to_local_face_offset_map,
+                       const std::vector<int>& boundary_psi_map)
 {
   device_buffer_ = crb::DeviceMemory<double>(cbc_fluds.GetGPULocalPsiDataSize());
 
@@ -16,31 +20,37 @@ CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds)
 
   cell_id_storage_ = Storage<uint64_t>(cbc_fluds.GetNumLocalCells());
   cell_face_offset_storage_ = Storage<int>(cbc_fluds.GetNumLocalCells());
+
+  boundary_psi_buffer_ = Storage<double>(incoming_boundary_psi_buffer_size);
+
+  boundary_psi_map_storage_ = Storage<int>(num_total_faces);
+  boundary_psi_map_storage_.Copy(boundary_psi_map.begin(), boundary_psi_map.end());
+
+  cell_to_local_face_offset_storage_ = Storage<int>(cell_to_local_face_offset_map.size());
+  cell_to_local_face_offset_storage_.Copy(cell_to_local_face_offset_map.begin(), cell_to_local_face_offset_map.end());
 }
 
 void
-CBC_FLUDS::Create_CBCD_FLUDS()
+CBC_FLUDS::Create_CBCD_FLUDS(size_t num_total_faces,
+                             size_t incoming_boundary_psi_buffer_size,
+                             const std::vector<int>& cell_to_local_face_offset_map,
+                             const std::vector<int>& boundary_psi_map)
 {
   if (not cbcd_fluds_)
   {
-    CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this);
+    CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this,
+                                            num_total_faces,
+                                            incoming_boundary_psi_buffer_size,
+                                            cell_to_local_face_offset_map,
+                                            boundary_psi_map);
     cbcd_fluds_ = cbcd_fluds;
   }
 }
 
 void
-CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi,
-                              const std::vector<int>& boundary_psi_map,
-                              const std::vector<int>& cell_to_local_face_offset_map)
+CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi)
 {
-  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->boundary_psi_buffer_ = Storage<double>(boundary_psi.size());
   reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->boundary_psi_buffer_.Copy(boundary_psi.begin(), boundary_psi.end());
-
-  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->boundary_psi_map_storage_ = Storage<int>(boundary_psi_map.size());
-  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->boundary_psi_map_storage_.Copy(boundary_psi_map.begin(), boundary_psi_map.end());
-
-  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_to_local_face_offset_storage_ = Storage<int>(cell_to_local_face_offset_map.size());
-  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_to_local_face_offset_storage_.Copy(cell_to_local_face_offset_map.begin(), cell_to_local_face_offset_map.end());
 }
 
 void

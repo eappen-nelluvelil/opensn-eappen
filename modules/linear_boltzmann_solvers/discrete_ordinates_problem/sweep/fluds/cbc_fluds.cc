@@ -172,14 +172,15 @@ CBC_FLUDS::BuildDeviceCellDOFMap()
 
 #ifndef __OPENSN_USE_CUDA__
 void
-CBC_FLUDS::Create_CBCD_FLUDS()
+CBC_FLUDS::Create_CBCD_FLUDS(size_t num_total_faces,
+                             size_t incoming_boundary_psi_buffer_size,
+                             const std::vector<int>& cell_to_local_face_offset_map,
+                             const std::vector<int>& boundary_psi_map)
 {
 }
 
 void
-CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi,
-                              const std::vector<int>& boundary_psi_map,
-                              const std::vector<int>& cell_to_local_face_offset_map)
+CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi)
 {
 }
 
