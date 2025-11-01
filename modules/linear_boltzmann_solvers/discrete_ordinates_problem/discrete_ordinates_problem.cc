@@ -1020,6 +1020,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                       dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                       groupset.psi_uk_man_,
                                       *discretization_,
+                                      cell_transport_views_,
                                       num_local_cells,
                                       max_cell_dof_count_,
                                       min_num_pool_allocator_slots,
@@ -1033,6 +1034,19 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                                         sweep_boundaries_,
                                                         *grid_local_comm_set_,
                                                         use_gpus_);
+
+        // Create the CBCD_FLUDS here
+        if (use_gpus_)
+        {
+          auto cbc_fluds = std::static_pointer_cast<CBC_FLUDS>(fluds);
+          auto [num_total_faces,
+                incoming_boundary_psi_buffer_size,
+                cell_face_offsets,
+                boundary_psi_map] =
+            cbc_fluds->Prepare_CBCD_FLUDS(*angle_set);
+
+          cbc_fluds->Create_CBCD_FLUDS(num_total_faces, incoming_boundary_psi_buffer_size, cell_face_offsets, boundary_psi_map);
+        }
 
         angle_set_group.GetAngleSets().push_back(angle_set);
       }

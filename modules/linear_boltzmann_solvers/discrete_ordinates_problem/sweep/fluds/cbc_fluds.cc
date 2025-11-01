@@ -16,6 +16,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
                      const CBC_FLUDSCommonData& common_data,
                      const UnknownManager& psi_uk_man,
                      const SpatialDiscretization& sdm,
+                     std::vector<CellLBSView>& cell_transport_views,
                      size_t num_local_cells,
                      size_t max_cell_dof_count,
                      size_t min_num_pool_allocator_slots,
@@ -24,6 +25,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
+    cell_transport_views_(cell_transport_views),
     num_local_cells_(num_local_cells),
     num_angles_in_gs_quadrature_(psi_uk_man_.GetNumberOfUnknowns()),
     num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
@@ -171,6 +173,23 @@ CBC_FLUDS::BuildDeviceCellDOFMap()
 }
 
 #ifndef __OPENSN_USE_CUDA__
+std::tuple<size_t, size_t, std::vector<int>, std::vector<int>>
+CBC_FLUDS::Prepare_CBCD_FLUDS(AngleSet& angle_set)
+{
+}
+
+std::vector<double>
+CBC_FLUDS::GetBoundaryPsiData(SweepChunk& sweep_chunk,
+                              AngleSet& angle_set)
+{
+}
+
+void
+CBC_FLUDS::UpdateBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
+{
+
+}
+
 void
 CBC_FLUDS::Create_CBCD_FLUDS(size_t num_total_faces,
                              size_t incoming_boundary_psi_buffer_size,

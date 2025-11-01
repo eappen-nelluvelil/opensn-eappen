@@ -180,6 +180,32 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
 {
   CALI_CXX_MARK_SCOPE("SweepScheduler::ScheduleAlgoFIFO");
 
+  // Check if boundaries allow for execution
+  // bool all_boundaries_ready = false;
+  // while (not all_boundaries_ready)
+  // {
+  //   all_boundaries_ready = true;
+  //   for (auto& angle_set_group : angle_agg_.angle_set_groups)
+  //   {
+  //     for (auto& angle_set : angle_set_group.GetAngleSets())
+  //     {
+  //       for (auto& [bid, boundary] : angle_set->GetBoundaries())
+  //       {
+  //         if (not boundary->CheckAnglesReadyStatus(angle_set->GetAngleIndices()))
+  //           all_boundaries_ready = false;
+  //       }
+  //     }
+  //   }
+  // }
+
+  for (auto& angle_set_group : angle_agg_.angle_set_groups)
+  {
+    for (auto& angle_set : angle_set_group.GetAngleSets())
+    {
+      dynamic_cast<CBC_FLUDS&>(angle_set->GetFLUDS()).UpdateBoundaryPsiData(sweep_chunk, *angle_set);
+    }
+  }
+  
   // Loop over AngleSetGroups
   bool finished = false;
   while (not finished)
@@ -226,8 +252,6 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
       rbndry->ResetAnglesReadyStatus();
     }
   }
-
-  // opensn::log.Log() << "SweepScheduler: Completed FIFO sweep scheduling.";
 }
 
 void

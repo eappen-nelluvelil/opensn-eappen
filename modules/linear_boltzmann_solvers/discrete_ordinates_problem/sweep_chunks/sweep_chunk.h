@@ -84,7 +84,7 @@ public:
   /// Returns the surface src-active flag.
   bool IsSurfaceSourceActive() const { return surface_source_active_; }
 
-  virtual ~SweepChunk() = default;
+  int GetGroupSetGroupIndex() const { return groupset_.groups.front().id; }
 
 protected:
   const std::shared_ptr<MeshContinuum> grid_;

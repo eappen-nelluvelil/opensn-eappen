@@ -6,9 +6,11 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "boost/pool/simple_segregated_storage.hpp"
+#include "modules/linear_boltzmann_solvers/lbs_problem/lbs_structs.h"
 #include <cstddef>
 #include <map>
 #include <functional>
+#include <tuple>
 
 namespace opensn
 {
@@ -19,6 +21,8 @@ class Cell;
 class LBSProblem;
 class LBSGroupset;
 class AngleSet;
+class SweepChunk;
+class CellLBSView;
 
 /**
  * Flux data structures (FLUDS) specific to the cell-by-cell (CBC) sweep algorithm
@@ -38,6 +42,7 @@ public:
             const CBC_FLUDSCommonData& common_data,
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm,
+            std::vector<CellLBSView>& cell_transport_views,
             size_t num_local_cells,
             size_t max_cell_dof_count,
             size_t min_num_pool_allocator_slots,
@@ -101,6 +106,15 @@ public:
 
   size_t GetNumLocalCells() const { return num_local_cells_; }
 
+  std::tuple<size_t, size_t, std::vector<int>, std::vector<int>>
+  Prepare_CBCD_FLUDS(AngleSet& angle_set);
+
+  std::vector<double> GetBoundaryPsiData(SweepChunk& sweep_chunk,
+                                         AngleSet& angle_set);
+
+  void UpdateBoundaryPsiData(SweepChunk& sweep_chunk,
+                             AngleSet& angle_set);
+
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
   void Create_CBCD_FLUDS(size_t num_total_faces,
@@ -139,6 +153,7 @@ private:
   const CBC_FLUDSCommonData& common_data_;
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
+  std::vector<CellLBSView>& cell_transport_views_;
   size_t num_local_cells_;
   size_t num_angles_in_gs_quadrature_;
   size_t num_quadrature_local_dofs_;
@@ -150,6 +165,12 @@ private:
   std::vector<double*> cell_local_ID_to_psi_map_;
   std::vector<double> local_psi_data_backing_buffer_;
   boost::simple_segregated_storage<size_t> local_psi_data_;
+
+  size_t num_total_faces_;
+  size_t incoming_boundary_psi_buffer_size_;
+  std::vector<int> cell_to_local_face_offset_map_;
+  std::vector<int> boundary_psi_map_;
+  std::vector<double> incoming_boundary_psi_buffer_;
 
   std::vector<size_t> cell_dof_map_;
   void* cbcd_fluds_ = nullptr;

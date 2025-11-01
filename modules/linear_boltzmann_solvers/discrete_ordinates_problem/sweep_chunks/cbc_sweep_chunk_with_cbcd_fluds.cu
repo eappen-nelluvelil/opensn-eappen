@@ -433,10 +433,6 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep_With_CBCD_FLUDS");
 
-  // if (tasks_to_execute_.empty())
-  //   return;
-
-  // This part seems fine
   // Determine sizes for host and device vectors
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
   auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
@@ -482,12 +478,6 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       }
     }
   }
-
-  // if (total_upwind_buffer_size != 0)
-  //   printf("Total upwind buffer size: %zu\n", total_upwind_buffer_size);
-
-  // if (total_downwind_buffer_size != 0)
-  //   printf("Total downwind buffer size: %zu\n", total_downwind_buffer_size);
 
   // Prepare angular flux buffers for H2D transfer
   std::vector<uint64_t> cell_local_ids;
@@ -543,9 +533,9 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
           upwind_psi_offsets[current_face_offset] = -1;
           face_neighbor_local_ids[current_face_offset] =
             face.GetNeighborLocalID(discretization_.GetGrid().get());
-          const size_t neighbor_node_map_ffset = current_face_offset * cbc_max_face_dofs;
+          const size_t neighbor_node_map_offset = current_face_offset * cbc_max_face_dofs;
           for (size_t fj = 0; fj < num_face_nodes; ++fj)
-            face_neighbor_cell_node_map[neighbor_node_map_ffset + fj] =
+            face_neighbor_cell_node_map[neighbor_node_map_offset + fj] =
               face_nodal_mapping->cell_node_mapping_[fj];
         }
         else if (not is_boundary_face)
