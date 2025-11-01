@@ -151,7 +151,7 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   // Cast SweepChunk to CBCSweepChunk to access GPU-specific methods
   auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);
 
-  cbc_sweep_chunk.GPUSetAngleSet(*this);
+  cbc_sweep_chunk.SetAngleSet(*this);
 
   auto tasks_who_received_data = async_comm_.ReceiveData();
 
@@ -165,7 +165,6 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
-  // cbc_sweep_chunk.UpdateBoundaryPsiData(*this);
   dynamic_cast<CBC_FLUDS&>(*fluds_).UpdateBoundaryPsiData(sweep_chunk, *this);
 
   std::vector<Task*> ready_tasks;
@@ -192,8 +191,6 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not ready_tasks.empty() and tasks_who_received_data.empty())
     // if (not ready_tasks.empty())
     {
-      // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - "
-      //                   << "Number of ready tasks: " << ready_tasks.size() << "\n";
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
       // cbc_sweep_chunk.GPUSweep(*this);

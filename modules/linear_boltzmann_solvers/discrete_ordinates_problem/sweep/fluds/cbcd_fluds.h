@@ -27,11 +27,16 @@ public:
   CBCD_FLUDS(CBC_FLUDS& cbc_fluds,
              size_t num_total_faces,
              size_t incoming_boundary_psi_buffer_size,
+              const std::vector<uint64_t>& face_neighbor_local_ids,
+              const std::vector<unsigned int>& face_neighbor_cell_node_map,
              const std::vector<int>& cell_to_local_face_offset_map,
              const std::vector<int>& boundary_psi_map);
 
   Storage<uint64_t> cell_id_storage_;
   Storage<int> cell_face_offset_storage_;
+
+  Storage<unsigned int> face_neighbor_cell_node_map_storage_;
+  Storage<uint64_t> face_neighbor_local_ids_storage_;
   
   /// Device storage for boundary angular fluxes
   Storage<double> boundary_psi_buffer_;

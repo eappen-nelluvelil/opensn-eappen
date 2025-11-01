@@ -106,7 +106,7 @@ public:
 
   size_t GetNumLocalCells() const { return num_local_cells_; }
 
-  std::tuple<size_t, size_t, std::vector<int>, std::vector<int>>
+  std::tuple<size_t, size_t, std::vector<uint64_t>, std::vector<unsigned int>, std::vector<int>, std::vector<int>>
   Prepare_CBCD_FLUDS(AngleSet& angle_set);
 
   std::vector<double> GetBoundaryPsiData(SweepChunk& sweep_chunk,
@@ -119,6 +119,8 @@ public:
 
   void Create_CBCD_FLUDS(size_t num_total_faces,
                          size_t incoming_boundary_psi_buffer_size,
+                         const std::vector<uint64_t>& face_neighbor_local_ids,
+                         const std::vector<unsigned int>& face_neighbor_cell_node_map,
                          const std::vector<int>& cell_to_local_face_offset_map,
                          const std::vector<int>& boundary_psi_map);
 
