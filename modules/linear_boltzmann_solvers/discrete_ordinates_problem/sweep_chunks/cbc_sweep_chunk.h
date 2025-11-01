@@ -67,6 +67,8 @@ public:
 
   void SetAngleSet(AngleSet& angle_set) override;
 
+  void GPUSetAngleSet(AngleSet& angle_set);
+
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
 
   void SetTaskList(const std::vector<Task*>& task_list);
@@ -94,10 +96,14 @@ public:
 
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
+  void SetNumTotalFaces(size_t total_faces) { total_faces_ = total_faces; }
+
   std::tuple<size_t, size_t, std::vector<int>, std::vector<int>>
   SizeBoundaryPsiData(AngleSet& angle_set);
 
   std::vector<double> PrepareBoundaryPsiData(AngleSet& angle_set, int buffer_size);
+
+  void UpdateBoundaryPsiData(AngleSet& angle_set);
 
 private:
   CBC_FLUDS* fluds_;
@@ -122,9 +128,12 @@ private:
   bool use_gpus_ = false;
   DiscreteOrdinatesProblem& problem_;
 
+  size_t total_faces_ = 0;
+
   /// Map to track if boundary data has been initialized for an angle set
   std::map<size_t, bool> boundary_data_initialized_map_;
   std::map<size_t, int> boundary_data_buffer_size_map_;
+  std::map<size_t, std::vector<double>> boundary_data_buffer_map_;
 
   DenseMatrix<Vector3> G_;
   DenseMatrix<double> M_;

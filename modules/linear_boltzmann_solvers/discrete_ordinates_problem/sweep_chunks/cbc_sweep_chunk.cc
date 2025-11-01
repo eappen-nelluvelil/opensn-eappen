@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
+#include "framework/runtime.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
@@ -207,11 +208,150 @@ CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
 
       fluds_->Create_CBCD_FLUDS(
         num_total_faces, incoming_boundary_psi_buffer_size, cell_face_offsets, boundary_psi_map);
+
+      const auto& boundary_psi_buffer = PrepareBoundaryPsiData(angle_set, boundary_data_buffer_size_map_[as_id]);
+      
+      boundary_data_buffer_map_[as_id] = boundary_psi_buffer;
+
+      fluds_->SetBoundaryPsiData(boundary_psi_buffer);
     }
+    // else {
+    //   opensn::log.Log() << "CBCSweepChunk: Boundary data for angleset " << as_id << " already initialized.";
+    // }
     const auto& boundary_psi_buffer = PrepareBoundaryPsiData(angle_set, boundary_data_buffer_size_map_[as_id]);
-    fluds_->SetBoundaryPsiData(boundary_psi_buffer);
+
+    bool boundary_psi_data_updated = false;
+    for (size_t i = 0; i < boundary_psi_buffer.size(); ++i)
+    {
+      if (boundary_data_buffer_map_[as_id][i] != boundary_psi_buffer[i])
+      {
+        boundary_psi_data_updated = true;
+        break;
+      }
+    }
+
+    if (boundary_psi_data_updated)
+    {
+      // opensn::log.Log() << "CBCSweepChunk: Updating boundary data for angleset " << as_id << ".";
+      boundary_data_buffer_map_[as_id] = boundary_psi_buffer;
+      fluds_->SetBoundaryPsiData(boundary_psi_buffer);
+    }
   }
   // */
+}
+
+void
+CBCSweepChunk::GPUSetAngleSet(AngleSet& angle_set)
+{
+  CALI_CXX_MARK_SCOPE("CbcSweepChunk::GPUSetAngleSet");
+
+  fluds_ = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
+
+  gs_size_ = groupset_.groups.size();
+  gs_gi_ = groupset_.groups.front().id;
+
+  surface_source_active_ = IsSurfaceSourceActive();
+  num_angles_in_as_ = angle_set.GetNumAngles();
+  group_stride_ = angle_set.GetNumGroups();
+  group_angle_stride_ = group_stride_ * num_angles_in_as_;
+
+  // /*
+  // if (use_gpus_)
+  // {
+  //   const size_t as_id = angle_set.GetID();
+  //   if (boundary_data_initialized_map_.find(as_id) == boundary_data_initialized_map_.end())
+  //   {
+  //     boundary_data_initialized_map_[as_id] = true;
+
+  //     // Determine sizes of buffers
+  //     auto [num_total_faces,
+  //           incoming_boundary_psi_buffer_size,
+  //           cell_face_offsets,
+  //           boundary_psi_map] = SizeBoundaryPsiData(angle_set);
+
+  //     boundary_data_buffer_size_map_[as_id] = incoming_boundary_psi_buffer_size;
+
+  //     fluds_->Create_CBCD_FLUDS(
+  //       num_total_faces, incoming_boundary_psi_buffer_size, cell_face_offsets, boundary_psi_map);
+
+  //     const auto& boundary_psi_buffer = PrepareBoundaryPsiData(angle_set, boundary_data_buffer_size_map_[as_id]);
+      
+  //     boundary_data_buffer_map_[as_id] = boundary_psi_buffer;
+
+  //     fluds_->SetBoundaryPsiData(boundary_psi_buffer);
+  //   }
+  //   else 
+  //   {
+  //     // opensn::log.Log() << "CBCSweepChunk: Boundary data for angleset " << as_id << " already initialized.";
+  //     const auto& boundary_psi_buffer = PrepareBoundaryPsiData(angle_set, boundary_data_buffer_size_map_[as_id]);
+
+  //     bool boundary_psi_data_updated = false;
+  //     for (size_t i = 0; i < boundary_psi_buffer.size(); ++i)
+  //     {
+  //       if (boundary_data_buffer_map_[as_id][i] != boundary_psi_buffer[i])
+  //       {
+  //         boundary_psi_data_updated = true;
+  //         break;
+  //       }
+  //     }
+
+  //     if (boundary_psi_data_updated)
+  //     {
+  //       boundary_data_buffer_map_[as_id] = boundary_psi_buffer;
+  //       fluds_->SetBoundaryPsiData(boundary_psi_buffer);
+  //     }
+  //   }
+  // }
+  // */
+}
+void
+CBCSweepChunk::UpdateBoundaryPsiData(AngleSet& angle_set)
+{
+  CALI_CXX_MARK_SCOPE("CBCSweepChunk::UpdateBoundaryPsiData");
+
+  const size_t as_id = angle_set.GetID();
+  if (boundary_data_initialized_map_.find(as_id) == boundary_data_initialized_map_.end())
+  {
+    boundary_data_initialized_map_[as_id] = true;
+
+    // Determine sizes of buffers
+    auto [num_total_faces,
+          incoming_boundary_psi_buffer_size,
+          cell_face_offsets,
+          boundary_psi_map] = SizeBoundaryPsiData(angle_set);
+
+    boundary_data_buffer_size_map_[as_id] = incoming_boundary_psi_buffer_size;
+
+    fluds_->Create_CBCD_FLUDS(
+      num_total_faces, incoming_boundary_psi_buffer_size, cell_face_offsets, boundary_psi_map);
+
+    const auto& boundary_psi_buffer = PrepareBoundaryPsiData(angle_set, boundary_data_buffer_size_map_[as_id]);
+    
+    boundary_data_buffer_map_[as_id] = boundary_psi_buffer;
+
+    fluds_->SetBoundaryPsiData(boundary_psi_buffer);
+  }
+  else 
+  {
+    // opensn::log.Log() << "CBCSweepChunk: Boundary data for angleset " << as_id << " already initialized.";
+    const auto& boundary_psi_buffer = PrepareBoundaryPsiData(angle_set, boundary_data_buffer_size_map_[as_id]);
+
+    bool boundary_psi_data_updated = false;
+    for (size_t i = 0; i < boundary_psi_buffer.size(); ++i)
+    {
+      if (boundary_data_buffer_map_[as_id][i] != boundary_psi_buffer[i])
+      {
+        boundary_psi_data_updated = true;
+        break;
+      }
+    }
+
+    if (boundary_psi_data_updated)
+    {
+      boundary_data_buffer_map_[as_id] = boundary_psi_buffer;
+      fluds_->SetBoundaryPsiData(boundary_psi_buffer);
+    }
+  }
 }
 
 void

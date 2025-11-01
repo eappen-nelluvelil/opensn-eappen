@@ -226,6 +226,8 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
       rbndry->ResetAnglesReadyStatus();
     }
   }
+
+  // opensn::log.Log() << "SweepScheduler: Completed FIFO sweep scheduling.";
 }
 
 void

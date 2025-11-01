@@ -151,7 +151,7 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   // Cast SweepChunk to CBCSweepChunk to access GPU-specific methods
   auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);
 
-  cbc_sweep_chunk.SetAngleSet(*this);
+  cbc_sweep_chunk.GPUSetAngleSet(*this);
 
   auto tasks_who_received_data = async_comm_.ReceiveData();
 
@@ -164,6 +164,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   for (auto& [bid, boundary] : boundaries_)
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
+
+  cbc_sweep_chunk.UpdateBoundaryPsiData(*this);
 
   std::vector<Task*> ready_tasks;
 
