@@ -1039,15 +1039,8 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
         if (use_gpus_)
         {
           auto cbc_fluds = std::static_pointer_cast<CBC_FLUDS>(fluds);
-          auto [num_total_faces,
-                incoming_boundary_psi_buffer_size,
-                face_neighbor_local_ids,
-                face_neighbor_cell_node_map,
-                cell_face_offsets,
-                boundary_psi_map] =
-            cbc_fluds->Prepare_CBCD_FLUDS(*angle_set);
-
-          cbc_fluds->Create_CBCD_FLUDS(num_total_faces, incoming_boundary_psi_buffer_size, face_neighbor_local_ids, face_neighbor_cell_node_map, cell_face_offsets, boundary_psi_map);
+          cbc_fluds->Prepare_CBCD_FLUDS(*angle_set);
+          cbc_fluds->Create_CBCD_FLUDS();
         }
 
         angle_set_group.GetAngleSets().push_back(angle_set);

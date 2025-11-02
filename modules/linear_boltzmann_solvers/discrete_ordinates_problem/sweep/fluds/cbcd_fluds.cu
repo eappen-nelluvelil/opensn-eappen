@@ -41,7 +41,7 @@ CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds,
   cell_to_local_face_offset_storage_.Copy(cell_to_local_face_offset_map.begin(), cell_to_local_face_offset_map.end());
 }
 
-std::tuple<size_t, size_t, std::vector<uint64_t>, std::vector<unsigned int>, std::vector<int>, std::vector<int>>
+void
 CBC_FLUDS::Prepare_CBCD_FLUDS(AngleSet& angle_set)
 {
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(angle_set.GetSPDS());
@@ -51,11 +51,11 @@ CBC_FLUDS::Prepare_CBCD_FLUDS(AngleSet& angle_set)
   for (const auto& cell : grid->local_cells)
     num_total_faces += cell.faces.size();
 
-  std::vector<int> cell_face_offsets(grid->local_cells.size());
+  std::vector<int> cell_to_local_face_offset_map(grid->local_cells.size());
   size_t cell_face_stride = 0;
   for (const auto& cell : grid->local_cells)
   {
-    cell_face_offsets[cell.local_id] = cell_face_stride;
+    cell_to_local_face_offset_map[cell.local_id] = cell_face_stride;
     cell_face_stride += cell.faces.size();
   }
 
@@ -106,12 +106,12 @@ CBC_FLUDS::Prepare_CBCD_FLUDS(AngleSet& angle_set)
     face_offset_stride += cell.faces.size();
   }
 
-  return {num_total_faces, 
-          incoming_boundary_psi_buffer_size, 
-          face_neighbor_local_ids, 
-          face_neighbor_cell_node_map, 
-          cell_face_offsets, 
-          boundary_psi_map};
+  num_total_faces_ = num_total_faces;
+  incoming_boundary_psi_buffer_size_ = incoming_boundary_psi_buffer_size;
+  face_neighbor_local_ids_ = face_neighbor_local_ids;
+  face_neighbor_cell_node_map_ = face_neighbor_cell_node_map;
+  cell_to_local_face_offset_map_ = cell_to_local_face_offset_map;
+  boundary_psi_map_ = boundary_psi_map;
 }
 
 std::vector<double>
@@ -187,28 +187,18 @@ CBC_FLUDS::UpdateBoundaryPsiData(SweepChunk& sweep_chunk,
 }
 
 void
-CBC_FLUDS::Create_CBCD_FLUDS(size_t num_total_faces,
-                             size_t incoming_boundary_psi_buffer_size,
-                             const std::vector<uint64_t>& face_neighbor_local_ids,
-                             const std::vector<unsigned int>& face_neighbor_cell_node_map,
-                             const std::vector<int>& cell_to_local_face_offset_map,
-                             const std::vector<int>& boundary_psi_map)
+CBC_FLUDS::Create_CBCD_FLUDS()
 {
   if (cbcd_fluds_ == nullptr)
   {
     CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this,
-                                            num_total_faces,
-                                            incoming_boundary_psi_buffer_size,
-                                            face_neighbor_local_ids,
-                                            face_neighbor_cell_node_map,
-                                            cell_to_local_face_offset_map,
-                                            boundary_psi_map);
+                                            num_total_faces_,
+                                            incoming_boundary_psi_buffer_size_,
+                                            face_neighbor_local_ids_,
+                                            face_neighbor_cell_node_map_,
+                                            cell_to_local_face_offset_map_,
+                                            boundary_psi_map_);
     cbcd_fluds_ = cbcd_fluds;
-
-    num_total_faces_ = num_total_faces;
-    incoming_boundary_psi_buffer_size_ = incoming_boundary_psi_buffer_size;
-    cell_to_local_face_offset_map_ = cell_to_local_face_offset_map;
-    boundary_psi_map_ = boundary_psi_map;
 
     incoming_boundary_psi_buffer_.resize(incoming_boundary_psi_buffer_size_, 0.0);
   }

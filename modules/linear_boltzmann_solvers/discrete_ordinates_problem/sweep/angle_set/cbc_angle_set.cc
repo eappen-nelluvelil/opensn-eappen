@@ -194,7 +194,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
       // cbc_sweep_chunk.GPUSweep(*this);
-      cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
+      cbc_sweep_chunk.Sweep(*this);
+      // cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
 
       for (auto* cell_task : ready_tasks)
       {

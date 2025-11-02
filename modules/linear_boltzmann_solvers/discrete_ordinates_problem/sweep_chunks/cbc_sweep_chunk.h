@@ -90,8 +90,6 @@ public:
 
   void CPUSweep(AngleSet& angle_set);
 
-  void GPUSweep(AngleSet& angle_set);
-
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
 private:

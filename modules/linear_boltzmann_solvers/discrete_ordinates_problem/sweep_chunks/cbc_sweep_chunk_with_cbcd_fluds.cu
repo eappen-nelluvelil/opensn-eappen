@@ -210,15 +210,6 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
         }
         else if (offset == -1) // Local face
         {
-          // const size_t nbr_cell_local_id = args.face_neighbor_local_ids[current_face_offset];
-          // const size_t nbr_cell_data_start_idx = args.cell_dof_map[nbr_cell_local_id];
-          // const size_t nbr_node_map_offset = current_face_offset * cbc_max_face_dofs;
-          // const size_t adj_cell_node = args.face_neighbor_cell_node_map[nbr_node_map_offset + fj];
-          // const size_t addr_offset =
-          //   adj_cell_node * args.num_groups_and_angles + angle_idx * args.groupset_size + group_idx;
-          // const size_t nbr_cell_data_idx = nbr_cell_data_start_idx + addr_offset;
-          // psi_in_ptr = &args.local_psi_data[nbr_cell_data_idx];
-
           const int local_face_offset = args.cell_to_local_face_offset_map[cell_local_id] + f;
           const size_t nbr_cell_local_id = args.face_neighbor_local_ids[local_face_offset];
           const size_t nbr_cell_data_start_idx = args.cell_dof_map[nbr_cell_local_id];
@@ -501,10 +492,6 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
   std::vector<int> cell_face_offset_map(tasks_to_execute_.size());
 
-  // Local cell neighbor information buffers
-  std::vector<unsigned int> face_neighbor_cell_node_map(total_faces * cbc_max_face_dofs, 0);
-  std::vector<uint64_t> face_neighbor_local_ids(total_faces, 0);
-
   size_t face_offset_stride = 0;
   size_t upwind_buffer_offset = 0;
   size_t downwind_buffer_offset = 0;
@@ -538,15 +525,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       if (face_orientations[f] == FaceOrientation::INCOMING)
       {
         if (is_local_face)
-        {
           upwind_psi_offsets[current_face_offset] = -1;
-          // face_neighbor_local_ids[current_face_offset] =
-          //   face.GetNeighborLocalID(discretization_.GetGrid().get());
-          // const size_t neighbor_node_map_offset = current_face_offset * cbc_max_face_dofs;
-          // for (size_t fj = 0; fj < num_face_nodes; ++fj)
-          //   face_neighbor_cell_node_map[neighbor_node_map_offset + fj] =
-          //     face_nodal_mapping->cell_node_mapping_[fj];
-        }
         else if (not is_boundary_face)
         {
           upwind_psi_offsets[current_face_offset] = upwind_buffer_offset;
@@ -571,9 +550,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
           upwind_buffer_offset += face_data_size;
         }
         else
-        {
           upwind_psi_offsets[current_face_offset] = -2;
-        }
       }
       // Downwind data packing
       else if (face_orientations[f] == FaceOrientation::OUTGOING)
@@ -634,14 +611,10 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   args.groupset_group_stride = groupset_group_stride_;
   args.save_angular_flux = save_angular_flux_;
 
-  // Storage<uint64_t> cell_id_storage(cell_local_ids.size());
-  // cell_id_storage.Copy(cell_local_ids.begin(), cell_local_ids.end());
-  // args.cell_local_ids = cell_id_storage.GetDevicePtr();
   cbcd_fluds.cell_id_storage_.Copy(cell_local_ids.begin(), cell_local_ids.end());
   args.cell_local_ids = cbcd_fluds.cell_id_storage_.GetDevicePtr();
   args.num_cells = cell_local_ids.size();
 
-  // Storage<int> cell_face_offset_storage(cell_face_offset_map.size());
   cbcd_fluds.cell_face_offset_storage_.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
   args.cell_face_offset_map = cbcd_fluds.cell_face_offset_storage_.GetDevicePtr();
 
@@ -650,18 +623,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   args.num_angles_in_as = num_angles_in_as;
   args.num_groups_and_angles = num_angles_in_as * gs_size;
 
-  // Storage<unsigned int> face_neighbor_cell_node_map_storage(face_neighbor_cell_node_map.size());
-  // face_neighbor_cell_node_map_storage.Copy(face_neighbor_cell_node_map.begin(),
-  //                                          face_neighbor_cell_node_map.end());
-  // args.face_neighbor_cell_node_map = face_neighbor_cell_node_map_storage.GetDevicePtr();
-
   args.face_neighbor_cell_node_map = cbcd_fluds.face_neighbor_cell_node_map_storage_.GetDevicePtr();
-
-  // Storage<uint64_t> face_neighbor_local_ids_storage(face_neighbor_local_ids.size());
-  // face_neighbor_local_ids_storage.Copy(face_neighbor_local_ids.begin(),
-  //                                      face_neighbor_local_ids.end());
-  // args.face_neighbor_local_ids = face_neighbor_local_ids_storage.GetDevicePtr();
-
   args.face_neighbor_local_ids = cbcd_fluds.face_neighbor_local_ids_storage_.GetDevicePtr();
 
   // Boundary angular flux buffers
