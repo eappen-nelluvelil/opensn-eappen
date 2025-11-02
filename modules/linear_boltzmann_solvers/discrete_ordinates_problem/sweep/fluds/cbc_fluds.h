@@ -116,9 +116,7 @@ public:
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
-  void Create_CBCD_FLUDS();
-
-  void SetBoundaryPsiData(const std::vector<double>& boundary_psi);
+  void Create_CBCD_FLUDS(AngleSet& angle_set);
 
   void Destroy_CBCD_FLUDS();
 

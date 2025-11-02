@@ -1034,14 +1034,8 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                                         sweep_boundaries_,
                                                         *grid_local_comm_set_,
                                                         use_gpus_);
-
-        // Create the CBCD_FLUDS here
         if (use_gpus_)
-        {
-          auto cbc_fluds = std::static_pointer_cast<CBC_FLUDS>(fluds);
-          cbc_fluds->Prepare_CBCD_FLUDS(*angle_set);
-          cbc_fluds->Create_CBCD_FLUDS();
-        }
+          std::static_pointer_cast<CBC_FLUDS>(fluds)->Create_CBCD_FLUDS(*angle_set);
 
         angle_set_group.GetAngleSets().push_back(angle_set);
       }

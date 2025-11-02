@@ -182,15 +182,19 @@ CBC_FLUDS::UpdateBoundaryPsiData(SweepChunk& sweep_chunk,
   if (boundary_psi_data_changed)
   {
     incoming_boundary_psi_buffer_ = boundary_psi_buffer;
-    SetBoundaryPsiData(incoming_boundary_psi_buffer_);
+    // SetBoundaryPsiData(incoming_boundary_psi_buffer_);
+    reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)
+      ->boundary_psi_buffer_.Copy(incoming_boundary_psi_buffer_.begin(),
+                                  incoming_boundary_psi_buffer_.end());
   }
 }
 
 void
-CBC_FLUDS::Create_CBCD_FLUDS()
+CBC_FLUDS::Create_CBCD_FLUDS(AngleSet& angle_set)
 {
   if (cbcd_fluds_ == nullptr)
   {
+    Prepare_CBCD_FLUDS(angle_set);
     CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this,
                                             num_total_faces_,
                                             incoming_boundary_psi_buffer_size_,
@@ -202,12 +206,6 @@ CBC_FLUDS::Create_CBCD_FLUDS()
 
     incoming_boundary_psi_buffer_.resize(incoming_boundary_psi_buffer_size_, 0.0);
   }
-}
-
-void
-CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi)
-{
-  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->boundary_psi_buffer_.Copy(boundary_psi.begin(), boundary_psi.end());
 }
 
 void

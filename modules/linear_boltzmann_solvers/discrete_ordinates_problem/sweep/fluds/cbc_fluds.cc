@@ -191,12 +191,7 @@ CBC_FLUDS::UpdateBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 }
 
 void
-CBC_FLUDS::Create_CBCD_FLUDS()
-{
-}
-
-void
-CBC_FLUDS::SetBoundaryPsiData(const std::vector<double>& boundary_psi)
+CBC_FLUDS::Create_CBCD_FLUDS(AngleSet& angle_set)
 {
 }
 
