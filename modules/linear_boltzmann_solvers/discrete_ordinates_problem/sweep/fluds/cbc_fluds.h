@@ -108,11 +108,27 @@ public:
 
   void Prepare_CBCD_FLUDS(AngleSet& angle_set);
 
-  std::vector<double> GetBoundaryPsiData(SweepChunk& sweep_chunk,
-                                         AngleSet& angle_set);
+  std::vector<double> GetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set);
 
-  void SetBoundaryPsiData(SweepChunk& sweep_chunk,
-                             AngleSet& angle_set);
+  void SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set);
+
+  void PackAndGetUpwindPsi(const std::vector<Task*>& tasks,
+                           const AngleSet& angle_set,
+                           const LBSGroupset& groupset,
+                           const SpatialDiscretization& sdm,
+                           const std::vector<CellLBSView>& cell_views,
+                           std::vector<double>& buffer,
+                           std::vector<int>& offsets,
+                           std::vector<int>& face_offset_map);
+
+  void UnpackDownwindPsi(const std::vector<Task*>& tasks,
+                         const AngleSet& angle_set,
+                         const LBSGroupset& groupset,
+                         const SpatialDiscretization& sdm,
+                         const std::vector<CellLBSView>& cell_views,
+                         const std::vector<double>& buffer,
+                         const std::vector<int>& offsets,
+                         const std::vector<int>& face_offset_map);
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
@@ -168,6 +184,9 @@ private:
   std::vector<int> boundary_psi_map_;
   std::vector<double> incoming_boundary_psi_buffer_;
   std::vector<int> incoming_face_category_map_;
+  std::vector<int> outgoing_face_category_map_;
+  size_t non_local_upwind_psi_buffer_size_;
+  size_t non_local_and_reflecting_psi_buffer_size_;
 
   std::vector<size_t> cell_dof_map_;
   void* cbcd_fluds_ = nullptr;

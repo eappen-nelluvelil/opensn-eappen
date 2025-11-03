@@ -23,6 +23,8 @@ protected:
   CBC_FLUDS& cbc_fluds_;
   bool use_gpus_ = false;
 
+  bool has_set_boundary_data_ = false;
+
 public:
   CBC_AngleSet(size_t id,
                size_t num_groups,

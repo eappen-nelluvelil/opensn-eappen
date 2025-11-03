@@ -45,8 +45,8 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
     std::fill(cell_local_ID_to_psi_map_.begin(), cell_local_ID_to_psi_map_.end(), nullptr);
     local_psi_data_backing_buffer_.resize(min_num_pool_allocator_slots * slot_size_);
     local_psi_data_.add_block(local_psi_data_backing_buffer_.data(),
-                            (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
-                            slot_size_ * sizeof(double));
+                              (min_num_pool_allocator_slots * slot_size_) * sizeof(double),
+                              slot_size_ * sizeof(double));
   }
 }
 
@@ -165,9 +165,8 @@ CBC_FLUDS::BuildDeviceCellDOFMap()
   for (const auto& cell : grid->local_cells)
   {
     const size_t dof_map_idx = cell.local_id;
-    const size_t spatial_dof_0_idx = 
-      (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / 
-        num_angles_in_gs_quadrature_ / num_groups_);
+    const size_t spatial_dof_0_idx =
+      (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_);
     cell_dof_map_[dof_map_idx] = spatial_dof_0_idx * num_groups_and_angles_;
   }
 }
@@ -179,15 +178,37 @@ CBC_FLUDS::Prepare_CBCD_FLUDS(AngleSet& angle_set)
 }
 
 std::vector<double>
-CBC_FLUDS::GetBoundaryPsiData(SweepChunk& sweep_chunk,
-                              AngleSet& angle_set)
+CBC_FLUDS::GetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 {
 }
 
 void
 CBC_FLUDS::SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 {
+}
 
+void
+CBC_FLUDS::PackAndGetUpwindPsi(const std::vector<Task*>& tasks,
+                           const AngleSet& angle_set,
+                           const LBSGroupset& groupset,
+                           const SpatialDiscretization& sdm,
+                           const std::vector<CellLBSView>& cell_views,
+                           std::vector<double>& buffer,
+                           std::vector<int>& offsets,
+                           std::vector<int>& face_offset_map)
+{
+}
+
+void
+CBC_FLUDS::UnpackDownwindPsi(const std::vector<Task*>& tasks,
+                             const AngleSet& angle_set,
+                             const LBSGroupset& groupset,
+                             const SpatialDiscretization& sdm,
+                             const std::vector<CellLBSView>& cell_views,
+                             const std::vector<double>& buffer,
+                             const std::vector<int>& offsets,
+                             const std::vector<int>& face_offset_map)
+{
 }
 
 void

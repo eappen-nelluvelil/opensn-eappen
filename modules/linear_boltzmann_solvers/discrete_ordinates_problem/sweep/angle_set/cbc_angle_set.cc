@@ -165,9 +165,17 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
+  if (not tasks_who_received_data.empty())
+    return AngleSetStatus::NOT_FINISHED;
+
   // Update boundary data
   // This is really only needed for reflecting boundaries
-  dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
+  if (not has_set_boundary_data_)
+  {
+    dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
+    has_set_boundary_data_ = true;
+  }
+  // dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
 
   std::vector<Task*> ready_tasks;
 
@@ -190,8 +198,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     // Note that if any tasks received data this iteration, we skip execution
     // This is to make sure that we can pass in as many ready tasks as possible to the GPU,
     // rather than executing a smaller batch, then receiving data, and having more ready tasks
-    if (not ready_tasks.empty() and tasks_who_received_data.empty())
-    // if (not ready_tasks.empty())
+    // if (not ready_tasks.empty() and tasks_who_received_data.empty())
+    if (not ready_tasks.empty())
     {
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
@@ -236,6 +244,7 @@ CBC_AngleSet::ResetSweepBuffers()
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;
+  has_set_boundary_data_ = false;
 }
 
 const double*

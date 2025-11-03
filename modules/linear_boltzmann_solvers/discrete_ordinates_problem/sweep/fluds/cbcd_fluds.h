@@ -13,6 +13,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/storage.h"
 #include "caribou/caribou.h"
+#include "framework/runtime.h"
+#include "framework/logging/log.h"
 #include <vector>
 #include <utility>
 
@@ -31,7 +33,10 @@ public:
              const std::vector<unsigned int>& face_neighbor_cell_node_map,
              const std::vector<int>& cell_to_local_face_offset_map,
              const std::vector<int>& boundary_psi_map,
-             const std::vector<int>& incoming_face_category_map);
+             const std::vector<int>& incoming_face_category_map,
+             const std::vector<int>& outgoing_face_category_map,
+             size_t non_local_upwind_psi_buffer_size,
+             size_t non_local_and_reflecting_psi_buffer_size);
 
   Storage<uint64_t> cell_id_storage_;
   Storage<int> cell_face_offset_storage_;
@@ -40,12 +45,19 @@ public:
   Storage<uint64_t> face_neighbor_local_ids_storage_;
 
   Storage<int> incoming_face_category_map_storage_;
-  
+  Storage<int> outgoing_face_category_map_storage_; 
+
   /// Device storage for boundary angular fluxes
   Storage<double> boundary_psi_buffer_;
 
   /// Device storage for mapping into the boundary psi buffer
   Storage<int> boundary_psi_map_storage_;
+
+  /// Device storage for non-local upwind angular fluxes
+  Storage<double> non_local_upwind_psi_buffer_storage_;
+
+  /// Device storage for outgoing non-local and reflecting boundary angular fluxes
+  Storage<double> non_local_and_reflecting_psi_buffer_storage_;
 
   /// Device storage for mapping cells to their corresponding faces in the boundary_psi_map_storage_
   /// vector
