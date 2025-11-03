@@ -85,6 +85,8 @@ struct CBCSweepKernelArgs_WITH_CBCD_FLUDS
   const int* boundary_psi_map;
   const int* cell_to_local_face_offset_map;
 
+  const int* incoming_face_category_map;
+
   // Upwind/downwind psi buffers
   const double* upwind_psi_data;
   const int* upwind_psi_offsets;
@@ -165,6 +167,7 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
                                        CellView& cell)
 {
   const size_t cell_local_id = args.cell_local_ids[cell_idx];
+  const size_t cell_face_start_idx = args.cell_to_local_face_offset_map[cell_local_id];
   const int face_offset = args.cell_face_offset_map[cell_idx];
 
   // Loop over each face
@@ -181,8 +184,8 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
     if (mu >= 0.0)
       continue;
 
-    const int current_face_offset = face_offset + f;
-    const int offset = args.upwind_psi_offsets[current_face_offset];
+    // const int offset = args.upwind_psi_offsets[current_face_offset];
+    const int incoming_face_category = args.incoming_face_category_map[cell_face_start_idx + f];
 
     // Compute surface integral
     for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
@@ -202,13 +205,15 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
         // upwind_psi_data buffer
 
         const double* psi_in_ptr;
-        if (offset >= 0) // Non-local or boundary face
+        if (incoming_face_category >= 0) // Non-local face
         {
+          const int current_face_offset = face_offset + f;
+          const int offset = args.upwind_psi_offsets[current_face_offset];
           const size_t upwind_offset =
             offset + fj * args.upwind_face_stride + angle_idx * args.groupset_size + group_idx;
           psi_in_ptr = &args.upwind_psi_data[upwind_offset];
         }
-        else if (offset == -1) // Local face
+        else if (incoming_face_category == -1) // Local face
         {
           const int local_face_offset = args.cell_to_local_face_offset_map[cell_local_id] + f;
           const size_t nbr_cell_local_id = args.face_neighbor_local_ids[local_face_offset];
@@ -220,7 +225,7 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
           const size_t nbr_cell_data_idx = nbr_cell_data_start_idx + addr_offset;
           psi_in_ptr = &args.local_psi_data[nbr_cell_data_idx];
         }
-        else if (offset == -2)
+        else if (incoming_face_category == -2)  // Boundary face
         {
           const int local_face_offset = args.cell_to_local_face_offset_map[cell_local_id];
           const size_t boundary_psi_map_idx =
@@ -630,6 +635,8 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   args.boundary_psi_data = cbcd_fluds.GetBoundaryPsiDevicePtr();
   args.boundary_psi_map = cbcd_fluds.GetBoundaryPsiMapDevicePtr();
   args.cell_to_local_face_offset_map = cbcd_fluds.cell_to_local_face_offset_storage_.GetDevicePtr();
+
+  args.incoming_face_category_map = cbcd_fluds.incoming_face_category_map_storage_.GetDevicePtr();
 
   Storage<double> upwind_psi_storage(upwind_psi_buffer.size());
   upwind_psi_storage.Copy(upwind_psi_buffer.begin(), upwind_psi_buffer.end());

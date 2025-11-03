@@ -185,7 +185,7 @@ CBC_FLUDS::GetBoundaryPsiData(SweepChunk& sweep_chunk,
 }
 
 void
-CBC_FLUDS::UpdateBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
+CBC_FLUDS::SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 {
 
 }

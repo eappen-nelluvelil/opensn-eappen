@@ -111,7 +111,7 @@ public:
   std::vector<double> GetBoundaryPsiData(SweepChunk& sweep_chunk,
                                          AngleSet& angle_set);
 
-  void UpdateBoundaryPsiData(SweepChunk& sweep_chunk,
+  void SetBoundaryPsiData(SweepChunk& sweep_chunk,
                              AngleSet& angle_set);
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
@@ -167,6 +167,7 @@ private:
   std::vector<int> cell_to_local_face_offset_map_;
   std::vector<int> boundary_psi_map_;
   std::vector<double> incoming_boundary_psi_buffer_;
+  std::vector<int> incoming_face_category_map_;
 
   std::vector<size_t> cell_dof_map_;
   void* cbcd_fluds_ = nullptr;

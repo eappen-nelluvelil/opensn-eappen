@@ -165,7 +165,9 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
-  dynamic_cast<CBC_FLUDS&>(*fluds_).UpdateBoundaryPsiData(sweep_chunk, *this);
+  // Update boundary data
+  // This is really only needed for reflecting boundaries
+  dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
 
   std::vector<Task*> ready_tasks;
 
@@ -194,8 +196,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
       // cbc_sweep_chunk.GPUSweep(*this);
-      cbc_sweep_chunk.Sweep(*this);
-      // cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
+      // cbc_sweep_chunk.Sweep(*this);
+      cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
 
       for (auto* cell_task : ready_tasks)
       {
