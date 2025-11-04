@@ -113,7 +113,7 @@ CBC_FLUDS::Prepare_CBCD_FLUDS(AngleSet& angle_set)
         (is_boundary_face) and (angle_set.GetBoundaries().at(cell.faces[f].neighbor_id)->IsReflecting());
 
       const size_t current_face_offset = face_offset_stride + f;
-      
+
       if ((face_orientations[f] == FaceOrientation::INCOMING))
       {
         if (is_local_face)

@@ -814,30 +814,11 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
                   cudaMemcpyDeviceToHost,
                   stream2);
 
+  // Wait for stream2 to complete so we can process downwind results
+  cudaStreamSynchronize(stream2);
   const auto& downwind_results = host_downwind_psi_buffer.data();
 
-  cudaDeviceSynchronize();
-  // cudaStreamSynchronize(stream1);
-  // cudaStreamSynchronize(stream2);
-
-  // Post-kernel processing
-  phi->CopyFromDevice();
-  if (save_angular_flux_)
-    reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
-
-  // Retrieve outflow
-  OutflowCarrier* outflow = reinterpret_cast<OutflowCarrier*>(problem_.GetCarrier(1));
-  outflow->AccumulateBack(cell_transport_views_);
-  outflow->Reset();
-
-  // Copy downwind angular flux data from device to host
-  // cbcd_fluds.non_local_and_reflecting_psi_buffer_storage_.CopyFromDevice();
-  // const auto& downwind_results =
-  // cbcd_fluds.non_local_and_reflecting_psi_buffer_storage_.GetHostVector();
-
-  // cudaStreamSynchronize(stream2);
-
-  // for (size_t i = 0; i < tasks_to_execute_.size(); ++i)
+  // Process downwind results on host, can overlap with stream1 execution
   for (size_t i = 0; i < tasks_for_stream_2.size(); ++i)
   {
     auto* task = tasks_for_stream_2[i];
@@ -901,6 +882,19 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
       }
     }
   }
+
+  // Now wait for stream1 to finish
+  cudaStreamSynchronize(stream1);
+
+  // Post-kernel processing
+  phi->CopyFromDevice();
+  if (save_angular_flux_)
+    reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
+
+  // Retrieve outflow
+  OutflowCarrier* outflow = reinterpret_cast<OutflowCarrier*>(problem_.GetCarrier(1));
+  outflow->AccumulateBack(cell_transport_views_);
+  outflow->Reset();
 
   cudaStreamDestroy(stream1);
   cudaStreamDestroy(stream2);
