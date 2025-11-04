@@ -9,17 +9,7 @@
 namespace opensn
 {
 
-CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds,
-                       size_t num_total_faces,
-                       size_t incoming_boundary_psi_buffer_size,
-                       const std::vector<uint64_t>& face_neighbor_local_ids,
-                       const std::vector<unsigned int>& face_neighbor_cell_node_map,
-                       const std::vector<int>& cell_to_local_face_offset_map,
-                       const std::vector<int>& boundary_psi_map,
-                       const std::vector<int>& incoming_face_category_map,
-                       const std::vector<int>& outgoing_face_category_map,
-                       size_t non_local_upwind_psi_buffer_size,
-                       size_t non_local_and_reflecting_psi_buffer_size)
+CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds)
 {
   // opensn::log.Log() << "Created CBCD_FLUDS\n";
   device_buffer_ = crb::DeviceMemory<double>(cbc_fluds.GetGPULocalPsiDataSize());
@@ -32,32 +22,54 @@ CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds,
   cell_face_offset_storage_ = Storage<int>(cbc_fluds.GetNumLocalCells());
 
   // Auxiliary maps for dealing with cells with purely local dependencies
-  face_neighbor_cell_node_map_storage_ = Storage<unsigned int>(num_total_faces * cbc_max_face_dofs);
-  face_neighbor_cell_node_map_storage_.Copy(face_neighbor_cell_node_map.begin(),
-                                            face_neighbor_cell_node_map.end());
-  face_neighbor_local_ids_storage_ = Storage<uint64_t>(num_total_faces);
-  face_neighbor_local_ids_storage_.Copy(face_neighbor_local_ids.begin(),
-                                        face_neighbor_local_ids.end());
+  face_neighbor_cell_node_map_storage_ = Storage<unsigned int>(cbc_fluds.num_total_faces_ * cbc_max_face_dofs);
+  face_neighbor_cell_node_map_storage_.Copy(cbc_fluds.face_neighbor_cell_node_map_.begin(),
+                                            cbc_fluds.face_neighbor_cell_node_map_.end());
+
+  face_neighbor_local_ids_storage_ = Storage<uint64_t>(cbc_fluds.num_total_faces_);
+  face_neighbor_local_ids_storage_.Copy(cbc_fluds.face_neighbor_local_ids_.begin(),
+                                        cbc_fluds.face_neighbor_local_ids_.end());
 
   // Boundary
-  boundary_psi_buffer_ = Storage<double>(incoming_boundary_psi_buffer_size);
-  boundary_psi_map_storage_ = Storage<int>(num_total_faces);
-  boundary_psi_map_storage_.Copy(boundary_psi_map.begin(), boundary_psi_map.end());
+  boundary_psi_buffer_ = Storage<double>(cbc_fluds.incoming_boundary_psi_buffer_size_);
+  boundary_psi_map_storage_ = Storage<int>(cbc_fluds.num_total_faces_);
+  boundary_psi_map_storage_.Copy(cbc_fluds.boundary_psi_map_.begin(), cbc_fluds.boundary_psi_map_.end());
 
-  cell_to_local_face_offset_storage_ = Storage<int>(cell_to_local_face_offset_map.size());
-  cell_to_local_face_offset_storage_.Copy(cell_to_local_face_offset_map.begin(),
-                                          cell_to_local_face_offset_map.end());
+  cell_to_local_face_offset_storage_ = Storage<int>(cbc_fluds.cell_to_local_face_offset_map_.size());
+  cell_to_local_face_offset_storage_.Copy(cbc_fluds.cell_to_local_face_offset_map_.begin(),
+                                          cbc_fluds.cell_to_local_face_offset_map_.end());
 
-  incoming_face_category_map_storage_ = Storage<int>(num_total_faces);
-  incoming_face_category_map_storage_.Copy(incoming_face_category_map.begin(),
-                                           incoming_face_category_map.end());
+  incoming_face_category_map_storage_ = Storage<int>(cbc_fluds.num_total_faces_);
+  incoming_face_category_map_storage_.Copy(cbc_fluds.incoming_face_category_map_.begin(),
+                                           cbc_fluds.incoming_face_category_map_.end());
 
-  outgoing_face_category_map_storage_ = Storage<int>(num_total_faces);
-  outgoing_face_category_map_storage_.Copy(outgoing_face_category_map.begin(),
-                                           outgoing_face_category_map.end());
+  outgoing_face_category_map_storage_ = Storage<int>(cbc_fluds.num_total_faces_);
+  outgoing_face_category_map_storage_.Copy(cbc_fluds.outgoing_face_category_map_.begin(),
+                                           cbc_fluds.outgoing_face_category_map_.end());
 
-  non_local_upwind_psi_buffer_storage_ = Storage<double>(non_local_upwind_psi_buffer_size);
-  non_local_and_reflecting_psi_buffer_storage_ = Storage<double>(non_local_and_reflecting_psi_buffer_size);
+  non_local_upwind_psi_buffer_storage_ = Storage<double>(cbc_fluds.non_local_upwind_psi_buffer_size_);
+  non_local_and_reflecting_psi_buffer_storage_ = Storage<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
+
+  host_cells_for_stream_1_ = crb::HostVector<uint64_t>(cbc_fluds.GetNumLocalCells());
+  device_cells_for_stream_1_ = crb::DeviceMemory<uint64_t>(cbc_fluds.GetNumLocalCells());
+
+  host_cells_for_stream_2_ = crb::HostVector<uint64_t>(cbc_fluds.GetNumLocalCells());
+  device_cells_for_stream_2_ = crb::DeviceMemory<uint64_t>(cbc_fluds.GetNumLocalCells());
+
+  host_cell_face_offset_map_ = crb::HostVector<int>(cbc_fluds.GetNumLocalCells());
+  device_cell_face_offset_map_ = crb::DeviceMemory<int>(cbc_fluds.GetNumLocalCells());
+
+  host_upwind_psi_buffer_ = crb::HostVector<double>(cbc_fluds.non_local_upwind_psi_buffer_size_);
+  device_upwind_psi_buffer_ = crb::DeviceMemory<double>(cbc_fluds.non_local_upwind_psi_buffer_size_);
+
+  host_upwind_psi_offsets_ = crb::HostVector<int>(cbc_fluds.num_total_faces_);
+  device_upwind_psi_offsets_ = crb::DeviceMemory<int>(cbc_fluds.num_total_faces_);
+
+  host_downwind_psi_buffer_ = crb::HostVector<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
+  device_downwind_psi_buffer_ = crb::DeviceMemory<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
+
+  host_downwind_psi_offsets_ = crb::HostVector<int>(cbc_fluds.num_total_faces_);
+  device_downwind_psi_offsets_ = crb::DeviceMemory<int>(cbc_fluds.num_total_faces_);
 }
 
 void
@@ -264,19 +276,12 @@ CBC_FLUDS::Create_CBCD_FLUDS(AngleSet& angle_set)
   if (cbcd_fluds_ == nullptr)
   {
     Prepare_CBCD_FLUDS(angle_set);
-    CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this,
-                                            num_total_faces_,
-                                            incoming_boundary_psi_buffer_size_,
-                                            face_neighbor_local_ids_,
-                                            face_neighbor_cell_node_map_,
-                                            cell_to_local_face_offset_map_,
-                                            boundary_psi_map_,
-                                            incoming_face_category_map_,
-                                            outgoing_face_category_map_,
-                                            non_local_upwind_psi_buffer_size_,
-                                            non_local_and_reflecting_psi_buffer_size_);
+    CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this);
     cbcd_fluds_ = cbcd_fluds;
 
+    // This buffer is used to track changes in boundary psi data
+    // If boundary data changes within or between sweeps, we need to
+    // update the device boundary psi buffer
     incoming_boundary_psi_buffer_.resize(incoming_boundary_psi_buffer_size_, 0.0);
   }
 }

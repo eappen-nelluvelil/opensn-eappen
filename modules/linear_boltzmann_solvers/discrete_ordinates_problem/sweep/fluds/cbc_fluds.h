@@ -159,6 +159,18 @@ public:
     return deplocs_outgoing_messages_;
   }
 
+  size_t num_total_faces_;
+  size_t incoming_boundary_psi_buffer_size_;
+  std::vector<uint64_t> face_neighbor_local_ids_;
+  std::vector<unsigned int> face_neighbor_cell_node_map_;
+  std::vector<int> cell_to_local_face_offset_map_;
+  std::vector<int> boundary_psi_map_;
+  std::vector<double> incoming_boundary_psi_buffer_;
+  std::vector<int> incoming_face_category_map_;
+  std::vector<int> outgoing_face_category_map_;
+  size_t non_local_upwind_psi_buffer_size_;
+  size_t non_local_and_reflecting_psi_buffer_size_;
+
 private:
   const CBC_FLUDSCommonData& common_data_;
   const UnknownManager& psi_uk_man_;
@@ -175,18 +187,6 @@ private:
   std::vector<double*> cell_local_ID_to_psi_map_;
   std::vector<double> local_psi_data_backing_buffer_;
   boost::simple_segregated_storage<size_t> local_psi_data_;
-
-  size_t num_total_faces_;
-  size_t incoming_boundary_psi_buffer_size_;
-  std::vector<uint64_t> face_neighbor_local_ids_;
-  std::vector<unsigned int> face_neighbor_cell_node_map_;
-  std::vector<int> cell_to_local_face_offset_map_;
-  std::vector<int> boundary_psi_map_;
-  std::vector<double> incoming_boundary_psi_buffer_;
-  std::vector<int> incoming_face_category_map_;
-  std::vector<int> outgoing_face_category_map_;
-  size_t non_local_upwind_psi_buffer_size_;
-  size_t non_local_and_reflecting_psi_buffer_size_;
 
   std::vector<size_t> cell_dof_map_;
   void* cbcd_fluds_ = nullptr;

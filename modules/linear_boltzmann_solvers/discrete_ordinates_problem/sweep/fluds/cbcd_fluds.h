@@ -26,17 +26,7 @@ namespace opensn
 class CBCD_FLUDS
 {
 public:
-  CBCD_FLUDS(CBC_FLUDS& cbc_fluds,
-             size_t num_total_faces,
-             size_t incoming_boundary_psi_buffer_size,
-             const std::vector<uint64_t>& face_neighbor_local_ids,
-             const std::vector<unsigned int>& face_neighbor_cell_node_map,
-             const std::vector<int>& cell_to_local_face_offset_map,
-             const std::vector<int>& boundary_psi_map,
-             const std::vector<int>& incoming_face_category_map,
-             const std::vector<int>& outgoing_face_category_map,
-             size_t non_local_upwind_psi_buffer_size,
-             size_t non_local_and_reflecting_psi_buffer_size);
+  CBCD_FLUDS(CBC_FLUDS& cbc_fluds);
 
   Storage<uint64_t> cell_id_storage_;
   Storage<int> cell_face_offset_storage_;
@@ -62,6 +52,29 @@ public:
   /// Device storage for mapping cells to their corresponding faces in the boundary_psi_map_storage_
   /// vector
   Storage<int> cell_to_local_face_offset_storage_;
+
+  /// HostVector and DeviceMemory objects for when using streams
+  /// TODO: Refactor CBCD_FLUDS at some point
+  crb::HostVector<uint64_t> host_cells_for_stream_1_;
+  crb::DeviceMemory<uint64_t> device_cells_for_stream_1_;
+
+  crb::HostVector<uint64_t> host_cells_for_stream_2_;
+  crb::DeviceMemory<uint64_t> device_cells_for_stream_2_;
+
+  crb::HostVector<int> host_cell_face_offset_map_;
+  crb::DeviceMemory<int> device_cell_face_offset_map_;
+
+  crb::HostVector<double> host_upwind_psi_buffer_;
+  crb::DeviceMemory<double> device_upwind_psi_buffer_;
+
+  crb::HostVector<int> host_upwind_psi_offsets_;
+  crb::DeviceMemory<int> device_upwind_psi_offsets_;
+
+  crb::HostVector<double> host_downwind_psi_buffer_;
+  crb::DeviceMemory<double> device_downwind_psi_buffer_;
+
+  crb::HostVector<int> host_downwind_psi_offsets_;
+  crb::DeviceMemory<int> device_downwind_psi_offsets_;
 
   /// Get the device memory.
   inline double* GetDevicePtr() { return device_buffer_.get(); }
