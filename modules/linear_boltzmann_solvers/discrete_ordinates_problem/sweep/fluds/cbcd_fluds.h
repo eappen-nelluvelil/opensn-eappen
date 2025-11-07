@@ -53,28 +53,37 @@ public:
   /// vector
   Storage<int> cell_to_local_face_offset_storage_;
 
-  /// HostVector and DeviceMemory objects for when using streams
+  /// 11/4: Contains for working with streams
   /// TODO: Refactor CBCD_FLUDS at some point
-  crb::HostVector<uint64_t> host_cells_for_stream_1_;
-  crb::DeviceMemory<uint64_t> device_cells_for_stream_1_;
 
-  crb::HostVector<uint64_t> host_cells_for_stream_2_;
-  crb::DeviceMemory<uint64_t> device_cells_for_stream_2_;
+  /// Device storage for cells in stream 1
+  Storage<uint64_t> cells_for_stream_1_storage_;
 
-  crb::HostVector<int> host_cell_face_offset_map_;
-  crb::DeviceMemory<int> device_cell_face_offset_map_;
+  /// Device storage for cells in stream 2
+  Storage<uint64_t> cells_for_stream_2_storage_;
 
-  crb::HostVector<double> host_upwind_psi_buffer_;
-  crb::DeviceMemory<double> device_upwind_psi_buffer_;
+  // crb::HostVector<int> host_cell_face_offset_map_;
+  // crb::DeviceMemory<int> device_cell_face_offset_map_;
+  Storage<int> cell_face_offset_for_stream_2_storage_;
 
-  crb::HostVector<int> host_upwind_psi_offsets_;
-  crb::DeviceMemory<int> device_upwind_psi_offsets_;
+  // crb::HostVector<double> host_upwind_psi_buffer_;
+  // crb::DeviceMemory<double> device_upwind_psi_buffer_;
+  Storage<double> upwind_psi_buffer_storage_;
 
-  crb::HostVector<double> host_downwind_psi_buffer_;
-  crb::DeviceMemory<double> device_downwind_psi_buffer_;
+  // crb::HostVector<int> host_upwind_psi_offsets_;
+  // crb::DeviceMemory<int> device_upwind_psi_offsets_;
+  Storage<int> upwind_psi_offsets_storage_;
 
-  crb::HostVector<int> host_downwind_psi_offsets_;
-  crb::DeviceMemory<int> device_downwind_psi_offsets_;
+  // crb::HostVector<double> host_downwind_psi_buffer_;
+  // crb::DeviceMemory<double> device_downwind_psi_buffer_;
+  Storage<double> downwind_psi_buffer_storage_;
+
+  // crb::HostVector<int> host_downwind_psi_offsets_;
+  // crb::DeviceMemory<int> device_downwind_psi_offsets_;
+  Storage<int> downwind_psi_offsets_storage_;
+
+  // Idea for dealing with surface integrals on device
+  crb::DeviceMemory<double> incoming_psi_buffer_;
 
   /// Get the device memory.
   inline double* GetDevicePtr() { return device_buffer_.get(); }

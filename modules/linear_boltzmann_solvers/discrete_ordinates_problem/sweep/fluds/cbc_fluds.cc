@@ -38,6 +38,7 @@ CBC_FLUDS::CBC_FLUDS(size_t num_groups,
   if (use_gpus_)
   {
     local_psi_data_gpu_buffer_.resize(gpu_local_psi_data_size_);
+    BuildDeviceCellDOFMap();
   }
   else
   {
@@ -188,27 +189,16 @@ CBC_FLUDS::SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 }
 
 void
-CBC_FLUDS::PackAndGetUpwindPsi(const std::vector<Task*>& tasks,
-                           const AngleSet& angle_set,
-                           const LBSGroupset& groupset,
-                           const SpatialDiscretization& sdm,
-                           const std::vector<CellLBSView>& cell_views,
-                           std::vector<double>& buffer,
-                           std::vector<int>& offsets,
-                           std::vector<int>& face_offset_map)
+CBC_FLUDS::GetAndSetNonlocalAndBoundaryPsiData(SweepChunk& sweep_chunk,
+                                               AngleSet& angle_set,
+                                               std::vector<Task*> tasks)
 {
 }
 
 void
-CBC_FLUDS::UnpackDownwindPsi(const std::vector<Task*>& tasks,
-                             const AngleSet& angle_set,
-                             const LBSGroupset& groupset,
-                             const SpatialDiscretization& sdm,
-                             const std::vector<CellLBSView>& cell_views,
-                             const std::vector<double>& buffer,
-                             const std::vector<int>& offsets,
-                             const std::vector<int>& face_offset_map)
+CBC_FLUDS::Prepare_CBCD_FLUDS_Better(AngleSet& angle_set)
 {
+
 }
 
 void

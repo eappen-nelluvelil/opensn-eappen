@@ -5,8 +5,9 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
-#include "boost/pool/simple_segregated_storage.hpp"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_structs.h"
+#include "boost/pool/simple_segregated_storage.hpp"
 #include <cstddef>
 #include <map>
 #include <functional>
@@ -112,23 +113,18 @@ public:
 
   void SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set);
 
-  void PackAndGetUpwindPsi(const std::vector<Task*>& tasks,
-                           const AngleSet& angle_set,
-                           const LBSGroupset& groupset,
-                           const SpatialDiscretization& sdm,
-                           const std::vector<CellLBSView>& cell_views,
-                           std::vector<double>& buffer,
-                           std::vector<int>& offsets,
-                           std::vector<int>& face_offset_map);
+  void GetAndSetNonlocalAndBoundaryPsiData(SweepChunk& sweep_chunk,
+                                           AngleSet& angle_set,
+                                           std::vector<Task*> tasks);
 
-  void UnpackDownwindPsi(const std::vector<Task*>& tasks,
-                         const AngleSet& angle_set,
-                         const LBSGroupset& groupset,
-                         const SpatialDiscretization& sdm,
-                         const std::vector<CellLBSView>& cell_views,
-                         const std::vector<double>& buffer,
-                         const std::vector<int>& offsets,
-                         const std::vector<int>& face_offset_map);
+  // ---------------------------------------------------------------------------
+  // Approach to avoid needing to indexing as many times in
+  // ComputeSurfaceIntegral_WITH_CBCD_FLUDS and
+  // DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS
+
+  void Prepare_CBCD_FLUDS_Better(AngleSet& angle_set);
+  
+  // ---------------------------------------------------------------------------
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
 
@@ -170,6 +166,11 @@ public:
   std::vector<int> outgoing_face_category_map_;
   size_t non_local_upwind_psi_buffer_size_;
   size_t non_local_and_reflecting_psi_buffer_size_;
+  size_t cell_face_psi_buffer_size_;
+
+  // ---------------------------------------------------------------------------
+  std::vector<uint64_t> cell_to_local_face_offset_map_gpu_;
+  size_t cell_to_local_face_offset_map_gpu_size_;
 
 private:
   const CBC_FLUDSCommonData& common_data_;
