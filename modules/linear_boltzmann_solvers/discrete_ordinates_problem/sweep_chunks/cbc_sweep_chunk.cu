@@ -372,334 +372,338 @@ CBCSweepKernel(CBCSweepKernelArgs args)
   DeviceRecordDownwindPsiAndOutflow(psi, cell, args, idx, direction);
 }
 
+/*
 void
 CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
+  // CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
 
-  if (tasks_to_execute_.empty())
-    return;
+  // if (tasks_to_execute_.empty())
+  //   return;
 
-  auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
-  auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
-  const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
-  const auto num_angles_in_as = as_angle_indices.size();
-  const auto gs_size = groupset_.groups.size();
-  const auto gs_gi = groupset_.groups.front().id;
+  // auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+  // auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
+  // const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
+  // const auto num_angles_in_as = as_angle_indices.size();
+  // const auto gs_size = groupset_.groups.size();
+  // const auto gs_gi = groupset_.groups.front().id;
 
-  // Determine sizes of host and device buffers
-  size_t total_faces = 0;
-  size_t total_upwind_buffer_size = 0;
-  size_t total_downwind_buffer_size = 0;
-  size_t total_outflow_faces = 0;
-  for (const auto* task : tasks_to_execute_)
-  {
-    const auto& cell = *task->cell_ptr;
-    total_faces += cell.faces.size();
-    const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
-    const auto& cell_mapping = discretization_.GetCellMapping(cell);
-
-    for (size_t f = 0; f < cell.faces.size(); ++f)
-    {
-      const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
-      const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
-      if (face_orientations[f] == FaceOrientation::INCOMING)
-        total_upwind_buffer_size += face_data_size;
-      else if (face_orientations[f] == FaceOrientation::OUTGOING)
-      {
-        total_downwind_buffer_size += face_data_size;
-        if (not cell.faces[f].has_neighbor)
-          ++total_outflow_faces;
-      }
-    }
-  }
-
-  // Prepare angular flux buffers for H2D transfer
-  std::vector<uint64_t> cell_local_ids;
-  cell_local_ids.reserve(tasks_to_execute_.size());
-
-  std::vector<double> upwind_psi_buffer(total_upwind_buffer_size);
-  std::vector<int> upwind_psi_offsets(total_faces, -1);
-
-  std::vector<double> downwind_psi_buffer(total_downwind_buffer_size);
-  std::vector<int> downwind_psi_offsets(total_faces, -1);
-
-  std::vector<double> outflow_buffer(total_outflow_faces * gs_size, 0.0);
-  std::vector<int> outflow_face_map(total_faces, -1);
-
-  std::vector<int> cell_face_offset_map;
-  cell_face_offset_map.reserve(tasks_to_execute_.size());
-
-  size_t face_offset_stride = 0;
-  size_t upwind_buffer_offset = 0;
-  size_t downwind_buffer_offset = 0;
-  size_t outflow_face_counter = 0;
-
-  for (auto* task : tasks_to_execute_)
-  {
-    const auto& cell = *task->cell_ptr;
-    cell_local_ids.push_back(cell.local_id);
-    cell_face_offset_map.push_back(face_offset_stride);
-
-    const auto& cell_mapping = discretization_.GetCellMapping(cell);
-    const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
-    const auto& cell_transport_view = cell_transport_views_[cell.local_id];
-
-    for (size_t f = 0; f < cell.faces.size(); ++f)
-    {
-      const auto& face = cell.faces[f];
-      const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
-      const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
-
-      // Upwind data packing
-      if (face_orientations[f] == FaceOrientation::INCOMING)
-      {
-        upwind_psi_offsets[face_offset_stride + f] = upwind_buffer_offset;
-        const bool is_local_face = cell_transport_view.IsFaceLocal(f);
-        const bool is_boundary_face = not face.has_neighbor;
-        const auto* face_nodal_mapping =
-          &fluds_->GetCommonData().GetFaceNodalMapping(cell.local_id, f);
-
-        for (size_t fj = 0; fj < num_face_nodes; ++fj)
-        {
-          const double* psi_in = nullptr;
-
-          for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
-          {
-            const auto direction_num = as_angle_indices[as_ss_idx];
-            if (is_local_face)
-              psi_in = cbc_fluds.GPUUpwindPsi(*cell_transport_view.FaceNeighbor(f),
-                                              face_nodal_mapping->cell_node_mapping_[fj],
-                                              as_ss_idx);
-            else if (not is_boundary_face)
-              psi_in = cbc_fluds.NLUpwindPsi(
-                cell.global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
-            else
-              psi_in = angle_set.PsiBoundary(face.neighbor_id,
-                                             direction_num,
-                                             cell.local_id,
-                                             f,
-                                             fj,
-                                             gs_gi,
-                                             surface_source_active_);
-
-            const size_t offset = fj * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
-            double* buffer_ptr = &upwind_psi_buffer[upwind_buffer_offset + offset];
-
-            if (psi_in)
-              std::copy(psi_in, psi_in + gs_size, buffer_ptr);
-            else
-              std::fill(buffer_ptr, buffer_ptr + gs_size, 0.0);
-          }
-        }
-        upwind_buffer_offset += face_data_size;
-      }
-      // Downwind data packing
-      else if (face_orientations[f] == FaceOrientation::OUTGOING)
-      {
-        downwind_psi_offsets[face_offset_stride + f] = downwind_buffer_offset;
-        downwind_buffer_offset += face_data_size;
-
-        if (not cell.faces[f].has_neighbor)
-        {
-          outflow_face_map[face_offset_stride + f] = outflow_face_counter;
-          ++outflow_face_counter;
-        }
-      }
-    }
-    face_offset_stride += cell.faces.size();
-  }
-
-  // Set up kernel arguments
-  CBCSweepKernelArgs args;
-  MeshCarrier* mesh = reinterpret_cast<MeshCarrier*>(problem_.GetCarrier(2));
-  args.mesh_data = mesh->GetDevicePtr();
-
-  QuadratureCarrier* quadrature = reinterpret_cast<QuadratureCarrier*>(groupset_.quad_carrier);
-  args.quad_data = quadrature->GetDevicePtr();
-
-  // Copy source moment and destination phi data to device
-  MemoryPinner<double>* src = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(0));
-  src->CopyToDevice();
-  args.src_moment = src->GetDevicePtr();
-
-  MemoryPinner<double>* phi = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(1));
-  phi->CopyToDevice();
-  args.phi = phi->GetDevicePtr();
-
-  // if (save_angular_flux_)
+  // // Determine sizes of host and device buffers
+  // size_t total_faces = 0;
+  // size_t total_upwind_buffer_size = 0;
+  // size_t total_downwind_buffer_size = 0;
+  // size_t total_outflow_faces = 0;
+  // for (const auto* task : tasks_to_execute_)
   // {
-  //   auto* psi_pinner = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2));
-  //   psi_pinner->CopyToDevice();
-  //   args.destination_psi = psi_pinner->GetDevicePtr();
+  //   const auto& cell = *task->cell_ptr;
+  //   total_faces += cell.faces.size();
+  //   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+  //   const auto& cell_mapping = discretization_.GetCellMapping(cell);
+
+  //   for (size_t f = 0; f < cell.faces.size(); ++f)
+  //   {
+  //     const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+  //     const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
+  //     if (face_orientations[f] == FaceOrientation::INCOMING)
+  //       total_upwind_buffer_size += face_data_size;
+  //     else if (face_orientations[f] == FaceOrientation::OUTGOING)
+  //     {
+  //       total_downwind_buffer_size += face_data_size;
+  //       if (not cell.faces[f].has_neighbor)
+  //         ++total_outflow_faces;
+  //     }
+  //   }
   // }
-  // else
-  //   args.destination_psi = nullptr;
 
-  args.destination_psi = nullptr;
+  // // Prepare angular flux buffers for H2D transfer
+  // std::vector<uint64_t> cell_local_ids;
+  // cell_local_ids.reserve(tasks_to_execute_.size());
 
-  // Copy angleset data to device
-  MemoryPinner<std::uint32_t>* directions =
-    reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
-  args.directions = directions->GetDevicePtr();
-  args.angleset_size = num_angles_in_as;
-  args.groupset_size = gs_size;
-  args.groupset_start = gs_gi;
-  args.num_groups = problem_.GetGroups().size();
-  args.groupset_angle_group_stride = groupset_angle_group_stride_;
-  args.groupset_group_stride = groupset_group_stride_;
-  args.save_angular_flux = save_angular_flux_;
+  // std::vector<double> upwind_psi_buffer(total_upwind_buffer_size);
+  // std::vector<int> upwind_psi_offsets(total_faces, -1);
 
-  Storage<uint64_t> cell_id_storage(cell_local_ids.size());
-  cell_id_storage.Copy(cell_local_ids.begin(), cell_local_ids.end());
-  args.cell_local_ids = cell_id_storage.GetDevicePtr();
-  args.num_cells = cell_local_ids.size();
+  // std::vector<double> downwind_psi_buffer(total_downwind_buffer_size);
+  // std::vector<int> downwind_psi_offsets(total_faces, -1);
 
-  Storage<int> cell_face_offset_storage(cell_face_offset_map.size());
-  cell_face_offset_storage.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
-  args.cell_face_offset_map = cell_face_offset_storage.GetDevicePtr();
+  // std::vector<double> outflow_buffer(total_outflow_faces * gs_size, 0.0);
+  // std::vector<int> outflow_face_map(total_faces, -1);
 
-  Storage<double> upwind_psi_storage(upwind_psi_buffer.size());
-  upwind_psi_storage.Copy(upwind_psi_buffer.begin(), upwind_psi_buffer.end());
-  args.upwind_psi_data = upwind_psi_storage.GetDevicePtr();
-  args.upwind_face_stride = num_angles_in_as * gs_size;
+  // std::vector<int> cell_face_offset_map;
+  // cell_face_offset_map.reserve(tasks_to_execute_.size());
 
-  Storage<double> downwind_psi_storage(downwind_psi_buffer.size());
-  args.downwind_psi_data = downwind_psi_storage.GetDevicePtr();
-  args.downwind_face_stride = num_angles_in_as * gs_size;
+  // size_t face_offset_stride = 0;
+  // size_t upwind_buffer_offset = 0;
+  // size_t downwind_buffer_offset = 0;
+  // size_t outflow_face_counter = 0;
 
-  Storage<int> upwind_offset_storage(upwind_psi_offsets.size());
-  upwind_offset_storage.Copy(upwind_psi_offsets.begin(), upwind_psi_offsets.end());
-  args.upwind_psi_offsets = upwind_offset_storage.GetDevicePtr();
+  // for (auto* task : tasks_to_execute_)
+  // {
+  //   const auto& cell = *task->cell_ptr;
+  //   cell_local_ids.push_back(cell.local_id);
+  //   cell_face_offset_map.push_back(face_offset_stride);
 
-  Storage<int> downwind_offset_storage(downwind_psi_offsets.size());
-  downwind_offset_storage.Copy(downwind_psi_offsets.begin(), downwind_psi_offsets.end());
-  args.downwind_psi_offsets = downwind_offset_storage.GetDevicePtr();
+  //   const auto& cell_mapping = discretization_.GetCellMapping(cell);
+  //   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+  //   const auto& cell_transport_view = cell_transport_views_[cell.local_id];
 
-  // Outflow buffers
-  Storage<double> outflow_storage(outflow_buffer.size());
-  outflow_storage.Copy(outflow_buffer.begin(), outflow_buffer.end());
-  args.outflow_data = outflow_storage.GetDevicePtr();
+  //   for (size_t f = 0; f < cell.faces.size(); ++f)
+  //   {
+  //     const auto& face = cell.faces[f];
+  //     const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+  //     const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
 
-  Storage<int> outflow_map_storage(outflow_face_map.size());
-  outflow_map_storage.Copy(outflow_face_map.begin(), outflow_face_map.end());
-  args.outflow_face_map = outflow_map_storage.GetDevicePtr();
+  //     // Upwind data packing
+  //     if (face_orientations[f] == FaceOrientation::INCOMING)
+  //     {
+  //       upwind_psi_offsets[face_offset_stride + f] = upwind_buffer_offset;
+  //       const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+  //       const bool is_boundary_face = not face.has_neighbor;
+  //       const auto* face_nodal_mapping =
+  //         &fluds_->GetCommonData().GetFaceNodalMapping(cell.local_id, f);
 
-  args.batch_size = args.num_cells * args.angleset_size * args.groupset_size;
-  std::uint32_t threads_per_block = 128;
-  std::uint32_t num_blocks = (args.batch_size + threads_per_block - 1) / threads_per_block;
+  //       for (size_t fj = 0; fj < num_face_nodes; ++fj)
+  //       {
+  //         const double* psi_in = nullptr;
 
-  CBCSweepKernel<<<num_blocks, threads_per_block>>>(args);
+  //         for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
+  //         {
+  //           const auto direction_num = as_angle_indices[as_ss_idx];
+  //           if (is_local_face)
+  //             psi_in = cbc_fluds.GPUUpwindPsi(*cell_transport_view.FaceNeighbor(f),
+  //                                             face_nodal_mapping->cell_node_mapping_[fj],
+  //                                             as_ss_idx);
+  //           else if (not is_boundary_face)
+  //             psi_in = cbc_fluds.NLUpwindPsi(
+  //               cell.global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+  //           else
+  //             psi_in = angle_set.PsiBoundary(face.neighbor_id,
+  //                                            direction_num,
+  //                                            cell.local_id,
+  //                                            f,
+  //                                            fj,
+  //                                            gs_gi,
+  //                                            surface_source_active_);
 
-  // Post-kernel processing
-  phi->CopyFromDevice();
-  if (save_angular_flux_)
-    reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
+  //           const size_t offset = fj * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
+  //           double* buffer_ptr = &upwind_psi_buffer[upwind_buffer_offset + offset];
 
-  // Copy outflow results from device to host
-  outflow_storage.CopyFromDevice();
-  const auto& outflow_results = outflow_storage.GetHostVector();
-  outflow_face_counter = 0;
+  //           if (psi_in)
+  //             std::copy(psi_in, psi_in + gs_size, buffer_ptr);
+  //           else
+  //             std::fill(buffer_ptr, buffer_ptr + gs_size, 0.0);
+  //         }
+  //       }
+  //       upwind_buffer_offset += face_data_size;
+  //     }
+  //     // Downwind data packing
+  //     else if (face_orientations[f] == FaceOrientation::OUTGOING)
+  //     {
+  //       downwind_psi_offsets[face_offset_stride + f] = downwind_buffer_offset;
+  //       downwind_buffer_offset += face_data_size;
 
-  for (const auto* task : tasks_to_execute_)
-  {
-    const auto& cell = *task->cell_ptr;
-    auto& cell_transport_view = cell_transport_views_[cell.local_id];
-    const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
-    for (size_t f = 0; f < cell.faces.size(); ++f)
-    {
-      if (face_orientations[f] == FaceOrientation::OUTGOING and (not cell.faces[f].has_neighbor))
-      {
-        const double* outflow_result_ptr = &outflow_results[outflow_face_counter * gs_size];
-        for (size_t gsg = 0; gsg < gs_size; ++gsg)
-          cell_transport_view.AddOutflow(f, gs_gi + gsg, outflow_result_ptr[gsg]);
-        ++outflow_face_counter;
-      }
-    }
-  }
+  //       if (not cell.faces[f].has_neighbor)
+  //       {
+  //         outflow_face_map[face_offset_stride + f] = outflow_face_counter;
+  //         ++outflow_face_counter;
+  //       }
+  //     }
+  //   }
+  //   face_offset_stride += cell.faces.size();
+  // }
 
-  // Copy downwind angular flux data from device to host
-  downwind_psi_storage.CopyFromDevice();
-  const auto& downwind_results = downwind_psi_storage.GetHostVector();
+  // // Set up kernel arguments
+  // CBCSweepKernelArgs args;
+  // MeshCarrier* mesh = reinterpret_cast<MeshCarrier*>(problem_.GetCarrier(2));
+  // args.mesh_data = mesh->GetDevicePtr();
 
-  for (size_t i = 0; i < tasks_to_execute_.size(); ++i)
-  {
-    auto* task = tasks_to_execute_[i];
-    const auto& cell = *task->cell_ptr;
-    const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
-    const auto& cell_mapping = discretization_.GetCellMapping(cell);
-    const auto& cell_transport_view = cell_transport_views_[cell.local_id];
+  // QuadratureCarrier* quadrature = reinterpret_cast<QuadratureCarrier*>(groupset_.quad_carrier);
+  // args.quad_data = quadrature->GetDevicePtr();
 
-    const int face_offset_base = cell_face_offset_map[i];
+  // // Copy source moment and destination phi data to device
+  // MemoryPinner<double>* src = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(0));
+  // src->CopyToDevice();
+  // args.src_moment = src->GetDevicePtr();
 
-    for (size_t f = 0; f < cell.faces.size(); ++f)
-    {
-      if (face_orientations[f] == FaceOrientation::OUTGOING)
-      {
-        const auto& face = cell.faces[f];
-        const bool is_local_face = cell_transport_view.IsFaceLocal(f);
-        const bool is_boundary_face = not face.has_neighbor;
-        const bool is_reflecting_boundary_face =
-          (is_boundary_face) and (angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
-        const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
-        const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
-        const int buffer_offset = downwind_psi_offsets[face_offset_base + f];
+  // MemoryPinner<double>* phi = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(1));
+  // phi->CopyToDevice();
+  // args.phi = phi->GetDevicePtr();
 
-        if (buffer_offset < 0)
-          continue;
+  // // if (save_angular_flux_)
+  // // {
+  // //   auto* psi_pinner = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2));
+  // //   psi_pinner->CopyToDevice();
+  // //   args.destination_psi = psi_pinner->GetDevicePtr();
+  // // }
+  // // else
+  // //   args.destination_psi = nullptr;
 
-        if (is_local_face)
-        {
-          for (size_t fi = 0; fi < num_face_nodes; ++fi)
-          {
-            const int i_node = cell_mapping.MapFaceNode(f, fi);
-            for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
-            {
-              const size_t offset = fi * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
-              const double* result_ptr = &downwind_results[buffer_offset + offset];
-              double* psi_out = cbc_fluds.GPUOutgoingPsi(cell, i_node, as_ss_idx);
+  // args.destination_psi = nullptr;
 
-              if (psi_out)
-                std::copy(result_ptr, result_ptr + gs_size, psi_out);
-            }
-          }
-        }
-        else if (not is_boundary_face)
-        {
-          const int locality = cell_transport_view.FaceLocality(f);
-          auto& async_comm = *cbc_angle_set.GetCommunicator();
-          const auto* face_nodal_mapping =
-            &fluds_->GetCommonData().GetFaceNodalMapping(cell.local_id, f);
-          std::vector<double>& psi_nonlocal_outgoing =
-            async_comm.InitGetDownwindMessageData(locality,
-                                                  face.neighbor_id,
-                                                  face_nodal_mapping->associated_face_,
-                                                  angle_set.GetID(),
-                                                  face_data_size);
+  // // Copy angleset data to device
+  // MemoryPinner<std::uint32_t>* directions =
+  //   reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
+  // args.directions = directions->GetDevicePtr();
+  // args.angleset_size = num_angles_in_as;
+  // args.groupset_size = gs_size;
+  // args.groupset_start = gs_gi;
+  // args.num_groups = problem_.GetGroups().size();
+  // args.groupset_angle_group_stride = groupset_angle_group_stride_;
+  // args.groupset_group_stride = groupset_group_stride_;
+  // args.save_angular_flux = save_angular_flux_;
 
-          std::copy(&downwind_results[buffer_offset],
-                    &downwind_results[buffer_offset + face_data_size],
-                    psi_nonlocal_outgoing.begin());
-        }
-        else if (is_reflecting_boundary_face)
-        {
-          for (size_t fi = 0; fi < num_face_nodes; ++fi)
-          {
-            for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
-            {
-              const auto direction_num = as_angle_indices[as_ss_idx];
-              const size_t offset = fi * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
-              const double* result_ptr = &downwind_results[buffer_offset + offset];
-              double* psi_out =
-                cbc_angle_set.PsiReflected(face.neighbor_id, direction_num, cell.local_id, f, fi);
+  // Storage<uint64_t> cell_id_storage(cell_local_ids.size());
+  // cell_id_storage.Copy(cell_local_ids.begin(), cell_local_ids.end());
+  // args.cell_local_ids = cell_id_storage.GetDevicePtr();
+  // args.num_cells = cell_local_ids.size();
 
-              if (psi_out)
-                std::copy(result_ptr, result_ptr + gs_size, psi_out);
-            }
-          }
-        }
-      }
-    }
-  }
+  // Storage<int> cell_face_offset_storage(cell_face_offset_map.size());
+  // cell_face_offset_storage.Copy(cell_face_offset_map.begin(), cell_face_offset_map.end());
+  // args.cell_face_offset_map = cell_face_offset_storage.GetDevicePtr();
+
+  // Storage<double> upwind_psi_storage(upwind_psi_buffer.size());
+  // upwind_psi_storage.Copy(upwind_psi_buffer.begin(), upwind_psi_buffer.end());
+  // args.upwind_psi_data = upwind_psi_storage.GetDevicePtr();
+  // args.upwind_face_stride = num_angles_in_as * gs_size;
+
+  // Storage<double> downwind_psi_storage(downwind_psi_buffer.size());
+  // args.downwind_psi_data = downwind_psi_storage.GetDevicePtr();
+  // args.downwind_face_stride = num_angles_in_as * gs_size;
+
+  // Storage<int> upwind_offset_storage(upwind_psi_offsets.size());
+  // upwind_offset_storage.Copy(upwind_psi_offsets.begin(), upwind_psi_offsets.end());
+  // args.upwind_psi_offsets = upwind_offset_storage.GetDevicePtr();
+
+  // Storage<int> downwind_offset_storage(downwind_psi_offsets.size());
+  // downwind_offset_storage.Copy(downwind_psi_offsets.begin(), downwind_psi_offsets.end());
+  // args.downwind_psi_offsets = downwind_offset_storage.GetDevicePtr();
+
+  // // Outflow buffers
+  // Storage<double> outflow_storage(outflow_buffer.size());
+  // outflow_storage.Copy(outflow_buffer.begin(), outflow_buffer.end());
+  // args.outflow_data = outflow_storage.GetDevicePtr();
+
+  // Storage<int> outflow_map_storage(outflow_face_map.size());
+  // outflow_map_storage.Copy(outflow_face_map.begin(), outflow_face_map.end());
+  // args.outflow_face_map = outflow_map_storage.GetDevicePtr();
+
+  // args.batch_size = args.num_cells * args.angleset_size * args.groupset_size;
+  // std::uint32_t threads_per_block = 128;
+  // std::uint32_t num_blocks = (args.batch_size + threads_per_block - 1) / threads_per_block;
+
+  // CBCSweepKernel<<<num_blocks, threads_per_block>>>(args);
+
+  // // Post-kernel processing
+  // phi->CopyFromDevice();
+  // if (save_angular_flux_)
+  //   reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
+
+  // // Copy outflow results from device to host
+  // outflow_storage.CopyFromDevice();
+  // const auto& outflow_results = outflow_storage.GetHostVector();
+  // outflow_face_counter = 0;
+
+  // for (const auto* task : tasks_to_execute_)
+  // {
+  //   const auto& cell = *task->cell_ptr;
+  //   auto& cell_transport_view = cell_transport_views_[cell.local_id];
+  //   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+  //   for (size_t f = 0; f < cell.faces.size(); ++f)
+  //   {
+  //     if (face_orientations[f] == FaceOrientation::OUTGOING and (not cell.faces[f].has_neighbor))
+  //     {
+  //       const double* outflow_result_ptr = &outflow_results[outflow_face_counter * gs_size];
+  //       for (size_t gsg = 0; gsg < gs_size; ++gsg)
+  //         cell_transport_view.AddOutflow(f, gs_gi + gsg, outflow_result_ptr[gsg]);
+  //       ++outflow_face_counter;
+  //     }
+  //   }
+  // }
+
+  // // Copy downwind angular flux data from device to host
+  // downwind_psi_storage.CopyFromDevice();
+  // const auto& downwind_results = downwind_psi_storage.GetHostVector();
+
+  // for (size_t i = 0; i < tasks_to_execute_.size(); ++i)
+  // {
+  //   auto* task = tasks_to_execute_[i];
+  //   const auto& cell = *task->cell_ptr;
+  //   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+  //   const auto& cell_mapping = discretization_.GetCellMapping(cell);
+  //   const auto& cell_transport_view = cell_transport_views_[cell.local_id];
+
+  //   const int face_offset_base = cell_face_offset_map[i];
+
+  //   for (size_t f = 0; f < cell.faces.size(); ++f)
+  //   {
+  //     if (face_orientations[f] == FaceOrientation::OUTGOING)
+  //     {
+  //       const auto& face = cell.faces[f];
+  //       const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+  //       const bool is_boundary_face = not face.has_neighbor;
+  //       const bool is_reflecting_boundary_face =
+  //         (is_boundary_face) and
+(angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
+  //       const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+  //       const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
+  //       const int buffer_offset = downwind_psi_offsets[face_offset_base + f];
+
+  //       if (buffer_offset < 0)
+  //         continue;
+
+  //       if (is_local_face)
+  //       {
+  //         for (size_t fi = 0; fi < num_face_nodes; ++fi)
+  //         {
+  //           const int i_node = cell_mapping.MapFaceNode(f, fi);
+  //           for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
+  //           {
+  //             const size_t offset = fi * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
+  //             const double* result_ptr = &downwind_results[buffer_offset + offset];
+  //             double* psi_out = cbc_fluds.GPUOutgoingPsi(cell, i_node, as_ss_idx);
+
+  //             if (psi_out)
+  //               std::copy(result_ptr, result_ptr + gs_size, psi_out);
+  //           }
+  //         }
+  //       }
+  //       else if (not is_boundary_face)
+  //       {
+  //         const int locality = cell_transport_view.FaceLocality(f);
+  //         auto& async_comm = *cbc_angle_set.GetCommunicator();
+  //         const auto* face_nodal_mapping =
+  //           &fluds_->GetCommonData().GetFaceNodalMapping(cell.local_id, f);
+  //         std::vector<double>& psi_nonlocal_outgoing =
+  //           async_comm.InitGetDownwindMessageData(locality,
+  //                                                 face.neighbor_id,
+  //                                                 face_nodal_mapping->associated_face_,
+  //                                                 angle_set.GetID(),
+  //                                                 face_data_size);
+
+  //         std::copy(&downwind_results[buffer_offset],
+  //                   &downwind_results[buffer_offset + face_data_size],
+  //                   psi_nonlocal_outgoing.begin());
+  //       }
+  //       else if (is_reflecting_boundary_face)
+  //       {
+  //         for (size_t fi = 0; fi < num_face_nodes; ++fi)
+  //         {
+  //           for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
+  //           {
+  //             const auto direction_num = as_angle_indices[as_ss_idx];
+  //             const size_t offset = fi * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
+  //             const double* result_ptr = &downwind_results[buffer_offset + offset];
+  //             double* psi_out =
+  //               cbc_angle_set.PsiReflected(face.neighbor_id, direction_num, cell.local_id, f,
+fi);
+
+  //             if (psi_out)
+  //               std::copy(result_ptr, result_ptr + gs_size, psi_out);
+  //           }
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
 }
+*/
 } // namespace opensn

@@ -65,6 +65,8 @@ public:
                 bool use_gpus,
                 DiscreteOrdinatesProblem& problem);
 
+  ~CBCSweepChunk();
+
   void SetAngleSet(AngleSet& angle_set) override;
 
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
@@ -89,6 +91,12 @@ public:
   void Sweep(AngleSet& angle_set) override;
 
   void CPUSweep(AngleSet& angle_set);
+
+  void InitializeCUDAStreams();
+
+  void DestroyCUDAStreams();
+
+  // void GPUSweeep(AngleSet& angle_set);
 
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
@@ -117,15 +125,13 @@ private:
 
   size_t total_faces_ = 0;
 
-  /// Map to track if boundary data has been initialized for an angle set
-  std::map<size_t, bool> boundary_data_initialized_map_;
-  std::map<size_t, int> boundary_data_buffer_size_map_;
-  std::map<size_t, std::vector<double>> boundary_data_buffer_map_;
-
   DenseMatrix<Vector3> G_;
   DenseMatrix<double> M_;
   std::vector<DenseMatrix<double>> M_surf_;
   std::vector<Vector<double>> IntS_shapeI_;
+
+  void* ptr_to_cuda_stream_1_ = nullptr;
+  void* ptr_to_cuda_stream_2_ = nullptr;
 };
 
 } // namespace opensn

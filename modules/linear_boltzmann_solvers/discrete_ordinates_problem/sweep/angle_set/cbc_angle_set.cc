@@ -174,8 +174,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   {
     dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
     has_set_boundary_data_ = true;
+    // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - Set boundary data.\n";
   }
-  // dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
 
   std::vector<Task*> ready_tasks;
 
@@ -201,6 +201,10 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     // if (not ready_tasks.empty() and tasks_who_received_data.empty())
     if (not ready_tasks.empty())
     {
+
+      // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - "
+      //                   << "Number of ready tasks this iteration: " << ready_tasks.size()
+      //                   << "\n";
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
       // cbc_sweep_chunk.GPUSweep(*this);

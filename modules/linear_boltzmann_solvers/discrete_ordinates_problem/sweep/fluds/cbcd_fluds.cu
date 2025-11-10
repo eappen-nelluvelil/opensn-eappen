@@ -17,8 +17,8 @@ CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds)
   cell_dof_map_storage_ = Storage<size_t>(cbc_fluds.GetCellDOFMap().size());
   cell_dof_map_storage_.Copy(cbc_fluds.GetCellDOFMap().begin(), cbc_fluds.GetCellDOFMap().end());
 
-  cell_id_storage_ = Storage<uint64_t>(cbc_fluds.GetNumLocalCells());
-  cell_face_offset_storage_ = Storage<int>(cbc_fluds.GetNumLocalCells());
+  // cell_id_storage_ = Storage<uint64_t>(cbc_fluds.GetNumLocalCells());
+  // cell_face_offset_storage_ = Storage<int>(cbc_fluds.GetNumLocalCells());
 
   // Auxiliary maps for dealing with cells with purely local dependencies
   face_neighbor_cell_node_map_storage_ = Storage<unsigned int>(cbc_fluds.num_total_faces_ * cbc_max_face_dofs);
@@ -46,33 +46,31 @@ CBCD_FLUDS::CBCD_FLUDS(CBC_FLUDS& cbc_fluds)
   outgoing_face_category_map_storage_.Copy(cbc_fluds.outgoing_face_category_map_.begin(),
                                            cbc_fluds.outgoing_face_category_map_.end());
 
-  // non_local_upwind_psi_buffer_storage_ = Storage<double>(cbc_fluds.non_local_upwind_psi_buffer_size_);
-  // non_local_and_reflecting_psi_buffer_storage_ = Storage<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
-
   // 11/4: Containers for performing transport sweeps with streams
   cells_for_stream_1_storage_ = Storage<uint64_t>(cbc_fluds.GetNumLocalCells());
 
   cells_for_stream_2_storage_ = Storage<uint64_t>(cbc_fluds.GetNumLocalCells());
-
   cell_face_offset_for_stream_2_storage_ = Storage<int>(cbc_fluds.GetNumLocalCells());
 
   upwind_psi_buffer_storage_ = Storage<double>(cbc_fluds.non_local_upwind_psi_buffer_size_);
-
-  // host_upwind_psi_offsets_ = crb::HostVector<int>(cbc_fluds.num_total_faces_);
-  // device_upwind_psi_offsets_ = crb::DeviceMemory<int>(cbc_fluds.num_total_faces_);
   upwind_psi_offsets_storage_ = Storage<int>(cbc_fluds.num_total_faces_);
 
-  // host_downwind_psi_buffer_ = crb::HostVector<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
-  // device_downwind_psi_buffer_ = crb::DeviceMemory<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
   downwind_psi_buffer_storage_ = Storage<double>(cbc_fluds.non_local_and_reflecting_psi_buffer_size_);
-
-  // host_downwind_psi_offsets_ = crb::HostVector<int>(cbc_fluds.num_total_faces_);
-  // device_downwind_psi_offsets_ = crb::DeviceMemory<int>(cbc_fluds.num_total_faces_);
   downwind_psi_offsets_storage_ = Storage<int>(cbc_fluds.num_total_faces_);
 
   // Idea for passing in a single cell's angular fluxes to the incoming surface integral
   // device function
   // incoming_psi_buffer_ = crb::DeviceMemory<double>(cbc_fluds.cell_face_psi_buffer_size_);
+
+  // // -----------------------------------------------------------------------------
+  // cell_to_local_face_offset_map_gpu_storage_ =
+  //   Storage<uint64_t>(cbc_fluds.cell_to_local_face_offset_map_gpu_size_);
+  // cell_to_local_face_offset_map_gpu_storage_.Copy(
+  //   cbc_fluds.cell_to_local_face_offset_map_gpu_.begin(),
+  //   cbc_fluds.cell_to_local_face_offset_map_gpu_.end());
+  // local_and_nonlocal_psi_buffer_ =
+  //   crb::DeviceMemory<double>(cbc_fluds.GetGPULocalPsiDataSize() + cbc_fluds.cell_to_local_face_offset_map_gpu_size_);
+  // -----------------------------------------------------------------------------
 }
 
 void
@@ -244,9 +242,17 @@ void
 CBC_FLUDS::SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 {
   const auto& boundary_psi_buffer = GetBoundaryPsiData(sweep_chunk, angle_set);
-  bool boundary_psi_data_changed = (incoming_boundary_psi_buffer_ != boundary_psi_buffer);
+  bool has_boundary_psi_data_changed = false;
+  for (size_t i = 0; i < boundary_psi_buffer.size(); ++i)
+  {
+    if (incoming_boundary_psi_buffer_[i] != boundary_psi_buffer[i])
+    {
+      has_boundary_psi_data_changed = true;
+      break;
+    }
+  }
 
-  if (boundary_psi_data_changed)
+  if (has_boundary_psi_data_changed)
   {
     incoming_boundary_psi_buffer_ = boundary_psi_buffer;
     reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)
@@ -254,6 +260,8 @@ CBC_FLUDS::SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
                                   incoming_boundary_psi_buffer_.end());
   }
 }
+
+// -----------------------------------------------------------------------------
 
 void
 CBC_FLUDS::GetAndSetNonlocalAndBoundaryPsiData(SweepChunk& sweep_chunk,
@@ -273,7 +281,6 @@ CBC_FLUDS::GetAndSetNonlocalAndBoundaryPsiData(SweepChunk& sweep_chunk,
   }
 }
 
-// -----------------------------------------------------------------------------
 void
 CBC_FLUDS::Prepare_CBCD_FLUDS_Better(AngleSet& angle_set)
 {
@@ -301,7 +308,6 @@ CBC_FLUDS::Prepare_CBCD_FLUDS_Better(AngleSet& angle_set)
 
   size_t face_offset_stride = 0;
   size_t current_face_offset = 0;
-  // std::vector<uint64_t> cell_to_local_face_offset_map(cell_to_local_face_offset_map_size);
   cell_to_local_face_offset_map_gpu_.resize(cell_to_local_face_offset_map_size, 0);
  
   for (const auto& cell : grid->local_cells)
@@ -453,6 +459,7 @@ CBC_FLUDS::Prepare_CBCD_FLUDS_Better(AngleSet& angle_set)
           }
         }
       }
+      face_offset_stride += cell.faces.size();
     }
   }
 

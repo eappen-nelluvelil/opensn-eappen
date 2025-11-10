@@ -46,7 +46,6 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
     gs_size_(0),
     gs_gi_(0),
     num_angles_in_as_(0),
-    num_angles_in_as_(0),
     group_stride_(0),
     group_angle_stride_(0),
     surface_source_active_(false),
@@ -59,6 +58,14 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
     use_gpus_(use_gpus),
     problem_(problem)
 {
+  if (use_gpus_)
+    InitializeCUDAStreams();
+}
+
+CBCSweepChunk::~CBCSweepChunk()
+{
+  if (use_gpus_)
+    DestroyCUDAStreams();
 }
 
 void
@@ -293,13 +300,6 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
                                                  face_nodal_mapping.associated_face_,
                                                  angle_set.GetID(),
                                                  data_size_for_msg);
-        const size_t data_size_for_msg = num_face_nodes * group_angle_stride_;
-        psi_nonlocal_outgoing =
-          &async_comm.InitGetDownwindMessageData(locality,
-                                                 face.neighbor_id,
-                                                 face_nodal_mapping.associated_face_,
-                                                 angle_set.GetID(),
-                                                 data_size_for_msg);
       }
 
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -320,7 +320,6 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
           psi = fluds_->OutgoingPsi(cell_local_id_, i, as_ss_idx);
         else if (not is_boundary_face)
           psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
-          psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)
           psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id_, f, fi);
 
@@ -334,6 +333,25 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 }
 
 #ifndef __OPENSN_USE_CUDA__
+
+void
+CBCSweepChunk::InitializeCUDAStreams()
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
+
+void
+CBCSweepChunk::DestroyCUDAStreams()
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+} 
+
+void
+CBCSweepChunk::GPUSweeep(AngleSet& angle_set)
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
+
 void
 CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 {
