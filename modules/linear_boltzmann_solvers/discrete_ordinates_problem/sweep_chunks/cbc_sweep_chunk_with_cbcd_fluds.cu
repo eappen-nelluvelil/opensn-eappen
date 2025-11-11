@@ -111,6 +111,56 @@ struct CBCSweepKernelArgs_WITH_CBCD_FLUDS
   const double* incoming_psi_buffer;
 };
 
+/*
+struct CBCSweepKernelArgs_WITH_CBCD_FLUDS
+{
+  // Mesh and quadrature
+  const char* mesh_data;
+  const char* quad_data;
+
+  // Source moments and phi
+  const double* src_moment;
+  double* phi;
+
+  // Angle set
+  const std::uint32_t* directions;
+  std::uint32_t angleset_size;
+
+  // Group set
+  std::uint32_t num_groups;
+  std::uint32_t groupset_start;
+  std::uint32_t groupset_size;
+
+  const uint64_t* cell_local_ids;
+  const int* cell_face_offset_map;
+  std::uint32_t num_cells;
+
+  // Local angular flux buffer
+  double* local_psi_data;
+  const size_t* cell_dof_map;
+  size_t num_angles_in_as;
+  size_t num_groups_and_angles;
+
+  // Non-local and boundary angular flux buffer
+  const double* nonlocal_and_boundary_psi_data;
+  const int* cell_to_local_face_offset_map;
+  const uint64_t* cell_to_local_face_offset_map_gpu;
+
+  // Downwind psi buffers
+  double* downwind_psi_data;
+  const int* downwind_psi_offsets;
+  size_t downwind_face_stride;
+  const int* outgoing_face_category_map;
+
+  // Batch
+  std::uint32_t batch_size;
+  bool save_angular_flux;
+  double* destination_psi;
+  size_t groupset_angle_group_stride;
+  size_t groupset_group_stride;
+};
+*/
+
 __device__ inline void
 ComputeGMS_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
                            std::array<double, cbc_max_dof>& psi,
@@ -167,13 +217,14 @@ __device__ inline void
 ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
                                        std::array<double, cbc_max_dof>& psi,
                                        const CBCSweepKernelArgs_WITH_CBCD_FLUDS& args,
+                                       const size_t cell_local_id,
                                        const std::uint32_t cell_idx,
                                        const std::uint32_t angle_idx,
                                        const std::uint32_t group_idx,
                                        DirectionView& direction,
                                        CellView& cell)
 {
-  const size_t cell_local_id = args.cell_local_ids[cell_idx];
+  // const size_t cell_local_id = args.cell_local_ids[cell_idx];
   const size_t cell_face_start_idx = args.cell_to_local_face_offset_map[cell_local_id];
 
   // Loop over each face
@@ -236,7 +287,7 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
         else if (incoming_face_category == -2) // Boundary face
         {
           // Map from cell face to boundary psi index
-          const int current_face_offset = args.cell_to_local_face_offset_map[cell_local_id] + f; 
+          const int current_face_offset = args.cell_to_local_face_offset_map[cell_local_id] + f;
           const int upwind_base_offset = args.boundary_psi_map[current_face_offset];
           const size_t addr_offset = fj * args.num_groups_and_angles +
                                      angle_idx * args.groupset_size + group_idx;
@@ -249,6 +300,69 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
     }
   }
 }
+
+/*
+__device__ inline void
+ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
+                                       std::array<double, cbc_max_dof>& psi,
+                                       const CBCSweepKernelArgs_WITH_CBCD_FLUDS& args,
+                                       const size_t cell_local_id,
+                                       const std::uint32_t cell_idx,
+                                       const std::uint32_t angle_idx,
+                                       const std::uint32_t group_idx,
+                                       DirectionView& direction,
+                                       CellView& cell)
+{
+  const size_t cell_face_start_idx = args.cell_to_local_face_offset_map[cell_local_id];
+
+  // Loop over each face
+  for (std::uint32_t f = 0; f < cell.num_faces; ++f)
+  {
+    FaceView face;
+    cell.GetFaceView(face, f);
+
+    // Compute mu = omega . n
+    const double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
+                      direction.omega[2] * face.normal[2];
+
+    // Skip if not incoming face
+    if (mu >= 0.0)
+      continue;
+
+    // Compute surface integral
+    for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
+    {
+      std::uint32_t i = face.cell_mapping_data[fi];
+      double* Ai = sweep_matrix.data() + i * cbc_max_dof;
+      for (std::uint32_t fj = 0; fj < face.num_face_nodes; ++fj)
+      {
+        std::uint32_t j = face.cell_mapping_data[fj];
+        double mu_Nij = -mu * face.M_surf_data[fi * face.num_face_nodes + fj];
+        Ai[j] += mu_Nij;
+
+        const double* psi_in;
+        const uint64_t cell_angular_flux_data_idx =
+          args.cell_to_local_face_offset_map_gpu[(cell_local_id * cell.num_faces *
+face.num_face_nodes * args.num_groups_and_angles) + (f * face.num_face_nodes *
+args.num_groups_and_angles) + (fj * args.num_groups_and_angles) + (angle_idx * args.groupset_size) +
+group_idx];
+
+        // Get second bit in cell_angular_flux_data_idx to determine if local or non-local/boundary
+        // Then, use last 62 bits of cell_angular_flux_data_idx to index into appropriate buffer
+        const bool is_local = (((cell_angular_flux_data_idx >> 1) & 1ULL) == 1);
+        const uint64_t upwind_offset = (cell_angular_flux_data_idx >> 2);
+
+        if (is_local) // Local face
+          psi_in = &args.local_psi_data[upwind_offset];
+        else // Non-local or boundary face
+          psi_in = &args.nonlocal_and_boundary_psi_data[upwind_offset];
+
+        psi[i] += (*psi_in) * mu_Nij;
+      }
+    }
+  }
+}
+*/
 
 __device__ inline void
 DeviceGaussianElimination_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& sweep_matrix,
@@ -429,8 +543,11 @@ CBCSweepKernel_WITH_CBCD_FLUDS(CBCSweepKernelArgs_WITH_CBCD_FLUDS args)
                                args.num_groups,
                                num_moments);
 
-    ComputeSurfaceIntegral_WITH_CBCD_FLUDS(
-      sweep_matrix, psi, args, idx.cell_idx, idx.angle_idx, idx.group_idx, direction, cell);
+    ComputeSurfaceIntegral_WITH_CBCD_FLUDS(sweep_matrix,
+                                           psi,
+                                           args,
+                                           cell_local_id,
+                                            idx.cell_idx, idx.angle_idx, idx.group_idx, direction, cell);
 
     // Solve
     DeviceGaussianElimination_WITH_CBCD_FLUDS(sweep_matrix, psi, cell.num_nodes);
@@ -676,7 +793,8 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
         const bool is_local_face = cell_transport_view.IsFaceLocal(f);
         const bool is_boundary_face = not face.has_neighbor;
         const bool is_reflecting_boundary_face =
-          (is_boundary_face) and (cbc_angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
+          (is_boundary_face) and
+(cbc_angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
 
         const size_t current_face_offset = face_offset_stride + f;
 
@@ -757,8 +875,9 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
     args2.cell_to_local_face_offset_map =
       cbcd_fluds.cell_to_local_face_offset_storage_.GetDevicePtr();
 
-    args2.incoming_face_category_map = cbcd_fluds.incoming_face_category_map_storage_.GetDevicePtr();
-    args2.outgoing_face_category_map = cbcd_fluds.outgoing_face_category_map_storage_.GetDevicePtr();
+    args2.incoming_face_category_map =
+cbcd_fluds.incoming_face_category_map_storage_.GetDevicePtr(); args2.outgoing_face_category_map =
+cbcd_fluds.outgoing_face_category_map_storage_.GetDevicePtr();
 
     std::copy(cells_for_stream_2.begin(),
               cells_for_stream_2.end(),
@@ -826,7 +945,8 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
     args2.batch_size = args2.num_cells * args2.angleset_size * args2.groupset_size;
     std::uint32_t num_blocks2 = (args2.batch_size + threads_per_block - 1) / threads_per_block;
-    CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks2, threads_per_block, 0, reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_)>>>(args2);
+    CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks2, threads_per_block, 0,
+reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_)>>>(args2);
 
     cudaMemcpyAsync(cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data(),
                     cbcd_fluds.downwind_psi_buffer_storage_.GetDevicePtr(),
@@ -839,7 +959,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
     const auto& downwind_results = cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data();
 
     // Process downwind results on host
-    // This can overlap with stream 1 execution since stream 1 cells write only to 
+    // This can overlap with stream 1 execution since stream 1 cells write only to
     // device buffers
     for (size_t i = 0; i < tasks_for_stream_2.size(); ++i)
     {
@@ -919,4 +1039,399 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
   outflow->AccumulateBack(cell_transport_views_);
   outflow->Reset();
 }
+
+/*
+void
+CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
+{
+  CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep_With_CBCD_FLUDS");
+
+  // Determine sizes for host and device vectors
+  auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+  auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
+  auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr());
+  const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
+  const auto num_angles_in_as = as_angle_indices.size();
+  const auto gs_size = groupset_.groups.size();
+  const auto gs_gi = groupset_.groups.front().id;
+
+  // Idea for dealing with incoming surface integrals on device
+  // cbcd_fluds.incoming_psi_buffer_.zero_fill();
+
+  // Determine sizes of buffers
+  std::vector<uint64_t> cell_local_ids(tasks_to_execute_.size());
+
+  std::vector<uint64_t> cells_for_stream_1;
+  std::vector<Task*> tasks_for_stream_1;
+
+  std::vector<uint64_t> cells_for_stream_2;
+  std::vector<Task*> tasks_for_stream_2;
+
+  size_t total_faces = 0;
+  size_t total_downwind_buffer_size = 0;
+
+  for (int idx = 0; idx < tasks_to_execute_.size(); ++idx)
+  {
+    const auto& cell = *tasks_to_execute_[idx]->cell_ptr;
+    cell_local_ids[idx] = cell.local_id;
+    total_faces += cell.faces.size();
+    const auto& face_orientations =
+      cbc_angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+    const auto& cell_mapping = discretization_.GetCellMapping(cell);
+    auto& cell_transport_view = cell_transport_views_[cell.local_id];
+
+    bool can_cell_go_stream_1 = true;
+
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+      const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
+      const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+      const bool is_boundary_face = not cell.faces[f].has_neighbor;
+      const bool is_reflecting_boundary_face =
+        (is_boundary_face) and
+        (cbc_angle_set.GetBoundaries().at(cell.faces[f].neighbor_id)->IsReflecting());
+
+      // Size upwind/downwind buffers for only non-local faces
+      if ((face_orientations[f] == FaceOrientation::INCOMING))
+      {
+        if (not is_local_face)
+        {
+          can_cell_go_stream_1 = false;
+        }
+      }
+      else if (face_orientations[f] == FaceOrientation::OUTGOING)
+      {
+        if (((not is_local_face) and (not is_boundary_face)) or (is_reflecting_boundary_face))
+        {
+          can_cell_go_stream_1 = false;
+          total_downwind_buffer_size += face_data_size;
+        }
+      }
+    }
+
+    if (can_cell_go_stream_1)
+    {
+      tasks_for_stream_1.push_back(tasks_to_execute_[idx]);
+      cells_for_stream_1.push_back(cell.local_id);
+    }
+    else
+    {
+      tasks_for_stream_2.push_back(tasks_to_execute_[idx]);
+      cells_for_stream_2.push_back(cell.local_id);
+    }
+  }
+
+  // opensn::log.Log() << "Number of cells in stream 1: " << cells_for_stream_1.size();
+  // opensn::log.Log() << "Number of cells in stream 2: " << cells_for_stream_2.size() << "\n\n";
+
+  MeshCarrier* mesh = reinterpret_cast<MeshCarrier*>(problem_.GetCarrier(2));
+  QuadratureCarrier* quadrature = reinterpret_cast<QuadratureCarrier*>(groupset_.quad_carrier);
+
+  // Copy source moment and destination phi data to device
+  MemoryPinner<double>* src = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(0));
+  src->CopyToDevice();
+
+  MemoryPinner<double>* phi = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(1));
+  phi->CopyToDevice();
+
+  // Copy angleset data to device
+  MemoryPinner<std::uint32_t>* directions =
+  reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
+
+  // Set up kernel arguments for stream 1 cells
+  // (cells that have purely local upwind and purely local outgoing faces)
+  CBCSweepKernelArgs_WITH_CBCD_FLUDS args;
+
+  args.mesh_data = mesh->GetDevicePtr();
+  args.quad_data = quadrature->GetDevicePtr();
+
+  args.src_moment = src->GetDevicePtr();
+
+  args.phi = phi->GetDevicePtr();
+
+  args.destination_psi = nullptr;
+
+  args.directions = directions->GetDevicePtr();
+  args.angleset_size = num_angles_in_as;
+  args.groupset_size = gs_size;
+  args.groupset_start = gs_gi;
+  args.num_groups = problem_.GetGroups().size();
+  args.groupset_angle_group_stride = groupset_angle_group_stride_;
+  args.groupset_group_stride = groupset_group_stride_;
+  args.save_angular_flux = save_angular_flux_;
+
+  // Local angular flux buffer
+  args.local_psi_data = cbcd_fluds.GetDevicePtr();
+  args.cell_dof_map = cbcd_fluds.GetCellDOFMapDevicePtr();
+  args.num_angles_in_as = num_angles_in_as;
+  args.num_groups_and_angles = num_angles_in_as * gs_size;
+
+  // Non-local and boundary angular flux buffers
+  args.nonlocal_and_boundary_psi_data = cbcd_fluds.nonlocal_and_boundary_psi_buffer_.GetDevicePtr();
+  args.cell_to_local_face_offset_map_gpu =
+cbcd_fluds.cell_to_local_face_offset_map_gpu_storage_.GetDevicePtr(); // Indexes int
+  args.cell_to_local_face_offset_map = cbcd_fluds.cell_to_local_face_offset_storage_.GetDevicePtr();
+
+  // Outgoing face category maps
+  args.outgoing_face_category_map = cbcd_fluds.outgoing_face_category_map_storage_.GetDevicePtr();
+
+  args.cell_face_offset_map = nullptr;
+  args.downwind_psi_data = nullptr;
+  args.downwind_psi_offsets = nullptr;
+
+  std::copy(cells_for_stream_1.begin(),
+            cells_for_stream_1.end(),
+            cbcd_fluds.cells_for_stream_1_storage_.GetHostVector().data());
+  cudaMemcpyAsync(cbcd_fluds.cells_for_stream_1_storage_.GetDevicePtr(),
+                  cbcd_fluds.cells_for_stream_1_storage_.GetHostVector().data(),
+                  cells_for_stream_1.size() * sizeof(uint64_t),
+                  cudaMemcpyHostToDevice,
+                  reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_1_));
+  args.cell_local_ids = cbcd_fluds.cells_for_stream_1_storage_.GetDevicePtr();
+  args.num_cells = cells_for_stream_1.size();
+
+  args.batch_size = args.num_cells * args.angleset_size * args.groupset_size;
+  std::uint32_t threads_per_block = 128;
+  std::uint32_t num_blocks = (args.batch_size + threads_per_block - 1) / threads_per_block;
+
+  CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks,
+                                    threads_per_block,
+                                    0,
+                                    reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_1_)>>>(args);
+
+  if (not cells_for_stream_2.empty())
+  {
+    // Prepare angular flux buffers for H2D transfer
+    std::vector<double> downwind_psi_buffer(total_downwind_buffer_size);
+    std::vector<int> downwind_psi_offsets(total_faces, -1);
+
+    std::vector<int> cell_face_offset_map(tasks_for_stream_2.size());
+
+    size_t face_offset_stride = 0;
+    size_t downwind_buffer_offset = 0;
+
+    // for (int idx = 0; idx < tasks_to_execute_.size(); ++idx)
+    for (int idx = 0; idx < tasks_for_stream_2.size(); ++idx)
+    {
+      const auto& cell = *tasks_for_stream_2[idx]->cell_ptr;
+      cell_face_offset_map[idx] = face_offset_stride;
+
+      const auto& cell_mapping = discretization_.GetCellMapping(cell);
+      const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+      const auto& cell_transport_view = cell_transport_views_[cell.local_id];
+
+      for (size_t f = 0; f < cell.faces.size(); ++f)
+      {
+        const auto& face = cell.faces[f];
+        const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+        const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
+        const auto* face_nodal_mapping =
+          &fluds_->GetCommonData().GetFaceNodalMapping(cell.local_id, f);
+
+        const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+        const bool is_boundary_face = not face.has_neighbor;
+        const bool is_reflecting_boundary_face =
+          (is_boundary_face) and
+(cbc_angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
+
+        const size_t current_face_offset = face_offset_stride + f;
+
+        // Downwind data packing
+        if (face_orientations[f] == FaceOrientation::OUTGOING)
+        {
+          if (is_local_face)
+            downwind_psi_offsets[current_face_offset] = -1;
+          else if ((not is_boundary_face) or (is_reflecting_boundary_face))
+          {
+            downwind_psi_offsets[current_face_offset] = downwind_buffer_offset;
+            downwind_buffer_offset += face_data_size;
+          }
+        }
+      }
+      face_offset_stride += cell.faces.size();
+    }
+
+    // Set up kernel arguments for stream 2 cells
+    CBCSweepKernelArgs_WITH_CBCD_FLUDS args2;
+
+    args2.mesh_data = mesh->GetDevicePtr();
+    args2.quad_data = quadrature->GetDevicePtr();
+    args2.src_moment = src->GetDevicePtr();
+    args2.phi = phi->GetDevicePtr();
+
+    args2.destination_psi = nullptr;
+
+    args2.directions = directions->GetDevicePtr();
+    args2.angleset_size = num_angles_in_as;
+    args2.groupset_size = gs_size;
+    args2.groupset_start = gs_gi;
+    args2.num_groups = problem_.GetGroups().size();
+    args2.groupset_angle_group_stride = groupset_angle_group_stride_;
+    args2.groupset_group_stride = groupset_group_stride_;
+    args2.save_angular_flux = save_angular_flux_;
+
+    args2.local_psi_data = cbcd_fluds.GetDevicePtr();
+    args2.cell_dof_map = cbcd_fluds.GetCellDOFMapDevicePtr();
+    args2.num_angles_in_as = num_angles_in_as;
+    args2.num_groups_and_angles = num_angles_in_as * gs_size;
+
+    args.nonlocal_and_boundary_psi_data =
+cbcd_fluds.nonlocal_and_boundary_psi_buffer_.GetDevicePtr(); args2.cell_to_local_face_offset_map_gpu
+= cbcd_fluds.cell_to_local_face_offset_map_gpu_storage_.GetDevicePtr();
+    args2.cell_to_local_face_offset_map =
+      cbcd_fluds.cell_to_local_face_offset_storage_.GetDevicePtr();
+
+    args2.outgoing_face_category_map =
+cbcd_fluds.outgoing_face_category_map_storage_.GetDevicePtr();
+
+    std::copy(cells_for_stream_2.begin(),
+              cells_for_stream_2.end(),
+              cbcd_fluds.cells_for_stream_2_storage_.GetHostVector().data());
+    cudaMemcpyAsync(cbcd_fluds.cells_for_stream_2_storage_.GetDevicePtr(),
+                    cbcd_fluds.cells_for_stream_2_storage_.GetHostVector().data(),
+                    cells_for_stream_2.size() * sizeof(uint64_t),
+                    cudaMemcpyHostToDevice,
+                    reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+    args2.cell_local_ids = cbcd_fluds.cells_for_stream_2_storage_.GetDevicePtr();
+    args2.num_cells = cells_for_stream_2.size();
+
+    std::copy(cell_face_offset_map.begin(),
+              cell_face_offset_map.end(),
+              cbcd_fluds.cell_face_offset_for_stream_2_storage_.GetHostVector().data());
+    cudaMemcpyAsync(cbcd_fluds.cell_face_offset_for_stream_2_storage_.GetDevicePtr(),
+                    cbcd_fluds.cell_face_offset_for_stream_2_storage_.GetHostVector().data(),
+                    cell_face_offset_map.size() * sizeof(int),
+                    cudaMemcpyHostToDevice,
+                    reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+    args2.cell_face_offset_map = cbcd_fluds.cell_face_offset_for_stream_2_storage_.GetDevicePtr();
+
+    cbc_fluds.GetNonlocalPsiData(*this, angle_set, tasks_for_stream_2);
+
+    // cudaMemcpyAsync(cbcd_fluds.nonlocal_and_boundary_psi_buffer_.GetDevicePtr(),
+    //                 cbcd_fluds.nonlocal_and_boundary_psi_buffer_.GetHostVector().data(),
+    //                 cbcd_fluds.nonlocal_and_boundary_psi_buffer_.GetHostVector().size() *
+sizeof(double),
+    //                 cudaMemcpyHostToDevice,
+    //                 reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+    // args2.upwind_face_stride = num_angles_in_as * gs_size;
+
+    std::copy(downwind_psi_buffer.begin(),
+              downwind_psi_buffer.end(),
+              cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data());
+    cudaMemcpyAsync(cbcd_fluds.downwind_psi_buffer_storage_.GetDevicePtr(),
+                    cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data(),
+                    downwind_psi_buffer.size() * sizeof(double),
+                    cudaMemcpyHostToDevice,
+                    reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+    args2.downwind_psi_data = cbcd_fluds.downwind_psi_buffer_storage_.GetDevicePtr();
+    args2.downwind_face_stride = num_angles_in_as * gs_size;
+
+    std::copy(downwind_psi_offsets.begin(),
+              downwind_psi_offsets.end(),
+              cbcd_fluds.downwind_psi_offsets_storage_.GetHostVector().data());
+    cudaMemcpyAsync(cbcd_fluds.downwind_psi_offsets_storage_.GetDevicePtr(),
+                    cbcd_fluds.downwind_psi_offsets_storage_.GetHostVector().data(),
+                    downwind_psi_offsets.size() * sizeof(int),
+                    cudaMemcpyHostToDevice,
+                    reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+    args2.downwind_psi_offsets = cbcd_fluds.downwind_psi_offsets_storage_.GetDevicePtr();
+
+    args2.batch_size = args2.num_cells * args2.angleset_size * args2.groupset_size;
+    std::uint32_t num_blocks2 = (args2.batch_size + threads_per_block - 1) / threads_per_block;
+    CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks2, threads_per_block, 0,
+reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_)>>>(args2);
+
+    cudaMemcpyAsync(cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data(),
+                    cbcd_fluds.downwind_psi_buffer_storage_.GetDevicePtr(),
+                    downwind_psi_buffer.size() * sizeof(double),
+                    cudaMemcpyDeviceToHost,
+                    reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+    // Wait for stream2 to complete so we can process downwind results
+    cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_2_));
+
+    const auto& downwind_results = cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data();
+
+    // Process downwind results on host
+    // This can overlap with stream 1 execution since stream 1 cells write only to
+    // device buffers
+    for (size_t i = 0; i < tasks_for_stream_2.size(); ++i)
+    {
+      auto* task = tasks_for_stream_2[i];
+      const auto& cell = *task->cell_ptr;
+      const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell.local_id];
+      const auto& cell_mapping = discretization_.GetCellMapping(cell);
+      const auto& cell_transport_view = cell_transport_views_[cell.local_id];
+
+      const int face_offset_base = cell_face_offset_map[i];
+
+      for (size_t f = 0; f < cell.faces.size(); ++f)
+      {
+        if (face_orientations[f] == FaceOrientation::OUTGOING)
+        {
+          const auto& face = cell.faces[f];
+          const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+          const bool is_boundary_face = not face.has_neighbor;
+          const bool is_reflecting_boundary_face =
+            (is_boundary_face) and (angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting());
+          const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+          const size_t face_data_size = num_face_nodes * num_angles_in_as * gs_size;
+          const int buffer_offset = downwind_psi_offsets[face_offset_base + f];
+
+          if (buffer_offset < 0)
+            continue;
+
+          if ((not is_local_face) and (not is_boundary_face))
+          {
+            const int locality = cell_transport_view.FaceLocality(f);
+            auto& async_comm = *cbc_angle_set.GetCommunicator();
+            const auto* face_nodal_mapping =
+              &fluds_->GetCommonData().GetFaceNodalMapping(cell.local_id, f);
+            std::vector<double>& psi_nonlocal_outgoing =
+              async_comm.InitGetDownwindMessageData(locality,
+                                                    face.neighbor_id,
+                                                    face_nodal_mapping->associated_face_,
+                                                    angle_set.GetID(),
+                                                    face_data_size);
+
+            std::copy(&downwind_results[buffer_offset],
+                      &downwind_results[buffer_offset + face_data_size],
+                      psi_nonlocal_outgoing.begin());
+          }
+          else if (is_reflecting_boundary_face)
+          {
+            for (size_t fi = 0; fi < num_face_nodes; ++fi)
+            {
+              for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
+              {
+                const auto direction_num = as_angle_indices[as_ss_idx];
+                const size_t offset = fi * (num_angles_in_as * gs_size) + as_ss_idx * (gs_size);
+                const double* result_ptr = &downwind_results[buffer_offset + offset];
+                double* psi_out =
+                  cbc_angle_set.PsiReflected(face.neighbor_id, direction_num, cell.local_id, f, fi);
+
+                if (psi_out)
+                  std::copy(result_ptr, result_ptr + gs_size, psi_out);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Wait for stream 1 to finish before copying back scalar fluxes and outflows
+  cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ptr_to_cuda_stream_1_));
+
+  // Post-kernel processing
+  phi->CopyFromDevice();
+  if (save_angular_flux_)
+    reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
+
+  // Retrieve outflow
+  OutflowCarrier* outflow = reinterpret_cast<OutflowCarrier*>(problem_.GetCarrier(1));
+  outflow->AccumulateBack(cell_transport_views_);
+  outflow->Reset();
+}
+*/
 } // namespace opensn

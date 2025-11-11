@@ -113,16 +113,17 @@ public:
 
   void SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set);
 
-  void GetAndSetNonlocalAndBoundaryPsiData(SweepChunk& sweep_chunk,
-                                           AngleSet& angle_set,
-                                           std::vector<Task*> tasks);
-
   // ---------------------------------------------------------------------------
   // Approach to avoid needing to indexing as many times in
   // ComputeSurfaceIntegral_WITH_CBCD_FLUDS and
   // DeviceRecordDownwindPsiAndOutflow_WITH_CBCD_FLUDS
 
-  void Prepare_CBCD_FLUDS_Better(AngleSet& angle_set);
+  void Prepare_CBCD_FLUDS_V2(AngleSet& angle_set);
+
+  void GetAndSetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set);
+
+  void
+  GetNonlocalPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set, std::vector<Task*> tasks);
   
   // ---------------------------------------------------------------------------
 
@@ -170,7 +171,7 @@ public:
 
   // ---------------------------------------------------------------------------
   std::vector<uint64_t> cell_to_local_face_offset_map_gpu_;
-  size_t cell_to_local_face_offset_map_gpu_size_;
+  size_t cell_to_local_face_offset_map_gpu_size_ = 0;
 
 private:
   const CBC_FLUDSCommonData& common_data_;

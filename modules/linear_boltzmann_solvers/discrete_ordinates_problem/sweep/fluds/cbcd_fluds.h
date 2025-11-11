@@ -62,7 +62,7 @@ public:
   // -----------------------------------------------------------------------------
   // Idea for dealing with surface integrals on device
   Storage<uint64_t> cell_to_local_face_offset_map_gpu_storage_;
-  crb::DeviceMemory<double> local_and_nonlocal_psi_buffer_;
+  Storage<double> nonlocal_and_boundary_psi_buffer_;
 
   // -----------------------------------------------------------------------------
 

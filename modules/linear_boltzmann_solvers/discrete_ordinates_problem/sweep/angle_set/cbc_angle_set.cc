@@ -165,17 +165,16 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
-  if (not tasks_who_received_data.empty())
-    return AngleSetStatus::NOT_FINISHED;
-
-  // Update boundary data
-  // This is really only needed for reflecting boundaries
+  // Get and set boundary data 
   if (not has_set_boundary_data_)
   {
     dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
+    // dynamic_cast<CBC_FLUDS&>(*fluds_).GetAndSetBoundaryPsiData(sweep_chunk, *this);
     has_set_boundary_data_ = true;
-    // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - Set boundary data.\n";
   }
+
+  if (not tasks_who_received_data.empty())
+    return AngleSetStatus::NOT_FINISHED;
 
   std::vector<Task*> ready_tasks;
 
@@ -198,17 +197,18 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     // Note that if any tasks received data this iteration, we skip execution
     // This is to make sure that we can pass in as many ready tasks as possible to the GPU,
     // rather than executing a smaller batch, then receiving data, and having more ready tasks
-    // if (not ready_tasks.empty() and tasks_who_received_data.empty())
+    // Ideally, there wouldn't be need for this implicit barrier
+    // IDEA: This implicit barrier could potentially be removed if sweeps are performed
+    // in parallel for all anglesets, not just one at a time in ScheduleAlgoFIFO
+    //  - Requires big architectural changes, however
     if (not ready_tasks.empty())
     {
-
       // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - "
       //                   << "Number of ready tasks this iteration: " << ready_tasks.size()
       //                   << "\n";
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
       // cbc_sweep_chunk.GPUSweep(*this);
-      // cbc_sweep_chunk.Sweep(*this);
       cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
 
       for (auto* cell_task : ready_tasks)

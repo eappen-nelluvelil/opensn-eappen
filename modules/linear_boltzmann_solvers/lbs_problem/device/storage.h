@@ -39,6 +39,8 @@ public:
   /// Get reference to the host vector.
   inline crb::HostVector<T>& GetHostVector() { return host_; }
 
+  inline crb::DeviceMemory<T>& GetDeviceMemory() { return device_; }
+
   /// Get pointer to device memory.
   inline T* GetDevicePtr() { return device_.get(); }
 
