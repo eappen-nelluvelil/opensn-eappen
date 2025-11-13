@@ -1,5 +1,8 @@
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
+/*
+#include
+"modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
+#include
+"modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
@@ -372,7 +375,6 @@ CBCSweepKernel(CBCSweepKernelArgs args)
   DeviceRecordDownwindPsiAndOutflow(psi, cell, args, idx, direction);
 }
 
-/*
 void
 CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 {
@@ -705,5 +707,5 @@ fi);
   //   }
   // }
 }
-*/
 } // namespace opensn
+*/

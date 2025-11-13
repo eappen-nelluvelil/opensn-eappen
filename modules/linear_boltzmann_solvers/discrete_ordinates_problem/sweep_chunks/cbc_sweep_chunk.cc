@@ -65,7 +65,10 @@ CBCSweepChunk::CBCSweepChunk(std::vector<double>& destination_phi,
 CBCSweepChunk::~CBCSweepChunk()
 {
   if (use_gpus_)
+  {
     DestroyCUDAStreams();
+    DestroyCUDAGraphs();
+  }
 }
 
 void
@@ -347,13 +350,13 @@ CBCSweepChunk::DestroyCUDAStreams()
 } 
 
 void
-CBCSweepChunk::GPUSweeep(AngleSet& angle_set)
+CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 {
   throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
 }
 
 void
-CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
+CBCSweepChunk::GPUSweeep(AngleSet& angle_set)
 {
   throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
 }

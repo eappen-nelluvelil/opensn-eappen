@@ -14,6 +14,17 @@
 #include <map>
 #include <memory>
 #include <tuple>
+#include <map>
+
+#if !defined(__CUDACC__)
+// Forward declarations for CUDA types for C++ compilers
+struct CUgraph_st;
+struct CUgraphExec_st;
+struct CUevent_st;
+typedef CUgraph_st* cudaGraph_t;
+typedef CUgraphExec_st* cudaGraphExec_t;
+typedef CUevent_st* cudaEvent_t;
+#endif
 
 namespace opensn
 {
@@ -96,9 +107,11 @@ public:
 
   void DestroyCUDAStreams();
 
-  // void GPUSweeep(AngleSet& angle_set);
+  void DestroyCUDAGraphs();
 
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
+
+  void GPUSweep(AngleSet& angle_set);
 
 private:
   CBC_FLUDS* fluds_;
@@ -132,6 +145,14 @@ private:
 
   void* ptr_to_cuda_stream_1_ = nullptr;
   void* ptr_to_cuda_stream_2_ = nullptr;
+  void* ptr_to_cuda_event_s2_ = nullptr;
+
+  using GraphKey = std::pair<int, size_t>;
+  std::map<GraphKey, cudaGraph_t> stream1_graphs_;
+  std::map<GraphKey, cudaGraphExec_t> stream1_graph_execs_;
+
+  std::map<GraphKey, cudaGraph_t> stream2_graphs_;
+  std::map<GraphKey, cudaGraphExec_t> stream2_graph_execs_;
 };
 
 } // namespace opensn

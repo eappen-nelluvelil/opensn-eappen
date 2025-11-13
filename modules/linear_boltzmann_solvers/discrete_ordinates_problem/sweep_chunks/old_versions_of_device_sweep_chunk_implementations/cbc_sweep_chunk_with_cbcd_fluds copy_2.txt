@@ -572,11 +572,9 @@ CBCSweepChunk::InitializeCUDAStreams()
 {
   cudaStream_t* stream1 = reinterpret_cast<cudaStream_t*>(&ptr_to_cuda_stream_1_);
   cudaStream_t* stream2 = reinterpret_cast<cudaStream_t*>(&ptr_to_cuda_stream_2_);
-  cudaEvent_t* event = reinterpret_cast<cudaEvent_t*>(&ptr_to_cuda_event_s2_);
 
   cudaStreamCreate(stream1);
   cudaStreamCreate(stream2);
-  cudaEventCreate(event);
 }
 
 void
@@ -584,15 +582,12 @@ CBCSweepChunk::DestroyCUDAStreams()
 {
   cudaStream_t* stream1 = reinterpret_cast<cudaStream_t*>(&ptr_to_cuda_stream_1_);
   cudaStream_t* stream2 = reinterpret_cast<cudaStream_t*>(&ptr_to_cuda_stream_2_);
-  cudaEvent_t* event = reinterpret_cast<cudaEvent_t*>(&ptr_to_cuda_event_s2_);
 
   cudaStreamDestroy(*stream1);
   cudaStreamDestroy(*stream2);
-  cudaEventDestroy(*event);
 
   ptr_to_cuda_stream_1_ = nullptr;
   ptr_to_cuda_stream_2_ = nullptr;
-  ptr_to_cuda_event_s2_ = nullptr;
 }
 
 void
@@ -940,8 +935,7 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
                     cudaMemcpyDeviceToHost,
                     stream2);
 
-    cudaEventRecord(reinterpret_cast<cudaEvent_t>(ptr_to_cuda_event_s2_), stream2);
-    cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(ptr_to_cuda_event_s2_));
+    cudaStreamSynchronize(stream2);
 
     const auto& downwind_results = cbcd_fluds.downwind_psi_buffer_storage_.GetHostVector().data();
 

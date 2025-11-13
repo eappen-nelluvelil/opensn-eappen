@@ -1394,7 +1394,7 @@ ComputeSurfaceIntegral_WITH_CBCD_FLUDS(std::array<double, cbc_matrix_size>& swee
 
 11/8:
 - Idea for incoming surface integral operations
-  - Pass in cell 
+  - Create buffer for both local and 
 
 // Pack corresponding angular flux data
   const size_t cell_face_start_idx = args.cell_to_local_face_offset_map[cell_local_id];
