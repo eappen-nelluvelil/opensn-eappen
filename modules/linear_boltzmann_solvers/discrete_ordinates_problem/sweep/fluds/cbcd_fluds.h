@@ -59,13 +59,35 @@ public:
   Storage<double> downwind_psi_buffer_storage_;
   Storage<int> downwind_psi_offsets_storage_;
 
-  // -----------------------------------------------------------------------------
-  // Idea for dealing with surface integrals on device
-  Storage<uint64_t> cell_to_local_face_offset_map_gpu_storage_;
-  Storage<double> nonlocal_and_boundary_psi_buffer_;
+  // ---------------------------------------------------------------------------
+  Storage<uint64_t> cell_local_ids_storage_;
 
-  // -----------------------------------------------------------------------------
+  Storage<uint64_t> cell_to_face_offset_map_storage_;
 
+  // Device storage for cell-face-face_node-angle-group offsets
+  // Used to index into the main angular flux device buffer given
+  // a cell local ID, face ID, face node ID, angle index, and group index
+  // The layout is cell major -> face major --> face node major --> angle major --> group major
+  // For a given entry in this buffer, the value represents the following:
+  //  1. The first bit is 0 if incoming, 1 if outgoing
+  //  2. The next 2 bits are encoded as follows:
+  //     - 00: local cell upwind flux
+  //     - 01: boundary upwind flux
+  //     - 10: non-local upwind flux
+  //     - 11: reflecting upwind flux
+  //  3. The remaining 61 bits represent the offset into the corresponding section of the
+  //     angular flux device buffer
+  Storage<uint64_t> cell_face_node_angle_group_offsets_map_storage_;
+
+  // Device storage for (local + boundary + non-local) angular fluxes
+  // 1. First section will be for storing local angular fluxes (for all cells)
+  // 2. Second section will be for storing incoming boundary angular fluxes
+  //    The location of this second section is offset from the start of the storage
+  //    by the size of the local angular flux section
+  // 3. Third section will be for storing non-local angular fluxes
+  //    The location of this third section is offset from the start of the storage
+  //    by the size of the local angular flux section + incoming boundary angular flux section
+  Storage<double> cell_psi_data_buffer_storage_;
   // ---------------------------------------------------------------------------
 
   /// Get the device memory.

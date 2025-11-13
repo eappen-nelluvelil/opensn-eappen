@@ -168,8 +168,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   // Get and set boundary data 
   if (not has_set_boundary_data_)
   {
-    dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);
-    // dynamic_cast<CBC_FLUDS&>(*fluds_).GetAndSetBoundaryPsiData(sweep_chunk, *this);
+    // dynamic_cast<CBC_FLUDS&>(*fluds_).SetBoundaryPsiData(sweep_chunk, *this);  // V1 of GPU sweep
+    dynamic_cast<CBC_FLUDS&>(*fluds_).GetAndSetBoundaryPsiData(sweep_chunk, *this); // V2 of GPU sweep
     has_set_boundary_data_ = true;
   }
 
@@ -203,13 +203,11 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     //  - Requires big architectural changes, however
     if (not ready_tasks.empty())
     {
-      // opensn::log.Log() << "CBC_AngleSet::GPUAngleSetAdvance - "
-      //                   << "Number of ready tasks this iteration: " << ready_tasks.size()
-      //                   << "\n";
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
-      // cbc_sweep_chunk.GPUSweep(*this);
-      cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
+      
+      // cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this); // V1 of GPU sweep
+      cbc_sweep_chunk.GPUSweep(*this);  // V2 of GPU sweep
 
       for (auto* cell_task : ready_tasks)
       {

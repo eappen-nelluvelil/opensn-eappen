@@ -165,10 +165,9 @@ CBC_FLUDS::BuildDeviceCellDOFMap()
 
   for (const auto& cell : grid->local_cells)
   {
-    const size_t dof_map_idx = cell.local_id;
     const size_t spatial_dof_0_idx =
       (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_);
-    cell_dof_map_[dof_map_idx] = spatial_dof_0_idx * num_groups_and_angles_;
+    cell_dof_map_[cell.local_id] = spatial_dof_0_idx * num_groups_and_angles_;
   }
 }
 
@@ -190,20 +189,28 @@ CBC_FLUDS::SetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 
 // ---------------------------------------------------------------------------
 void
-CBC_FLUDS::GetAndSetBoundaryPsiData(SweepChunk& sweep_chunk,
-                                               AngleSet& angle_set)
-{
-}
-
-void
-CBC_FLUDS::GetNonlocalPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set, std::vector<Task*> tasks)
-{
-}
-
-void
 CBC_FLUDS::Prepare_CBCD_FLUDS_V2(AngleSet& angle_set)
 {
 }
+
+void
+CBC_FLUDS::GetAndSetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
+{
+}
+void
+CBC_FLUDS::GetNonlocalPsiData(SweepChunk& sweep_chunk,
+                              AngleSet& angle_set,
+                              std::vector<Task*>& tasks)
+{
+}
+
+void
+CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiData(SweepChunk& sweep_chunk,
+                                                  AngleSet& angle_set,
+                                                  std::vector<Task*>& tasks)
+{
+}
+
 // ---------------------------------------------------------------------------
 
 void
