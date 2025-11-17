@@ -205,9 +205,13 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
     {
 
       cbc_sweep_chunk.SetTaskList(ready_tasks);
-      
-      // cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this); // V1 of GPU sweep
-      cbc_sweep_chunk.GPUSweep(*this);  // V2 of GPU sweep
+
+      // V1 of GPU sweep
+      // cbc_sweep_chunk.GPUSweep_With_CBCD_FLUDS(*this);
+
+      // V2 of GPU sweep
+      // Not working at the moment - need to further debug it
+      cbc_sweep_chunk.GPUSweep(*this);  
 
       for (auto* cell_task : ready_tasks)
       {

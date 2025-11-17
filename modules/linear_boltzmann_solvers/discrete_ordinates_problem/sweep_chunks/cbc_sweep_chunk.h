@@ -147,6 +147,13 @@ private:
   void* ptr_to_cuda_stream_2_ = nullptr;
   void* ptr_to_cuda_event_s2_ = nullptr;
 
+  // Maps to hold CUDA graph instances
+  // A drawback here is that the keys into these maps is dependent upon
+  // the number of ready tasks to be sent to the device, which can vary
+  // between sweeps
+  // Maybe this isn't a better approach than simply using streams? Need to look
+  // into this later
+  // This shouldn't be an issue during serial runs
   using GraphKey = std::pair<int, size_t>;
   std::map<GraphKey, cudaGraph_t> stream1_graphs_;
   std::map<GraphKey, cudaGraphExec_t> stream1_graph_execs_;

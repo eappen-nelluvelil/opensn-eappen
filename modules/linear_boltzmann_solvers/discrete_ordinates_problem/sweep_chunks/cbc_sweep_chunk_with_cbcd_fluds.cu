@@ -640,6 +640,13 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
     const auto graph_key_s1 = std::make_pair(as_id, num_cells_s1);
     if (stream1_graph_execs_.count(graph_key_s1) == 0)
     {
+      /*
+       This is the default mode.
+       If the local thread has an ongoing capture sequence that was not initiated
+       with cudaStreamCaptureModeRelaxed at cuStreamBeginCapture, or if any other
+       thread has a concurrent capture sequence initiated with cudaStreamCaptureModeGlobal,
+       this thread is prohibited from potentially unsafe API calls.
+      */
       cudaStreamBeginCapture(stream1, cudaStreamCaptureModeGlobal);
 
       args.cell_local_ids = cbcd_fluds.cells_for_stream_1_storage_.GetDevicePtr();
@@ -650,11 +657,14 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
       CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks, threads_per_block, 0, stream1>>>(args);
 
-      stream1_graphs_[graph_key_s1] = nullptr;
-      stream1_graph_execs_[graph_key_s1] = nullptr;
+      // Capture graph on stream 1
       cudaStreamEndCapture(stream1, &stream1_graphs_[graph_key_s1]);
+
+      // Instantiate the graph on stream 1 as an executable graph
       cudaGraphInstantiate(&stream1_graph_execs_[graph_key_s1], stream1_graphs_.at(graph_key_s1), 0);
     }
+    // If the graph has already been captured and instantiated, launch it
+    // This is dependent on the
     cudaGraphLaunch(stream1_graph_execs_.at(graph_key_s1), stream1);
   }
 
@@ -813,8 +823,6 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
       CBCSweepKernel_WITH_CBCD_FLUDS<<<num_blocks2, threads_per_block, 0, stream2>>>(args2);
 
-      stream2_graphs_[graph_key_s2] = nullptr;
-      stream2_graph_execs_[graph_key_s2] = nullptr;
       cudaStreamEndCapture(stream2, &stream2_graphs_[graph_key_s2]);
       cudaGraphInstantiate(
         &stream2_graph_execs_[graph_key_s2], stream2_graphs_.at(graph_key_s2), 0);

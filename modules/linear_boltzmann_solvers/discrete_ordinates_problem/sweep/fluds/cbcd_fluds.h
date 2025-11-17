@@ -70,23 +70,17 @@ public:
   // The layout is cell major -> face major --> face node major --> angle major --> group major
   // For a given entry in this buffer, the value represents the following:
   //  1. The first bit is 0 if incoming, 1 if outgoing
-  //  2. The next 2 bits are encoded as follows:
-  //     - 00: local cell upwind flux
-  //     - 01: boundary upwind flux
-  //     - 10: non-local upwind flux
-  //     - 11: reflecting upwind flux
-  //  3. The remaining 61 bits represent the offset into the corresponding section of the
+  //  2. The second bit is 0 if local, 1 is non-local/boundary
+  //  3. The remaining 62 bits represent the offset into the corresponding section of the
   //     angular flux device buffer
   Storage<uint64_t> cell_face_node_angle_group_offsets_map_storage_;
 
   // Device storage for (local + boundary + non-local) angular fluxes
   // 1. First section will be for storing local angular fluxes (for all cells)
-  // 2. Second section will be for storing incoming boundary angular fluxes
+  // 2. Second section will be for storing incoming non-local and boundary angular fluxes
+  //    as well as storing outgoing non-local and boundary angular fluxes
   //    The location of this second section is offset from the start of the storage
   //    by the size of the local angular flux section
-  // 3. Third section will be for storing non-local angular fluxes
-  //    The location of this third section is offset from the start of the storage
-  //    by the size of the local angular flux section + incoming boundary angular flux section
   Storage<double> cell_psi_data_buffer_storage_;
   // ---------------------------------------------------------------------------
 
