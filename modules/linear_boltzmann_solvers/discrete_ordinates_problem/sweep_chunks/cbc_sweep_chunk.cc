@@ -204,7 +204,16 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 
           if (psi != nullptr)
             for (size_t gsg = 0; gsg < gs_size_; ++gsg)
+            {
               b[gsg](i) += psi[gsg] * mu_Nij;
+
+              // opensn::log.Log() << "Cell " << cell_->local_id << " Face " << f << " FaceNode i "
+              //                   << i
+              //                   << " FaceNode j " << j << " Angle " << direction_num << " Group "
+              //                   << gsg
+              //                   << " Mu_Nij " << mu_Nij
+              //                   << " Psi_in " << psi[gsg];
+            }
         } // for face node j
       } // for face node i
     } // for f

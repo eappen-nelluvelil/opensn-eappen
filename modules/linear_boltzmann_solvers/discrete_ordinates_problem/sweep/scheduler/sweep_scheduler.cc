@@ -228,7 +228,12 @@ dependency counters, etc.
 
   // Copy phi back from device if using GPUs
   if (dynamic_cast<CBCSweepChunk&>(sweep_chunk).IsUsingGPUS())
+  {
     dynamic_cast<CBCSweepChunk&>(sweep_chunk).CopyOutflowAndPhiFromDevice();
+    // for (auto& angle_set_group : angle_agg_.angle_set_groups)
+    //   for (auto& angle_set : angle_set_group.GetAngleSets())
+    //     dynamic_cast<CBCAngleSet&>(*angle_set).ResetSweepBuffers();
+  }
 
   // Receive delayed data
   opensn::mpi_comm.barrier();
