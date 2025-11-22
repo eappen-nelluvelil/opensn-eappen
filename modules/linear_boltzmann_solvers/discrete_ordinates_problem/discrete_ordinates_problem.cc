@@ -77,9 +77,6 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
     verbose_sweep_angles_(params.GetParamVectorValue<int>("directions_sweep_order_to_print")),
     sweep_type_(params.GetParamValue<std::string>("sweep_type"))
 {
-  scattering_order_ = params.GetParamValue<int>("scattering_order");
-  ValidateAndComputeScatteringMoments();
-
   // Check for consistency between quadrature sets
   auto& groupset0 = groupsets_[0];
   for (auto& groupset : groupsets_)
@@ -1026,6 +1023,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                       min_num_pool_allocator_slots,
                                       use_gpus_);
 
+        // IDEA: Have the AngleSet have a unique CUDA stream for asynchronous sweeps
         auto angle_set = std::make_shared<CBC_AngleSet>(angle_set_id++,
                                                         gs_num_grps,
                                                         *sweep_ordering,

@@ -103,6 +103,8 @@ public:
 
   void CPUSweep(AngleSet& angle_set);
 
+  bool IsUsingGPUS() const { return use_gpus_; }
+
   void InitializeCUDAStreams();
 
   void DestroyCUDAStreams();
@@ -112,6 +114,10 @@ public:
   void GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set);
 
   void GPUSweep(AngleSet& angle_set);
+
+  void CopyPhiAndSrcToDevice();
+
+  void CopyOutflowAndPhiFromDevice();
 
 private:
   CBC_FLUDS* fluds_;

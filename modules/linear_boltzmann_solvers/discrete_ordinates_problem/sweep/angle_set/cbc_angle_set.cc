@@ -74,8 +74,6 @@ CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
   bool all_tasks_completed = true;
   bool a_task_executed = true;
 
-  // int num_ready_tasks_per_while_loop = 0;
-
   while (a_task_executed)
   {
     a_task_executed = false;
@@ -114,11 +112,6 @@ CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
           cbc_fluds_.Deallocate(cell_task.cell_ptr->local_id);
       }
     } // for cell_task
-
-    // opensn::log.Log() << "CBC_AngleSet::CPUAngleSetAdvance - "
-    //                   << "Number of ready tasks this iteration: " << num_ready_tasks_per_while_loop
-    //                   << "\n";
-    // num_ready_tasks_per_while_loop = 0;
 
     async_comm_.SendData();
   }
@@ -222,6 +215,8 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
         async_comm_.SendData(); // Need to play around with when to send data
       }
 
+      // async_comm_.SendData();
+
       tasks_were_executed = true;
       ready_tasks.clear();
     }
@@ -280,5 +275,103 @@ CBC_AngleSet::PsiReflected(uint64_t boundary_id,
 {
   return boundaries_[boundary_id]->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
 }
+
+/*
+AngleSetStatus
+CBC_AngleSet::CPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+{
+  CALI_CXX_MARK_SCOPE("CBC_AngleSet::CPUAngleSetAdvance");
+
+  if (executed_)
+    return AngleSetStatus::FINISHED;
+
+  // Make this a loop over all angle sets, and aggregate the current task lists
+  // into a vector (i.e., std::vector<std::vector<Task>>)
+  if (current_task_list_.empty())
+    current_task_list_ = cbc_spds_.GetTaskList();
+
+  // Create a new method for SweepChunk to populate a vector that will hold
+  // all AngleSet references
+  sweep_chunk.SetAngleSet(*this);
+
+  // Loop through each angle set, and call ReceiveData on its async communicator
+  auto tasks_who_received_data = async_comm_.ReceiveData();
+
+  // Loop through each angle set, and decrement dependencies for tasks that received data
+  for (const uint64_t task_number : tasks_who_received_data)
+    --current_task_list_[task_number].num_dependencies;
+
+  // Loop through each angle set, and call SendData on its async communicator
+  async_comm_.SendData();
+
+  // Loop through each angle set, and determine if the corresponding boundaries all allow for
+  // execution
+
+  // Check if boundaries allow for execution
+  for (auto& [bid, boundary] : boundaries_)
+    if (not boundary->CheckAnglesReadyStatus(angles_))
+      return AngleSetStatus::NOT_FINISHED;
+
+  bool all_tasks_completed = true;
+  bool a_task_executed = true;  // Replace this with tasks_were_executed
+
+  while (a_task_executed)
+  {
+    a_task_executed = false;
+
+    // This loop needs to be modified to loop through all angle sets and their current task list
+    for (auto& angle_set : angle_sets_)
+      for (auto& cell_task : angle_set.current_task_list_)
+      {
+        if (not cell_task.completed)
+          all_tasks_completed = false;
+        if (cell_task.num_dependencies == 0 and not cell_task.completed)
+        {
+          
+          cbc_fluds_.Allocate(cell_task.cell_ptr->local_id);
+
+          sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+          sweep_chunk.Sweep(*this);
+
+          for (uint64_t local_task_num : cell_task.local_successors)
+            --current_task_list_[local_task_num].num_dependencies;
+
+          cell_task.completed = true;
+          a_task_executed = true;
+          async_comm_.SendData();
+
+          // Update predecessor dependency consumption counts
+          for (uint64_t local_task_num : cell_task.local_predecessors)
+          {
+            ++current_task_list_[local_task_num].num_satisfied_downwind_deps;
+
+            if (current_task_list_[local_task_num].num_satisfied_downwind_deps >=
+                current_task_list_[local_task_num].local_successors.size())
+              cbc_fluds_.Deallocate(current_task_list_[local_task_num].cell_ptr->local_id);
+          }
+
+          // Deallocate if cell has no local successors
+          if (cell_task.local_successors.empty())
+            cbc_fluds_.Deallocate(cell_task.cell_ptr->local_id);
+        }
+      } // for cell_task
+
+    async_comm_.SendData();
+  }
+
+  const bool all_messages_sent = async_comm_.SendData();
+
+  if (all_tasks_completed and all_messages_sent)
+  {
+    // Update boundary readiness
+    for (auto& [bid, boundary] : boundaries_)
+      boundary->UpdateAnglesReadyStatus(angles_);
+    executed_ = true;
+    return AngleSetStatus::FINISHED;
+  }
+
+  return AngleSetStatus::NOT_FINISHED;
+}
+*/
 
 } // namespace opensn

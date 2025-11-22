@@ -64,6 +64,10 @@ private:
 
   /// Executes the depth-of-graph algorithm.
   void ScheduleAlgoDOG(SweepChunk& sweep_chunk);
+
+  // ---------------------------------------------------------------------------
+  void DeviceScheduleAlgoFIFO(SweepChunk& sweep_chunk);
+  // ---------------------------------------------------------------------------
 };
 
 } // namespace opensn

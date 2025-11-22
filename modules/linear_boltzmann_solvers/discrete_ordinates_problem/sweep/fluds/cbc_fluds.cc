@@ -211,6 +211,11 @@ CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiData(SweepChunk& sweep_chunk,
 {
 }
 
+void
+CBC_FLUDS::Reset_CBCD_FLUDS_Device_Data()
+{
+}
+
 // ---------------------------------------------------------------------------
 
 void

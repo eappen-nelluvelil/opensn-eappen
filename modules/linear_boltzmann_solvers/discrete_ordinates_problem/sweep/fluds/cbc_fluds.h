@@ -122,8 +122,10 @@ public:
   void GetNonlocalPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set, std::vector<Task*>& tasks);
 
   void SetNonlocalAndReflectingBoundaryPsiData(SweepChunk& sweep_chunk,
-                                        AngleSet& angle_set,
-                                        std::vector<Task*>& tasks);
+                                               AngleSet& angle_set,
+                                               std::vector<Task*>& tasks);
+
+  void Reset_CBCD_FLUDS_Device_Data();
   // ---------------------------------------------------------------------------
 
   void* Get_CBCD_FLUDS_Ptr() { return cbcd_fluds_; }
@@ -169,6 +171,8 @@ public:
   size_t cell_face_psi_buffer_size_;
 
   // ---------------------------------------------------------------------------
+  bool has_nonlocal_faces_ = false;
+  bool has_reflecting_boundary_faces_ = false;
   size_t nonlocal_and_boundary_psi_buffer_size_ = 0;
   std::vector<uint64_t> cell_to_face_offset_map_gpu_;
   std::vector<uint64_t> cell_face_node_angle_group_offsets_map_gpu_;

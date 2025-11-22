@@ -180,6 +180,29 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
 {
   CALI_CXX_MARK_SCOPE("SweepScheduler::ScheduleAlgoFIFO");
 
+  // size_t num_angle_sets = 0;
+  // size_t num_angles = 0;
+
+  
+  // for (auto& angle_set_group : angle_agg_.angle_set_groups)
+  // {
+  //   num_angle_sets += angle_set_group.GetAngleSets().size();
+  //   for (auto& angle_set : angle_set_group.GetAngleSets())
+  //   {
+  //     num_angles += angle_set->GetNumAngles();
+  //     opensn::log.Log() << "SweepScheduler::ScheduleAlgoFIFO: AngleSet has "
+  //                      << angle_set->GetNumAngles() << " angles.\n";
+  //   }
+  // }
+
+  // opensn::log.Log() << "SweepScheduler::ScheduleAlgoFIFO: Total number of anglesets: " <<
+  // num_angle_sets << "\n"; opensn::log.Log() << "SweepScheduler::ScheduleAlgoFIFO: Total number of
+  // angles: " << num_angles << "\n";
+
+  // Copy src and phi to device if using GPUs
+  if (dynamic_cast<CBCSweepChunk&>(sweep_chunk).IsUsingGPUS())
+    dynamic_cast<CBCSweepChunk&>(sweep_chunk).CopyPhiAndSrcToDevice();
+
   // Loop over AngleSetGroups
   bool finished = false;
   while (not finished)
@@ -193,7 +216,19 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
         if (status != AngleSetStatus::FINISHED)
           finished = false;
       } // for angleset
+
+    /*
+      1. Loop through all angle sets, receive data for each one, send data for each, decrement
+dependency counters, etc.
+      2. Determine which anglesets have ready boundaries
+      3. Perform the sweep over the anglesets that have ready boundaries
+      4. Synchronize the device prior to sending the data
+    */
   } // while not finished
+
+  // Copy phi back from device if using GPUs
+  if (dynamic_cast<CBCSweepChunk&>(sweep_chunk).IsUsingGPUS())
+    dynamic_cast<CBCSweepChunk&>(sweep_chunk).CopyOutflowAndPhiFromDevice();
 
   // Receive delayed data
   opensn::mpi_comm.barrier();
@@ -249,5 +284,14 @@ SweepScheduler::PrepareForSweep(bool use_boundary_source, bool zero_incoming_del
   sweep_chunk_.ZeroDestinationPhi();
   sweep_chunk_.SetBoundarySourceActiveFlag(use_boundary_source);
 }
+
+#ifndef __OPENSN_USE_CUDA__
+
+void
+SweepScheduler::DeviceScheduleAlgoFIFO(SweepChunk& sweep_chunk)
+{
+}
+
+#endif // __OPENSN_USE_CUDA__
 
 } // namespace opensn

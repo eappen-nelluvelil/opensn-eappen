@@ -83,7 +83,6 @@ CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
 
   surface_source_active_ = IsSurfaceSourceActive();
   num_angles_in_as_ = angle_set.GetNumAngles();
-  num_angles_in_as_ = angle_set.GetNumAngles();
   group_stride_ = angle_set.GetNumGroups();
   group_angle_stride_ = group_stride_ * num_angles_in_as_;
 }
@@ -360,6 +359,19 @@ CBCSweepChunk::GPUSweeep(AngleSet& angle_set)
 {
   throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
 }
+
+void
+CBCSweepChunk::CopyPhiAndSrcToDevice()
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
+
+void
+CBCSweepChunk::CopyOutflowPhiFromDevice()
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
+
 #endif // __OPENSN_USE_CUDA__
 
 } // namespace opensn

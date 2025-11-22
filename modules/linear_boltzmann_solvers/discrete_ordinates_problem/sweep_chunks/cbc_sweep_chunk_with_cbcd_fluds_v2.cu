@@ -18,6 +18,7 @@
 #include "caliper/cali.h"
 #include "caribou/caribou.h"
 
+#include <sys/types.h>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/copy.h>
@@ -77,8 +78,6 @@ struct CBCSweepKernelArgs
   // Psi data buffer and auxiliary vector maps
   const uint64_t* cell_to_face_offset_map;
   const uint64_t* cell_face_node_angle_group_offsets_map;
-  size_t local_psi_data_size;
-  size_t nonlocal_and_boundary_psi_data_size;
   double* cell_psi_data;
 
   // Batch
@@ -93,7 +92,7 @@ ComputeGMS(std::array<double, cbc_matrix_size>& sweep_matrix,
            const std::uint32_t& cell_num_nodes,
            DirectionView& direction,
            CellView& cell,
-           const double* __restrict src_moment,
+           const double* src_moment,
            const std::uint32_t& groupset_start,
            const std::uint32_t& group_idx,
            const std::uint32_t& num_groups,
@@ -151,7 +150,7 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
                        CellView& cell)
 {
   const uint64_t cell_face_offset = args.cell_to_face_offset_map[cell_local_id];
-  uint64_t face_offset_within_cell = 0;
+  size_t face_offset_stride = 0;
 
   // Loop over each face
   for (std::uint32_t f = 0; f < cell.num_faces; ++f)
@@ -164,12 +163,40 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
     const double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                       direction.omega[2] * face.normal[2];
 
-    // Skip if not incoming face
-    if (mu >= 0.0)
+    // Get first bit
+    // First bit == 0 -> incoming face
+    // First bit == 1 -> outgoing face
+    uint64_t face_map_val =
+      args.cell_face_node_angle_group_offsets_map[cell_face_offset + face_offset_stride];
+
+    // bool is_incoming_face = !((face_map_val >> 63) & 1);
+
+    // Get first two bits
+    // First two bits == 01 -> incoming face
+    // First two bits == 10 -> outgoing face
+    bool is_incoming_face = ((face_map_val >> 62) & 0x3) == 0x1;
+
+    // Get second two bits
+    // Second two bits == 00 -> local face
+    // Second two bits == 10 -> non-local face
+    // Second two bits == 11 -> boundary face
+    // bool is_incoming_local_face = ((face_map_val >> 60) & 0x3) == 0x1;
+    // bool is_incoming_nonlocal_face = ((face_map_val >> 60) & 0x3) == 0x2;
+    // bool is_incoming_boundary_face = ((face_map_val >> 60) & 0x3) == 0x3;
+
+    if (!is_incoming_face)
     {
-      face_offset_within_cell += face_data_size;
+      face_offset_stride += face_data_size;
       continue;
     }
+
+    // Skip if not incoming local, non-local, or boundary face
+    // if (!is_incoming_face or !(is_incoming_local_face || is_incoming_nonlocal_face ||
+    // is_incoming_boundary_face))
+    // {
+    //   face_offset_stride += face_data_size;
+    //   continue;
+    // }
 
     // Compute surface integral
     for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
@@ -184,43 +211,31 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
 
         const double* psi_in = nullptr;
 
-        const uint64_t map_idx = cell_face_offset + face_offset_within_cell +
+        const uint64_t map_idx = cell_face_offset +
+                                 face_offset_stride +
                                  (fj * args.angleset_size * args.groupset_size) +
                                  (angle_idx * args.groupset_size) + group_idx;
 
-        const uint64_t map_value = args.cell_face_node_angle_group_offsets_map[map_idx];
+        const uint64_t encoded_device_buffer_index =
+          args.cell_face_node_angle_group_offsets_map[map_idx];
 
-        // Get the second bit of map_value
-        // If the second bit = 0, then f is a local face
-        // If the second bit = 1, then f is a non-local or boundary face
-        const uint64_t second_bit = (map_value >> 1) & 1ULL;
+        // Get the second bit of encoded_device_buffer_index
+        // Second bit == 0 -> local face
+        // Second bit == 1 -> non-local or boundary face
+        // bool is_local_face = !((encoded_device_buffer_index >> 62) & 1);
 
-        // Get the remaining 62 bits of map_value
-        // If f is an incoming local face, these bits (interpreted as an integer) give the
-        // offset into the local psi data buffer, which is the first section of
-        // args.cell_psi_data. Otherwise, these bits are not used, and the offset into the
-        // non-local/boundary psi data buffer is computed as (args.cell_psi_data +
-        // args.local_psi_data_size) + map_idx
-        const uint64_t offset_bits = (map_value >> 2);
+        // const uint64_t true_device_buffer_index =
+        //   encoded_device_buffer_index & 0x3FFFFFFFFFFFFFFF;
 
-        // if (cell_local_id == 0 && angle_idx == 0 && group_idx == 0)
-        //   std::printf("map_value = %llu, second_bit = %llu \n", map_value, second_bit);
+        // Get remaining 60 bits of encoded_device_buffer_index
+        const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x0FFFFFFFFFFFFFFF;
 
-        // std::printf("offset bits = %llu \n", offset_bits);
-
-        if (second_bit == 0) // Incoming local face
-        {
-          psi_in = args.cell_psi_data + offset_bits;
-        }
-        else // Incoming non-local or boundary face
-        {
-          psi_in = args.cell_psi_data + args.local_psi_data_size + map_idx;
-        }
+        psi_in = &args.cell_psi_data[true_device_buffer_index];
 
         psi[i] += (*psi_in) * mu_Nij;
       }
     }
-    face_offset_within_cell += face_data_size;
+    face_offset_stride += face_data_size;
   }
 }
 
@@ -275,7 +290,7 @@ DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
                                   DirectionView& direction)
 {
   const uint64_t cell_face_offset = args.cell_to_face_offset_map[cell_local_id];
-  uint64_t face_offset_within_cell = 0;
+  size_t face_offset_stride = 0;
 
   for (std::uint32_t f = 0; f < cell.num_faces; ++f)
   {
@@ -285,43 +300,55 @@ DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
     double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                 direction.omega[2] * face.normal[2];
 
-    if (mu <= 0.0)
+    // Get first bit
+    // First bit == 0 -> incoming face 
+    // First bit == 1 -> outgoing face
+    uint64_t face_map_val = args.cell_face_node_angle_group_offsets_map[cell_face_offset + face_offset_stride];
+    // bool is_outgoing_face = (face_map_val >> 63) & 1;
+
+    // Get first two bits
+    // First two bits == 01 -> incoming face
+    // First two bits == 10 -> outgoing face
+    bool is_outgoing_face = ((face_map_val >> 62) & 0x3) == 0x2;
+
+    // Get second two bits
+    // Second two bits == 01 -> local face
+    // Second two bits == 10 -> non-local face
+    // Second two bits == 11 -> reflecting boundary face
+    // bool is_outgoing_local_face = ((face_map_val >> 60) & 0x3) == 0x1;
+    // bool is_outgoing_nonlocal_face = ((face_map_val >> 60) & 0x3) == 0x2;
+    // bool is_outgoing_boundary_face = ((face_map_val >> 60) & 0x3) == 0x3;
+
+    if (!is_outgoing_face)
     {
-      face_offset_within_cell += face_data_size;
+      face_offset_stride += face_data_size;
       continue;
     }
+
+    // if (!is_outgoing_face or !(is_outgoing_local_face || is_outgoing_nonlocal_face || is_outgoing_boundary_face))
+    // {
+    //   face_offset_stride += face_data_size;
+    //   continue;
+    // }
 
     for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
     {
       const int i = face.cell_mapping_data[fi];
 
-      const uint64_t map_idx = cell_face_offset + face_offset_within_cell +
+      const uint64_t map_idx = cell_face_offset +
+                               face_offset_stride +
                                (fi * args.angleset_size * args.groupset_size) +
                                (angle_idx * args.groupset_size) + group_idx;
 
-      const uint64_t map_value = args.cell_face_node_angle_group_offsets_map[map_idx];
+      const uint64_t encoded_device_buffer_index =
+        args.cell_face_node_angle_group_offsets_map[map_idx];
 
-      // Get the second bit of map_value
-      // If the second bit = 0, then f is a local face
-      // If the second bit = 1, then f is a non-local or boundary face
-      const uint64_t second_bit = (map_value >> 1) & 1ULL;
+      // const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x3FFFFFFFFFFFFFFF;
 
-      // Get the remaining 62 bits of map_value
-      // If f is an outgoing local face, these bits (interpreted as an integer) give the
-      // offset into the local psi data buffer, which is the first section of
-      // args.cell_psi_data. Otherwise, these bits are not used, and the offset into the
-      // non-local/boundary psi data buffer is computed as (args.cell_psi_data +
-      // args.local_psi_data_size) + map_idx
-      const uint64_t offset_bits = (map_value >> 2);
+      // Get remaining 60 bits of encoded_device_buffer_index
+      const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x0FFFFFFFFFFFFFFF;
 
-      if (second_bit == 0) // Outgoing local face
-      {
-        args.cell_psi_data[offset_bits] = psi[i];
-      }
-      else // Outgoing non-local or boundary face
-      {
-        args.cell_psi_data[args.local_psi_data_size + map_idx] = psi[i];
-      }
+      args.cell_psi_data[true_device_buffer_index] = psi[i];
 
       // Tally outflow for boundary faces
       if (face.outflow != nullptr)
@@ -330,7 +357,7 @@ DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
         crb::atomic_add(face.outflow + group_idx, outflow);
       }
     }
-    face_offset_within_cell += face_data_size;
+    face_offset_stride += face_data_size;
   }
 }
 __device__ void
@@ -413,7 +440,7 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                            idx.group_idx,
                            direction,
                            cell);
-
+    
     // Solve
     DeviceGaussianElimination(sweep_matrix, psi, cell.num_nodes);
   }
@@ -433,6 +460,33 @@ CBCSweepKernel(CBCSweepKernelArgs args)
 }
 
 void
+CBCSweepChunk::CopyPhiAndSrcToDevice()
+{
+  // Copy source moment and destination phi data to device
+  MemoryPinner<double>* src = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(0));
+  src->CopyToDevice();
+
+  MemoryPinner<double>* phi = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(1));
+  phi->CopyToDevice();
+}
+
+void
+CBCSweepChunk::CopyOutflowAndPhiFromDevice()
+{
+  // Post-kernel processing
+  MemoryPinner<double>* phi = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(1));
+  phi->CopyFromDevice();
+
+  // Retrieve outflow from device
+  OutflowCarrier* outflow = reinterpret_cast<OutflowCarrier*>(problem_.GetCarrier(1));
+  outflow->AccumulateBack(cell_transport_views_);
+  outflow->Reset();
+
+  // if (save_angular_flux_)
+  //   reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(2))->CopyFromDevice();
+}
+
+void
 CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
@@ -443,7 +497,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr());
   const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
   const auto num_angles_in_as = as_angle_indices.size();
-  const auto gs_size = groupset_.groups.size();
+  const auto gs_size = cbc_angle_set.GetNumGroups();
   const auto gs_gi = groupset_.groups.front().id;
 
   // Determine sizes of buffers
@@ -460,19 +514,18 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 
   // Copy source moment and destination phi data to device
   MemoryPinner<double>* src = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(0));
-  src->CopyToDevice();
+  // src->CopyToDevice();
 
   MemoryPinner<double>* phi = reinterpret_cast<MemoryPinner<double>*>(problem_.GetPinner(1));
-  phi->CopyToDevice();
+  // phi->CopyToDevice();
 
   // Copy angleset data to device
   MemoryPinner<std::uint32_t>* directions =
     reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
 
-  // Prior to executing the sweep kernel, need to retrieve non-local cell angular fluxes
-  // and write them to the appropriate device buffer locations
-  // This also copies the incoming boundary angular flux data from host to device,
-  // which avoids a redundant H2D copy 
+  // Prior to executing the sweep kernel, need to retrieve
+  // incoming non-local cell angular fluxes and write them to the appropriate
+  // device buffer locations
   cbc_fluds.GetNonlocalPsiData(*this, cbc_angle_set, tasks_to_execute_);
 
   // Set up kernel arguments
@@ -497,11 +550,9 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   args.cell_to_face_offset_map = cbcd_fluds.cell_to_face_offset_map_storage_.GetDevicePtr();
   args.cell_face_node_angle_group_offsets_map =
     cbcd_fluds.cell_face_node_angle_group_offsets_map_storage_.GetDevicePtr();
-  args.local_psi_data_size = cbc_fluds.GetGPULocalPsiDataSize();
-  args.nonlocal_and_boundary_psi_data_size = cbc_fluds.nonlocal_and_boundary_psi_buffer_size_;
   args.cell_psi_data = cbcd_fluds.cell_psi_data_buffer_storage_.GetDevicePtr();
 
-  args.batch_size = tasks_to_execute_.size() * num_angles_in_as * gs_size;
+  args.batch_size = args.num_cells * args.angleset_size * args.groupset_size;
   args.save_angular_flux = false;
   args.destination_psi = nullptr;
 
@@ -510,12 +561,30 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 
   CBCSweepKernel<<<num_blocks, threads_per_block>>>(args);
 
-  // Copy local, non-local, and boundary angular flux data back to host
-  cbcd_fluds.cell_psi_data_buffer_storage_.CopyFromDevice();
-
-  // After executing the sweep kernel, need to send outgoing non-local and reflecting
+  // After executing the sweep kernel, send outgoing non-local and reflecting
   // boundary angular flux to appropriate locations
   cbc_fluds.SetNonlocalAndReflectingBoundaryPsiData(*this, cbc_angle_set, tasks_to_execute_);
+
+  // Check if cell 0 is in cell_local_ids
+  // if (std::find(cell_local_ids.begin(), cell_local_ids.end(), 0) != cell_local_ids.end())
+  // {
+  //   cbcd_fluds.cell_psi_data_buffer_storage_.CopyFromDevice();
+  //   // Get corresponding psi value for face 0, face node 0 on the face, angle 0 in angleset and
+  //   // group 0 in groupset This needs to index into cell_psi_data_buffer_storage_.GetHostVector()
+  //   const uint64_t cell_face_offset = cbcd_fluds.cell_to_face_offset_map_storage_.GetHostVector()[0];
+  //   const uint64_t address_offset = cell_face_offset +
+  //                                     (0 * num_angles_in_as * gs_size) + // face 0
+  //                                     (0 * gs_size) +                     // face node 0
+  //                                     (0 * 1) +                           // angle 0
+  //                                     (0);                                // group 0
+  //   const uint64_t encoded_device_buffer_index =
+  //     cbcd_fluds.cell_face_node_angle_group_offsets_map_storage_.GetHostVector()[address_offset];
+  //   const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x3FFFFFFFFFFFFFFF;
+  //   const double psi_value =
+  //     cbcd_fluds.cell_psi_data_buffer_storage_.GetHostVector()[true_device_buffer_index];
+  //   std::printf("CBC Sweep Chunk: Cell 0, Face 0, Face Node 0, Angle 0, Group 0 Psi = %f\n", psi_value);
+  //   std::terminate();
+  // }
 }
 
 } // namespace opensn
