@@ -115,9 +115,14 @@ public:
 
   void GPUSweep(AngleSet& angle_set);
 
+  void GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_execute);
+
   void CopyPhiAndSrcToDevice();
 
   void CopyOutflowAndPhiFromDevice();
+
+  std::vector<std::shared_ptr<AngleSet>> associated_angle_sets_;
+  std::vector<AngleSetStatus> angle_set_statuses_;
 
 private:
   CBC_FLUDS* fluds_;

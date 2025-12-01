@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_aggregation/angle_aggregation.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 
 namespace opensn
 {
@@ -66,7 +67,7 @@ private:
   void ScheduleAlgoDOG(SweepChunk& sweep_chunk);
 
   // ---------------------------------------------------------------------------
-  void DeviceScheduleAlgoFIFO(SweepChunk& sweep_chunk);
+  void ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk);
   // ---------------------------------------------------------------------------
 };
 

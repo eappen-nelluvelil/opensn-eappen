@@ -197,6 +197,13 @@ void
 CBC_FLUDS::GetAndSetBoundaryPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set)
 {
 }
+
+void
+CBC_FLUDS::GetAndSetBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
+                                          AngleSet& angle_set)
+{
+}
+
 void
 CBC_FLUDS::GetNonlocalPsiData(SweepChunk& sweep_chunk,
                               AngleSet& angle_set,
@@ -205,7 +212,21 @@ CBC_FLUDS::GetNonlocalPsiData(SweepChunk& sweep_chunk,
 }
 
 void
+CBC_FLUDS::GetNonlocalPsiDataAsync(SweepChunk& sweep_chunk,
+                                   AngleSet& angle_set,
+                                   std::vector<Task*>& tasks)
+{
+}
+
+void
 CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiData(SweepChunk& sweep_chunk,
+                                                  AngleSet& angle_set,
+                                                  std::vector<Task*>& tasks)
+{
+}
+
+void
+CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
                                                   AngleSet& angle_set,
                                                   std::vector<Task*>& tasks)
 {

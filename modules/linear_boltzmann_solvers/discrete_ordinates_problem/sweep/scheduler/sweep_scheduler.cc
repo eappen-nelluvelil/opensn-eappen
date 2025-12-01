@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/sweep_scheduler.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/aah.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/boundary/reflecting_boundary.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
@@ -203,6 +204,14 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
   if (dynamic_cast<CBCSweepChunk&>(sweep_chunk).IsUsingGPUS())
     dynamic_cast<CBCSweepChunk&>(sweep_chunk).CopyPhiAndSrcToDevice();
 
+  // for (auto& angle_set_group : angle_agg_.angle_set_groups)
+  // {
+  //   for (auto& angle_set : angle_set_group.GetAngleSets())
+  //   {
+  //     dynamic_cast<CBCSweepChunk&>(sweep_chunk).associated_angle_sets_.push_back(angle_set);
+  //   }
+  // }
+
   // Loop over AngleSetGroups
   bool finished = false;
   while (not finished)
@@ -274,7 +283,15 @@ SweepScheduler::Sweep()
   CALI_CXX_MARK_SCOPE("SweepScheduler::Sweep");
 
   if (scheduler_type_ == SchedulingAlgorithm::FIRST_IN_FIRST_OUT)
-    ScheduleAlgoFIFO(sweep_chunk_);
+  {
+    auto* cbc_sweep_chunk = dynamic_cast<CBCSweepChunk*>(&sweep_chunk_);
+    if (cbc_sweep_chunk and cbc_sweep_chunk->IsUsingGPUS())
+      ScheduleAlgoFIFOAsync(sweep_chunk_);
+    else
+      ScheduleAlgoFIFO(sweep_chunk_);
+
+    // ScheduleAlgoFIFO(sweep_chunk_);
+  }
   else if (scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH)
     ScheduleAlgoDOG(sweep_chunk_);
 }

@@ -29,6 +29,14 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
     cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds_)),
     use_gpus_(use_gpu)
 {
+  if (use_gpus_)
+    CreateCUDAStream();
+}
+
+CBC_AngleSet::~CBC_AngleSet()
+{
+  if (use_gpus_)
+    DestroyCUDAStream();
 }
 
 AsynchronousCommunicator*
@@ -215,7 +223,7 @@ CBC_AngleSet::GPUAngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permiss
         async_comm_.SendData(); // Need to play around with when to send data
       }
 
-      // async_comm_.SendData();
+      async_comm_.SendData();
 
       tasks_were_executed = true;
       ready_tasks.clear();
@@ -276,6 +284,21 @@ CBC_AngleSet::PsiReflected(uint64_t boundary_id,
 {
   return boundaries_[boundary_id]->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
 }
+
+#ifndef _OPENSN_USE_CUDA
+void
+CBC_AngleSet::CreateCUDAStream()
+{
+
+}
+
+void
+CBC_AngleSet::DestroyCUDAStream()
+{
+
+}
+
+#endif
 
 /*
 AngleSetStatus

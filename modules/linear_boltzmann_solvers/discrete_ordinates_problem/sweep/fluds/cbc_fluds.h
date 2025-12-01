@@ -13,6 +13,9 @@
 #include <functional>
 #include <tuple>
 
+#include "framework/logging/log.h"
+#include "framework/runtime.h"
+
 namespace opensn
 {
 
@@ -119,9 +122,18 @@ public:
   void GetAndSetBoundaryPsiData(SweepChunk& sweep_chunk,
                                 AngleSet& angle_set);
 
+  void GetAndSetBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
+                                AngleSet& angle_set);
+
   void GetNonlocalPsiData(SweepChunk& sweep_chunk, AngleSet& angle_set, std::vector<Task*>& tasks);
 
+  void GetNonlocalPsiDataAsync(SweepChunk& sweep_chunk, AngleSet& angle_set, std::vector<Task*>& tasks);
+
   void SetNonlocalAndReflectingBoundaryPsiData(SweepChunk& sweep_chunk,
+                                               AngleSet& angle_set,
+                                               std::vector<Task*>& tasks);
+
+  void SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
                                                AngleSet& angle_set,
                                                std::vector<Task*>& tasks);
 

@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 
@@ -23,8 +24,6 @@ protected:
   CBC_FLUDS& cbc_fluds_;
   bool use_gpus_ = false;
 
-  bool has_set_boundary_data_ = false;
-
 public:
   CBC_AngleSet(size_t id,
                size_t num_groups,
@@ -34,6 +33,8 @@ public:
                std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                const MPICommunicatorSet& comm_set,
                bool use_gpu);
+  
+  ~CBC_AngleSet();
 
   AsynchronousCommunicator* GetCommunicator() override;
 
@@ -72,6 +73,34 @@ public:
                        uint64_t cell_local_id,
                        unsigned int face_num,
                        unsigned int fi) override;
+
+  const CBC_SPDS& GetSPDS() { return cbc_spds_; }
+
+  CBC_FLUDS& GetFLUDS() { return cbc_fluds_; }
+
+  std::vector<Task>& GetCurrentTaskList() { return current_task_list_; }
+
+  void ReceiveData() { tasks_who_received_data_ = async_comm_.ReceiveData(); }
+
+  void SendData() { async_comm_.SendData(); }
+
+  bool HasSentBoundaryData() const { return has_set_boundary_data_; }
+
+  void SetBoundaryDataFlag(bool flag) { has_set_boundary_data_ = flag; }
+
+  bool GetExecutionStatus() const { return executed_; }
+
+  void SetExecutionStatus(bool status) { executed_ = status; }
+
+  void CreateCUDAStream();
+
+  void DestroyCUDAStream();
+
+  std::vector<uint64_t> tasks_who_received_data_;
+  std::vector<Task*> ready_tasks_;
+
+  void* stream_ptr = nullptr;
+  bool has_set_boundary_data_ = false;
 };
 
 } // namespace opensn

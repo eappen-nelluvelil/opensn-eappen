@@ -207,10 +207,11 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
             {
               b[gsg](i) += psi[gsg] * mu_Nij;
 
-              // opensn::log.Log() << "Cell " << cell_->local_id << " Face " << f << " FaceNode i "
-              //                   << i
-              //                   << " FaceNode j " << j << " Angle " << direction_num << " Group "
+              // opensn::log.Log() << "(INCOMING) Cell " << cell_->local_id << " Face " << f << " FaceNode i "
+              //                   << i << " FaceNode j " << j << " Angle " << direction_num
+              //                   << " Group "
               //                   << gsg
+              //                   << " Mu " << face_mu_values[f]
               //                   << " Mu_Nij " << mu_Nij
               //                   << " Psi_in " << psi[gsg];
             }
@@ -336,8 +337,29 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 
         // Write the solved angular flux to the determined location
         if (psi != nullptr)
+        {
           for (size_t gsg = 0; gsg < gs_size_; ++gsg)
+          {
             psi[gsg] = b[gsg](i);
+
+            // opensn::log.Log() << "(OUTGOING) Cell " << cell_->local_id << " Face " << f << " FaceNode i "
+            //                   << i << " Angle " << direction_num
+            //                   << " Group "
+            //                   << gsg
+            //                   << " Mu " << face_mu_values[f]
+            //                   << " Psi_out " << psi[gsg];
+          }
+        }
+
+        // for (size_t gsg = 0; gsg < gs_size_; ++gsg)
+        // {
+        //   opensn::log.Log() << "(OUTGOING) Cell " << cell_->local_id << " Face " << f << " FaceNode i "
+        //                     << i << " Angle " << direction_num
+        //                     << " Group "
+        //                     << gsg
+        //                     << " Mu " << face_mu_values[f]
+        //                     << " Psi_out " << b[gsg](i);
+        // }
       } // for fi
     } // for face
   } // for angleset/subset
@@ -365,6 +387,12 @@ CBCSweepChunk::GPUSweep_With_CBCD_FLUDS(AngleSet& angle_set)
 
 void
 CBCSweepChunk::GPUSweeep(AngleSet& angle_set)
+{
+  throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
+}
+
+void
+CBCSweepChunk::GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_execute)
 {
   throw std::runtime_error("OpenSn was not compiled with CUDA.\n");
 }
