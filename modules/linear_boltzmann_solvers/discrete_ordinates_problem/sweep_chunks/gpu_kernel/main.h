@@ -45,3 +45,26 @@ SweepDispatch(std::uint32_t n, Args&&... args)
 }
 
 } // namespace opensn::gpu_kernel
+
+namespace opensn::cbc_gpu_kernel
+{
+
+using SweepFunc = std::add_pointer_t<void(const cbc_gpu_kernel::CBC_Arguments&,
+                                          CellView&,
+                                          DirectionView&,
+                                          const std::uint64_t*,
+                                          const unsigned int&,
+                                          const unsigned int&,
+                                          const std::uint32_t&,
+                                          double*)>;
+template <std::size_t... IntSequence>
+__device__ constexpr std::array<SweepFunc, sizeof...(IntSequence)>
+MakeCBCSweepSpecMap(std::index_sequence<IntSequence...>)
+{
+  return std::array<SweepFunc, sizeof...(IntSequence)>{
+    &gpu_kernel::Sweep<IntSequence, CBCD_NodeIndex, cbc_gpu_kernel::CBC_Arguments>...};
+}
+__device__ std::array<SweepFunc, LBSProblem::max_dofs_gpu> cbc_sweep_spec_map =
+  MakeCBCSweepSpecMap(gpu_kernel::MakeIndexSequenceFromRange<1, LBSProblem::max_dofs_gpu + 1>{});
+
+} // namespace opensn::cbc_gpu_kernel
