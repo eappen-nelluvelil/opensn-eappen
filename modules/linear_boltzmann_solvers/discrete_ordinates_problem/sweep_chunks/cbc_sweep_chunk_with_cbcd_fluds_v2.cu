@@ -18,11 +18,6 @@
 #include "caliper/cali.h"
 #include "caribou/caribou.h"
 
-#include <sys/types.h>
-#include <thrust/host_vector.h>
-#include <thrust/device_vector.h>
-#include <thrust/copy.h>
-
 namespace crb = caribou;
 
 namespace opensn
@@ -69,6 +64,7 @@ struct CBCSweepKernelArgs
   std::uint32_t angleset_size;
 
   // Group set
+  std::uint32_t num_groups;
   std::uint32_t groupset_start;
   std::uint32_t groupset_size;
 
@@ -165,8 +161,6 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
     const double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                       direction.omega[2] * face.normal[2];
 
-    // std::printf("Mu for Face %u: %f\n", f, mu);
-
     // Get first bit
     // First bit == 0 -> incoming face
     // First bit == 1 -> outgoing face
@@ -228,27 +222,12 @@ ComputeSurfaceIntegral(std::array<double, cbc_matrix_size>& sweep_matrix,
         // Second bit == 1 -> non-local or boundary face
         // bool is_local_face = !((encoded_device_buffer_index >> 62) & 1);
 
-        // const uint64_t true_device_buffer_index =
-        //   encoded_device_buffer_index & 0x3FFFFFFFFFFFFFFF;
-
         // Get remaining 60 bits of encoded_device_buffer_index
         const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x0FFFFFFFFFFFFFFF;
 
         psi_in = &args.cell_psi_data[true_device_buffer_index];
 
         psi[i] += (*psi_in) * mu_Nij;
-
-        // std::printf("(INCOMING) Cell %d Face %d FaceNode i %d FaceNode j %d Angle %d Group %d Mu %f Mu_Nij %f "
-        //             "Psi_in %f\n",
-        //             (int)cell_local_id, (int)f, (int)i, (int)j, (int)args.directions[angle_idx], (int)group_idx, mu, mu_Nij, *psi_in);
-        
-        // std::printf("face node i = %d, face node j = %d, angle = %d, group = %d\n",
-        //             i,
-        //             j,
-        //             angle_idx,
-        //             group_idx);
-
-        // std::printf("mu = %f\n", mu);
       }
     }
     face_offset_stride += face_data_size;
@@ -352,13 +331,6 @@ DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
     //   continue;
     // }
 
-    // NOTE: We need to record outgoing psi for local, non-local, and reflecting boundary faces
-    // Outgoing non-reflecting boundary angular fluxes are still written
-    // to the device buffer, which is unnecessary
-    // Need to figure out how to skip writing angular fluxes for outgoing non-reflecting
-    // boundary faces to save memory bandwidth
-    // However, outflow still needs to be tallied for outgoing boundary faces,
-    // regardless if they're non-reflecting or reflecting
     for (std::uint32_t fi = 0; fi < face.num_face_nodes; ++fi)
     {
       const int i = face.cell_mapping_data[fi];
@@ -371,22 +343,10 @@ DeviceRecordDownwindPsiAndOutflow(const std::array<double, cbc_max_dof>& psi,
       const uint64_t encoded_device_buffer_index =
         args.cell_face_node_angle_group_offsets_map[map_idx];
 
-      // const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x3FFFFFFFFFFFFFFF;
-
       // Get remaining 60 bits of encoded_device_buffer_index
       const uint64_t true_device_buffer_index = encoded_device_buffer_index & 0x0FFFFFFFFFFFFFFF;
 
       args.cell_psi_data[true_device_buffer_index] = psi[i];
-
-      // std::printf("(OUTGOING) Cell %d Face %d FaceNode i %d Angle %d Group %d Mu %f"
-      //             " Psi_out %f\n",
-      //             (int)cell_local_id,
-      //             (int)f,
-      //             (int)i,
-      //             (int)args.directions[angle_idx],
-      //             (int)group_idx,
-      //             mu,
-      //             args.cell_psi_data[true_device_buffer_index]);
 
       // Tally outflow for boundary faces
       if (face.outflow != nullptr)
@@ -467,7 +427,8 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                args.src_moment,
                args.groupset_start,
                idx.group_idx,
-               args.groupset_size,
+               //  args.groupset_size,
+               args.num_groups,
                num_moments);
 
     ComputeSurfaceIntegral(sweep_matrix,
@@ -491,7 +452,7 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                    args.phi,
                    args.groupset_start,
                    idx.group_idx,
-                   args.groupset_size,
+                   args.num_groups,
                    num_moments);
 
   DeviceRecordDownwindPsiAndOutflow(
@@ -528,21 +489,29 @@ CBCSweepChunk::CopyOutflowAndPhiFromDevice()
 void
 CBCSweepChunk::GPUSweep(AngleSet& angle_set)
 {
-  // CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
-
-  opensn::log.Log() << "Here in GPUSweep";
+  CALI_CXX_MARK_SCOPE("CBCSweepChunk::GPUSweep");
 
   // Determine sizes for host and device vectors
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
   auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(*fluds_);
   auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr());
   const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
-  const auto num_angles_in_as = as_angle_indices.size();
-  const auto gs_size = cbc_angle_set.GetNumGroups();
+  const auto num_angles_in_as = cbc_angle_set.GetNumAngles();
+  const auto gs_size = groupset_.groups.size();
 
   // opensn::log.Log() << "gs_size = " << gs_size << "\n";
 
   const auto gs_gi = groupset_.groups.front().id;
+
+  // opensn::log.Log() << "AngleSet "
+  //                   << cbc_angle_set.GetID()
+  //                   << " num_angles_in_as = "
+  //                   << num_angles_in_as
+  //                   << " gs_size = "
+  //                   << gs_size
+  //                   << " gs_gi = "
+  //                   << gs_gi
+  //                 << " angle_indices[0] = " << as_angle_indices[0] << "\n";
 
   // Determine sizes of buffers
   std::vector<uint64_t> cell_local_ids(tasks_to_execute_.size());
@@ -582,6 +551,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   args.directions = directions->GetDevicePtr();
   args.angleset_size = num_angles_in_as;
 
+  args.num_groups = problem_.GetGroups().size();
   args.groupset_start = gs_gi;
   args.groupset_size = gs_size;
 
@@ -598,7 +568,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   args.save_angular_flux = false;
   args.destination_psi = nullptr;
 
-  const std::uint32_t threads_per_block = 256;
+  const std::uint32_t threads_per_block = 128;
   const std::uint32_t num_blocks = (args.batch_size + threads_per_block - 1) / threads_per_block;
 
   // Invoke kernel asynchronously with the current angle set's stream
@@ -616,12 +586,10 @@ CBCSweepChunk::GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_e
 
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
   auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(cbc_angle_set.GetFLUDS());
-
   auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr());
 
-  const auto& as_angle_indices = cbc_angle_set.GetAngleIndices();
-  const auto num_angles_in_as = as_angle_indices.size();
-  const auto gs_size = cbc_angle_set.GetNumGroups();
+  const auto num_angles_in_as = cbc_angle_set.GetNumAngles();
+  const auto gs_size = groupset_.groups.size();
   const auto gs_gi = groupset_.groups.front().id;
 
   std::vector<std::uint64_t> cell_local_ids(tasks_to_execute.size());
@@ -638,23 +606,19 @@ CBCSweepChunk::GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_e
   MemoryPinner<std::uint32_t>* directions =
     reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
 
+  std::copy(cell_local_ids.begin(),
+            cell_local_ids.end(),
+            cbcd_fluds.cell_local_ids_storage_.GetHostVector().begin());
+
   cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
-  // cudaStreamSynchronize(stream);
 
-  // std::copy(cell_local_ids.begin(),
-  //           cell_local_ids.end(),
-  //           cbcd_fluds.cell_local_ids_storage_.GetHostVector().begin());
+  cudaMemcpyAsync(cbcd_fluds.cell_local_ids_storage_.GetDevicePtr(),
+                      cbcd_fluds.cell_local_ids_storage_.GetHostVector().data(),
+                      sizeof(uint64_t) * cell_local_ids.size(),
+                      cudaMemcpyHostToDevice,
+                      stream);
 
-  // cudaMemcpyAsync(cbcd_fluds.cell_local_ids_storage_.GetDevicePtr(),
-  //                     cbcd_fluds.cell_local_ids_storage_.GetHostVector().data(),
-  //                     sizeof(uint64_t) * cell_local_ids.size(),
-  //                     cudaMemcpyHostToDevice,
-  //                     stream);
-
-  cbcd_fluds.cell_local_ids_storage_.Copy(cell_local_ids.begin(), cell_local_ids.end());
-
-  // cbc_fluds.GetNonlocalPsiDataAsync(*this, cbc_angle_set, tasks_to_execute);
-  cbc_fluds.GetNonlocalPsiData(*this, cbc_angle_set, tasks_to_execute);
+  cbc_fluds.GetNonlocalPsiDataAsync(*this, cbc_angle_set, tasks_to_execute);
 
   CBCSweepKernelArgs args;
 
@@ -664,8 +628,11 @@ CBCSweepChunk::GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_e
   args.phi = phi->GetDevicePtr();
   args.directions = directions->GetDevicePtr();
   args.angleset_size = num_angles_in_as;
+
+  args.num_groups = problem_.GetGroups().size();
   args.groupset_start = gs_gi;
   args.groupset_size = gs_size;
+
   args.cell_local_ids = cbcd_fluds.cell_local_ids_storage_.GetDevicePtr();
   args.num_cells = tasks_to_execute.size();
   args.cell_to_face_offset_map = cbcd_fluds.cell_to_face_offset_map_storage_.GetDevicePtr();

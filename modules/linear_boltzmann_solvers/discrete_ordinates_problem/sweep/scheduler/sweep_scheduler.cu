@@ -26,24 +26,25 @@ SweepScheduler::ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk)
 
 	const size_t num_angle_sets = angle_sets.size();
 
-	// opensn::log.Log() << "Number of angle sets: " << num_angle_sets;
-
+	std::vector<bool> executed(num_angle_sets, false);
+  std::vector<bool> boundary_data_set(num_angle_sets, false);
+  
+	// Get current task list
 	for (auto* as : angle_sets)
 	{
-		auto& task_list = as->GetCurrentTaskList();
-		if (task_list.empty())
-			task_list = as->GetSPDS().GetTaskList();
+		auto& current_task_list = as->GetCurrentTaskList();
+		if (current_task_list.empty())
+			current_task_list = as->GetSPDS().GetTaskList();
 	}
-
-	std::vector<bool> executed(num_angle_sets, false);
-	std::vector<bool> boundary_data_set(num_angle_sets, false);
 
 	bool all_finished = false;
 	while (not all_finished)
 	{
-		all_finished = true;
+    all_finished = true;
 
-		// Check execution status, receive data, and send data
+    // Check execution status, receive data, and send data
+    // std::vector<bool> angleset_received_data(num_angle_sets, false);
+    
 		for (size_t i = 0; i < num_angle_sets; ++i)
 		{
 			if (executed[i])
@@ -54,20 +55,26 @@ SweepScheduler::ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk)
 			auto* as = angle_sets[i];
 			auto* comm = dynamic_cast<CBC_ASynchronousCommunicator*>(as->GetCommunicator());
 
-			auto tasks_received = comm->ReceiveData();
-			auto& task_list = as->GetCurrentTaskList();
+			auto tasks_that_received_data = comm->ReceiveData();
+      auto& current_task_list = as->GetCurrentTaskList();
 
-			for (uint64_t t : tasks_received)
-			  --task_list[t].num_dependencies;
+      // if (not tasks_that_received_data.empty())
+			// 	angleset_received_data[i] = true;
+
+			for (uint64_t t : tasks_that_received_data)
+			  --current_task_list[t].num_dependencies;
 
 			comm->SendData();
 		}
 
 		// Check boundary readiness
 		for (size_t i = 0; i < num_angle_sets; ++i)
-		{
-			if (executed[i])
-			  continue;
+    {
+      if (executed[i] or boundary_data_set[i])
+        continue;
+      
+			// if (executed[i] or boundary_data_set[i] or angleset_received_data[i])
+			//   continue;
 
 			auto* as = angle_sets[i];
 			bool boundaries_ready = true;
@@ -83,18 +90,20 @@ SweepScheduler::ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk)
 
 			if (boundaries_ready and not boundary_data_set[i])
 			{
-				reinterpret_cast<CBC_FLUDS&>(as->GetFLUDS()).GetAndSetBoundaryPsiData(sweep_chunk, dynamic_cast<AngleSet&>(*as));
-				// reinterpret_cast<CBC_FLUDS&>(as->GetFLUDS()).GetAndSetBoundaryPsiDataAsync(sweep_chunk, dynamic_cast<AngleSet&>(*as));
+				reinterpret_cast<CBC_FLUDS&>(as->GetFLUDS()).GetAndSetBoundaryPsiDataAsync(sweep_chunk, dynamic_cast<AngleSet&>(*as));
 				boundary_data_set[i] = true;
 			}
 		}
 
-		// Collect ready tasks
+    // Collect ready tasks
 		std::vector<std::vector<Task*>> ready_tasks(num_angle_sets);
 		for (size_t i = 0; i < num_angle_sets; ++i)
-		{
-			if (executed[i])
-				continue;
+    {
+      if (executed[i] or not boundary_data_set[i])
+        continue;
+      
+			// if (executed[i] or not boundary_data_set[i] or angleset_received_data[i])
+			// 	continue;
 
 			auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
 			for (auto& task : current_task_list)
@@ -106,9 +115,12 @@ SweepScheduler::ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk)
 
 		// Launch concurrent kernels
 		for (size_t i = 0; i < num_angle_sets; ++i)
-		{
-			if (executed[i] or ready_tasks[i].empty())
-				continue;
+    {
+      if (executed[i] or ready_tasks[i].empty() or not boundary_data_set[i])
+        continue;
+      
+			// if (executed[i] or ready_tasks[i].empty() or not boundary_data_set[i] or angleset_received_data[i])
+			// 	continue;
 
 			auto* as = angle_sets[i];
 			auto& fluds = dynamic_cast<CBC_FLUDS&>(as->GetFLUDS());
@@ -117,28 +129,31 @@ SweepScheduler::ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk)
 		}
 
 		// Synchronize streams
-		// for (size_t i = 0; i < num_angle_sets; ++i)
-		// {
-		// 	if (executed[i] or ready_tasks[i].empty())
-		// 	  continue;
+		for (size_t i = 0; i < num_angle_sets; ++i)
+    {
+      if (executed[i] or ready_tasks[i].empty() or not boundary_data_set[i])
+        continue;
+      
+			// if (executed[i] or ready_tasks[i].empty() or not boundary_data_set[i] or angleset_received_data[i])
+			//   continue;
 
-    // 	auto* as = angle_sets[i];
-    // 	cudaStream_t stream = reinterpret_cast<cudaStream_t>(as->stream_ptr);
-    // 	cudaStreamSynchronize(stream);
-    // }
-    cudaDeviceSynchronize();
+    	auto* as = angle_sets[i];
+    	cudaStream_t stream = reinterpret_cast<cudaStream_t>(as->stream_ptr);
+    	cudaStreamSynchronize(stream);
+    }
 
 		// Set outgoing non-local and reflecting boundary data
 		for (size_t i = 0; i < num_angle_sets; ++i)
-		{
-			if (executed[i] or ready_tasks[i].empty())
-			  continue;
+    {
+      if (executed[i] or ready_tasks[i].empty() or not boundary_data_set[i])
+        continue;
+      
+			// if (executed[i] or ready_tasks[i].empty() or not boundary_data_set[i] or angleset_received_data[i])
+			// 	continue;
 
 			auto* as = angle_sets[i];
-
 			auto& fluds = dynamic_cast<CBC_FLUDS&>(as->GetFLUDS());
-			// fluds.SetNonlocalAndReflectingBoundaryPsiDataAsync(sweep_chunk, dynamic_cast<AngleSet&>(*as), ready_tasks[i]);
-			fluds.SetNonlocalAndReflectingBoundaryPsiData(sweep_chunk, dynamic_cast<AngleSet&>(*as), ready_tasks[i]);
+			fluds.SetNonlocalAndReflectingBoundaryPsiDataAsync(sweep_chunk, dynamic_cast<AngleSet&>(*as), ready_tasks[i]);
 
 			auto& current_task_list = as->GetCurrentTaskList();
 			auto* comm = dynamic_cast<CBC_ASynchronousCommunicator*>(as->GetCommunicator());
@@ -151,26 +166,19 @@ SweepScheduler::ScheduleAlgoFIFOAsync(SweepChunk& sweep_chunk)
 				}
 				task->completed = true;
 				comm->SendData();
-			}
-    }
-
-    // Send data
-    for (size_t i = 0; i < num_angle_sets; ++i)
-		{
-			if (executed[i])
-				continue;
-
-			auto* as = angle_sets[i];
-			auto* comm = dynamic_cast<CBC_ASynchronousCommunicator*>(as->GetCommunicator());
-
+      }
+      
 			comm->SendData();
-		}
+    }
 
 		// Check angleset completion
 		for (size_t i = 0; i < num_angle_sets; ++i)
 		{
-			if (executed[i])
-			  continue;
+      // if (executed[i] or not boundary_data_set[i])
+      //   continue;
+
+      if (executed[i])
+				continue;
 
 			auto* as = angle_sets[i];
 			auto& current_task_list = as->GetCurrentTaskList();

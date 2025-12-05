@@ -363,8 +363,7 @@ CBC_FLUDS::Prepare_CBCD_FLUDS_V2(AngleSet& angle_set)
 
                 // incoming, local
                 cell_face_node_angle_group_offsets_map[map_idx] =
-                  (map_val & 0x0FFFFFFFFFFFFFFFULL) |
-                  (0x1ULL << 62) | (0x1ULL << 60);
+                  (map_val & 0x0FFFFFFFFFFFFFFFULL) | (0x1ULL << 62) | (0x1ULL << 60);
               }
               else if (!is_boundary_face)
               {
@@ -710,12 +709,39 @@ CBC_FLUDS::GetNonlocalPsiDataAsync(SweepChunk& sweep_chunk,
                                    AngleSet& angle_set,
                                    std::vector<Task*>& tasks)
 {
-  if (!has_nonlocal_faces_) return;
-
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS());
   const auto& grid = cbc_spds.GetGrid();
   const auto& angle_indices = cbc_angle_set.GetAngleIndices();
+
+  // Determine if there are non-local faces to process
+  bool has_incoming_nonlocal_faces = false;
+
+  for (Task* task : tasks)
+  {
+    const auto& cell = grid->local_cells[task->reference_id];
+    const auto& face_orientations = cbc_spds.GetCellFaceOrientations()[cell.local_id];
+    const auto& cell_transport_view = cell_transport_views_[cell.local_id];
+
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+      const bool is_boundary_face = !face.has_neighbor;
+
+      if (face_orientations[f] == FaceOrientation::INCOMING &&
+          !is_local_face && !is_boundary_face)
+      {
+        has_incoming_nonlocal_faces = true;
+        break; // Exit inner loop early
+      }
+    }
+
+    if (has_incoming_nonlocal_faces)
+      break; // Exit outer loop early
+  }
+
+  if (!has_incoming_nonlocal_faces) return;
 
   for (Task* task : tasks)
   {
@@ -908,12 +934,45 @@ CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
                                                         AngleSet& angle_set,
                                                         std::vector<Task*>& tasks)
 {
-  if (!has_nonlocal_faces_ && !has_reflecting_boundary_faces_) return;
-
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS());
   const auto& grid = cbc_spds.GetGrid();
   const auto& angle_indices = cbc_angle_set.GetAngleIndices();
+
+  // Determine if there are outgoing non-local or reflecting boundary faces to process
+  bool has_outgoing_nonlocal_faces = false;
+  bool has_outgoing_reflecting_boundary_faces = false;
+
+  for (Task* task : tasks)
+  {
+    const auto& cell = grid->local_cells[task->reference_id];
+    const auto& face_orientations = cbc_spds.GetCellFaceOrientations()[cell.local_id];
+    const auto& cell_transport_view = cell_transport_views_[cell.local_id];
+
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      const bool is_local_face = cell_transport_view.IsFaceLocal(f);
+      const bool is_boundary_face = !face.has_neighbor;
+      const bool is_reflecting_boundary_face =
+        is_boundary_face &&
+        angle_set.GetBoundaries().at(face.neighbor_id)->IsReflecting();
+
+      if (face_orientations[f] == FaceOrientation::OUTGOING && !is_local_face)
+      {
+        if (!is_boundary_face)
+          has_outgoing_nonlocal_faces = true;
+        else if (is_reflecting_boundary_face)
+          has_outgoing_reflecting_boundary_faces = true;
+      }
+    }
+
+    if (has_outgoing_nonlocal_faces or has_outgoing_reflecting_boundary_faces)
+      break; // Exit outer loop early
+  }
+
+  if (!has_outgoing_nonlocal_faces && !has_outgoing_reflecting_boundary_faces)
+    return;
 
   cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
 
@@ -1034,7 +1093,7 @@ CBC_FLUDS::Reset_CBCD_FLUDS_Device_Data()
 
 void
 CBC_FLUDS::Create_CBCD_FLUDS(AngleSet& angle_set)
-{
+{ 
   if (cbcd_fluds_ == nullptr)
   {
     // For V1 of GPUSweep
@@ -1046,7 +1105,6 @@ CBC_FLUDS::Create_CBCD_FLUDS(AngleSet& angle_set)
 
     // V2 of GPUSweep
     Prepare_CBCD_FLUDS_V2(angle_set);
-    
     CBCD_FLUDS* cbcd_fluds = new CBCD_FLUDS(*this);
     cbcd_fluds_ = cbcd_fluds;
   }

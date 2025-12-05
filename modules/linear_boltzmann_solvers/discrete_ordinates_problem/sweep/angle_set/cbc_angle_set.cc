@@ -254,7 +254,6 @@ CBC_AngleSet::ResetSweepBuffers()
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;
   has_set_boundary_data_ = false;
-  // dynamic_cast<CBC_FLUDS&>(*fluds_).Reset_CBCD_FLUDS_Device_Data();
 }
 
 const double*

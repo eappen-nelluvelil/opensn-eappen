@@ -204,17 +204,7 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 
           if (psi != nullptr)
             for (size_t gsg = 0; gsg < gs_size_; ++gsg)
-            {
               b[gsg](i) += psi[gsg] * mu_Nij;
-
-              // opensn::log.Log() << "(INCOMING) Cell " << cell_->local_id << " Face " << f << " FaceNode i "
-              //                   << i << " FaceNode j " << j << " Angle " << direction_num
-              //                   << " Group "
-              //                   << gsg
-              //                   << " Mu " << face_mu_values[f]
-              //                   << " Mu_Nij " << mu_Nij
-              //                   << " Psi_in " << psi[gsg];
-            }
         } // for face node j
       } // for face node i
     } // for f
@@ -337,29 +327,8 @@ CBCSweepChunk::CPUSweep(AngleSet& angle_set)
 
         // Write the solved angular flux to the determined location
         if (psi != nullptr)
-        {
           for (size_t gsg = 0; gsg < gs_size_; ++gsg)
-          {
             psi[gsg] = b[gsg](i);
-
-            // opensn::log.Log() << "(OUTGOING) Cell " << cell_->local_id << " Face " << f << " FaceNode i "
-            //                   << i << " Angle " << direction_num
-            //                   << " Group "
-            //                   << gsg
-            //                   << " Mu " << face_mu_values[f]
-            //                   << " Psi_out " << psi[gsg];
-          }
-        }
-
-        // for (size_t gsg = 0; gsg < gs_size_; ++gsg)
-        // {
-        //   opensn::log.Log() << "(OUTGOING) Cell " << cell_->local_id << " Face " << f << " FaceNode i "
-        //                     << i << " Angle " << direction_num
-        //                     << " Group "
-        //                     << gsg
-        //                     << " Mu " << face_mu_values[f]
-        //                     << " Psi_out " << b[gsg](i);
-        // }
       } // for fi
     } // for face
   } // for angleset/subset
