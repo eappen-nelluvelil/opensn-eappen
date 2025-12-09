@@ -543,6 +543,7 @@ void
 CBC_FLUDS::GetAndSetBoundaryPsiDataAsync(SweepChunk& sweep_chunk, AngleSet& angle_set)
 {
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+  auto* cbcd_fluds = reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_);
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS());
   const auto& grid = cbc_spds.GetGrid();
   const auto& angle_indices = cbc_angle_set.GetAngleIndices();
@@ -595,8 +596,7 @@ CBC_FLUDS::GetAndSetBoundaryPsiDataAsync(SweepChunk& sweep_chunk, AngleSet& angl
           const std::uint64_t true_idx = encoded & 0x0FFFFFFFFFFFFFFFULL;
 
           double* buffer =
-            &reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)
-               ->cell_psi_data_buffer_storage_
+            &cbcd_fluds->cell_psi_data_buffer_storage_
                .GetHostVector()[true_idx];
 
           if (psi)
@@ -612,9 +612,9 @@ CBC_FLUDS::GetAndSetBoundaryPsiDataAsync(SweepChunk& sweep_chunk, AngleSet& angl
   cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
 
   cudaMemcpyAsync(
-    reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_psi_data_buffer_storage_.GetDeviceMemory().get() + 
+    cbcd_fluds->cell_psi_data_buffer_storage_.GetDeviceMemory().get() + 
       gpu_local_psi_data_size_,
-    reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_psi_data_buffer_storage_.GetHostVector().data() + 
+    cbcd_fluds->cell_psi_data_buffer_storage_.GetHostVector().data() + 
       gpu_local_psi_data_size_,
     nonlocal_and_boundary_psi_buffer_size_ * sizeof(double),
     cudaMemcpyHostToDevice,
@@ -710,6 +710,7 @@ CBC_FLUDS::GetNonlocalPsiDataAsync(SweepChunk& sweep_chunk,
                                    std::vector<Task*>& tasks)
 {
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+  auto* cbcd_fluds = reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_);
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS());
   const auto& grid = cbc_spds.GetGrid();
   const auto& angle_indices = cbc_angle_set.GetAngleIndices();
@@ -785,8 +786,7 @@ CBC_FLUDS::GetNonlocalPsiDataAsync(SweepChunk& sweep_chunk,
           const std::uint64_t true_idx = encoded & 0x0FFFFFFFFFFFFFFFULL;
 
           double* buffer =
-            &reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)
-               ->cell_psi_data_buffer_storage_
+            &cbcd_fluds->cell_psi_data_buffer_storage_
                .GetHostVector()[true_idx];
 
           const double* psi =
@@ -806,8 +806,8 @@ CBC_FLUDS::GetNonlocalPsiDataAsync(SweepChunk& sweep_chunk,
 
   cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
 
-  cudaMemcpyAsync(reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_psi_data_buffer_storage_.GetDevicePtr() + gpu_local_psi_data_size_,
-                  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_psi_data_buffer_storage_.GetHostVector().data() + gpu_local_psi_data_size_,
+  cudaMemcpyAsync(cbcd_fluds->cell_psi_data_buffer_storage_.GetDevicePtr() + gpu_local_psi_data_size_,
+                  cbcd_fluds->cell_psi_data_buffer_storage_.GetHostVector().data() + gpu_local_psi_data_size_,
                   sizeof(double) * nonlocal_and_boundary_psi_buffer_size_,
                   cudaMemcpyHostToDevice,
                   stream);
@@ -935,6 +935,7 @@ CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
                                                         std::vector<Task*>& tasks)
 {
   auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(angle_set);
+  auto* cbcd_fluds = reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_);
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS());
   const auto& grid = cbc_spds.GetGrid();
   const auto& angle_indices = cbc_angle_set.GetAngleIndices();
@@ -976,8 +977,8 @@ CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
 
   cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
 
-  cudaMemcpyAsync(reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_psi_data_buffer_storage_.GetHostVector().data() + gpu_local_psi_data_size_,
-                  reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)->cell_psi_data_buffer_storage_.GetDevicePtr() + gpu_local_psi_data_size_,
+  cudaMemcpyAsync(cbcd_fluds->cell_psi_data_buffer_storage_.GetHostVector().data() + gpu_local_psi_data_size_,
+                  cbcd_fluds->cell_psi_data_buffer_storage_.GetDevicePtr() + gpu_local_psi_data_size_,
                   sizeof(double) * nonlocal_and_boundary_psi_buffer_size_,
                   cudaMemcpyDeviceToHost,
                   stream);
@@ -1043,8 +1044,7 @@ CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
             if (psi)
             {
               auto& buf =
-                reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)
-                  ->cell_psi_data_buffer_storage_.GetHostVector();
+                cbcd_fluds->cell_psi_data_buffer_storage_.GetHostVector();
               std::copy(buf.data() + true_idx,
                         buf.data() + true_idx + num_groups_,
                         psi);
@@ -1063,8 +1063,7 @@ CBC_FLUDS::SetNonlocalAndReflectingBoundaryPsiDataAsync(SweepChunk& sweep_chunk,
             if (psi)
             {
               auto& buf =
-                reinterpret_cast<CBCD_FLUDS*>(cbcd_fluds_)
-                  ->cell_psi_data_buffer_storage_.GetHostVector();
+                cbcd_fluds->cell_psi_data_buffer_storage_.GetHostVector();
               std::copy(buf.data() + true_idx,
                         buf.data() + true_idx + num_groups_,
                         psi);

@@ -427,7 +427,6 @@ CBCSweepKernel(CBCSweepKernelArgs args)
                args.src_moment,
                args.groupset_start,
                idx.group_idx,
-               //  args.groupset_size,
                args.num_groups,
                num_moments);
 
@@ -499,19 +498,7 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set)
   const auto num_angles_in_as = cbc_angle_set.GetNumAngles();
   const auto gs_size = groupset_.groups.size();
 
-  // opensn::log.Log() << "gs_size = " << gs_size << "\n";
-
   const auto gs_gi = groupset_.groups.front().id;
-
-  // opensn::log.Log() << "AngleSet "
-  //                   << cbc_angle_set.GetID()
-  //                   << " num_angles_in_as = "
-  //                   << num_angles_in_as
-  //                   << " gs_size = "
-  //                   << gs_size
-  //                   << " gs_gi = "
-  //                   << gs_gi
-  //                 << " angle_indices[0] = " << as_angle_indices[0] << "\n";
 
   // Determine sizes of buffers
   std::vector<uint64_t> cell_local_ids(tasks_to_execute_.size());
@@ -588,16 +575,21 @@ CBCSweepChunk::GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_e
   auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(cbc_angle_set.GetFLUDS());
   auto& cbcd_fluds = *static_cast<CBCD_FLUDS*>(cbc_fluds.Get_CBCD_FLUDS_Ptr());
 
-  const auto num_angles_in_as = cbc_angle_set.GetNumAngles();
-  const auto gs_size = groupset_.groups.size();
-  const auto gs_gi = groupset_.groups.front().id;
+  auto& host_ids = cbcd_fluds.cell_local_ids_storage_.GetHostVector();
+  for (size_t idx = 0; idx < tasks_to_execute.size(); ++idx)
+    host_ids[idx] = tasks_to_execute[idx]->cell_ptr->local_id;
 
-  std::vector<std::uint64_t> cell_local_ids(tasks_to_execute.size());
-  for (int idx = 0; idx < tasks_to_execute.size(); ++idx)
-  {
-    const auto& cell = *tasks_to_execute[idx]->cell_ptr;
-    cell_local_ids[idx] = cell.local_id;
-  }
+  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
+
+  cudaMemcpyAsync(cbcd_fluds.cell_local_ids_storage_.GetDevicePtr(),
+                  host_ids.data(),
+                  sizeof(uint64_t) * tasks_to_execute.size(),
+                  cudaMemcpyHostToDevice,
+                  stream);
+
+  cbc_fluds.GetNonlocalPsiDataAsync(*this, cbc_angle_set, tasks_to_execute);
+
+  CBCSweepKernelArgs args;
 
   MeshCarrier* mesh = reinterpret_cast<MeshCarrier*>(problem_.GetCarrier(2));
   QuadratureCarrier* quadrature = reinterpret_cast<QuadratureCarrier*>(groupset_.quad_carrier);
@@ -606,32 +598,16 @@ CBCSweepChunk::GPUSweepAsync(AngleSet& angle_set, std::vector<Task*>& tasks_to_e
   MemoryPinner<std::uint32_t>* directions =
     reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
 
-  std::copy(cell_local_ids.begin(),
-            cell_local_ids.end(),
-            cbcd_fluds.cell_local_ids_storage_.GetHostVector().begin());
-
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(cbc_angle_set.stream_ptr);
-
-  cudaMemcpyAsync(cbcd_fluds.cell_local_ids_storage_.GetDevicePtr(),
-                      cbcd_fluds.cell_local_ids_storage_.GetHostVector().data(),
-                      sizeof(uint64_t) * cell_local_ids.size(),
-                      cudaMemcpyHostToDevice,
-                      stream);
-
-  cbc_fluds.GetNonlocalPsiDataAsync(*this, cbc_angle_set, tasks_to_execute);
-
-  CBCSweepKernelArgs args;
-
   args.mesh_data = mesh->GetDevicePtr();
   args.quad_data = quadrature->GetDevicePtr();
   args.src_moment = src->GetDevicePtr();
   args.phi = phi->GetDevicePtr();
   args.directions = directions->GetDevicePtr();
-  args.angleset_size = num_angles_in_as;
+  args.angleset_size = cbc_angle_set.GetNumAngles();
 
   args.num_groups = problem_.GetGroups().size();
-  args.groupset_start = gs_gi;
-  args.groupset_size = gs_size;
+  args.groupset_start = groupset_.groups.front().id;
+  args.groupset_size = groupset_.groups.size();
 
   args.cell_local_ids = cbcd_fluds.cell_local_ids_storage_.GetDevicePtr();
   args.num_cells = tasks_to_execute.size();
