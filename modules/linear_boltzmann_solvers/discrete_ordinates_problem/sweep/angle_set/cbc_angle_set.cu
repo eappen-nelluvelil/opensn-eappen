@@ -123,9 +123,17 @@ CBC_AngleSet::BuildAndInstantiateCUDAGraph(std::vector<cbc_gpu_kernel::GraphArgu
     }
 
     // Finally, add dependencies from predecessor nodes to current kernel node
+    // if (!predecessor_nodes.empty())
+    // {
+    //   cudaGraphAddDependencies(std::any_cast<cudaGraph_t>(cuda_graph_), predecessor_nodes.data(), &current_kernel_node, nullptr, predecessor_nodes.size());
+    // }
     if (!predecessor_nodes.empty())
     {
-      cudaGraphAddDependencies(std::any_cast<cudaGraph_t>(cuda_graph_), predecessor_nodes.data(), &current_kernel_node, nullptr, predecessor_nodes.size());
+      for (auto& pred_node : predecessor_nodes)
+      {
+        cudaGraphAddDependencies(std::any_cast<cudaGraph_t>(cuda_graph_), &pred_node, &current_kernel_node, nullptr, 1);
+      }
+      // cudaGraphAddDependencies(std::any_cast<cudaGraph_t>(cuda_graph_), predecessor_nodes.data(), &current_kernel_node, nullptr, predecessor_nodes.size());
     }
   }
 
