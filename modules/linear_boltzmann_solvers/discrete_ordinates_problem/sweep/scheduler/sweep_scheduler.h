@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_aggregation/angle_aggregation.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include <any>
 
 namespace opensn
 {
@@ -34,6 +35,9 @@ private:
 
   /// Applies a first-in-first-out sweep scheduling on device.
   void DeviceScheduleAlgoFIFO(SweepChunk& sweep_chunk);
+
+  /// Applies a first-in-first-out sweep scheduling on device using CUDA graphs.
+  void DeviceScheduleAlgoFIFOCudaGraph(SweepChunk& sweep_chunk);
 
   /// Initializes the depth-of-graph algorithm.
   void InitializeAlgoDOG();
@@ -66,6 +70,10 @@ private:
     }
   };
   std::vector<RuleValues> rule_values_;
+
+  /// Vector of CUDA graph arguments for device scheduling
+  bool constructed_cuda_graph_arguments_ = false;
+  std::vector<std::vector<std::any>> cuda_graph_arguments_;
 };
 
 } // namespace opensn

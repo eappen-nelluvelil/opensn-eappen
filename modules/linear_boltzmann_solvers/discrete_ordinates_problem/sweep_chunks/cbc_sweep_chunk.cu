@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_gpu_kernel/main.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
@@ -21,8 +22,9 @@ namespace opensn
 namespace cbc_gpu_kernel
 {
 
+template<typename ArgType>
 __global__ void
-CBCSweepKernel(const Arguments args)
+CBCSweepKernel(const ArgType args)
 {
   Index idx;
   {
@@ -32,7 +34,12 @@ CBCSweepKernel(const Arguments args)
     idx.Compute(thread_idx, args.angleset_size, args.groupset_size);
   }
 
-  const std::uint64_t cell_local_idx = args.cell_local_ids[idx.cell_idx];
+  std::uint64_t cell_local_idx;
+  if constexpr (std::is_same_v<ArgType, Arguments>)
+    cell_local_idx = args.cell_local_ids[idx.cell_idx];
+  else
+    cell_local_idx = args.cell_local_id;
+  // const std::uint64_t cell_local_idx = args.cell_local_ids[idx.cell_idx];
 
   CellView cell;
   MeshView(args.mesh_data).GetCellView(cell, cell_local_idx);
@@ -72,6 +79,25 @@ CBCSweepChunk::CopyOutflowAndPhiFromDevice()
   auto* outflow = reinterpret_cast<OutflowCarrier*>(problem_.GetCarrier(1));
   outflow->AccumulateBack(cell_transport_views_);
   outflow->Reset();
+}
+
+void
+CBCSweepChunk::BuildCUDAGraphArguments(std::vector<CBC_AngleSet*>& angle_sets, std::vector<std::vector<std::any>>& cuda_graph_arguments)
+{
+  cuda_graph_arguments.resize(angle_sets.size());
+  for (size_t i = 0; i < angle_sets.size(); ++i)
+  {
+    auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(*angle_sets[i]);
+    auto& current_task_list = dynamic_cast<const CBC_SPDS&>(cbc_angle_set.GetSPDS()).GetTaskList();
+    auto& cbcd_fluds = dynamic_cast<CBCD_FLUDS&>(cbc_angle_set.GetFLUDS());
+
+    auto& graph_args = cuda_graph_arguments[i];
+    graph_args.resize(current_task_list.size());
+
+    for (size_t j = 0; j < current_task_list.size(); ++j)
+      graph_args[j] = std::any_cast<cbc_gpu_kernel::GraphArguments>(cbc_gpu_kernel::GraphArguments(
+        problem_, groupset_, cbc_angle_set, cbcd_fluds, current_task_list[j].reference_id));
+  }
 }
 
 void

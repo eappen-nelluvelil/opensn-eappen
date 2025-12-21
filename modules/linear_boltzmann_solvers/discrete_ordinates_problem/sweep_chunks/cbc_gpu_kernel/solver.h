@@ -24,7 +24,7 @@ ComputeGMS(double* sweep_matrix,
            DirectionView& direction,
            const unsigned int& group_idx,
            const std::uint32_t& num_moments,
-           const Arguments& args)
+           const BaseArguments& args)
 {
   // Get sigmaT
   double sigma_t = cell.total_xs[args.groupset_start + group_idx];
@@ -69,7 +69,7 @@ ComputeSurfaceIntegral(double* sweep_matrix,
                        DirectionView& direction,
                        const std::uint64_t* cell_edge_data,
                        const std::uint64_t& angle_group_idx,
-                       const Arguments& args)
+                       const BaseArguments& args)
 {
   // Loop over each face
   std::uint32_t face_node_counter = 0;
@@ -155,7 +155,7 @@ WritePsiToFLUDSAndOutflow(double* psi,
                           const std::uint64_t* cell_edge_data,
                           const unsigned int& angle_group_idx,
                           const unsigned int& group_idx,
-                          const Arguments& args)
+                          const BaseArguments& args)
 {
   // Loop over each face
   std::uint32_t face_node_counter = 0;
@@ -203,7 +203,7 @@ ComputePhi(double* psi,
            DirectionView& direction,
            const unsigned int& group_idx,
            const std::uint32_t& num_moments,
-           const Arguments& args)
+           const BaseArguments& args)
 {
   double* phi = args.phi + cell.phi_address + args.groupset_start + group_idx;
   _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
@@ -219,7 +219,7 @@ ComputePhi(double* psi,
 /// Template device function to perform a sweep for a cell with ndofs spatial DOFs.
 template <std::size_t ndofs>
 __device__ void
-Sweep(const Arguments& args,
+Sweep(const BaseArguments& args,
       CellView& cell,
       DirectionView& direction,
       const std::uint64_t* cell_edge_data,

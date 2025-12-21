@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set_helpers.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_gpu_kernel/arguments.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/boundary/reflecting_boundary.h"
@@ -212,4 +213,183 @@ SweepScheduler::DeviceScheduleAlgoFIFO(SweepChunk& sweep_chunk)
     }
   }
 }
+
+void
+SweepScheduler::DeviceScheduleAlgoFIFOCudaGraph(SweepChunk& sweep_chunk)
+{
+  CALI_CXX_MARK_SCOPE("SweepScheduler::DeviceScheduleAlgoFIFO");
+
+  CBCSweepChunk& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk);
+
+  // Copy phi and source to device
+  cbc_sweep_chunk.CopyPhiAndSrcToDevice();
+
+  std::vector<CBC_AngleSet*> angle_sets;
+  for (auto& angle_set_group : angle_agg_.angle_set_groups)
+    for (auto& angle_set : angle_set_group.GetAngleSets())
+      angle_sets.push_back(dynamic_cast<CBC_AngleSet*>(angle_set.get()));
+
+  const size_t num_angle_sets = angle_sets.size();
+
+  for (auto* angle_set : angle_sets)
+  {
+    auto& current_task_list = angle_set->GetCurrentTaskList();
+    if (current_task_list.empty())
+      current_task_list = dynamic_cast<const CBC_SPDS&>(angle_set->GetSPDS()).GetTaskList();
+  }
+
+  // Create device sweep kernels for each angleset
+  if (not constructed_cuda_graph_arguments_)
+  {
+    // A. Build Host Arguments for all cells
+    cbc_sweep_chunk.BuildCUDAGraphArguments(angle_sets, cuda_graph_arguments_);
+    
+    // B. Build and Instantiate Device Graphs for each AngleSet
+    for (size_t i = 0; i < num_angle_sets; ++i)
+    {
+      // Unpack the arguments from std::any back to the concrete vector type
+      // required by BuildAndInstantiateCUDAGraph
+      std::vector<cbc_gpu_kernel::GraphArguments> typed_args;
+      typed_args.reserve(cuda_graph_arguments_[i].size());
+      
+      for(const auto& arg_any : cuda_graph_arguments_[i])
+        typed_args.push_back(std::any_cast<cbc_gpu_kernel::GraphArguments>(arg_any));
+
+      angle_sets[i]->CreateCUDAGraph();
+      angle_sets[i]->BuildAndInstantiateCUDAGraph(typed_args);
+    }
+    
+    constructed_cuda_graph_arguments_ = true;
+  }
+
+  // Launch CUDA graphs for each angleset
+  // for (size_t i = 0; i < num_angle_sets; ++i)
+  // {
+  //   crb::Stream& stream = GetCBCAngleSetStream(*angle_sets[i]);
+  //   cudaGraphExec_t graph_exec = std::any_cast<cudaGraphExec_t>(angle_sets[i]->GetCUDAGraphExec());
+    
+  //   // Launch the graph asynchronously.
+  //   // It will immediately run local kernels but STALL at the boundary Wait Node
+  //   // until the event is recorded in the loop below.
+  //   cudaGraphLaunch(graph_exec, stream.get());
+  // }
+
+  std::vector<bool> executed(num_angle_sets, false);
+  std::vector<bool> boundary_data_set(num_angle_sets, false);
+  std::vector<bool> graphs_launched(num_angle_sets, false);
+
+  size_t executed_anglesets = 0;
+  while (executed_anglesets < num_angle_sets)
+  {
+    // Receive and send MPI data
+    // for (size_t i = 0; i < num_angle_sets; ++i)
+    // {
+    //   if (executed[i])
+    //     continue;
+
+    //   auto* comm = dynamic_cast<CBC_ASynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
+    //   auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
+
+    //   auto received = comm->ReceiveData();
+    //   if (not received.empty())
+    //   {
+    //     opensn::log.Log() << "Here\n";
+    //     for (uint64_t t : received)
+    //       --current_task_list[t].num_dependencies;
+    //   }
+
+    //   comm->SendData();
+    // }
+
+    // Set boundary data
+    for (size_t i = 0; i < num_angle_sets; ++i)
+    {
+      if (graphs_launched[i])
+        continue;
+
+      auto* as = angle_sets[i];
+      bool boundaries_ready = true;
+      for (auto& [bid, boundary] : as->GetBoundaries())
+      {
+        if (not boundary->CheckAnglesReadyStatus(as->GetAngleIndices()))
+        {
+          boundaries_ready = false;
+          break;
+        }
+      }
+
+      if (not boundaries_ready)
+        continue;
+
+      crb::Stream& stream = GetCBCAngleSetStream(*as);
+      dynamic_cast<CBCD_FLUDS&>(as->GetFLUDS()).CopyIncomingBoundaryPsiToDevice(sweep_chunk);
+
+      cudaEvent_t boundary_event = std::any_cast<cudaEvent_t>(as->GetBoundaryEvent());
+      cudaEventRecord(boundary_event, stream.get());
+
+      cudaGraphExec_t graph_exec = std::any_cast<cudaGraphExec_t>(as->GetCUDAGraphExec());
+      cudaGraphLaunch(graph_exec, stream.get());
+
+      graphs_launched[i] = true;
+    }
+
+    for (size_t i = 0; i < num_angle_sets; ++i)
+    {
+      if (executed[i] or (not graphs_launched[i]))
+        continue;
+
+      auto* async_comm = dynamic_cast<CBC_ASynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
+
+      // Check if angleset's stream is completed
+      // If so, mark angleset as executed
+      crb::Stream& stream = GetCBCAngleSetStream(*angle_sets[i]);
+      bool all_done = stream.is_completed();
+
+      if (all_done and async_comm->SendData())
+      {
+        for (auto& [bid, boundary] : angle_sets[i]->GetBoundaries())
+          boundary->UpdateAnglesReadyStatus(angle_sets[i]->GetAngleIndices());
+        executed[i] = true;
+        ++executed_anglesets;
+      }
+    }
+  }
+
+  constructed_cuda_graph_arguments_ = false;
+
+  // Copy back phi and outflow from device
+  cbc_sweep_chunk.CopyOutflowAndPhiFromDevice();
+
+  opensn::mpi_comm.barrier();
+
+  bool received_delayed_data = false;
+  while (not received_delayed_data)
+  {
+    received_delayed_data = true;
+
+    for (auto& angle_set_group : angle_agg_.angle_set_groups)
+      for (auto& angle_set : angle_set_group.GetAngleSets())
+      {
+        if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
+          received_delayed_data = false;
+
+        if (not angle_set->ReceiveDelayedData())
+          received_delayed_data = false;
+      }
+  }
+
+  for (auto& angle_set_group : angle_agg_.angle_set_groups)
+    for (auto& angle_set : angle_set_group.GetAngleSets())
+      angle_set->ResetSweepBuffers();
+
+  for (const auto& [bid, bndry] : angle_agg_.GetSimBoundaries())
+  {
+    if (bndry->GetType() == LBSBoundaryType::REFLECTING)
+    {
+      auto rbndry = std::static_pointer_cast<ReflectingBoundary>(bndry);
+      rbndry->ResetAnglesReadyStatus();
+    }
+  }
+}
+
 } // namespace opensn

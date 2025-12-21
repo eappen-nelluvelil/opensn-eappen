@@ -36,6 +36,11 @@ enum class AngleSetStatus
 struct Task
 {
   unsigned int num_dependencies;
+  bool has_incoming_boundary_faces;
+  bool has_outgoing_boundary_faces;
+  bool has_incoming_nonlocal_faces;
+  bool has_outgoing_nonlocal_faces;
+  std::vector<std::uint64_t> predecessors;
   std::vector<uint64_t> successors;
   uint64_t reference_id;
   const Cell* cell_ptr;

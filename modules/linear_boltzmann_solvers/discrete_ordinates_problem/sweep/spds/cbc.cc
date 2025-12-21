@@ -74,25 +74,50 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   for (const auto& cell : grid_->local_cells)
   {
     const size_t num_faces = cell.faces.size();
+    bool has_incoming_boundary_faces = false;
+    bool has_outgoing_boundary_faces = false;
+    bool has_incoming_nonlocal_faces = false;
+    bool has_outgoing_nonlocal_faces = false;
     unsigned int num_dependencies = 0;
+    std::vector<std::uint64_t> predecessors;
     std::vector<uint64_t> successors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
-      if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+      const auto& face = cell.faces[f];
+      const auto& cell_face_orientation = cell_face_orientations_[cell.local_id][f];
+      const auto& is_cell_face_local = grid->IsCellLocal(face.neighbor_id);
+      
+      if (cell_face_orientation == INCOMING)
       {
-        if (cell.faces[f].has_neighbor)
+        if (face.has_neighbor)
+        {
           ++num_dependencies;
+          if (is_cell_face_local)
+            predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+          else
+            has_incoming_nonlocal_faces = true;
+        }
+        else
+          has_incoming_boundary_faces = true;
       }
-      else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+      else if (cell_face_orientation == OUTGOING)
       {
-        const auto& face = cell.faces[f];
-        if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-          successors.push_back(grid->cells[face.neighbor_id].local_id);
+        if (face.has_neighbor)
+        {
+          if (is_cell_face_local)
+            successors.push_back(grid->cells[face.neighbor_id].local_id);
+          else
+            has_outgoing_nonlocal_faces = true;
+        }
+        else
+          has_outgoing_boundary_faces = true;
       }
     }
-
-    task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, 
+      has_incoming_boundary_faces, has_outgoing_boundary_faces, 
+      has_incoming_nonlocal_faces, has_outgoing_nonlocal_faces, 
+      predecessors, successors, cell.local_id, &cell, false});
   }
 }
 

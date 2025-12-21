@@ -306,6 +306,11 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set, std::vector<Task*>& tasks_to_execut
 }
 
 void
+CBCSweepChunk::BuildCUDAGraphArguments(std::vector<CBC_AngleSet*>& angle_sets, std::vector<std::vector<std::any>>& cuda_graph_arguments)
+{
+}
+
+void
 CBCSweepChunk::CopyPhiAndSrcToDevice()
 {
 }

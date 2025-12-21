@@ -226,7 +226,10 @@ SweepScheduler::Sweep()
   {
     auto& cbc_sweep_chunk = dynamic_cast<CBCSweepChunk&>(sweep_chunk_);
     if (cbc_sweep_chunk.IsUsingGPUs())
-      DeviceScheduleAlgoFIFO(sweep_chunk_);
+    {
+      // DeviceScheduleAlgoFIFO(sweep_chunk_);
+      DeviceScheduleAlgoFIFOCudaGraph(sweep_chunk_);
+    }
     else
       ScheduleAlgoFIFO(sweep_chunk_);
   }
@@ -248,6 +251,11 @@ SweepScheduler::PrepareForSweep(bool use_boundary_source, bool zero_incoming_del
 #ifndef __OPENSN_USE_CUDA__
 void
 SweepScheduler::DeviceScheduleAlgoFIFO(SweepChunk& sweep_chunk)
+{
+}
+
+void
+SweepScheduler::DeviceScheduleAlgoFIFOCudaGraph(SweepChunk& sweep_chunk)
 {
 }
 #endif

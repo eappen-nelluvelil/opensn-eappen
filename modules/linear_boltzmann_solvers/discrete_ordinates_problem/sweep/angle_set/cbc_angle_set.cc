@@ -30,6 +30,7 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
   if (use_gpus)
   {
     CreateStream();
+    CreateCUDAGraph();
     AssociateAngleSetWithFLUDS();
   }
 }
@@ -37,7 +38,10 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
 CBC_AngleSet::~CBC_AngleSet()
 {
   if (use_gpus_)
+  {
+    DestroyCUDAGraph();
     DestroyStream();
+  }
 }
 
 AsynchronousCommunicator*
@@ -154,12 +158,37 @@ CBC_AngleSet::CreateStream()
 }
 
 void
+CBC_AngleSet::CreateCUDAGraph()
+{
+}
+
+void 
+CBC_AngleSet::BuildAndInstantiateCUDAGraph(std::vector<cbc_gpu_kernel::GraphArguments>& graph_args)
+{
+}
+
+void
 CBC_AngleSet::DestroyStream()
 {
 }
 
 void
+CBC_AngleSet::DestroyCUDAGraph()
+{
+}
+
+void
 CBC_AngleSet::AssociateAngleSetWithFLUDS()
+{
+}
+
+void
+CBC_AngleSet::InitializeBoundaryEvent()
+{
+}
+
+void
+CBC_AngleSet::DestroyBoundaryEvent()
 {
 }
 #endif

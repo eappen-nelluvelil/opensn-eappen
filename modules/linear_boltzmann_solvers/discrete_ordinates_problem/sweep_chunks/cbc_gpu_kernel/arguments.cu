@@ -54,4 +54,43 @@ cbc_gpu_kernel::Arguments::Arguments(DiscreteOrdinatesProblem& problem,
   destination_psi = nullptr;
 }
 
+cbc_gpu_kernel::GraphArguments::GraphArguments(DiscreteOrdinatesProblem& problem,
+                                     const LBSGroupset& groupset,
+                                     AngleSet& angle_set,
+                                     CBCD_FLUDS& fluds,
+                                     const std::uint64_t cell_local_id)
+{
+  // Get mesh and quadrature data
+  auto* mesh = reinterpret_cast<MeshCarrier*>(problem.GetCarrier(2));
+  mesh_data = mesh->GetDevicePtr();
+  auto* quadrature = reinterpret_cast<QuadratureCarrier*>(groupset.quad_carrier);
+  quad_data = quadrature->GetDevicePtr();
+
+  // Copy source moment and destination phi data to device
+  auto* src = reinterpret_cast<MemoryPinner<double>*>(problem.GetPinner(0));
+  src_moment = src->GetDevicePtr();
+  auto* scalar_flux = reinterpret_cast<MemoryPinner<double>*>(problem.GetPinner(1));
+  phi = scalar_flux->GetDevicePtr();
+
+  // Copy angleset data to device
+  auto* directions_num = reinterpret_cast<MemoryPinner<std::uint32_t>*>(angle_set.GetMemoryPin());
+  directions = directions_num->GetDevicePtr();
+  angleset_size = angle_set.GetNumAngles();
+
+  // Copy groupset data to device
+  groupset_size = groupset.groups.size();
+  groupset_start = groupset.groups.front().id;
+  num_groups = problem.GetGroups().size();
+
+  // Copy ready cell local IDs to device, and retrieve CBCD_FLUDS pointers and node indices
+  this->cell_local_id = cell_local_id;
+  flud_data = fluds.GetPointerSet();
+  flud_index = fluds.GetCommonData().GetDeviceCellFaceNodeMap();
+
+  // Set batch size
+  batch_size = static_cast<std::uint32_t>(angleset_size * groupset_size);
+  save_angular_flux = false;
+  destination_psi = nullptr;
+}
+
 } // namespace opensn

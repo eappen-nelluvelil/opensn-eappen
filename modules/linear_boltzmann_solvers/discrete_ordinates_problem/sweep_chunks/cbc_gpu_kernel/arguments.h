@@ -42,15 +42,8 @@ struct Index
   std::uint32_t group_idx;
 };
 
-/// Arguments for the device CBC sweep chunk kernel
-struct Arguments
+struct BaseArguments
 {
-  Arguments(DiscreteOrdinatesProblem& problem,
-            const LBSGroupset& groupset,
-            AngleSet& angle_set,
-            CBCD_FLUDS& fluds,
-            std::vector<Task*>& tasks);
-
   // Mesh and quadrature device pointers
   const char* mesh_data;
   const char* quad_data;
@@ -64,17 +57,38 @@ struct Arguments
   std::uint32_t num_groups;
   std::uint32_t groupset_start;
   std::uint32_t groupset_size;
-  // Cell local IDs corresponding to the current set of ready cells that can be swept
-  const std::uint64_t* cell_local_ids;
-  // Device CBC_FLUDS pointers into local, boundary, and non-local buffers
+  // Device CBC_FLUDS pointers
   CBCD_FLUDSPointerSet flud_data;
-  // Device CBC_FLUDS cell-face-node index pointer
   const std::uint64_t* flud_index;
-  // Number of cells * number of angles in angleset * number of groups in groupset
+  // Batch info
   std::uint32_t batch_size;
-  // Whether to save angular fluxes after sweep, which are then copied from the device to the host
   bool save_angular_flux;
   double* destination_psi;
+};
+
+/// Arguments for the device CBC sweep chunk kernel
+struct Arguments : public BaseArguments
+{
+  Arguments(DiscreteOrdinatesProblem& problem,
+            const LBSGroupset& groupset,
+            AngleSet& angle_set,
+            CBCD_FLUDS& fluds,
+            std::vector<Task*>& tasks);
+
+  // Cell local IDs corresponding to the current set of ready cells that can be swept
+  const std::uint64_t* cell_local_ids;
+};
+
+/// Arguments for the device CBC sweep chunk kernel
+struct GraphArguments : public BaseArguments
+{
+  GraphArguments(DiscreteOrdinatesProblem& problem,
+            const LBSGroupset& groupset,
+            AngleSet& angle_set,
+            CBCD_FLUDS& fluds,
+            const std::uint64_t cell_local_id);
+
+  std::uint64_t cell_local_id;
 };
 
 } // namespace opensn::cbc_gpu_kernel

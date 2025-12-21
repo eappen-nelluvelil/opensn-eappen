@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include <any>
 
 namespace caribou
 {
@@ -15,6 +16,11 @@ class Stream;
 
 namespace opensn
 {
+
+namespace cbc_gpu_kernel
+{
+struct GraphArguments;
+}
 
 struct Task;
 class CBC_SPDS;
@@ -27,6 +33,10 @@ protected:
   CBC_ASynchronousCommunicator async_comm_;
   bool use_gpus_;
   void* stream_ = nullptr;
+  std::any cuda_graph_;
+  std::any cuda_graph_exec_;
+  std::any boundary_event_;
+  std::any cell_params_;
 
 public:
   CBC_AngleSet(size_t id,
@@ -79,8 +89,25 @@ public:
   /// Create caribou stream for asynchronous kernel launches and data transfers
   void CreateStream();
 
+  /// Create CUDA graph for sweep chunk execution
+  void CreateCUDAGraph();
+
+  void InitializeBoundaryEvent();
+
+  void DestroyBoundaryEvent();
+
+  std::any GetBoundaryEvent() const { return boundary_event_; }
+
+  std::any GetCUDAGraphExec() const { return cuda_graph_exec_; }
+
+  /// Build and instantiate CUDA graph
+  void BuildAndInstantiateCUDAGraph(std::vector<cbc_gpu_kernel::GraphArguments>& graph_args);
+
   /// Destroy caribou stream
   void DestroyStream();
+
+  /// Destroy CUDA graph
+  void DestroyCUDAGraph();
 
   /// Get the void pointer to the caribou stream, which can be casted to caribou::Stream
   void* GetStream() const { return stream_; }

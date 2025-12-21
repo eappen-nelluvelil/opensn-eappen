@@ -7,9 +7,12 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include <any>
 
 namespace opensn
 {
+
+class CBC_AngleSet;
 class CellMapping;
 class DiscreteOrdinatesProblem;
 struct Task;
@@ -30,6 +33,9 @@ class CBCSweepChunk : public SweepChunk
 public:
   CBCSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset);
 
+  /// Get DiscreteOrdinates problem reference
+  DiscreteOrdinatesProblem& GetProblem() const { return problem_; }
+
   /// Check if GPUs are being used for the sweep
   bool IsUsingGPUs() const { return use_gpus_; }
 
@@ -38,6 +44,9 @@ public:
 
   /// Set the current cell to be swept (used for host-only sweeps)
   void SetCell(Cell const* cell_ptr, AngleSet& angle_set) override;
+
+  /// Get groupset
+  const LBSGroupset& GetGroupset() const { return groupset_; }
 
   /// Get the groupset's group index
   int GetGroupsetGroupIndex() const { return groupset_.groups.front().id; }
@@ -64,6 +73,9 @@ public:
 
   /// Device-analogue of Sweep for device execution.
   void GPUSweep(AngleSet& angle_set, std::vector<Task*>& tasks_to_execute);
+
+  /// Construct vector of device arguments for CUDA graph execution.
+  void BuildCUDAGraphArguments(std::vector<CBC_AngleSet*>& angle_sets, std::vector<std::vector<std::any>>& cuda_graph_arguments);
 
   /// Copy phi and source moments to device.
   void CopyPhiAndSrcToDevice();

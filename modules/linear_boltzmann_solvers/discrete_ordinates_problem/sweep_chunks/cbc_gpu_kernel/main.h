@@ -25,7 +25,7 @@ using MakeIndexSequenceFromRange =
   decltype(MakeIndexSequenceFromRangeImpl<From, To>(std::make_index_sequence<To - From>{}));
 
 /// Function pointer type for CBC sweep kernels
-using SweepFunc = std::add_pointer_t<void(const Arguments&,
+using SweepFunc = std::add_pointer_t<void(const BaseArguments&,
                                           CellView&,
                                           DirectionView&,
                                           const std::uint64_t*,
