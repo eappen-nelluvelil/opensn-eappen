@@ -13,6 +13,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/outflow_carrier.h"
 #include "caliper/cali.h"
 #include "caribou/caribou.h"
+#include <algorithm>
 
 namespace crb = caribou;
 
@@ -109,8 +110,13 @@ CBCSweepChunk::GPUSweep(AngleSet& angle_set, std::vector<Task*>& tasks_to_execut
   auto& cbcd_fluds = dynamic_cast<CBCD_FLUDS&>(angle_set.GetFLUDS());
 
   auto& host_cell_local_ids = cbcd_fluds.GetLocalCellIDs().GetHostVector();
-  for (size_t idx = 0; idx < tasks_to_execute.size(); ++idx)
-    host_cell_local_ids[idx] = tasks_to_execute[idx]->reference_id;
+  // for (size_t idx = 0; idx < tasks_to_execute.size(); ++idx)
+  //   host_cell_local_ids[idx] = tasks_to_execute[idx]->reference_id;
+
+  std::transform(tasks_to_execute.begin(),
+                 tasks_to_execute.end(),
+                 host_cell_local_ids.begin(),
+                 [](const Task* task) { return task->reference_id; });
 
   caribou::Stream& stream = GetCBCAngleSetStream(cbc_angle_set);
   crb::copy_async(cbcd_fluds.GetLocalCellIDs().GetDeviceMemory(),

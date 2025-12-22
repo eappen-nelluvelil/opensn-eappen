@@ -62,6 +62,28 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                            "Cycles need to be allowed by the calling application.");
   }
 
+  // Generate levelized spls
+  int max_level = 0;
+  std::vector<int> levels(num_vertices(local_DG), 0);
+  for (auto& v : spls_)
+  {
+    for (auto ei = out_edges(v, local_DG); ei.first != ei.second; ++ei.first)
+    {
+      auto successor = target(*ei.first, local_DG);
+      levels[successor] = std::max(levels[successor], levels[v] + 1);
+      max_level = std::max(max_level, levels[successor]);
+    }
+  }
+  levelized_spls_.resize(max_level + 1);
+  for (auto v = 0; v < num_vertices(local_DG); ++v)
+    levelized_spls_[levels[v]].push_back(v);
+
+  // Regenerate spls to match levelized spls
+  spls_.clear();
+  for (auto& level : levelized_spls_)
+    for (auto& cell : level)
+      spls_.push_back(cell);
+
   // Create task list
   std::vector<std::vector<int>> global_dependencies;
   global_dependencies.resize(opensn::mpi_comm.size());
