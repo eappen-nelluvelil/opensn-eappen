@@ -90,9 +90,11 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       if (face_orientation == INCOMING)
       {
         if (face.has_neighbor)
+        {
           ++num_dependencies;
-        if (grid->IsCellLocal(face.neighbor_id))
-          predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+          if (grid->IsCellLocal(face.neighbor_id))
+            predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+        }
       }
       else if (face_orientation == OUTGOING)
       {
@@ -105,6 +107,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   }
 
   SimulateLocalSweep();
+
+  opensn::log.Log() << "CBC_SPDS: Maximum number of pool allocator slots = " << edmonds_blossom_min_num_slots_ << "\n";
 }
 
 const std::vector<Task>&
@@ -176,27 +180,27 @@ CBC_SPDS::SimulateLocalSweep()
   }
 
   // Run Hopcroft-Karp to find maximum matching in reuse graph, which corresponds to maximum reuse and thus minimum number of simultaneously live tasks
-  std::vector<boost::graph_traits<BipartiteGraph>::vertex_descriptor> mate_map(2 * num_tasks);
-  std::fill(mate_map.begin(), mate_map.end(), boost::graph_traits<BipartiteGraph>::null_vertex());
+  // std::vector<boost::graph_traits<BipartiteGraph>::vertex_descriptor> mate_map(2 * num_tasks);
+  // std::fill(mate_map.begin(), mate_map.end(), boost::graph_traits<BipartiteGraph>::null_vertex());
 
-  HKAugmentingPathFinder<BipartiteGraph,
-                        boost::property_map<BipartiteGraph, boost::vertex_index_t>::type>
-    augmenting_path_finder(reuse_graph, boost::get(boost::vertex_index, reuse_graph), mate_map);
+  // HKAugmentingPathFinder<BipartiteGraph,
+  //                       boost::property_map<BipartiteGraph, boost::vertex_index_t>::type>
+  //   augmenting_path_finder(reuse_graph, boost::get(boost::vertex_index, reuse_graph), mate_map);
 
-  // Augment until no additional augmenting paths can be found
-  while (augmenting_path_finder.AugmentMatching()) {}
+  // // Augment until no additional augmenting paths can be found
+  // while (augmenting_path_finder.AugmentMatching()) {}
 
-  // Count number of matched edges, which corresponds to number of reuses
-  size_t hopcroft_karp_matching_size = 0;
-  for (size_t i = 0; i < num_tasks; ++i)
-  {
-    // Check if a vertex in the left partition (task u) is matched to a vertex in the right partition (task v)
-    if (mate_map[i] != boost::graph_traits<BipartiteGraph>::null_vertex() and mate_map[i] >= num_tasks)
-      ++hopcroft_karp_matching_size;
-  }
+  // // Count number of matched edges, which corresponds to number of reuses
+  // size_t hopcroft_karp_matching_size = 0;
+  // for (size_t i = 0; i < num_tasks; ++i)
+  // {
+  //   // Check if a vertex in the left partition (task u) is matched to a vertex in the right partition (task v)
+  //   if (mate_map[i] != boost::graph_traits<BipartiteGraph>::null_vertex() and mate_map[i] >= num_tasks)
+  //     ++hopcroft_karp_matching_size;
+  // }
 
-  // Minimum number of buffers needed is total tasks minus reuses
-  hopcroft_karp_min_num_slots_ = num_tasks - hopcroft_karp_matching_size;
+  // // Minimum number of buffers needed is total tasks minus reuses
+  // hopcroft_karp_min_num_slots_ = num_tasks - hopcroft_karp_matching_size;
 
   // Calculate minimum number of buffers needed via Edmonds Blossom algorithm with verification
   // that a maximum matching was found, as a cross-check against the Hopcroft-Karp result
@@ -222,13 +226,13 @@ CBC_SPDS::SimulateLocalSweep()
   }
 
   // Print logging statement if two slot calculates DON'T match
-  if (hopcroft_karp_min_num_slots_ != edmonds_blossom_min_num_slots_)
-  {
-    opensn::log.Log0Warning() 
-       << "Hopcroft-Karp and Edmonds blossom algorithms calculated different minimum slot counts for CBC_FLUDS pool allocator. "
-       << "Hopcroft-Karp min slots: " << hopcroft_karp_min_num_slots_ 
-       << ", Edmonds blossom min slots: " << edmonds_blossom_min_num_slots_ << ".\n";
-  }
+  // if (hopcroft_karp_min_num_slots_ != edmonds_blossom_min_num_slots_)
+  // {
+  //   opensn::log.Log0Warning() 
+  //      << "Hopcroft-Karp and Edmonds blossom algorithms calculated different minimum slot counts for CBC_FLUDS pool allocator. "
+  //      << "Hopcroft-Karp min slots: " << hopcroft_karp_min_num_slots_ 
+  //      << ", Edmonds blossom min slots: " << edmonds_blossom_min_num_slots_ << ".\n";
+  // }
 
 }
 

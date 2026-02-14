@@ -33,11 +33,11 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                             slot_size_ * sizeof(double));
 
   // Print logs for number of cells, number of max cell dofs, number of slots, and total memory allocated for local psi storage
-  const size_t total_memory_bytes = num_slots_ * slot_size_ * sizeof(double);
-  const double total_memory_gb = static_cast<double>(total_memory_bytes) / (1024.0 * 1024.0 * 1024.0);
-  opensn::log.Log() << "CBC_FLUDS initialized with " << num_local_cells_ << " local cells, max cell DOFs: " << max_cell_dof_count
-             << ", slot size: " << slot_size_ << " doubles, num slots: " << num_slots_
-             << ", total local psi memory: " << total_memory_gb << " GB";
+  // const size_t total_memory_bytes = num_slots_ * slot_size_ * sizeof(double);
+  // const double total_memory_gb = static_cast<double>(total_memory_bytes) / (1024.0 * 1024.0 * 1024.0);
+  // opensn::log.Log() << "CBC_FLUDS initialized with " << num_local_cells_ << " local cells, max cell DOFs: " << max_cell_dof_count
+  //            << ", slot size: " << slot_size_ << " doubles, num slots: " << num_slots_
+  //            << ", total local psi memory: " << total_memory_gb << " GB";
 }
 
 const FLUDSCommonData&
@@ -49,22 +49,22 @@ CBC_FLUDS::GetCommonData() const
 void
 CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
 {
-  opensn::log.Log() << "Allocating slot for cell local ID " << cell_local_id;
+  // opensn::log.Log() << "Allocating slot for cell local ID " << cell_local_id;
   assert(cell_to_slot_ptrs_[cell_local_id] == nullptr);
   void* cell_slot = local_psi_pool_.malloc();
   assert(cell_slot != nullptr);
   cell_to_slot_ptrs_[cell_local_id] = static_cast<double*>(cell_slot);
-  opensn::log.Log() << "Allocated slot for cell local ID " << cell_local_id;
+  // opensn::log.Log() << "Allocated slot for cell local ID " << cell_local_id;
 }
 
 void
 CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
 {
-  opensn::log.Log() << "Deallocating slot for cell local ID " << cell_local_id;
+  // opensn::log.Log() << "Deallocating slot for cell local ID " << cell_local_id;
   assert(cell_to_slot_ptrs_[cell_local_id] != nullptr);
   local_psi_pool_.free(cell_to_slot_ptrs_[cell_local_id]);
   cell_to_slot_ptrs_[cell_local_id] = nullptr;
-  opensn::log.Log() << "Deallocated slot for cell local ID " << cell_local_id;
+  // opensn::log.Log() << "Deallocated slot for cell local ID " << cell_local_id;
 }
 
 double*
