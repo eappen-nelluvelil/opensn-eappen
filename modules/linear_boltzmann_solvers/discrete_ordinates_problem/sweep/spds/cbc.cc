@@ -8,9 +8,12 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <boost/graph/topological_sort.hpp>
+#include <boost/dynamic_bitset.hpp>
 
 namespace opensn
 {
+
+
 
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
                    const std::shared_ptr<MeshContinuum>& grid,
@@ -100,6 +103,94 @@ const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
 {
   return task_list_;
+}
+
+std::size_t
+CBC_SPDS::SimulateLocalSweep() const
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::SimulateLocalSweep");
+
+  const auto num_tasks = task_list_.size();
+  if (num_tasks == 0)
+    return 0;
+
+  // Construct transitive closure of the local cell graph to determine the maximum number of simultaneously ready tasks
+  std::vector<boost::dynamic_bitset<>> reachability(num_tasks, boost::dynamic_bitset<>(num_tasks));
+
+  // Iterate backwards through topologically sorted tasks to populate reachability
+  for (auto it = spls_.rbegin(); it != spls_.rend(); ++it)
+  {
+    const auto u = *it;
+    const auto& task = task_list_[u];
+
+    // Reflexive: node u reaches itself
+    reachability[u].set(u);
+
+    // Union with successors' reachability
+    for (const auto& succ : task.successors)
+      reachability[u] |= reachability[succ];
+  }
+
+  // Build reuse graph: edge from u to v if task v can reuse memory from task u (i.e. no path from u to v in the reachability graph)
+  using BipartiteGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
+  BipartiteGraph reuse_graph(2 * num_tasks);
+
+  boost::dynamic_bitset<> valid_targets(num_tasks);
+
+  for (int u = 0; u < num_tasks; ++u)
+  {
+    const auto& task_u = task_list_[u];
+
+    // If task u has no local successors, it is a sink
+    if (task_u.successors.empty())
+      continue;
+
+    // Start with the first successor's reachability
+    valid_targets = reachability[task_u.successors[0]];
+
+    // Intersect with all other successors
+    for (size_t i = 1; i < task_u.successors.size(); ++i)
+      valid_targets &= reachability[task_u.successors[i]];
+
+    // Strictness: remove immediate successors themselves
+    // Buffer is live during handover to immediate successors, so they cannot be reused until after the immediate successors execute
+    for (const auto& succ : task_u.successors)
+      valid_targets.reset(succ);
+
+    // Add edges to reuse graph for all valid targets
+    auto v = valid_targets.find_first();
+    while (v != boost::dynamic_bitset<>::npos)
+    {
+      // Add edge u -> v in reuse graph (with u and v in separate partitions)
+      boost::add_edge(u, v + num_tasks, reuse_graph);
+      v = valid_targets.find_next(v);
+    }
+  }
+
+  // Run Hopcroft-Karp to find maximum matching in reuse graph, which corresponds to maximum reuse and thus minimum number of simultaneously live tasks
+  std::vector<boost::graph_traits<BipartiteGraph>::vertex_descriptor> mate_map(2 * num_tasks);
+  std::fill(mate_map.begin(), mate_map.end(), boost::graph_traits<BipartiteGraph>::null_vertex());
+
+  HKAugmentingPathFinder<BipartiteGraph,
+                        decltype(mate_map),
+                        boost::property_map<BipartiteGraph, boost::vertex_index_t>::type>
+    augmenting_path_finder(reuse_graph, get(boost::vertex_index, reuse_graph), mate_map);
+
+  // Augment until no more augmenting paths can be found
+  while (augmenting_path_finder.AugmentMatching()) {}
+
+  // Count number of matched edges, which corresponds to number of reuses
+  size_t num_reuses = 0;
+  for (size_t i = 0; i < num_tasks; ++i)
+  {
+    // Check if a vertex in the left partition (task u) is matched to a vertex in the right partition (task v)
+    if (mate_map[i] != boost::graph_traits<BipartiteGraph>::null_vertex() and mate_map[i] >= num_tasks)
+      ++num_reuses;
+  }
+
+  // Minimum number of buffers needed is total tasks minus reuses
+  size_t num_buffers = num_tasks - num_reuses;
+  return num_buffers;
 }
 
 } // namespace opensn
