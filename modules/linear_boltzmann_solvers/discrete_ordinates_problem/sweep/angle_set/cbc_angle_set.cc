@@ -23,7 +23,8 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
                            const MPICommunicatorSet& comm_set)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
-    async_comm_(id, *fluds, comm_set)
+    async_comm_(id, *fluds, comm_set),
+    cbc_fluds_(static_cast<CBC_FLUDS&>(*fluds_))
 {
 }
 
@@ -69,6 +70,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         all_tasks_completed = false;
       if (cell_task.num_dependencies == 0 and not cell_task.completed)
       {
+        cbc_fluds_.AllocateSlot(cell_task.cell_ptr->local_id);
         sweep_chunk.SetCell(cell_task.cell_ptr, *this);
         sweep_chunk.Sweep(*this);
 
@@ -78,6 +80,23 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         cell_task.completed = true;
         a_task_executed = true;
         async_comm_.SendData();
+
+        // Update predecessors' count of satisfied successors
+        for (const auto& predecessor : cell_task.predecessors)
+        {
+          ++current_task_list_[predecessor].num_satisfied_successors;
+
+          // Deallocate predecessor's FLUDS slot if all its successors are satisfied
+          if (current_task_list_[predecessor].num_satisfied_successors >=
+              current_task_list_[predecessor].successors.size())
+          {
+            cbc_fluds_.DeallocateSlot(current_task_list_[predecessor].cell_ptr->local_id);
+          }
+        }
+
+        // If this cell has no successors, deallocate its FLUDS slot immediately
+        if (cell_task.successors.empty())
+          cbc_fluds_.DeallocateSlot(cell_task.cell_ptr->local_id);
       }
     } // for cell_task
     async_comm_.SendData();

@@ -61,6 +61,7 @@ protected:
   const CBC_SPDS& cbc_spds_;
   std::vector<Task> current_task_list_;
   CBC_ASynchronousCommunicator async_comm_;
+  CBC_FLUDS& cbc_fluds_;
 };
 
 } // namespace opensn

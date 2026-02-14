@@ -79,24 +79,29 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   {
     const size_t num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
+    unsigned int num_satisfied_successors = 0;
+    std::vector<std::uint32_t> predecessors;
     std::vector<std::uint32_t> successors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
-      if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+      const auto& face = cell.faces[f];
+      const auto& face_orientation = cell_face_orientations_[cell.local_id][f];
+      if (face_orientation == INCOMING)
       {
-        if (cell.faces[f].has_neighbor)
+        if (face.has_neighbor)
           ++num_dependencies;
+        if (grid->IsCellLocal(face.neighbor_id))
+          predecessors.push_back(grid->cells[face.neighbor_id].local_id);
       }
-      else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+      else if (face_orientation == OUTGOING)
       {
-        const auto& face = cell.faces[f];
         if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
           successors.push_back(grid->cells[face.neighbor_id].local_id);
       }
     }
 
-    task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, num_satisfied_successors, predecessors, successors, cell.local_id, &cell, false});
   }
 
   SimulateLocalSweep();
