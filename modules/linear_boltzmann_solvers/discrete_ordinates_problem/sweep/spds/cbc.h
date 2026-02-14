@@ -16,14 +16,14 @@ namespace opensn
 /**
  * Helper class for the Hopcroft-Karp maximum bipartite matching algorithm.
  */
-template <typename Graph, typename MateMap, typename VertexIndexMap>
+template <typename Graph, typename VertexIndexMap>
 class HKAugmentingPathFinder
 {
 public:
   using vertex_iterator = typename boost::graph_traits<Graph>::vertex_iterator;
   using out_edge_iterator = typename boost::graph_traits<Graph>::out_edge_iterator;
 
-  HKAugmentingPathFinder(const Graph& graph, VertexIndexMap vertex_index_map, MateMap mate_map)
+  HKAugmentingPathFinder(const Graph& graph, VertexIndexMap vertex_index_map, std::vector<Vertex>& mate_map)
     : graph_(graph), vertex_index_map_(vertex_index_map), mate_map_(mate_map), distance_(boost::num_vertices(graph)),
       partition_(boost::num_vertices(graph), -1)
   {
@@ -65,15 +65,15 @@ public:
     constexpr auto inf = std::numeric_limits<int>::max();
     dist_null_ = inf;
 
-    vertex_iterator vi, vi_end;
     // BFS to build layers from free left-nodes
+    vertex_iterator vi, vi_end;
     for (boost::tie(vi, vi_end) = boost::vertices(graph_); vi != vi_end; ++vi)
     {
       // Only consider left partition for starting paths
       if (partition_[boost::get(vertex_index_map_, *vi)] == 0)
       {
         // If vertex is unmatched, it's a valid root for augmenting path
-        if (boost::get(mate_map_, *vi) == boost::graph_traits<Graph>::null_vertex())
+        if (mate_map_[boost::get(vertex_index_map_, *vi)] == boost::graph_traits<Graph>::null_vertex())
         {
           distance_[boost::get(vertex_index_map_, *vi)] = 0;
           Q.push(*vi);
@@ -97,8 +97,8 @@ public:
         out_edge_iterator ei, ei_end;
         for (boost::tie(ei, ei_end) = boost::out_edges(u, graph_); ei != ei_end; ++ei)
         {
-          Vertex v = boost::target(*ei, graph_);
-          Vertex v_mate = boost::get(mate_map_, v);
+          auto v = boost::target(*ei, graph_);
+          auto v_mate = mate_map_[boost::get(vertex_index_map_, v)];
 
           // If v is free, we found an augmenting path
           if (v_mate == boost::graph_traits<Graph>::null_vertex())
@@ -127,7 +127,7 @@ public:
     for (boost::tie(vi, vi_end) = boost::vertices(graph_); vi != vi_end; ++vi)
     {
       if (partition_[boost::get(vertex_index_map_, *vi)] == 0 and
-          boost::get(mate_map_, *vi) == boost::graph_traits<Graph>::null_vertex())
+          mate_map_[boost::get(vertex_index_map_, *vi)] == boost::graph_traits<Graph>::null_vertex())
       {
         if (DFS(*vi, inf))
           augmented = true;
@@ -140,7 +140,7 @@ public:
 private:
   const Graph& graph_;
   VertexIndexMap vertex_index_map_;
-  MateMap mate_map_;
+  std::vector<Vertex>& mate_map_;
   std::vector<int> distance_;
   std::vector<int> partition_;
   int dist_null_ = 0;
@@ -152,15 +152,17 @@ private:
     for (boost::tie(ei, ei_end) = boost::out_edges(u, graph_); ei != ei_end; ++ei)
     {
       auto v = boost::target(*ei, graph_);
-      auto v_mate = boost::get(mate_map_, v);
+      auto v_mate = mate_map_[boost::get(vertex_index_map_, v)];
 
       if (v_mate == boost::graph_traits<Graph>::null_vertex())
       {
         if (dist_null_ == distance_[boost::get(vertex_index_map_, u)] + 1)
         {
           // Augment: flip the matching along this edge
-          boost::put(mate_map_, v, u);
-          boost::put(mate_map_, u, v);
+          mate_map_[boost::get(vertex_index_map_, v)] = u;
+          mate_map_[boost::get(vertex_index_map_, u)] = v;
+          // Mark this vertex as part of an augmenting path to prevent redundant searches
+          distance_[boost::get(vertex_index_map_, u)] = inf;
           return true;
         }
       }
@@ -172,8 +174,10 @@ private:
           if (DFS(v_mate, inf))
           {
             // Augment: flip the matching along this edge
-            boost::put(mate_map_, v, u);
-            boost::put(mate_map_, u, v);
+            mate_map_[boost::get(vertex_index_map_, v)] = u;
+            mate_map_[boost::get(vertex_index_map_, u)] = v;
+            // Mark this vertex as part of an augmenting path to prevent redundant searches
+            distance_[boost::get(vertex_index_map_, u)] = inf;
             return true;
           }
         }
@@ -201,12 +205,22 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
-  /// Returns the minimum number of slots needed for CBC_FLUDS pool allocator.
-  std::size_t SimulateLocalSweep() const;
+  /// Returns the minimum number of slots needed for CBC_FLUDS pool allocator, calculated via the Hopcroft-Karp algorithm.
+  size_t GetMinNumSlots() const { return hopcroft_karp_min_num_slots_; }
+
+  /// Returns the minimum number of slots needed for CBC_FLUDS pool allocator, calculated via Edmonds Blossom algorithm.
+  size_t GetMinNumSlotsEdmonds() const { return edmonds_blossom_min_num_slots_; }
+
+  /// Calculates the minimum number of slots needed for CBC_FLUDS pool allocator via Hopcroft-Karp algorithm.
+  void SimulateLocalSweep();
 
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+  /// Minimum number of slots needed for CBC_FLUDS pool allocator, calculated via Hopcroft-Karp algorithm.
+  size_t hopcroft_karp_min_num_slots_ = 0;
+  /// Minimum number of slots needed for CBC_FLUDS pool allocator, calculated via Edmonds Blossom algorithm.
+  size_t edmonds_blossom_min_num_slots_ = 0;
 };
 
 } // namespace opensn
