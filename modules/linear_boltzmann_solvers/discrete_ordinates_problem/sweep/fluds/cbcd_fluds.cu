@@ -168,9 +168,10 @@ CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
   const auto& num_angles = angle_indices.size();
   for (const auto& cell_local_id : cell_local_ids)
   {
-    if (not cell_to_incoming_nonlocal_nodes_.contains(cell_local_id))
+    auto it = cell_to_incoming_nonlocal_nodes_.find(cell_local_id);
+    if (it == cell_to_incoming_nonlocal_nodes_.end())
       continue;
-    for (const auto& node : cell_to_incoming_nonlocal_nodes_[cell_local_id])
+    for (const auto& node : it->second)
     {
       for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
       {
@@ -197,8 +198,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto& cell = grid.local_cells[cell_local_id];
-    if (cell_to_outgoing_boundary_nodes_.contains(cell_local_id))
-      for (const auto& node : cell_to_outgoing_boundary_nodes_[cell_local_id])
+    auto boundary_it = cell_to_outgoing_boundary_nodes_.find(cell_local_id);
+    if (boundary_it != cell_to_outgoing_boundary_nodes_.end())
+      for (const auto& node : boundary_it->second)
       {
         const auto& face = cell.faces[node.face_id];
         if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
@@ -215,8 +217,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           }
         }
       }
-    if (cell_to_outgoing_nonlocal_nodes_.contains(cell_local_id))
-      for (const auto& node : cell_to_outgoing_nonlocal_nodes_[cell_local_id])
+    auto nonlocal_it = cell_to_outgoing_nonlocal_nodes_.find(cell_local_id);
+    if (nonlocal_it != cell_to_outgoing_nonlocal_nodes_.end())
+      for (const auto& node : nonlocal_it->second)
       {
         const auto& face = cell.faces[node.face_id];
         const auto& cell_mapping = sdm_.GetCellMapping(cell);
