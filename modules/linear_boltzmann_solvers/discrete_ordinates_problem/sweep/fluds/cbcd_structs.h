@@ -56,6 +56,32 @@ public:
     SetIndex(index);
   }
 
+  /// Construct a local (non-boundary) node index from cell_local_id and node.
+  CBCD_NodeIndex(std::uint64_t cell_local_id, std::uint32_t node, bool is_outgoing)
+  {
+    // cell_local_id must fit in 53 bits, node must fit in 8 bits
+    if (cell_local_id >= (std::uint64_t(1) << 53))
+      throw std::runtime_error("cell_local_id exceeds 53-bit capacity.");
+    if (node >= 256)
+      throw std::runtime_error("node index exceeds 8-bit capacity.");
+    SetInOut(is_outgoing);
+    SetLocal(true);
+    SetBoundary(false);
+    SetIndex((cell_local_id << 8) | static_cast<std::uint64_t>(node));
+  }
+
+  /// Extract cell_local_id from a local node index (bits 8-60 of index field).
+  constexpr std::uint32_t GetCellLocalId() const noexcept
+  {
+    return static_cast<std::uint32_t>((value_ & index_bit_mask) >> 8);
+  }
+
+  /// Extract node index from a local node index (bits 0-7 of index field).
+  constexpr std::uint32_t GetNode() const noexcept
+  {
+    return static_cast<std::uint32_t>((value_ & index_bit_mask) & 0xFF);
+  }
+
   /// Check if the current index corresponds to a local bank.
   constexpr bool IsLocal() const noexcept { return (value_ & local_bit_mask) != 0; }
 
@@ -99,6 +125,11 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   double* __restrict__ incoming_boundary_psi = nullptr;
   /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
+  /// Device-visible slot indirection table: cell_local_id -> slot_id.
+  /// Backed by crb::MappedHostVector on host (zero-copy).
+  const std::uint32_t* __restrict__ slot_map = nullptr;
+  /// Number of DOFs per slot.
+  std::uint32_t dofs_per_slot = 0;
 
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
@@ -119,7 +150,11 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Incoming local case
     if (node_index.IsLocal())
     {
-      return local_psi + node_index.GetIndex() * stride_size;
+      // Slot indirection: look up which pool slot this cell currently occupies
+      std::uint32_t cell_local_id = node_index.GetCellLocalId();
+      std::uint32_t node = node_index.GetNode();
+      std::uint32_t slot = slot_map[cell_local_id];
+      return local_psi + (static_cast<std::uint64_t>(slot) * dofs_per_slot + node) * stride_size;
     }
     // Incoming non-local case
     else
@@ -147,7 +182,10 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Outgoing local case
     if (node_index.IsLocal())
     {
-      return local_psi + node_index.GetIndex() * stride_size;
+      std::uint32_t cell_local_id = node_index.GetCellLocalId();
+      std::uint32_t node = node_index.GetNode();
+      std::uint32_t slot = slot_map[cell_local_id];
+      return local_psi + (static_cast<std::uint64_t>(slot) * dofs_per_slot + node) * stride_size;
     }
     // Outgoing non-local case
     else

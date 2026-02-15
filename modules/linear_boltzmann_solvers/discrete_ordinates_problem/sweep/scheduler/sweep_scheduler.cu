@@ -109,6 +109,21 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           for (uint64_t succ : task->successors)
             --current_task_list[succ].num_dependencies;
           task->completed = true;
+
+          // Deallocate predecessor slots whose successors are all satisfied
+          for (const auto& pred : task->predecessors)
+          {
+            ++current_task_list[pred].num_satisfied_dependencies;
+            if (current_task_list[pred].num_satisfied_dependencies ==
+                current_task_list[pred].successors.size())
+            {
+              fluds_list[i]->DeallocateDeviceSlot(current_task_list[pred].reference_id);
+            }
+          }
+
+          // If this cell has no local successors, deallocate immediately
+          if (task->successors.empty())
+            fluds_list[i]->DeallocateDeviceSlot(task->reference_id);
         }
         // Send MPI data
         auto* comm = static_cast<CBC_AsynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
@@ -177,6 +192,11 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           }
         if (ready_tasks[i].empty())
           continue;
+
+        // Allocate pool slots for all ready cells
+        for (const auto& cell_id : ready_cell_ids[i])
+          fluds_list[i]->AllocateDeviceSlot(cell_id);
+
         fluds_list[i]->CopyIncomingNonlocalPsiToDevice(angle_sets[i], ready_cell_ids[i]);
         cbcd_sweep_chunk.GPUSweep(*angle_sets[i], ready_cell_ids[i]);
         in_flight_tasks[i] = std::move(ready_tasks[i]);
@@ -232,6 +252,14 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   // Reset all
   for (auto& angle_set : angle_sets)
     angle_set->ResetSweepBuffers();
+
+  // Reset pool allocator state for next sweep
+  for (size_t i = 0; i < num_angle_sets; ++i)
+  {
+    auto& slot_map = fluds_list[i]->GetCellToSlotMap();
+    std::fill(slot_map.begin(), slot_map.end(), std::numeric_limits<std::uint32_t>::max());
+    fluds_list[i]->ResetFreeSlots();
+  }
 
   for (const auto& [bid, bndry] : angle_agg_.GetSimBoundaries())
     bndry->ResetAnglesReadyStatus();

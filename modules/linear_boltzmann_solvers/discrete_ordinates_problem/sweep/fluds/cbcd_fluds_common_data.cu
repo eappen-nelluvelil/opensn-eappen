@@ -61,8 +61,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             std::uint32_t nbr_local_idx = face.GetNeighborLocalID(&grid);
             std::uint32_t adj_cell_node = face_nodal_mapping.cell_node_mapping_[fn];
-            const std::uint64_t index = cell_spatial_dof_offsets[nbr_local_idx] + adj_cell_node;
-            node_index = CBCD_NodeIndex(index, is_outgoing_face, is_local_face);
+            node_index = CBCD_NodeIndex(nbr_local_idx, adj_cell_node, is_outgoing_face);
           }
           else if (not is_boundary_face)
           {
@@ -94,8 +93,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           if (is_local_face)
           {
             const int cell_node = sdm.GetCellMapping(cell).MapFaceNode(f, fn);
-            const std::uint64_t index = cell_spatial_dof_offsets[cell.local_id] + cell_node;
-            node_index = CBCD_NodeIndex(index, is_outgoing_face, is_local_face);
+            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(cell.local_id), static_cast<std::uint32_t>(cell_node), is_outgoing_face);
           }
           else if (not is_boundary_face)
           {

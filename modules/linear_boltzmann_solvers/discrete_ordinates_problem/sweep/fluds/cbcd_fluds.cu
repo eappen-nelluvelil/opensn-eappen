@@ -34,8 +34,15 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
     local_cell_ids_(num_local_cells),
-    save_angular_flux_(save_angular_flux)
+    save_angular_flux_(save_angular_flux),
+    num_pool_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumSlots()),
+    max_cell_dof_count_(max_cell_dof_count),
+    cell_to_slot_map_(num_local_cells, std::numeric_limits<std::uint32_t>::max())
 {
+  // Initialize free slot stack
+  free_slots_.resize(num_pool_slots_);
+  for (std::uint32_t i = 0; i < num_pool_slots_; ++i)
+    free_slots_[i] = num_pool_slots_ - 1 - i;  // stack order: pop gives 0, 1, 2, ...
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -47,6 +54,7 @@ CBCD_FLUDS::~CBCD_FLUDS()
     device_saved_psi_.async_free(stream_);
   }
   local_cell_ids_.clear();
+  cell_to_slot_map_.clear();
   incoming_boundary_psi_.clear();
   outgoing_boundary_psi_.clear();
   incoming_nonlocal_psi_.clear();
@@ -56,7 +64,8 @@ CBCD_FLUDS::~CBCD_FLUDS()
 void
 CBCD_FLUDS::AllocateLocalAndSavedPsi()
 {
-  local_psi_ = crb::DeviceMemory<double>(local_psi_data_size_, stream_);
+  const std::size_t pool_psi_size = num_pool_slots_ * max_cell_dof_count_ * num_groups_and_angles_;
+  local_psi_ = crb::DeviceMemory<double>(pool_psi_size, stream_);
   if (save_angular_flux_ and host_saved_psi_.empty())
   {
     host_saved_psi_ = crb::HostVector<double>(local_psi_data_size_);
@@ -89,6 +98,32 @@ CBCD_FLUDS::CreatePointerSet()
     assert(pointer_set_.nonlocal_outgoing_psi != nullptr);
 
   pointer_set_.stride_size = num_groups_and_angles_;
+
+  pointer_set_.slot_map = cell_to_slot_map_.data();
+  pointer_set_.dofs_per_slot = max_cell_dof_count_;
+}
+
+void
+CBCD_FLUDS::AllocateDeviceSlot(std::uint64_t cell_local_id)
+{
+  assert(!free_slots_.empty() && "Pool allocator: no free slots available");
+  assert(cell_to_slot_map_[cell_local_id] == std::numeric_limits<std::uint32_t>::max()
+         && "Slot already allocated for this cell");
+
+  std::uint32_t slot = free_slots_.back();
+  free_slots_.pop_back();
+  cell_to_slot_map_[cell_local_id] = slot;
+}
+
+void
+CBCD_FLUDS::DeallocateDeviceSlot(std::uint64_t cell_local_id)
+{
+  assert(cell_to_slot_map_[cell_local_id] != std::numeric_limits<std::uint32_t>::max()
+         && "No slot allocated for this cell");
+
+  std::uint32_t slot = cell_to_slot_map_[cell_local_id];
+  cell_to_slot_map_[cell_local_id] = std::numeric_limits<std::uint32_t>::max();
+  free_slots_.push_back(slot);
 }
 
 void

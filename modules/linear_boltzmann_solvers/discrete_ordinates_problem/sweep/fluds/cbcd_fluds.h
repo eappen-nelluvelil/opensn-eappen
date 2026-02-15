@@ -52,6 +52,15 @@ public:
 
   crb::MappedHostVector<std::uint64_t>& GetLocalCellIDs() { return local_cell_ids_; }
 
+  crb::MappedHostVector<std::uint32_t>& GetCellToSlotMap() { return cell_to_slot_map_; }
+
+  void ResetFreeSlots()
+  {
+    free_slots_.resize(num_pool_slots_);
+    for (std::uint32_t i = 0; i < num_pool_slots_; ++i)
+      free_slots_[i] = num_pool_slots_ - 1 - i;
+  }
+
   crb::DeviceMemory<double>& GetDeviceSavedPsi() { return device_saved_psi_; }
 
   crb::HostVector<double>& GetHostSavedPsi() { return host_saved_psi_; }
@@ -64,6 +73,14 @@ public:
 
   /// Gets pointer set to device angular flux data.
   CBCD_FLUDSPointerSet& GetDevicePointerSet() { return pointer_set_; }
+
+  /// Allocate a pool slot for the given cell. 
+  ///  Must be called before the kernel that sweeps this cell.
+  void AllocateDeviceSlot(std::uint64_t cell_local_id);
+
+  /// Deallocate a pool slot for the given cell. 
+  ///  Must be called after the kernel that sweeps all of this cell's successors has completed.
+  void DeallocateDeviceSlot(std::uint64_t cell_local_id);
 
   /// Copies incoming boundary psi from host to device.
   void CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
@@ -97,7 +114,17 @@ private:
   crb::Stream stream_;
   crb::MappedHostVector<std::uint64_t> local_cell_ids_;
   bool save_angular_flux_;
-  /// Device storage for local angular fluxes.
+  /// Number of pool slots (from CBC_SPDS::GetMaxNumSlots()).
+  std::size_t num_pool_slots_;
+  /// Maximum DOFs per cell.
+  std::uint32_t max_cell_dof_count_;
+  /// Device-visible slot map: cell_local_id -> slot_id.
+  /// UINT32_MAX means "not allocated".
+  crb::MappedHostVector<std::uint32_t> cell_to_slot_map_;
+  /// Free slot stack.
+  std::vector<std::uint32_t> free_slots_;
+  /// Device memory for pool-allocated local angular fluxes.
+  /// Sized: num_pool_slots * max_cell_dof_count * num_groups_and_angles_.
   crb::DeviceMemory<double> local_psi_;
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
