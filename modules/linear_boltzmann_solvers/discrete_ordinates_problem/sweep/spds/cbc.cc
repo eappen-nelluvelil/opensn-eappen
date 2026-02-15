@@ -106,7 +106,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
 
   SimulateLocalSweep();
 
-  opensn::log.Log() << "CBC_SPDS: Maximum number of pool allocator slots = " << max_num_slots_ << "\n";
+  // opensn::log.Log() << "CBC_SPDS: Maximum number of pool allocator slots = " << max_num_slots_ << "\n";
 }
 
 const std::vector<Task>&
