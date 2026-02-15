@@ -1583,6 +1583,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                         dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
                                         groupset.psi_uk_man_,
                                         *discretization_,
+                                        GetMaxCellDOFCount(),
                                         use_gpus_);
         }
 

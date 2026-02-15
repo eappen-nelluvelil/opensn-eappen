@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
@@ -23,7 +24,8 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
                            const MPICommunicatorSet& comm_set)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
-    async_comm_(id, *fluds, comm_set)
+    async_comm_(id, *fluds, comm_set),
+    cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds_))
 {
 }
 
@@ -69,6 +71,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         all_tasks_completed = false;
       if (cell_task.num_dependencies == 0 and not cell_task.completed)
       {
+        cbc_fluds_.AllocateSlot(cell_task.reference_id);
         sweep_chunk.SetCell(cell_task.cell_ptr, *this);
         sweep_chunk.Sweep(*this);
 
@@ -78,6 +81,17 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         cell_task.completed = true;
         a_task_executed = true;
         async_comm_.SendData();
+
+        for (const auto& pred_task_num : cell_task.predecessors)
+        {
+          ++current_task_list_[pred_task_num].num_satisfied_dependencies;
+          if (current_task_list_[pred_task_num].num_satisfied_dependencies == 
+            current_task_list_[pred_task_num].successors.size())
+            cbc_fluds_.DeallocateSlot(current_task_list_[pred_task_num].reference_id);
+        }
+
+        if (cell_task.successors.empty())
+          cbc_fluds_.DeallocateSlot(cell_task.reference_id);
       }
     } // for cell_task
     async_comm_.SendData();

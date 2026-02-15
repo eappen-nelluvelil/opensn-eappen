@@ -87,6 +87,7 @@ DiscreteOrdinatesProblem::CreateCBCD_FLUDS(std::size_t num_groups,
                                       dynamic_cast<const CBCD_FLUDSCommonData&>(common_data),
                                       psi_uk_man,
                                       sdm,
+                                      GetMaxCellDOFCount(),
                                       save_angular_flux);
 }
 

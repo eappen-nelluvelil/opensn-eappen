@@ -24,9 +24,21 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
+  /// Returns the maximum number of slots needed for CBC_FLUDS pool allocator.
+  unsigned int GetMaxNumSlots() const { return max_num_slots_; }
+
+  /**
+   * Computes the maximum number of slots needed for CBC_FLUDS pool allocator 
+   * by constructing the reflexive transitive closure of the local sweep dependency graph,
+   * constructing a bipartite graph from the closure, and finding the maximum matching of the bipartite graph.
+   */
+  void SimulateLocalSweep();
+
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+  /// Maximum number of slots needed for CBC_FLUDS pool allocator.
+  unsigned int max_num_slots_ = 0;
 };
 
 } // namespace opensn

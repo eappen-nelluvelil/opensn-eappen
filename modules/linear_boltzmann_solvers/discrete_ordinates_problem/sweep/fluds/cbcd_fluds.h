@@ -33,6 +33,7 @@ public:
              const CBCD_FLUDSCommonData& common_data,
              const UnknownManager& psi_uk_man,
              const SpatialDiscretization& sdm,
+             size_t max_cell_dof_count,
              bool save_angular_flux);
 
   ~CBCD_FLUDS();

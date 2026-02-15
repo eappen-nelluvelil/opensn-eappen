@@ -7,6 +7,8 @@
 #include "framework/utils/timer.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
+#include <boost/dynamic_bitset.hpp>
+#include <boost/graph/max_cardinality_matching.hpp>
 #include <boost/graph/topological_sort.hpp>
 
 namespace opensn
@@ -75,31 +77,128 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   {
     const size_t num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
+    unsigned int num_satisfied_dependencies = 0;
+    std::vector<std::uint32_t> predecessors;
     std::vector<std::uint32_t> successors;
 
     for (size_t f = 0; f < num_faces; ++f)
     {
-      if (cell_face_orientations_[cell.local_id][f] == INCOMING)
+      const auto& face = cell.faces[f];
+      const auto face_orientation = cell_face_orientations_[cell.local_id][f];
+      if (face_orientation == INCOMING)
       {
-        if (cell.faces[f].has_neighbor)
+        if (face.has_neighbor)
+        {
           ++num_dependencies;
+          if (grid->IsCellLocal(face.neighbor_id))
+            predecessors.push_back(grid->cells[face.neighbor_id].local_id);
+        }
       }
-      else if (cell_face_orientations_[cell.local_id][f] == OUTGOING)
+      else if (face_orientation == OUTGOING)
       {
-        const auto& face = cell.faces[f];
         if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
           successors.push_back(grid->cells[face.neighbor_id].local_id);
       }
     }
 
-    task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
+    task_list_.push_back({num_dependencies, num_satisfied_dependencies, predecessors, successors, cell.local_id, &cell, false});
   }
+
+  SimulateLocalSweep();
+
+  opensn::log.Log() << "CBC_SPDS: Maximum number of pool allocator slots = " << max_num_slots_ << "\n";
 }
 
 const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
 {
   return task_list_;
+}
+
+void
+CBC_SPDS::SimulateLocalSweep()
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::SimulateLocalSweep");
+
+  const auto num_tasks = task_list_.size();
+  if (num_tasks == 0)
+    return;
+
+  // Construct transitive closure of the local cell graph to determine the maximum number of simultaneously ready tasks
+  std::vector<boost::dynamic_bitset<>> reachability(num_tasks, boost::dynamic_bitset<>(num_tasks));
+
+  // Iterate backwards through topologically sorted tasks to populate reachability
+  for (auto it = spls_.rbegin(); it != spls_.rend(); ++it)
+  {
+    const auto u = *it;
+    const auto& task = task_list_[u];
+
+    // Reflexive: node u reaches itself
+    reachability[u].set(u);
+
+    // Union with successors' reachability
+    for (const auto& succ : task.successors)
+      reachability[u] |= reachability[succ];
+  }
+
+  // Build reuse graph: edge from u to v if task v can reuse memory from task u (i.e. no path from u to v in the reachability graph)
+  using BipartiteGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
+  BipartiteGraph reuse_graph(2 * num_tasks);
+
+  boost::dynamic_bitset<> valid_targets(num_tasks);
+
+  for (int u = 0; u < num_tasks; ++u)
+  {
+    const auto& task_u = task_list_[u];
+
+    // If task u has no local successors, it is a sink
+    if (task_u.successors.empty())
+      continue;
+
+    // Start with the first successor's reachability
+    valid_targets = reachability[task_u.successors[0]];
+
+    // Intersect with all other successors
+    for (size_t i = 1; i < task_u.successors.size(); ++i)
+      valid_targets &= reachability[task_u.successors[i]];
+
+    // Strictness check: remove immediate successors themselves
+    // Buffer is live during handover to immediate successors, so it cannot be reused until after the immediate successors execute
+    for (const auto& succ : task_u.successors)
+      valid_targets.reset(succ);
+
+    // Add edges to reuse graph for all valid targets
+    auto v = valid_targets.find_first();
+    while (v != boost::dynamic_bitset<>::npos)
+    {
+      // Add edge u -> v in reuse graph (with u and v in separate partitions)
+      boost::add_edge(u, v + num_tasks, reuse_graph);
+      v = valid_targets.find_next(v);
+    }
+  }
+
+  // Calculate minimum number of buffers needed via Edmonds Blossom algorithm with verification
+  // that a maximum matching was found
+  std::vector<boost::graph_traits<BipartiteGraph>::vertex_descriptor> edmond_blossoms_mate_map(2 * num_tasks);
+  bool is_maximum_matching = boost::checked_edmonds_maximum_cardinality_matching(
+    reuse_graph, &edmond_blossoms_mate_map[0]);
+
+  if (is_maximum_matching)
+  {
+    size_t edmonds_blossom_matching_size = 0;
+    for (size_t i = 0; i < num_tasks; ++i)
+    {
+      if (edmond_blossoms_mate_map[i] != boost::graph_traits<BipartiteGraph>::null_vertex() and
+          edmond_blossoms_mate_map[i] >= num_tasks)
+        ++edmonds_blossom_matching_size;
+    }
+
+    max_num_slots_ = num_tasks - edmonds_blossom_matching_size;
+  }
+  else
+  {
+    opensn::log.Log0Warning() << "Edmonds blossom algorithm did not find a maximum matching. Results may be inaccurate.\n";
+  }
 }
 
 } // namespace opensn

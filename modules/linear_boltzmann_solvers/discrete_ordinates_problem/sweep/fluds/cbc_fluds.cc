@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
@@ -15,6 +15,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      const CBC_FLUDSCommonData& common_data,
                      const UnknownManager& psi_uk_man,
                      const SpatialDiscretization& sdm,
+                     size_t max_cell_dof_count,
                      bool use_gpus)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
@@ -24,11 +25,19 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
-    local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    local_psi_data_()
+    local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_)
 {
   if (not use_gpus)
-    local_psi_data_.resize(local_psi_data_size_, 0.0);
+  {
+    num_local_cells_ = common_data.GetSPDS().GetGrid()->local_cells.size();
+    slot_size_ = max_cell_dof_count * num_groups_and_angles_;
+    num_slots_ = static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumSlots();
+    cell_to_slot_ptrs_.resize(num_local_cells_, nullptr);
+    local_psi_backing_buffer_.resize(num_slots_ * slot_size_);
+    local_psi_pool_.add_block(local_psi_backing_buffer_.data(),
+                            (num_slots_ * slot_size_) * sizeof(double),
+                            slot_size_ * sizeof(double));
+  }
 }
 
 const FLUDSCommonData&
@@ -37,41 +46,37 @@ CBC_FLUDS::GetCommonData() const
   return common_data_;
 }
 
-double*
-CBC_FLUDS::UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx)
+void
+CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
 {
-  // Map to face neighbor cell's first spatial DOF index
-  // (0 to (num_local_spatial_dofs_ - 1))
-  const size_t face_nbr_spatial_dof_0_index =
-    (sdm_.MapDOFLocal(face_neighbor, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ /
-     num_groups_);
+  assert(cell_to_slot_ptrs_[cell_local_id] == nullptr);
+  void* cell_slot = local_psi_pool_.malloc();
+  assert(cell_slot != nullptr);
+  cell_to_slot_ptrs_[cell_local_id] = static_cast<double*>(cell_slot);
+}
 
-  // Index to start of neighbor cell's data block in local_psi_data_
-  const size_t face_nbr_data_start_index = face_nbr_spatial_dof_0_index * num_groups_and_angles_;
-  const size_t addr_offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  const size_t face_nbr_data_index = face_nbr_data_start_index + addr_offset;
-
-  assert((face_nbr_data_index >= 0) and (face_nbr_data_index < local_psi_data_.size()));
-
-  return &local_psi_data_[face_nbr_data_index];
+void
+CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
+{
+  assert(cell_to_slot_ptrs_[cell_local_id] != nullptr);
+  local_psi_pool_.free(cell_to_slot_ptrs_[cell_local_id]);
+  cell_to_slot_ptrs_[cell_local_id] = nullptr;
 }
 
 double*
-CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx)
+CBC_FLUDS::UpwindPsi(std::uint64_t neighbor_cell_local_id, unsigned int adj_cell_node, size_t as_ss_idx)
 {
-  // Map to current cell's first spatial DOF index
-  // (0 to (num_local_spatial_dofs_ - 1))
-  const size_t cur_cell_spatial_dof_0_index =
-    (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_);
+  assert(cell_to_slot_ptrs_[neighbor_cell_local_id] != nullptr);
+  const size_t addr_offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  return cell_to_slot_ptrs_[neighbor_cell_local_id] + addr_offset;
+}
 
-  // Index to start of current cell's data block in local_psi_data_
-  const size_t cur_cell_data_start_index = cur_cell_spatial_dof_0_index * num_groups_and_angles_;
+double*
+CBC_FLUDS::OutgoingPsi(std::uint64_t cell_local_id, unsigned int cell_node, size_t as_ss_idx)
+{
+  assert(cell_to_slot_ptrs_[cell_local_id] != nullptr);
   const size_t addr_offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  const size_t cur_cell_data_index = cur_cell_data_start_index + addr_offset;
-
-  assert((cur_cell_data_index >= 0) and (cur_cell_data_index < local_psi_data_.size()));
-
-  return &local_psi_data_[cur_cell_data_index];
+  return cell_to_slot_ptrs_[cell_local_id] + addr_offset;
 }
 
 double*

@@ -144,7 +144,7 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
           const double* psi = nullptr;
 
           if (is_local_face)
-            psi = fluds_->UpwindPsi(*cell_transport_view_->FaceNeighbor(f),
+            psi = fluds_->UpwindPsi(cell_transport_view_->FaceNeighbor(f)->local_id,
                                     face_nodal_mapping->cell_node_mapping_[fj],
                                     as_ss_idx);
           else if (not is_boundary_face)
@@ -276,7 +276,7 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
         double* psi = nullptr;
 
         if (is_local_face)
-          psi = fluds_->OutgoingPsi(*cell_, i, as_ss_idx);
+          psi = fluds_->OutgoingPsi(cell_local_id_, i, as_ss_idx);
         else if (not is_boundary_face)
           psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)

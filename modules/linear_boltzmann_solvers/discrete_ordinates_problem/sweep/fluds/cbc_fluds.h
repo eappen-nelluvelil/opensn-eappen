@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
+#include <boost/pool/simple_segregated_storage.hpp>
 #include <cstddef>
 #include <map>
 #include <functional>
@@ -36,6 +37,7 @@ public:
             const CBC_FLUDSCommonData& common_data,
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm,
+            size_t max_cell_dof_count,
             bool use_gpus);
 
   virtual const FLUDSCommonData& GetCommonData() const;
@@ -43,19 +45,23 @@ public:
   /// Get local psi data size.
   size_t GetLocalPsiDataSize() const { return local_psi_data_size_; }
 
+  void AllocateSlot(std::uint64_t cell_local_id);
+
+  void DeallocateSlot(std::uint64_t cell_local_id);
+
   /**
    * Given a local upwind neighbor cell, a node index on this cell, and an
    * angleset subset index, this function returns a pointer to
    * the start of the group data for the specified node and angle.
    */
-  double* UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
+  double* UpwindPsi(std::uint64_t neighbor_cell_local_id, unsigned int adj_cell_node, size_t as_ss_idx);
 
   /**
    * Given a local cell, a node index on this cell, and an angleset subset index,
    * this function returns a pointer to the start of the group data for the specified
    * node and angle for writing its just solved angular fluxes.
    */
-  double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
+  double* OutgoingPsi(std::uint64_t cell_local_id, unsigned int cell_node, size_t as_ss_idx);
 
   /**
    * Given a remote upwind cell's global ID, a face ID on this cell,
@@ -103,11 +109,12 @@ protected:
   size_t num_local_spatial_dofs_;
   size_t local_psi_data_size_;
 
-  /**
-   * Layout for storage for local angular fluxes:
-   * spatial DOF major -> angle in angleset major -> group in groupset major
-   */
-  std::vector<double> local_psi_data_;
+  size_t num_local_cells_;
+  size_t slot_size_;
+  size_t num_slots_;
+  std::vector<double*> cell_to_slot_ptrs_;
+  std::vector<double> local_psi_backing_buffer_;
+  boost::simple_segregated_storage<std::uint64_t> local_psi_pool_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
 
