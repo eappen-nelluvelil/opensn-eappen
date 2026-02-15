@@ -33,8 +33,6 @@ public:
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
-            const UnknownManager& psi_uk_man,
-            const SpatialDiscretization& sdm,
             size_t max_cell_dof_count);
 
   const FLUDSCommonData& GetCommonData() const;
@@ -98,9 +96,6 @@ public:
 
 private:
   const CBC_FLUDSCommonData& common_data_;
-  const UnknownManager& psi_uk_man_;
-  const SpatialDiscretization& sdm_;
-
   size_t num_local_cells_;
   size_t slot_size_;
   size_t num_slots_;
