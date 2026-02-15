@@ -224,17 +224,17 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           common_data_.GetFaceNodalMapping(node.cell_local_id, node.face_id);
         const auto& num_face_nodes = cell_mapping.GetNumFaceNodes(node.face_id);
         const auto& face_data_size = num_face_nodes * num_groups_and_angles_;
+        const int locality =
+            sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
+        auto& async_comm = *angle_set->GetCommunicator();
+        std::vector<double>* psi_nonlocal_outgoing =
+          &async_comm.InitGetDownwindMessageData(locality,
+                                                  face.neighbor_id,
+                                                  face_nodal_mapping.associated_face_,
+                                                  angle_set->GetID(),
+                                                  face_data_size);
         for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
         {
-          const int locality =
-            sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
-          auto& async_comm = *angle_set->GetCommunicator();
-          std::vector<double>* psi_nonlocal_outgoing =
-            &async_comm.InitGetDownwindMessageData(locality,
-                                                   face.neighbor_id,
-                                                   face_nodal_mapping.associated_face_,
-                                                   angle_set->GetID(),
-                                                   face_data_size);
           auto* dst_psi = NLOutgoingPsi(psi_nonlocal_outgoing, node.face_node, as_ss_idx);
           const double* src_psi = outgoing_nonlocal_psi_.data() +
                                   node.storage_index * num_groups_and_angles_ +
@@ -251,6 +251,7 @@ CBCD_FLUDS::CopySavedPsiFromDevice()
   if (not save_angular_flux_)
     return;
   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
+  stream_.synchronize();
 }
 
 void

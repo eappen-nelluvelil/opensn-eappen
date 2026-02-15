@@ -8,6 +8,7 @@
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
+#include <thread>
 
 namespace opensn
 {
@@ -93,6 +94,8 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
   bool all_tasks_completed = false;
   while (not all_tasks_completed)
   {
+    bool any_work_done = false;
+
     // Poll for kernel completion
     if (kernel_in_flight and stream_.is_completed())
     {
@@ -127,13 +130,18 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
       in_flight_tasks.clear();
       in_flight_cell_ids.clear();
       kernel_in_flight = false;
+      any_work_done = true;
     }
 
     // Receive MPI data
     {
       auto received = comm->ReceiveData();
-      for (uint64_t t : received)
-        --current_task_list_[t].num_dependencies;
+      if (not received.empty())
+      {
+        for (uint64_t t : received)
+          --current_task_list_[t].num_dependencies;
+        any_work_done = true;
+      }
       comm->SendData();
     }
 
@@ -166,6 +174,7 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
         in_flight_tasks = std::move(ready_tasks);
         in_flight_cell_ids = std::move(ready_cell_ids);
         kernel_in_flight = true;
+        any_work_done = true;
       }
     }
 
@@ -177,6 +186,9 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
         current_task_list_.end(),
         [](const Task& t) { return t.completed; });
     }
+
+    if (not any_work_done)
+      std::this_thread::yield();
   } // while not all_tasks_completed
 
   // Flush all MPI sends
@@ -192,9 +204,7 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 
   // Copy saved psi from device to host
   cbcd_fluds_.CopySavedPsiFromDevice();
-  stream_.add_callback([&]() {
-    cbcd_fluds_.CopySavedPsiToDestinationPsi(*cbcd_sweep_chunk_, this);
-  });
+  cbcd_fluds_.CopySavedPsiToDestinationPsi(*cbcd_sweep_chunk_, this);
 
   executed_ = true;
   return AngleSetStatus::FINISHED;

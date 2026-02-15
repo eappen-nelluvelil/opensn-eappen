@@ -22,13 +22,6 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
       total_face_nodes += sdm.GetCellMapping(cell).GetNumFaceNodes(f);
-  std::vector<size_t> cell_spatial_dof_offsets(num_local_cells);
-  size_t current_dof_offset = 0;
-  for (const auto& cell : grid.local_cells)
-  {
-    cell_spatial_dof_offsets[cell.local_id] = current_dof_offset;
-    current_dof_offset += sdm.GetCellMapping(cell).GetNumNodes();
-  }
   const size_t offsets_size = 2 * num_local_cells;
   const size_t total_size = offsets_size + total_face_nodes;
   std::vector<std::uint64_t> local_map(total_size);
@@ -145,7 +138,6 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
   if (device_cell_face_node_map_ != nullptr)
   {
     crb::DeviceMemory<std::uint64_t> device_cell_face_node_map(device_cell_face_node_map_);
-    device_cell_face_node_map.release();
     device_cell_face_node_map_ = nullptr;
   }
 }
