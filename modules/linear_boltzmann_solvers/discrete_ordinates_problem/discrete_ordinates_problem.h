@@ -194,7 +194,6 @@ private:
   void CreateCBCD_FLUDSCommonData();
   std::shared_ptr<FLUDS> CreateCBCD_FLUDS(std::size_t num_groups,
                                           std::size_t num_angles,
-                                          std::size_t num_local_cells,
                                           const FLUDSCommonData& common_data,
                                           const UnknownManager& psi_uk_man,
                                           const SpatialDiscretization& sdm,

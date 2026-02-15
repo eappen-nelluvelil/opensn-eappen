@@ -29,7 +29,6 @@ class CBCD_FLUDS : public CBC_FLUDS
 public:
   CBCD_FLUDS(size_t num_groups,
              size_t num_angles,
-             size_t num_local_cells,
              const CBCD_FLUDSCommonData& common_data,
              const UnknownManager& psi_uk_man,
              const SpatialDiscretization& sdm,
@@ -97,6 +96,12 @@ public:
 private:
   /// Reference to the common data.
   const CBCD_FLUDSCommonData& common_data_;
+  const UnknownManager& psi_uk_man_;
+  const SpatialDiscretization& sdm_;
+  size_t num_angles_in_gs_quadrature_;
+  size_t num_quadrature_local_dofs_;
+  size_t num_local_spatial_dofs_;
+  size_t local_psi_data_size_;
   /// Map from incoming face boundary node to indexing metadata
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
   /// Map from cell to outgoing boundary node indexing metadata.
@@ -112,6 +117,7 @@ private:
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
   /// Associated angleset's stream.
   crb::Stream stream_;
+  size_t num_local_cells_;
   crb::MappedHostVector<std::uint64_t> local_cell_ids_;
   bool save_angular_flux_;
   /// Number of pool slots (from CBC_SPDS::GetMaxNumSlots()).

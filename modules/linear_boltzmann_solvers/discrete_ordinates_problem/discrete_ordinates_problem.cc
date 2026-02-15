@@ -1266,7 +1266,6 @@ DiscreteOrdinatesProblem::CreateCBCD_FLUDSCommonData()
 std::shared_ptr<FLUDS>
 DiscreteOrdinatesProblem::CreateCBCD_FLUDS(std::size_t num_groups,
                                            std::size_t num_angles,
-                                           std::size_t num_local_cells,
                                            const FLUDSCommonData& common_data,
                                            const UnknownManager& psi_uk_man,
                                            const SpatialDiscretization& sdm,
@@ -1569,7 +1568,6 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
         {
           fluds = CreateCBCD_FLUDS(gs_num_grps,
                                    angle_indices.size(),
-                                   grid_->local_cells.size(),
                                    fluds_common_data,
                                    groupset.psi_uk_man_,
                                    *discretization_,
@@ -1581,8 +1579,6 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
             std::make_shared<CBC_FLUDS>(gs_num_grps,
                                         angle_indices.size(),
                                         dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
-                                        groupset.psi_uk_man_,
-                                        *discretization_,
                                         GetMaxCellDOFCount(),
                                         use_gpus_);
         }

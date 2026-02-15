@@ -106,7 +106,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
 
   SimulateLocalSweep();
 
-  opensn::log.Log() << "CBC_SPDS: Maximum number of pool allocator slots = " << max_num_slots_ << "\n";
+  // opensn::log.Log() << "CBC_SPDS: Maximum number of pool allocator slots = " << max_num_slots_ << "\n";
 }
 
 const std::vector<Task>&
@@ -198,6 +198,7 @@ CBC_SPDS::SimulateLocalSweep()
   else
   {
     opensn::log.Log0Warning() << "Edmonds blossom algorithm did not find a maximum matching. Results may be inaccurate.\n";
+    max_num_slots_ = num_tasks; // Upper bound on number of slots needed
   }
 }
 

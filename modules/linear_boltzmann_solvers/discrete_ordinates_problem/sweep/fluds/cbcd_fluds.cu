@@ -17,14 +17,20 @@ namespace opensn
 
 CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
                        size_t num_angles,
-                       size_t num_local_cells,
                        const CBCD_FLUDSCommonData& common_data,
                        const UnknownManager& psi_uk_man,
                        const SpatialDiscretization& sdm,
                        size_t max_cell_dof_count,
                        bool save_angular_flux)
-  : CBC_FLUDS(num_groups, num_angles, common_data, psi_uk_man, sdm, max_cell_dof_count, true),
+  : CBC_FLUDS(num_groups, num_angles, common_data, max_cell_dof_count, true),
     common_data_(common_data),
+    psi_uk_man_(psi_uk_man),
+    sdm_(sdm),
+    num_angles_in_gs_quadrature_(psi_uk_man_.GetNumberOfUnknowns()),
+    num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
+    num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
+                            num_groups_),
+    local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
     cell_to_outgoing_boundary_nodes_(common_data_.GetOutgoingBoundaryNodeMap()),
     cell_to_incoming_nonlocal_nodes_(common_data_.GetIncomingNonlocalNodeMap()),
@@ -33,11 +39,12 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
-    local_cell_ids_(num_local_cells),
+    num_local_cells_(common_data.GetSPDS().GetGrid()->local_cells.size()),
+    local_cell_ids_(num_local_cells_),
     save_angular_flux_(save_angular_flux),
     num_pool_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumSlots()),
     max_cell_dof_count_(max_cell_dof_count),
-    cell_to_slot_map_(num_local_cells, std::numeric_limits<std::uint32_t>::max())
+    cell_to_slot_map_(num_local_cells_, std::numeric_limits<std::uint32_t>::max())
 {
   // Initialize free slot stack
   free_slots_.resize(num_pool_slots_);

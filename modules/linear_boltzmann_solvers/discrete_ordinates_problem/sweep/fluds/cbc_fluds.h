@@ -35,15 +35,10 @@ public:
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
-            const UnknownManager& psi_uk_man,
-            const SpatialDiscretization& sdm,
             size_t max_cell_dof_count,
             bool use_gpus);
 
   virtual const FLUDSCommonData& GetCommonData() const;
-
-  /// Get local psi data size.
-  size_t GetLocalPsiDataSize() const { return local_psi_data_size_; }
 
   void AllocateSlot(std::uint64_t cell_local_id);
 
@@ -102,13 +97,6 @@ public:
 
 protected:
   const CBC_FLUDSCommonData& common_data_;
-  const UnknownManager& psi_uk_man_;
-  const SpatialDiscretization& sdm_;
-  size_t num_angles_in_gs_quadrature_;
-  size_t num_quadrature_local_dofs_;
-  size_t num_local_spatial_dofs_;
-  size_t local_psi_data_size_;
-
   size_t num_local_cells_;
   size_t slot_size_;
   size_t num_slots_;
