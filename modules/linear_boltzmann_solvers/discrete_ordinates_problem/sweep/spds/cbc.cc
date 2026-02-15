@@ -177,7 +177,7 @@ CBC_SPDS::SimulateLocalSweep()
     }
   }
 
-  // Calculate minimum number of buffers needed via Edmonds Blossom algorithm with verification
+  // Calculate maximum number of buffers needed via Edmonds blossom algorithm, with verification
   // that a maximum matching was found
   std::vector<boost::graph_traits<BipartiteGraph>::vertex_descriptor> edmond_blossoms_mate_map(2 * num_tasks);
   bool is_maximum_matching = boost::checked_edmonds_maximum_cardinality_matching(
