@@ -41,7 +41,8 @@ public:
   /// Must be called before launching threads.
   void SetSweepChunk(CBCDSweepChunk* sweep_chunk) { cbcd_sweep_chunk_ = sweep_chunk; }
 
-  /// Initialize the starting latch. Must be called after UpdateSweepDependencies
+  /// Initialize the starting latch. 
+  /// Must be called after UpdateSweepDependencies
   /// and before launching threads.
   void SetStartingLatch();
 
@@ -63,16 +64,15 @@ private:
   /// Pointer to the sweep chunk (set before threads launch, and read-only during sweeps).
   CBCDSweepChunk* cbcd_sweep_chunk_ = nullptr;
 
-  /// \name Reflecting BC synchronization (latch pattern)
-  /// \{
+  /// Latch for reflecting BC dependencies.
   /// Number of angle sets this one must wait for before starting.
   std::size_t num_dependencies_ = 0;
-  /// Starting latch. Thread waits here until all predecessors count_down.
+  /// Starting latch. 
+  /// Thread waits here until all predecessors count_down.
   /// A latch(0) is immediately released.
   std::unique_ptr<std::latch> starting_latch_;
   /// Angle sets whose latches this angle set counts down upon completion.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
-  /// \}
 };
 
 } // namespace opensn
