@@ -211,6 +211,7 @@ CBCD_FLUDS::CopySavedPsiFromDevice()
   if (not save_angular_flux_)
     return;
   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
+  stream_.synchronize();
 }
 
 void
