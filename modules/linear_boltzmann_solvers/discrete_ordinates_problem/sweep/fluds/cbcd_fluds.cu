@@ -125,9 +125,10 @@ CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
   const auto& num_angles = angle_indices.size();
   for (const auto& cell_local_id : cell_local_ids)
   {
-    if (not cell_to_incoming_nonlocal_nodes_.contains(cell_local_id))
+    auto it = cell_to_incoming_nonlocal_nodes_.find(cell_local_id);
+    if (it == cell_to_incoming_nonlocal_nodes_.end())
       continue;
-    for (const auto& node : cell_to_incoming_nonlocal_nodes_[cell_local_id])
+    for (const auto& node : it->second)
     {
       for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
       {
@@ -154,8 +155,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto& cell = grid.local_cells[cell_local_id];
-    if (cell_to_outgoing_boundary_nodes_.contains(cell_local_id))
-      for (const auto& node : cell_to_outgoing_boundary_nodes_[cell_local_id])
+    auto boundary_it = cell_to_outgoing_boundary_nodes_.find(cell_local_id);
+    if (boundary_it != cell_to_outgoing_boundary_nodes_.end())
+      for (const auto& node : boundary_it->second)
       {
         const auto& face = cell.faces[node.face_id];
         if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
@@ -172,8 +174,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           }
         }
       }
-    if (cell_to_outgoing_nonlocal_nodes_.contains(cell_local_id))
-      for (const auto& node : cell_to_outgoing_nonlocal_nodes_[cell_local_id])
+    auto nonlocal_it = cell_to_outgoing_nonlocal_nodes_.find(cell_local_id);
+    if (nonlocal_it != cell_to_outgoing_nonlocal_nodes_.end())
+      for (const auto& node : nonlocal_it->second)
       {
         const auto& face = cell.faces[node.face_id];
         const auto& cell_mapping = sdm_.GetCellMapping(cell);
@@ -181,17 +184,17 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           common_data_.GetFaceNodalMapping(node.cell_local_id, node.face_id);
         const auto& num_face_nodes = cell_mapping.GetNumFaceNodes(node.face_id);
         const auto& face_data_size = num_face_nodes * num_groups_and_angles_;
+        const int locality =
+            sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
+        auto& async_comm = *angle_set->GetCommunicator();
+        std::vector<double>* psi_nonlocal_outgoing =
+          &async_comm.InitGetDownwindMessageData(locality,
+                                                  face.neighbor_id,
+                                                  face_nodal_mapping.associated_face_,
+                                                  angle_set->GetID(),
+                                                  face_data_size);
         for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
         {
-          const int locality =
-            sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
-          auto& async_comm = *angle_set->GetCommunicator();
-          std::vector<double>* psi_nonlocal_outgoing =
-            &async_comm.InitGetDownwindMessageData(locality,
-                                                   face.neighbor_id,
-                                                   face_nodal_mapping.associated_face_,
-                                                   angle_set->GetID(),
-                                                   face_data_size);
           auto* dst_psi = NLOutgoingPsi(psi_nonlocal_outgoing, node.face_node, as_ss_idx);
           const double* src_psi = outgoing_nonlocal_psi_.data() +
                                   node.storage_index * num_groups_and_angles_ +
