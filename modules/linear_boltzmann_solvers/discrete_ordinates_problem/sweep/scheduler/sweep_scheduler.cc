@@ -29,7 +29,8 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     InitializeAlgoDOG();
 
   if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE ||
-      scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH)
+      scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH ||
+      scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
     angle_agg_.SetupAngleSetDependencies();
   }
