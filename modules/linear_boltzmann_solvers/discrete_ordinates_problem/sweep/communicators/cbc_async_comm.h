@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
+#include <mutex>
 
 namespace mpi = mpicpp_lite;
 
@@ -41,12 +42,14 @@ public:
 
   void Reset()
   {
+    std::lock_guard<std::mutex> lock(comm_mutex_);
     outgoing_message_queue_.clear();
     send_buffer_.clear();
   }
 
 protected:
   const size_t angle_set_id_;
+  std::mutex comm_mutex_;
 
   // location_id, cell_global_id, face_id
   using MessageKey = std::tuple<int, uint64_t, unsigned int>;

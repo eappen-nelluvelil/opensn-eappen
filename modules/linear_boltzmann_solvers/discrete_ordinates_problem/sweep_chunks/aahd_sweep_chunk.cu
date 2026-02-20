@@ -27,7 +27,7 @@ namespace gpu_kernel
 {
 
 __global__ void
-AAH_SweepKernel(Arguments args,
+AAH_SweepKernel(AAH_Arguments args,
                 const std::uint32_t* level,
                 unsigned int level_size,
                 double* saved_psi)
