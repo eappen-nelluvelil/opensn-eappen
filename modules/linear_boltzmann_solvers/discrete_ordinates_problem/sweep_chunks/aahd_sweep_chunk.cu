@@ -17,12 +17,6 @@ namespace crb = caribou;
 namespace opensn
 {
 
-static unsigned int
-RoundUp(unsigned int num, unsigned int divisor = crb::get_warp_size())
-{
-  return (num + divisor - 1) & ~(divisor - 1);
-}
-
 namespace gpu_kernel
 {
 
@@ -69,12 +63,6 @@ AAH_SweepKernel(AAH_Arguments args,
                 saved_psi);
 }
 
-#if defined(__NVCC__)
-constexpr unsigned int threshold = 128;
-#elif defined(__HIPCC__)
-constexpr unsigned int threshold = 64;
-#endif
-
 } // namespace gpu_kernel
 
 AAHDSweepChunk::AAHDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset)
@@ -108,7 +96,7 @@ AAHDSweepChunk::Sweep(AngleSet& angle_set)
   const auto& spds = static_cast<const AAH_SPDS&>(aahd_angle_set.GetSPDS());
   const auto& levelized_spls = spds.GetLevelizedLocalSubgrid();
   // compute block size
-  unsigned int stride_size = RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
+  unsigned int stride_size = gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
   unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);
   unsigned int block_size_y = gpu_kernel::threshold / block_size_x;
   ::dim3 block_size{block_size_x, block_size_y};
