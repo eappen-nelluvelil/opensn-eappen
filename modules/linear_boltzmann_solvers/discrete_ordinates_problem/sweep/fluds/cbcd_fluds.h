@@ -49,11 +49,11 @@ public:
   /// Get the stride size for each face node's angular flux data.
   inline std::size_t GetStrideSize() const { return num_groups_and_angles_; }
 
+  /// Get vector of local cells to be swept.
   crb::MappedHostVector<std::uint64_t>& GetLocalCellIDs() { return local_cell_ids_; }
 
-  crb::DeviceMemory<double>& GetDeviceSavedPsi() { return device_saved_psi_; }
-
-  crb::HostVector<double>& GetHostSavedPsi() { return host_saved_psi_; }
+  /// Get saved angular flux device pointer.
+  double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
 
   /// Copy saved psi from device to host.
   void CopySavedPsiFromDevice();

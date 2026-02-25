@@ -5,7 +5,10 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aahd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
+#include "caribou/main.hpp"
 #include <cstdint>
+
+namespace crb = caribou;
 
 namespace opensn
 {
@@ -19,6 +22,18 @@ class CBCD_FLUDS;
 
 namespace opensn::gpu_kernel
 {
+
+#if defined(__NVCC__)
+constexpr unsigned int threshold = 128;
+#elif defined(__HIPCC__)
+constexpr unsigned int threshold = 64;
+#endif
+
+static unsigned int
+RoundUp(unsigned int num, unsigned int divisor = crb::get_warp_size())
+{
+  return (num + divisor - 1) & ~(divisor - 1);
+}
 
 /// Common arguments for AAH and CBC kernels.
 struct Arguments
@@ -66,15 +81,12 @@ struct CBC_Arguments : public opensn::gpu_kernel::Arguments
   CBC_Arguments(DiscreteOrdinatesProblem& problem,
                 const LBSGroupset& groupset,
                 CBCD_AngleSet& angle_set,
-                CBCD_FLUDS& fluds,
-                const size_t& num_ready_cells);
+                CBCD_FLUDS& fluds);
 
   // Ready cell local IDs
   const std::uint64_t* cell_local_ids;
   // FLUDS pointer set
   CBCD_FLUDSPointerSet flud_data;
-  // Batch size info
-  std::uint32_t batch_size;
 };
 
 } // namespace opensn::cbc_gpu_kernel

@@ -58,8 +58,7 @@ namespace opensn::cbc_gpu_kernel
 CBC_Arguments::CBC_Arguments(DiscreteOrdinatesProblem& problem,
                              const LBSGroupset& groupset,
                              CBCD_AngleSet& angle_set,
-                             CBCD_FLUDS& fluds,
-                             const size_t& num_ready_cells)
+                             CBCD_FLUDS& fluds)
   : Arguments(problem, groupset)
 {
   // Copy angleset data to GPU
@@ -70,8 +69,6 @@ CBC_Arguments::CBC_Arguments(DiscreteOrdinatesProblem& problem,
   // Retrieve CBCD_FLUDS pointers and node indices
   flud_data = fluds.GetDevicePointerSet();
   flud_index = fluds.GetCommonData().GetDeviceIndex();
-  // Set batch size
-  batch_size = static_cast<std::uint32_t>(num_ready_cells * angleset_size * groupset_size);
 }
 
 } // namespace opensn::cbc_gpu_kernel
