@@ -8,14 +8,11 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "caribou/main.hpp"
-#include <memory>
 
 namespace crb = caribou;
 
 namespace opensn
 {
-
-class CBCD_AggregatedCommunicator;
 
 /// CBC sweep chunk for device.
 class CBCDSweepChunk : public SweepChunk
@@ -44,21 +41,11 @@ public:
 
   const std::vector<crb::Stream*>& GetStreamsList() const { return streams_list_; }
 
-  /// Start the aggregated communication thread.
-  void StartCommunicator();
-
-  /// Stop the aggregated communication thread (flush + join).
-  void StopCommunicator();
-
-  /// Get a reference to the aggregated communicator.
-  CBCD_AggregatedCommunicator& GetAggregatedCommunicator();
-
 private:
   DiscreteOrdinatesProblem& problem_;
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<CBCD_FLUDS*> fluds_list_;
   std::vector<crb::Stream*> streams_list_;
-  std::unique_ptr<CBCD_AggregatedCommunicator> agg_comm_;
 };
 
 } // namespace opensn

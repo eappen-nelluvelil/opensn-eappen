@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_aggregated_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/main.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
@@ -70,34 +69,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     fluds_list_.push_back(static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS())));
     streams_list_.push_back(&(angle_set->GetStream()));
   }
-
-  // Create aggregated communicator and set it on all angle sets
-  std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
-  agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(
-    base_angle_sets, problem_.GetMPICommunicatorSet());
-  for (auto* as : angle_sets_)
-    as->SetAggregatedCommunicator(agg_comm_.get());
 }
 
 CBCDSweepChunk::~CBCDSweepChunk() = default;
-
-void
-CBCDSweepChunk::StartCommunicator()
-{
-  agg_comm_->Start();
-}
-
-void
-CBCDSweepChunk::StopCommunicator()
-{
-  agg_comm_->Stop();
-}
-
-CBCD_AggregatedCommunicator&
-CBCDSweepChunk::GetAggregatedCommunicator()
-{
-  return *agg_comm_;
-}
 
 void
 CBCDSweepChunk::GPUSweep(CBCD_AngleSet& angle_set, const std::vector<std::uint64_t>& cell_local_ids)

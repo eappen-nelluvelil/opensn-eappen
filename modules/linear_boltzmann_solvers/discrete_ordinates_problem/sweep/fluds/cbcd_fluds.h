@@ -10,6 +10,7 @@
 #include "caribou/main.hpp"
 #include <cstddef>
 #include <functional>
+#include <unordered_map>
 #include <map>
 
 namespace crb = caribou;
@@ -18,6 +19,7 @@ namespace opensn
 {
 
 class CBCD_AngleSet;
+class CBCD_DirectCommunicator;
 class UnknownManager;
 class SpatialDiscretization;
 class Cell;
@@ -71,9 +73,10 @@ public:
   void CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
                                        const std::vector<std::uint64_t>& cell_local_ids);
 
-  /// Copy outgoing psi on host after D2H copy is done.
+  /// Copy outgoing psi on host after D2H copy is done, writing directly into direct comm buffers.
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                  CBCD_AngleSet* angle_set,
+                                 CBCD_DirectCommunicator& direct_comm,
                                  const std::vector<std::uint64_t>& cell_local_ids);
 
   // --- Pulled up from CBC_FLUDS ---
@@ -97,7 +100,17 @@ public:
   // cell_global_id, face_id
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
-  std::map<CellFaceKey, std::vector<double>>& GetDeplocsOutgoingMessages()
+  struct CellFaceKeyHash
+  {
+    size_t operator()(const CellFaceKey& k) const noexcept
+    {
+      return std::hash<uint64_t>{}(k.first) ^
+             (std::hash<unsigned int>{}(k.second) * 2654435761ULL);
+    }
+  };
+
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>&
+  GetDeplocsOutgoingMessages()
   {
     return deplocs_outgoing_messages_;
   }
@@ -139,7 +152,16 @@ private:
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
   /// Non-local outgoing messages storage (pulled up from CBC_FLUDS).
-  std::map<CellFaceKey, std::vector<double>> deplocs_outgoing_messages_;
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>
+    deplocs_outgoing_messages_;
+
+  /// Pre-computed face-grouped outgoing nonlocal node info.
+  struct FaceOutgoingInfo
+  {
+    unsigned int face_id;
+    std::vector<const NonlocalNodeInfo*> nodes;
+  };
+  std::unordered_map<uint64_t, std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();

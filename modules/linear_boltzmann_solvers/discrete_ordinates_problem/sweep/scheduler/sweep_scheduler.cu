@@ -69,16 +69,11 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
     as->SetStartingLatch();
   }
 
-  // Start aggregated communication thread
-  cbcd_chunk.StartCommunicator();
-
   // Launch one thread per angle set via SPMD_ThreadPool
+  // Each thread does its own MPI — no comm thread to manage
   pool_.run(
     [&sweep_chunk, &angle_sets](std::size_t i)
     { angle_sets[i]->AngleSetAdvance(sweep_chunk, AngleSetStatus::EXECUTE); });
-
-  // Flush + join communication thread
-  cbcd_chunk.StopCommunicator();
 
   // Copy phi and outflow data back to host
   cbcd_chunk.GetProblem().CopyPhiAndOutflowBackToHost();

@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_direct_comm.h"
 #include "caribou/main.hpp"
 #include <latch>
 #include <memory>
@@ -17,7 +18,6 @@ namespace opensn
 
 class CBC_SPDS;
 class CBCDSweepChunk;
-class CBCD_AggregatedCommunicator;
 
 /// CBC angle set for device.
 class CBCD_AngleSet : public AngleSet
@@ -41,11 +41,8 @@ public:
 
   void SetSweepChunk(CBCDSweepChunk* sweep_chunk) { cbcd_sweep_chunk_ = sweep_chunk; }
 
-  /// Set the aggregated communicator pointer.
-  void SetAggregatedCommunicator(CBCD_AggregatedCommunicator* agg_comm) { agg_comm_ = agg_comm; }
-
-  /// Get the aggregated communicator pointer.
-  CBCD_AggregatedCommunicator* GetAggregatedCommunicator() const { return agg_comm_; }
+  /// Get the direct communicator.
+  CBCD_DirectCommunicator& GetDirectCommunicator() { return direct_comm_; }
 
   /// Initialize the starting latch.
   void SetStartingLatch();
@@ -99,8 +96,8 @@ private:
   const CBC_SPDS& cbc_spds_;
   /// Cell-by-cell task list (pulled up from CBC_AngleSet).
   std::vector<Task> current_task_list_;
-  /// Pointer to the aggregated communicator (owned by CBCDSweepChunk).
-  CBCD_AggregatedCommunicator* agg_comm_ = nullptr;
+  /// Per-angle-set direct MPI communicator (no dedicated thread).
+  CBCD_DirectCommunicator direct_comm_;
   /// Number of angle sets this one must wait for before starting.
   std::size_t num_dependencies_ = 0;
   /// A starting latch.

@@ -5,7 +5,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_aggregated_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_direct_comm.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
@@ -43,6 +43,15 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     local_cell_ids_(num_local_cells),
     save_angular_flux_(save_angular_flux)
 {
+  // Pre-compute face-grouped outgoing nonlocal nodes
+  for (const auto& [cell_id, nodes] : cell_to_outgoing_nonlocal_nodes_)
+  {
+    std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
+    for (const auto& node : nodes)
+      by_face[node.face_id].push_back(&node);
+    for (auto& [fid, fnodes] : by_face)
+      cell_to_face_grouped_outgoing_[cell_id].push_back({fid, std::move(fnodes)});
+  }
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -177,9 +186,10 @@ CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
 void
 CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AngleSet* angle_set,
+                                      CBCD_DirectCommunicator& direct_comm,
                                       const std::vector<std::uint64_t>& cell_local_ids)
 {
-  if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_outgoing_nonlocal_nodes_.empty())
+  if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_face_grouped_outgoing_.empty())
     return;
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_indices.size();
@@ -206,32 +216,31 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           }
         }
       }
-    auto nonlocal_it = cell_to_outgoing_nonlocal_nodes_.find(cell_local_id);
-    if (nonlocal_it != cell_to_outgoing_nonlocal_nodes_.end())
-    {
-      // Group nodes by face_id so we build one staging buffer per face
-      std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> nodes_by_face;
-      for (const auto& node : nonlocal_it->second)
-        nodes_by_face[node.face_id].push_back(&node);
 
-      for (const auto& [face_id, face_nodes] : nodes_by_face)
+    // Use pre-computed face grouping and write directly into direct comm buffers
+    auto grouped_it = cell_to_face_grouped_outgoing_.find(cell_local_id);
+    if (grouped_it != cell_to_face_grouped_outgoing_.end())
+    {
+      for (const auto& face_info : grouped_it->second)
       {
-        const auto& face = cell.faces[face_id];
+        const auto& face = cell.faces[face_info.face_id];
         const auto& cell_mapping = sdm_.GetCellMapping(cell);
         const auto& face_nodal_mapping =
-          common_data_.GetFaceNodalMapping(cell_local_id, face_id);
-        const auto num_face_nodes = cell_mapping.GetNumFaceNodes(face_id);
+          common_data_.GetFaceNodalMapping(cell_local_id, face_info.face_id);
+        const auto num_face_nodes = cell_mapping.GetNumFaceNodes(face_info.face_id);
         const auto face_data_size = num_face_nodes * num_groups_and_angles_;
         const int locality =
-            sweep_chunk.GetCellTransportView(cell_local_id).FaceLocality(face_id);
+          sweep_chunk.GetCellTransportView(cell_local_id).FaceLocality(face_info.face_id);
 
-        // Build one staging buffer for the entire face
-        std::vector<double> staged_buffer(face_data_size, 0.0);
-        for (const auto* node : face_nodes)
+        // Get buffer directly from communicator (avoids staging buffer allocation)
+        auto& msg_data = direct_comm.InitGetDownwindMessageData(
+          locality, face.neighbor_id, face_nodal_mapping.associated_face_, face_data_size);
+
+        for (const auto* node : face_info.nodes)
         {
           for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
           {
-            double* dst_psi = staged_buffer.data() +
+            double* dst_psi = msg_data.data() +
                               node->face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
             const double* src_psi = outgoing_nonlocal_psi_.data() +
                                     node->storage_index * num_groups_and_angles_ +
@@ -239,13 +248,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
             std::copy(src_psi, src_psi + num_groups_, dst_psi);
           }
         }
-
-        auto* agg_comm = angle_set->GetAggregatedCommunicator();
-        agg_comm->EnqueueOutgoing(locality,
-                                  angle_set->GetID(),
-                                  face.neighbor_id,
-                                  face_nodal_mapping.associated_face_,
-                                  std::move(staged_buffer));
       }
     }
   }

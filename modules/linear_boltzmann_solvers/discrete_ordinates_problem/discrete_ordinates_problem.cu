@@ -10,7 +10,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_aggregated_comm.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/outflow_carrier.h"
 
