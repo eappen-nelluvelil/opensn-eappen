@@ -55,55 +55,38 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 {
   CALI_CXX_MARK_SCOPE("SweepScheduler::ScheduleAlgoAsyncFIFO");
 
-  auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
+  auto& cbcd_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
 
   // Copy phi and source moments to device
-  cbcd_sweep_chunk.GetProblem().CopyPhiAndSrcToDevice();
+  cbcd_chunk.GetProblem().CopyPhiAndSrcToDevice();
 
-  const auto& angle_sets = cbcd_sweep_chunk.GetAngleSets();
-  const size_t num_angle_sets = angle_sets.size();
+  const auto& angle_sets = cbcd_chunk.GetAngleSets();
 
   // Set sweep chunk reference and initialize latches for all angle sets
-  for (auto* angle_set : angle_sets)
+  for (auto* as : angle_sets)
   {
-    angle_set->SetSweepChunk(&cbcd_sweep_chunk);
-    angle_set->SetStartingLatch();
+    as->SetSweepChunk(&cbcd_chunk);
+    as->SetStartingLatch();
   }
 
-  // Launch one thread per angle set
-  std::vector<std::thread> sweep_threads(num_angle_sets);
-  for (size_t i = 0; i < num_angle_sets; ++i)
-  {
-    sweep_threads[i] = std::thread(
-      [&sweep_chunk, angle_set = angle_sets[i]]()
-      { angle_set->AngleSetAdvance(sweep_chunk, AngleSetStatus::EXECUTE); });
-  }
+  // Start aggregated communication thread
+  cbcd_chunk.StartCommunicator();
 
-  // Wait for all threads to complete
-  for (auto& thread : sweep_threads)
-    thread.join();
+  // Launch one thread per angle set via SPMD_ThreadPool
+  pool_.run(
+    [&sweep_chunk, &angle_sets](std::size_t i)
+    { angle_sets[i]->AngleSetAdvance(sweep_chunk, AngleSetStatus::EXECUTE); });
+
+  // Flush + join communication thread
+  cbcd_chunk.StopCommunicator();
 
   // Copy phi and outflow data back to host
-  cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
-
-  // Receive delayed data
+  cbcd_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
   opensn::mpi_comm.barrier();
-  bool received_delayed_data = false;
-  while (not received_delayed_data)
-  {
-    received_delayed_data = true;
-    for (auto* angle_set : angle_sets)
-    {
-      if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
-        received_delayed_data = false;
-      if (not angle_set->ReceiveDelayedData())
-        received_delayed_data = false;
-    }
-  }
 
-  // Reset all angle sets (includes pool allocator reset)
-  for (auto* angle_set : angle_sets)
-    angle_set->ResetSweepBuffers();
+  // Reset all angle sets
+  for (auto* as : angle_sets)
+    as->ResetSweepBuffers();
 
   for (const auto& [bid, bndry] : angle_agg_.GetSimBoundaries())
     bndry->ResetAnglesReadyStatus();

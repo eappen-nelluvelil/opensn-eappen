@@ -10,6 +10,7 @@
 #include "framework/field_functions/field_function_grid_based.h"
 #include "framework/materials/multi_group_xs/multi_group_xs.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+#include "framework/mpi/mpi_comm_set.h"
 #include "framework/utils/hdf_utils.h"
 #include "framework/object_factory.h"
 #include "framework/logging/log.h"
@@ -297,6 +298,12 @@ std::shared_ptr<MeshContinuum>
 LBSProblem::GetGrid() const
 {
   return grid_;
+}
+
+const MPICommunicatorSet&
+LBSProblem::GetMPICommunicatorSet() const
+{
+  return *grid_local_comm_set_;
 }
 
 const SpatialDiscretization&

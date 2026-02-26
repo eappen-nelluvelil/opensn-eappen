@@ -151,6 +151,9 @@ public:
   /// Obtains a reference to the grid.
   std::shared_ptr<MeshContinuum> GetGrid() const;
 
+  /// Returns a const reference to the MPI communicator set.
+  const MPICommunicatorSet& GetMPICommunicatorSet() const;
+
   /// Get pointer to carriers.
   void* GetCarrier(std::uint32_t idx) { return carriers_.at(idx); }
 
