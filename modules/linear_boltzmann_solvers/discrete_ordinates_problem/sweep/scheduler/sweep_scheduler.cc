@@ -35,7 +35,8 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     angle_agg_.SetupAngleSetDependencies();
   }
 
-  if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE)
+  if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE ||
+      scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());

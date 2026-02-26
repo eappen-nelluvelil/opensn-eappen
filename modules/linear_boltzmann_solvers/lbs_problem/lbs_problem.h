@@ -163,14 +163,8 @@ public:
   /// Obtains a reference to the grid.
   std::shared_ptr<MeshContinuum> GetGrid() const;
 
-  TotalXSCarrier* GetTotalXSCarrier() { return total_xs_carrier_.get(); }
-  const TotalXSCarrier* GetTotalXSCarrier() const { return total_xs_carrier_.get(); }
-
-  OutflowCarrier* GetOutflowCarrier() { return outflow_carrier_.get(); }
-  const OutflowCarrier* GetOutflowCarrier() const { return outflow_carrier_.get(); }
-
-  MeshCarrier* GetMeshCarrier() { return mesh_carrier_.get(); }
-  const MeshCarrier* GetMeshCarrier() const { return mesh_carrier_.get(); }
+  /// Returns a const reference to the MPI communicator set.
+  const MPICommunicatorSet& GetMPICommunicatorSet() const;
 
   MemoryPinner<double>* GetSourceMomentsPinner() { return source_pinner_.get(); }
   const MemoryPinner<double>* GetSourceMomentsPinner() const { return source_pinner_.get(); }

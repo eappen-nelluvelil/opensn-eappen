@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_aggregated_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
+#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
@@ -20,10 +21,12 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
                              const std::vector<size_t>& angle_indices,
                              std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                              const MPICommunicatorSet& comm_set)
-  : CBC_AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries, comm_set),
+  : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     stream_(crb::Stream::create()),
     device_angle_indices_(angles_.size(), stream_),
-    cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_))
+    cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_)),
+    cbcd_sweep_chunk_(nullptr),
+    cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_))
 {
   crb::MemoryPinningManager angle_indices_pinner_(angles_);
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
@@ -62,11 +65,11 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     return AngleSetStatus::FINISHED;
 
   assert(cbcd_sweep_chunk_ != nullptr);
-  auto* comm = static_cast<CBC_AsynchronousCommunicator*>(GetCommunicator());
+  assert(agg_comm_ != nullptr);
 
   // Initialize task list
   if (current_task_list_.empty())
-    current_task_list_ = static_cast<const CBC_SPDS&>(spds_).GetTaskList();
+    current_task_list_ = cbc_spds_.GetTaskList();
 
   // For non-reflecting problems, num_dependencies_ == 0, so latch(0) is
   // immediately released and wait() returns without blocking.
@@ -89,7 +92,7 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
       // Copy back outgoing boundary (reflecting) and non-local psi to host
       cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, in_flight_cell_ids);
 
-      // Update task dependencies and pool allocator state
+      // Update task dependencies
       for (auto* task : in_flight_tasks)
       {
         for (uint64_t succ : task->successors)
@@ -97,24 +100,29 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
         task->completed = true;
       }
 
-      // Send MPI data
-      comm->SendData();
+      // Outgoing data is now enqueued via aggregated comm (done inside CopyOutgoingPsiBackToHost)
       in_flight_tasks.clear();
       in_flight_cell_ids.clear();
       kernel_in_flight = false;
       any_work_done = true;
     }
 
-    // Receive MPI data
+    // Pull received data from aggregated comm
     {
-      auto received = comm->ReceiveData();
-      if (not received.empty())
+      auto received_entries = agg_comm_->DequeueIncoming(id_);
+      if (not received_entries.empty())
       {
-        for (uint64_t t : received)
-          --current_task_list_[t].num_dependencies;
+        for (auto& entry : received_entries)
+        {
+          // Merge into deplocs_outgoing_messages_ for NLUpwindPsi access
+          cbcd_fluds_.GetDeplocsOutgoingMessages()[{entry.cell_global_id, entry.face_id}] =
+            std::move(entry.psi_data);
+          // Map cell_global_id to local task number to decrement dependencies
+          auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
+          --current_task_list_[local_id].num_dependencies;
+        }
         any_work_done = true;
       }
-      comm->SendData();
     }
 
     // Collect ready tasks and launch kernel
@@ -159,9 +167,8 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
       std::this_thread::yield();
   } // while not all_tasks_completed
 
-  // Flush all MPI sends
-  while (not comm->SendData())
-    ; // spin until all sends complete
+  // Signal to the aggregated communicator that this angle set has no more outgoing data
+  agg_comm_->SignalAngleSetComplete(id_);
 
   // Update boundary readiness and notify following angle sets
   for (auto& [bid, boundary] : boundaries_)
@@ -182,9 +189,36 @@ void
 CBCD_AngleSet::ResetSweepBuffers()
 {
   current_task_list_.clear();
-  async_comm_.Reset();
-  fluds_->ClearLocalAndReceivePsi();
+  cbcd_fluds_.ClearLocalAndReceivePsi();
   executed_ = false;
+}
+
+const double*
+CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
+                            unsigned int angle_num,
+                            uint64_t cell_local_id,
+                            unsigned int face_num,
+                            unsigned int fi,
+                            unsigned int g,
+                            bool surface_source_active)
+{
+  if (boundaries_[boundary_id]->IsReflecting())
+    return boundaries_[boundary_id]->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
+
+  if (not surface_source_active)
+    return boundaries_[boundary_id]->ZeroFlux(g);
+
+  return boundaries_[boundary_id]->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
+}
+
+double*
+CBCD_AngleSet::PsiReflected(uint64_t boundary_id,
+                             unsigned int angle_num,
+                             uint64_t cell_local_id,
+                             unsigned int face_num,
+                             unsigned int fi)
+{
+  return boundaries_[boundary_id]->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
 }
 
 } // namespace opensn
