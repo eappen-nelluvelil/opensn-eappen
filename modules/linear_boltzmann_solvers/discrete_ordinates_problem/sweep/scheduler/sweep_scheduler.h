@@ -93,6 +93,8 @@ private:
   std::unordered_map<AngleSet*, std::set<AngleSet*>> preceding_angle_sets_;
 
   SPMD_ThreadPool pool_;
+
+  size_t num_workers_;
 };
 
 } // namespace opensn

@@ -73,18 +73,10 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   // Start aggregated communication thread
   cbcd_chunk.StartCommunicator();
 
-  // Use a bounded number of worker threads: min(angle_sets, hardware threads).
-  // Each worker cooperatively processes multiple angle sets in a round-robin loop.
-  // This avoids spawning hundreds of busy-polling threads for large quadratures.
-  const size_t num_workers =
-    std::min(num_angle_sets, static_cast<size_t>(std::thread::hardware_concurrency()));
-  pool_.Resize(num_workers);
-
+  const auto num_workers = num_workers_;
   pool_.run(
     [&angle_sets, num_angle_sets, num_workers](std::size_t worker_id)
     {
-      CALI_CXX_MARK_SCOPE("CBCD_Worker");
-
       // Partition angle sets among workers (contiguous ranges)
       const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
       const size_t begin = worker_id * chunk_size;
