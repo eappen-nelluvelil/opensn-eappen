@@ -9,6 +9,7 @@
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 
 namespace opensn
 {
@@ -45,6 +46,28 @@ CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
 {
   if (comm_thread_.joinable())
     Stop();
+
+  // Clean up any remaining lock-free nodes
+  for (auto& [dest, queue] : outgoing_queues_)
+  {
+    auto* node = queue.head.load(std::memory_order_relaxed);
+    while (node)
+    {
+      auto* next = node->next;
+      delete node;
+      node = next;
+    }
+  }
+  for (auto& mailbox : incoming_mailboxes_)
+  {
+    auto* node = mailbox.head.load(std::memory_order_relaxed);
+    while (node)
+    {
+      auto* next = node->next;
+      delete node;
+      node = next;
+    }
+  }
 }
 
 void
@@ -57,9 +80,16 @@ CBCD_AggregatedCommunicator::EnqueueOutgoing(int dest_location,
   auto it = outgoing_queues_.find(dest_location);
   assert(it != outgoing_queues_.end());
 
+  // Lock-free CAS push (Treiber stack)
+  auto* node =
+    new OutgoingNode{{angle_set_id, cell_global_id, face_id, std::move(psi_data)}, nullptr};
   auto& queue = it->second;
-  std::lock_guard<std::mutex> lock(queue.mutex);
-  queue.entries.push_back({angle_set_id, cell_global_id, face_id, std::move(psi_data)});
+  OutgoingNode* expected = queue.head.load(std::memory_order_relaxed);
+  do
+  {
+    node->next = expected;
+  } while (not queue.head.compare_exchange_weak(
+    expected, node, std::memory_order_release, std::memory_order_relaxed));
 }
 
 std::vector<IncomingEntry>
@@ -68,10 +98,17 @@ CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
   assert(angle_set_id < num_angle_sets_);
   auto& mailbox = incoming_mailboxes_[angle_set_id];
 
+  // Lock-free: atomically take the entire chain
+  IncomingNode* chain = mailbox.head.exchange(nullptr, std::memory_order_acquire);
+
   std::vector<IncomingEntry> result;
+  while (chain)
   {
-    std::lock_guard<std::mutex> lock(mailbox.mutex);
-    result.swap(mailbox.entries);
+    for (auto& e : chain->entries)
+      result.push_back(std::move(e));
+    auto* next = chain->next;
+    delete chain;
+    chain = next;
   }
   return result;
 }
@@ -90,7 +127,6 @@ CBCD_AggregatedCommunicator::Start()
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
   pending_sends_.clear();
-  last_flush_time_ = std::chrono::steady_clock::now();
   comm_thread_ = std::thread(&CBCD_AggregatedCommunicator::CommThreadLoop, this);
 }
 
@@ -137,26 +173,21 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::FlushOutgoing");
 
-  auto now = std::chrono::steady_clock::now();
-
   for (auto& [dest, queue] : outgoing_queues_)
   {
+    // Lock-free: atomically drain the entire chain
+    OutgoingNode* chain = queue.head.exchange(nullptr, std::memory_order_acquire);
+    if (not chain)
+      continue;
+
+    // Collect entries from the chain
     std::vector<OutgoingEntry> entries_to_send;
-
+    while (chain)
     {
-      std::lock_guard<std::mutex> lock(queue.mutex);
-      if (queue.entries.empty())
-        continue;
-
-      bool should_flush =
-        queue.entries.size() >= kFlushSizeThreshold or
-        (now - last_flush_time_) >= kFlushTimeInterval or
-        stop_requested_.load(std::memory_order_relaxed);
-
-      if (not should_flush)
-        continue;
-
-      entries_to_send.swap(queue.entries);
+      entries_to_send.push_back(std::move(chain->entry));
+      auto* next = chain->next;
+      delete chain;
+      chain = next;
     }
 
     // Group entries by angle set id for serialization
@@ -176,7 +207,20 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     //     [psi_data : double x data_size]
     //   }
     // }
+
+    // Pre-compute exact buffer size to avoid repeated reallocations
+    size_t total_bytes = sizeof(size_t); // num_as_in_batch
+    for (const auto& [as_id, entry_ptrs] : by_angle_set)
+    {
+      total_bytes += sizeof(size_t) + sizeof(size_t); // as_id + num_entries
+      for (const auto* entry : entry_ptrs)
+        total_bytes += sizeof(uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
+                       entry->psi_data.size() * sizeof(double);
+    }
+
     ByteArray buffer;
+    buffer.Data().reserve(total_bytes);
+
     size_t num_as_in_batch = by_angle_set.size();
     buffer.Write(num_as_in_batch);
 
@@ -192,8 +236,12 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
         buffer.Write(entry->face_id);
         size_t data_size = entry->psi_data.size();
         buffer.Write(data_size);
-        for (double val : entry->psi_data)
-          buffer.Write(val);
+        // Bulk write: one memcpy for all doubles instead of N element-by-element writes
+        const size_t n_bytes = data_size * sizeof(double);
+        auto& raw = buffer.Data();
+        const size_t old_sz = raw.size();
+        raw.resize(old_sz + n_bytes);
+        std::memcpy(&raw[old_sz], entry->psi_data.data(), n_bytes);
       }
     }
 
@@ -206,8 +254,6 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     ps.request = comm.isend(dest_rank, aggregated_tag_, ps.data.Data());
     pending_sends_.push_back(std::move(ps));
   }
-
-  last_flush_time_ = now;
 }
 
 void
@@ -240,8 +286,10 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
         auto num_entries = data_array.Read<size_t>();
 
         assert(as_id < num_angle_sets_);
-        auto& mailbox = incoming_mailboxes_[as_id];
-        std::lock_guard<std::mutex> lock(mailbox.mutex);
+
+        // Accumulate entries locally (no synchronization needed)
+        std::vector<IncomingEntry> batch_entries;
+        batch_entries.reserve(num_entries);
 
         for (size_t e = 0; e < num_entries; ++e)
         {
@@ -249,12 +297,24 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
           entry.cell_global_id = data_array.Read<uint64_t>();
           entry.face_id = data_array.Read<unsigned int>();
           auto data_size = data_array.Read<size_t>();
+          // Bulk read: one memcpy for all doubles instead of N element-by-element reads
           entry.psi_data.resize(data_size);
-          for (size_t k = 0; k < data_size; ++k)
-            entry.psi_data[k] = data_array.Read<double>();
+          const size_t n_bytes = data_size * sizeof(double);
+          std::memcpy(entry.psi_data.data(), &data_array.Data()[data_array.Offset()], n_bytes);
+          data_array.Seek(data_array.Offset() + n_bytes);
 
-          mailbox.entries.push_back(std::move(entry));
+          batch_entries.push_back(std::move(entry));
         }
+
+        // Lock-free CAS push to the mailbox (Treiber stack)
+        auto& mailbox = incoming_mailboxes_[as_id];
+        auto* node = new IncomingNode{std::move(batch_entries), nullptr};
+        IncomingNode* expected = mailbox.head.load(std::memory_order_relaxed);
+        do
+        {
+          node->next = expected;
+        } while (not mailbox.head.compare_exchange_weak(
+          expected, node, std::memory_order_release, std::memory_order_relaxed));
       }
     } // while iprobe
   }
@@ -278,13 +338,11 @@ CBCD_AggregatedCommunicator::AllWorkComplete() const
     if (not angle_set_done_[i].load(std::memory_order_acquire))
       return false;
 
-  // Check all outgoing queues are empty
+  // After all angle sets signal done, no more enqueues happen.
+  // Check all outgoing queues are drained.
   for (const auto& [dest, queue] : outgoing_queues_)
   {
-    // We can't lock here as we're const, but after all angle sets signal done,
-    // no more enqueues happen. The atomic acquire fence above ensures visibility.
-    // A quick non-locked check is safe at this point.
-    if (not queue.entries.empty())
+    if (queue.head.load(std::memory_order_acquire) != nullptr)
       return false;
   }
 
