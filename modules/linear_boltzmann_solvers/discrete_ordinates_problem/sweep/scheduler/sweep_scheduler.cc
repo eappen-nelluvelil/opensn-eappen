@@ -35,9 +35,9 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     angle_agg_.SetupAngleSetDependencies();
   }
 
-  if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE ||
-      scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
-  {
+  // AAO (AAHD) needs one thread per angle set — threads mostly block on MPI, so this is fine.
+  // ASYNC_FIFO (CBCD) sizes its own pool in ScheduleAlgoAsyncFIFO to a bounded worker count.
+  if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE)
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
   }

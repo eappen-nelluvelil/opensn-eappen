@@ -20,6 +20,11 @@ class CBCDSweepChunk;
 class CBCD_AggregatedCommunicator;
 
 /// CBC angle set for device.
+///
+/// Supports two execution modes:
+/// 1. **One-thread-per-angle-set** — call AngleSetAdvance() directly (blocking).
+/// 2. **Cooperative scheduling** — a bounded worker pool calls TryInitialize() and
+///    TryAdvanceOneStep() in a round-robin loop across many angle sets.
 class CBCD_AngleSet : public AngleSet
 {
 public:
@@ -53,6 +58,22 @@ public:
   /// Must be called after UpdateSweepDependencies and before launching threads.
   void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
+  // --- Cooperative scheduling interface ---
+
+  /// Non-blocking initialization. Returns true when ready (latch satisfied).
+  /// Returns false if waiting on predecessor angle sets (reflecting BCs).
+  bool TryInitialize();
+
+  /// Execute one step of work (poll kernel, receive data, launch kernel).
+  /// Returns true if any work was done. Automatically finalizes when all tasks complete.
+  bool TryAdvanceOneStep();
+
+  /// Check if this angle set has completed all sweep tasks.
+  bool IsFinished() const { return executed_; }
+
+  /// Check if initialization has been done.
+  bool IsInitialized() const { return initialized_; }
+
   // --- AngleSet pure virtual overrides ---
 
   AsynchronousCommunicator* GetCommunicator() override { return nullptr; }
@@ -63,6 +84,7 @@ public:
 
   void SetMaxBufferMessages(int new_max) override {}
 
+  /// Blocking sweep (backward-compatible with one-thread-per-angle-set scheduling).
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus exec_status) override;
 
   AngleSetStatus FlushSendBuffers() override { return AngleSetStatus::MESSAGES_SENT; }
@@ -87,6 +109,9 @@ public:
                        unsigned int fi) override;
 
 private:
+  /// Signal completion, update boundaries, notify following angle sets, copy saved psi.
+  void FinalizeSweep();
+
   /// Associated crb::Stream.
   crb::Stream stream_;
   /// Angle indices on GPU.
@@ -109,6 +134,21 @@ private:
   std::unique_ptr<std::latch> starting_latch_;
   /// Anglesets whose latches this angleset counts down upon completion.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
+
+  // --- Cooperative scheduling state ---
+
+  /// Whether TryInitialize has completed successfully.
+  bool initialized_ = false;
+  /// Ready queue: task indices whose dependencies have been satisfied.
+  std::vector<uint64_t> ready_queue_;
+  /// Whether a GPU kernel is currently in-flight on this angle set's stream.
+  bool kernel_in_flight_ = false;
+  /// Tasks and cell IDs for the currently in-flight kernel batch.
+  std::vector<Task*> in_flight_tasks_;
+  std::vector<std::uint64_t> in_flight_cell_ids_;
+  /// Number of completed tasks and total tasks for this sweep.
+  size_t completed_count_ = 0;
+  size_t total_tasks_ = 0;
 };
 
 } // namespace opensn
