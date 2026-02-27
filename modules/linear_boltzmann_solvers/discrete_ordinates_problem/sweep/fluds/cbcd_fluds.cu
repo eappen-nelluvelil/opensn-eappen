@@ -43,6 +43,17 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     local_cell_ids_(num_local_cells),
     save_angular_flux_(save_angular_flux)
 {
+  // Pre-compute face-grouped outgoing nonlocal nodes once at construction.
+  // This avoids rebuilding a std::map<face_id, nodes> on every CopyOutgoingPsiBackToHost call.
+  for (const auto& [cell_id, nodes] : cell_to_outgoing_nonlocal_nodes_)
+  {
+    std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
+    for (const auto& node : nodes)
+      by_face[node.face_id].push_back(&node);
+    auto& grouped = cell_to_face_grouped_outgoing_[cell_id];
+    for (auto& [fid, fnodes] : by_face)
+      grouped.push_back({fid, std::move(fnodes)});
+  }
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -179,7 +190,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AngleSet* angle_set,
                                       const std::vector<std::uint64_t>& cell_local_ids)
 {
-  if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_outgoing_nonlocal_nodes_.empty())
+  if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_face_grouped_outgoing_.empty())
     return;
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_indices.size();
@@ -206,28 +217,24 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           }
         }
       }
-    auto nonlocal_it = cell_to_outgoing_nonlocal_nodes_.find(cell_local_id);
-    if (nonlocal_it != cell_to_outgoing_nonlocal_nodes_.end())
+    // Use pre-computed face grouping — avoids rebuilding nodes_by_face map per call
+    auto grouped_it = cell_to_face_grouped_outgoing_.find(cell_local_id);
+    if (grouped_it != cell_to_face_grouped_outgoing_.end())
     {
-      // Group nodes by face_id so we build one staging buffer per face
-      std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> nodes_by_face;
-      for (const auto& node : nonlocal_it->second)
-        nodes_by_face[node.face_id].push_back(&node);
-
-      for (const auto& [face_id, face_nodes] : nodes_by_face)
+      for (const auto& face_info : grouped_it->second)
       {
-        const auto& face = cell.faces[face_id];
+        const auto& face = cell.faces[face_info.face_id];
         const auto& cell_mapping = sdm_.GetCellMapping(cell);
         const auto& face_nodal_mapping =
-          common_data_.GetFaceNodalMapping(cell_local_id, face_id);
-        const auto num_face_nodes = cell_mapping.GetNumFaceNodes(face_id);
+          common_data_.GetFaceNodalMapping(cell_local_id, face_info.face_id);
+        const auto num_face_nodes = cell_mapping.GetNumFaceNodes(face_info.face_id);
         const auto face_data_size = num_face_nodes * num_groups_and_angles_;
         const int locality =
-            sweep_chunk.GetCellTransportView(cell_local_id).FaceLocality(face_id);
+          sweep_chunk.GetCellTransportView(cell_local_id).FaceLocality(face_info.face_id);
 
         // Build one staging buffer for the entire face
         std::vector<double> staged_buffer(face_data_size, 0.0);
-        for (const auto* node : face_nodes)
+        for (const auto* node : face_info.nodes)
         {
           for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
           {

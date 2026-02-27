@@ -7,7 +7,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
-#include <algorithm>
 #include <cassert>
 #include <thread>
 
@@ -77,12 +76,22 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(*cbcd_sweep_chunk_, this);
 
+  // Build initial ready queue from zero-dependency tasks (O(N) once at start).
+  // After this, the queue is maintained incrementally — O(1) per task completion.
+  std::vector<uint64_t> ready_queue;
+  ready_queue.reserve(current_task_list_.size());
+  for (size_t i = 0; i < current_task_list_.size(); ++i)
+    if (current_task_list_[i].num_dependencies == 0)
+      ready_queue.push_back(i);
+
   bool kernel_in_flight = false;
   std::vector<Task*> in_flight_tasks;
   std::vector<std::uint64_t> in_flight_cell_ids;
 
-  bool all_tasks_completed = false;
-  while (not all_tasks_completed)
+  size_t completed_count = 0;
+  const size_t total_tasks = current_task_list_.size();
+
+  while (completed_count < total_tasks)
   {
     bool any_work_done = false;
 
@@ -92,12 +101,16 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
       // Copy back outgoing boundary (reflecting) and non-local psi to host
       cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, in_flight_cell_ids);
 
-      // Update task dependencies
+      // Update task dependencies and push newly-ready successors to the queue
       for (auto* task : in_flight_tasks)
       {
         for (uint64_t succ : task->successors)
-          --current_task_list_[succ].num_dependencies;
+        {
+          if (--current_task_list_[succ].num_dependencies == 0)
+            ready_queue.push_back(succ); // O(1) push — no full scan needed
+        }
         task->completed = true;
+        ++completed_count;
       }
 
       // Outgoing data is now enqueued via aggregated comm (done inside CopyOutgoingPsiBackToHost)
@@ -117,55 +130,46 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
           // Merge into deplocs_outgoing_messages_ for NLUpwindPsi access
           cbcd_fluds_.GetDeplocsOutgoingMessages()[{entry.cell_global_id, entry.face_id}] =
             std::move(entry.psi_data);
-          // Map cell_global_id to local task number to decrement dependencies
+          // Map cell_global_id to local task and push to ready queue if now unblocked
           auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
-          --current_task_list_[local_id].num_dependencies;
+          if (--current_task_list_[local_id].num_dependencies == 0)
+            ready_queue.push_back(local_id); // O(1) push — no full scan needed
         }
         any_work_done = true;
       }
     }
 
-    // Collect ready tasks and launch kernel
-    if (not kernel_in_flight)
+    // Drain ready queue and launch kernel (no O(N) scan!)
+    if (not kernel_in_flight and not ready_queue.empty())
     {
       std::vector<Task*> ready_tasks;
       std::vector<std::uint64_t> ready_cell_ids;
-      for (auto& task : current_task_list_)
+      ready_tasks.reserve(ready_queue.size());
+      ready_cell_ids.reserve(ready_queue.size());
+
+      for (uint64_t task_idx : ready_queue)
       {
-        if (task.num_dependencies == 0 and not task.completed)
-        {
-          ready_tasks.push_back(&task);
-          ready_cell_ids.push_back(task.reference_id);
-        }
+        auto& task = current_task_list_[task_idx];
+        ready_tasks.push_back(&task);
+        ready_cell_ids.push_back(task.reference_id);
       }
+      ready_queue.clear();
 
-      if (not ready_tasks.empty())
-      {
-        // Copy incoming non-local data for these cells to device
-        cbcd_fluds_.CopyIncomingNonlocalPsiToDevice(this, ready_cell_ids);
+      // Copy incoming non-local data for these cells to device
+      cbcd_fluds_.CopyIncomingNonlocalPsiToDevice(this, ready_cell_ids);
 
-        // Launch kernel on this angle set's caribou stream
-        cbcd_sweep_chunk_->GPUSweep(*this, ready_cell_ids);
+      // Launch kernel on this angle set's caribou stream
+      cbcd_sweep_chunk_->GPUSweep(*this, ready_cell_ids);
 
-        in_flight_tasks = std::move(ready_tasks);
-        in_flight_cell_ids = std::move(ready_cell_ids);
-        kernel_in_flight = true;
-        any_work_done = true;
-      }
-    }
-
-    // Check overall completion
-    if (not kernel_in_flight)
-    {
-      all_tasks_completed = std::all_of(
-        current_task_list_.begin(),
-        current_task_list_.end(),
-        [](const Task& t) { return t.completed; });
+      in_flight_tasks = std::move(ready_tasks);
+      in_flight_cell_ids = std::move(ready_cell_ids);
+      kernel_in_flight = true;
+      any_work_done = true;
     }
 
     if (not any_work_done)
       std::this_thread::yield();
-  } // while not all_tasks_completed
+  } // while completed_count < total_tasks
 
   // Signal to the aggregated communicator that this angle set has no more outgoing data
   agg_comm_->SignalAngleSetComplete(id_);

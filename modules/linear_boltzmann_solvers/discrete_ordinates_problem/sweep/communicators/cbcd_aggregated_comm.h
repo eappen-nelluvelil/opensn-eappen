@@ -6,11 +6,9 @@
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -35,6 +33,7 @@ struct IncomingEntry
 ///
 /// A dedicated communication thread aggregates MPI sends/receives across all angle sets,
 /// reducing the number of MPI calls by ~N× and eliminating MPI contention between worker threads.
+/// All inter-thread communication uses lock-free atomic operations (no mutexes).
 class CBCD_AggregatedCommunicator
 {
 public:
@@ -45,14 +44,14 @@ public:
 
   // --- Worker thread interface ---
 
-  /// Push outgoing psi for a cell-face to the per-destination queue.
+  /// Push outgoing psi for a cell-face to the per-destination queue (lock-free CAS).
   void EnqueueOutgoing(int dest_location,
                        size_t angle_set_id,
                        uint64_t cell_global_id,
                        unsigned int face_id,
                        std::vector<double>&& psi_data);
 
-  /// Pull all received data for this angle set (swaps mailbox contents out).
+  /// Pull all received data for this angle set (lock-free atomic exchange).
   std::vector<IncomingEntry> DequeueIncoming(size_t angle_set_id);
 
   /// Signal that this angle set has no more outgoing data.
@@ -70,7 +69,7 @@ private:
   /// Main loop of the communication thread.
   void CommThreadLoop();
 
-  /// Aggregate per-destination outgoing entries, serialize, and isend.
+  /// Drain per-destination outgoing queues, serialize, and isend.
   void FlushOutgoing();
 
   /// Probe all dependencies, recv, deserialize, and dispatch to mailboxes.
@@ -92,16 +91,32 @@ private:
     std::vector<double> psi_data;
   };
 
-  struct PerDestQueue
+  /// Lock-free singly-linked node for outgoing data (Treiber stack).
+  struct OutgoingNode
   {
-    std::mutex mutex;
-    std::vector<OutgoingEntry> entries;
+    OutgoingEntry entry;
+    OutgoingNode* next;
   };
 
+  /// Lock-free singly-linked node for incoming data batches (Treiber stack).
+  struct IncomingNode
+  {
+    std::vector<IncomingEntry> entries;
+    IncomingNode* next;
+  };
+
+  /// Lock-free per-destination outgoing queue.
+  /// Workers push via CAS, comm thread drains via atomic exchange.
+  struct PerDestQueue
+  {
+    alignas(64) std::atomic<OutgoingNode*> head{nullptr};
+  };
+
+  /// Lock-free per-angle-set incoming mailbox.
+  /// Comm thread pushes via CAS, worker drains via atomic exchange.
   struct PerAngleSetMailbox
   {
-    std::mutex mutex;
-    std::vector<IncomingEntry> entries;
+    alignas(64) std::atomic<IncomingNode*> head{nullptr};
   };
 
   struct PendingSend
@@ -115,10 +130,10 @@ private:
   const MPICommunicatorSet& comm_set_;
   size_t num_angle_sets_;
 
-  /// One queue per destination location for outgoing data.
+  /// One lock-free queue per destination location for outgoing data.
   std::map<int, PerDestQueue> outgoing_queues_;
 
-  /// One mailbox per angle set for incoming data.
+  /// One lock-free mailbox per angle set for incoming data.
   std::vector<PerAngleSetMailbox> incoming_mailboxes_;
 
   /// Union of all location dependencies across all SPDS.
@@ -141,13 +156,6 @@ private:
 
   /// The dedicated communication thread.
   std::thread comm_thread_;
-
-  /// Flush interval for the communication thread.
-  static constexpr size_t kFlushSizeThreshold = 1;
-  static constexpr auto kFlushTimeInterval = std::chrono::microseconds(100);
-
-  /// Timestamp of last flush.
-  std::chrono::steady_clock::time_point last_flush_time_;
 };
 
 } // namespace opensn

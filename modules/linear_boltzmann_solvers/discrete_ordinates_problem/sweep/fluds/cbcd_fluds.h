@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <unordered_map>
 
 namespace crb = caribou;
 
@@ -97,7 +98,17 @@ public:
   // cell_global_id, face_id
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
-  std::map<CellFaceKey, std::vector<double>>& GetDeplocsOutgoingMessages()
+  struct CellFaceKeyHash
+  {
+    size_t operator()(const CellFaceKey& k) const noexcept
+    {
+      return std::hash<uint64_t>{}(k.first) ^
+             (std::hash<unsigned int>{}(k.second) * 2654435761ULL);
+    }
+  };
+
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>&
+  GetDeplocsOutgoingMessages()
   {
     return deplocs_outgoing_messages_;
   }
@@ -139,7 +150,17 @@ private:
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
   /// Non-local outgoing messages storage (pulled up from CBC_FLUDS).
-  std::map<CellFaceKey, std::vector<double>> deplocs_outgoing_messages_;
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>
+    deplocs_outgoing_messages_;
+
+  /// Pre-computed face-grouped outgoing nonlocal nodes, built once in the constructor.
+  /// Avoids rebuilding a nodes-by-face map on every CopyOutgoingPsiBackToHost call.
+  struct FaceOutgoingInfo
+  {
+    unsigned int face_id;
+    std::vector<const NonlocalNodeInfo*> nodes;
+  };
+  std::unordered_map<uint64_t, std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();
