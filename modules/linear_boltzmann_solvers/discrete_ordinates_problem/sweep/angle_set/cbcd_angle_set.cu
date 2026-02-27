@@ -55,122 +55,124 @@ CBCD_AngleSet::UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets
   }
 }
 
-AngleSetStatus
-CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+bool
+CBCD_AngleSet::TryInitialize()
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::AngleSetAdvance");
-
-  if (executed_)
-    return AngleSetStatus::FINISHED;
+  if (initialized_)
+    return true;
 
   assert(cbcd_sweep_chunk_ != nullptr);
   assert(agg_comm_ != nullptr);
+
+  // Non-blocking latch check. For non-reflecting problems, num_dependencies_ == 0,
+  // so latch(0).try_wait() returns true immediately.
+  if (not starting_latch_->try_wait())
+    return false;
 
   // Initialize task list
   if (current_task_list_.empty())
     current_task_list_ = cbc_spds_.GetTaskList();
 
-  // For non-reflecting problems, num_dependencies_ == 0, so latch(0) is
-  // immediately released and wait() returns without blocking.
-  starting_latch_->wait();
-
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(*cbcd_sweep_chunk_, this);
 
   // Build initial ready queue from zero-dependency tasks (O(N) once at start).
   // After this, the queue is maintained incrementally — O(1) per task completion.
-  std::vector<uint64_t> ready_queue;
-  ready_queue.reserve(current_task_list_.size());
+  ready_queue_.reserve(current_task_list_.size());
   for (size_t i = 0; i < current_task_list_.size(); ++i)
     if (current_task_list_[i].num_dependencies == 0)
-      ready_queue.push_back(i);
+      ready_queue_.push_back(i);
 
-  bool kernel_in_flight = false;
-  std::vector<Task*> in_flight_tasks;
-  std::vector<std::uint64_t> in_flight_cell_ids;
+  total_tasks_ = current_task_list_.size();
+  completed_count_ = 0;
+  kernel_in_flight_ = false;
+  initialized_ = true;
+  return true;
+}
 
-  size_t completed_count = 0;
-  const size_t total_tasks = current_task_list_.size();
+bool
+CBCD_AngleSet::TryAdvanceOneStep()
+{
+  if (not initialized_ or executed_)
+    return false;
 
-  while (completed_count < total_tasks)
+  bool any_work_done = false;
+
+  // Poll for kernel completion
+  if (kernel_in_flight_ and stream_.is_completed())
   {
-    bool any_work_done = false;
+    // Copy back outgoing boundary (reflecting) and non-local psi to host
+    cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, in_flight_cell_ids_);
 
-    // Poll for kernel completion
-    if (kernel_in_flight and stream_.is_completed())
+    // Update task dependencies and push newly-ready successors to the queue
+    for (auto* task : in_flight_tasks_)
     {
-      // Copy back outgoing boundary (reflecting) and non-local psi to host
-      cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, in_flight_cell_ids);
-
-      // Update task dependencies and push newly-ready successors to the queue
-      for (auto* task : in_flight_tasks)
+      for (uint64_t succ : task->successors)
       {
-        for (uint64_t succ : task->successors)
-        {
-          if (--current_task_list_[succ].num_dependencies == 0)
-            ready_queue.push_back(succ); // O(1) push — no full scan needed
-        }
-        task->completed = true;
-        ++completed_count;
+        if (--current_task_list_[succ].num_dependencies == 0)
+          ready_queue_.push_back(succ);
       }
+      task->completed = true;
+      ++completed_count_;
+    }
 
-      // Outgoing data is now enqueued via aggregated comm (done inside CopyOutgoingPsiBackToHost)
-      in_flight_tasks.clear();
-      in_flight_cell_ids.clear();
-      kernel_in_flight = false;
+    in_flight_tasks_.clear();
+    in_flight_cell_ids_.clear();
+    kernel_in_flight_ = false;
+    any_work_done = true;
+  }
+
+  // Pull received data from aggregated comm
+  {
+    auto received_entries = agg_comm_->DequeueIncoming(id_);
+    if (not received_entries.empty())
+    {
+      for (auto& entry : received_entries)
+      {
+        cbcd_fluds_.GetDeplocsOutgoingMessages()[{entry.cell_global_id, entry.face_id}] =
+          std::move(entry.psi_data);
+        auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
+        if (--current_task_list_[local_id].num_dependencies == 0)
+          ready_queue_.push_back(local_id);
+      }
       any_work_done = true;
     }
+  }
 
-    // Pull received data from aggregated comm
+  // Drain ready queue and launch kernel
+  if (not kernel_in_flight_ and not ready_queue_.empty())
+  {
+    std::vector<Task*> ready_tasks;
+    std::vector<std::uint64_t> ready_cell_ids;
+    ready_tasks.reserve(ready_queue_.size());
+    ready_cell_ids.reserve(ready_queue_.size());
+
+    for (uint64_t task_idx : ready_queue_)
     {
-      auto received_entries = agg_comm_->DequeueIncoming(id_);
-      if (not received_entries.empty())
-      {
-        for (auto& entry : received_entries)
-        {
-          // Merge into deplocs_outgoing_messages_ for NLUpwindPsi access
-          cbcd_fluds_.GetDeplocsOutgoingMessages()[{entry.cell_global_id, entry.face_id}] =
-            std::move(entry.psi_data);
-          // Map cell_global_id to local task and push to ready queue if now unblocked
-          auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
-          if (--current_task_list_[local_id].num_dependencies == 0)
-            ready_queue.push_back(local_id); // O(1) push — no full scan needed
-        }
-        any_work_done = true;
-      }
+      auto& task = current_task_list_[task_idx];
+      ready_tasks.push_back(&task);
+      ready_cell_ids.push_back(task.reference_id);
     }
+    ready_queue_.clear();
 
-    // Drain ready queue and launch kernel (no O(N) scan!)
-    if (not kernel_in_flight and not ready_queue.empty())
-    {
-      std::vector<Task*> ready_tasks;
-      std::vector<std::uint64_t> ready_cell_ids;
-      ready_tasks.reserve(ready_queue.size());
-      ready_cell_ids.reserve(ready_queue.size());
+    cbcd_fluds_.CopyIncomingNonlocalPsiToDevice(this, ready_cell_ids);
+    cbcd_sweep_chunk_->GPUSweep(*this, ready_cell_ids);
 
-      for (uint64_t task_idx : ready_queue)
-      {
-        auto& task = current_task_list_[task_idx];
-        ready_tasks.push_back(&task);
-        ready_cell_ids.push_back(task.reference_id);
-      }
-      ready_queue.clear();
+    in_flight_tasks_ = std::move(ready_tasks);
+    in_flight_cell_ids_ = std::move(ready_cell_ids);
+    kernel_in_flight_ = true;
+    any_work_done = true;
+  }
 
-      // Copy incoming non-local data for these cells to device
-      cbcd_fluds_.CopyIncomingNonlocalPsiToDevice(this, ready_cell_ids);
+  // Check completion
+  if (completed_count_ >= total_tasks_)
+    FinalizeSweep();
 
-      // Launch kernel on this angle set's caribou stream
-      cbcd_sweep_chunk_->GPUSweep(*this, ready_cell_ids);
+  return any_work_done;
+}
 
-      in_flight_tasks = std::move(ready_tasks);
-      in_flight_cell_ids = std::move(ready_cell_ids);
-      kernel_in_flight = true;
-      any_work_done = true;
-    }
-
-    if (not any_work_done)
-      std::this_thread::yield();
-  } // while completed_count < total_tasks
-
+void
+CBCD_AngleSet::FinalizeSweep()
+{
   // Signal to the aggregated communicator that this angle set has no more outgoing data
   agg_comm_->SignalAngleSetComplete(id_);
 
@@ -186,6 +188,27 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
   cbcd_fluds_.CopySavedPsiToDestinationPsi(*cbcd_sweep_chunk_, this);
 
   executed_ = true;
+}
+
+AngleSetStatus
+CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+{
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::AngleSetAdvance");
+
+  if (executed_)
+    return AngleSetStatus::FINISHED;
+
+  // Block until initialized (backward-compatible with one-thread-per-angle-set)
+  while (not TryInitialize())
+    std::this_thread::yield();
+
+  // Main loop
+  while (not executed_)
+  {
+    if (not TryAdvanceOneStep())
+      std::this_thread::yield();
+  }
+
   return AngleSetStatus::FINISHED;
 }
 
@@ -195,6 +218,13 @@ CBCD_AngleSet::ResetSweepBuffers()
   current_task_list_.clear();
   cbcd_fluds_.ClearLocalAndReceivePsi();
   executed_ = false;
+  initialized_ = false;
+  ready_queue_.clear();
+  kernel_in_flight_ = false;
+  in_flight_tasks_.clear();
+  in_flight_cell_ids_.clear();
+  completed_count_ = 0;
+  total_tasks_ = 0;
 }
 
 const double*
