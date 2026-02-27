@@ -61,6 +61,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   cbcd_chunk.GetProblem().CopyPhiAndSrcToDevice();
 
   const auto& angle_sets = cbcd_chunk.GetAngleSets();
+  const size_t num_angle_sets = angle_sets.size();
 
   // Set sweep chunk reference and initialize latches for all angle sets
   for (auto* as : angle_sets)
@@ -72,10 +73,53 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   // Start aggregated communication thread
   cbcd_chunk.StartCommunicator();
 
-  // Launch one thread per angle set via SPMD_ThreadPool
+  // Use a bounded number of worker threads: min(angle_sets, hardware threads).
+  // Each worker cooperatively processes multiple angle sets in a round-robin loop.
+  // This avoids spawning hundreds of busy-polling threads for large quadratures.
+  const size_t num_workers =
+    std::min(num_angle_sets, static_cast<size_t>(std::thread::hardware_concurrency()));
+  pool_.Resize(num_workers);
+
   pool_.run(
-    [&sweep_chunk, &angle_sets](std::size_t i)
-    { angle_sets[i]->AngleSetAdvance(sweep_chunk, AngleSetStatus::EXECUTE); });
+    [&angle_sets, num_angle_sets, num_workers](std::size_t worker_id)
+    {
+      CALI_CXX_MARK_SCOPE("CBCD_Worker");
+
+      // Partition angle sets among workers (contiguous ranges)
+      const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
+      const size_t begin = worker_id * chunk_size;
+      const size_t end = std::min(begin + chunk_size, num_angle_sets);
+
+      // Process until all assigned angle sets are finished
+      bool all_done = false;
+      while (not all_done)
+      {
+        all_done = true;
+        bool any_work = false;
+
+        for (size_t i = begin; i < end; ++i)
+        {
+          auto* as = angle_sets[i];
+
+          if (as->IsFinished())
+            continue;
+          all_done = false;
+
+          // Try initialization (non-blocking; waits for predecessor latches)
+          if (not as->IsInitialized())
+          {
+            any_work |= as->TryInitialize();
+            continue;
+          }
+
+          // One step of work: poll kernel, receive data, launch kernel
+          any_work |= as->TryAdvanceOneStep();
+        }
+
+        if (not any_work and not all_done)
+          std::this_thread::yield();
+      }
+    });
 
   // Flush + join communication thread
   cbcd_chunk.StopCommunicator();
