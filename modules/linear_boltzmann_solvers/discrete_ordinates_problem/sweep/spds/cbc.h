@@ -13,7 +13,8 @@
 // {
 // public:
 //   /**
-//    * Constructs a cell-by-cell sweep-plane data strcture (SPDS) with the given direction and grid.
+//    * Constructs a cell-by-cell sweep-plane data strcture (SPDS) with the given direction and
+//    grid.
 //    *
 //    * \param omega The angular direction vector.
 //    * \param grid Reference to the grid.
@@ -65,7 +66,8 @@ public:
   size_t Solve()
   {
     size_t matching_size = 0;
-    // Hopcroft-Karp uses BFS to find all shortest augmenting paths, then DFS to find and augment along those paths.
+    // Hopcroft-Karp uses BFS to find all shortest augmenting paths, then DFS to find and augment
+    // along those paths.
     while (BFS())
     {
       for (size_t u = 0; u < num_tasks_; ++u)
@@ -80,10 +82,7 @@ public:
     return matching_size;
   }
 
-  bool VerifyMatching()
-  {
-    return (not BFS());
-  }
+  bool VerifyMatching() { return (not BFS()); }
 
 private:
   // Recomputes the adjacency list (valid reuse targets) for 'u' on the fly.
@@ -185,7 +184,8 @@ private:
         {
           mate_v_[v] = static_cast<int>(u);
           mate_u_[u] = static_cast<int>(v);
-          // Mark this vertex as part of an augmenting path to avoid redundant searches in future DFS calls.
+          // Mark this vertex as part of an augmenting path to avoid redundant searches in future
+          // DFS calls.
           dist_[u] = -1; // Mark as visited
           return true;
         }
@@ -198,7 +198,8 @@ private:
           {
             mate_v_[v] = static_cast<int>(u);
             mate_u_[u] = static_cast<int>(v);
-            // Mark this vertex as part of an augmenting path to avoid redundant searches in future DFS calls.
+            // Mark this vertex as part of an augmenting path to avoid redundant searches in future
+            // DFS calls.
             dist_[u] = -1; // Mark as visited
             return true;
           }
@@ -206,7 +207,8 @@ private:
       }
       v = neighbors.find_next(v);
     }
-    // Mark this vertex as fully explored (no augmenting path through it) to avoid redundant searches in future DFS calls.
+    // Mark this vertex as fully explored (no augmenting path through it) to avoid redundant
+    // searches in future DFS calls.
     dist_[u] = -1; // Mark as visited
     return false;
   }

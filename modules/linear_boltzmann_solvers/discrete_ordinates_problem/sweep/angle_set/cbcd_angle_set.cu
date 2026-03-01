@@ -85,6 +85,43 @@ CBCD_AngleSet::TryInitialize()
   total_tasks_ = current_task_list_.size();
   completed_count_ = 0;
   kernel_in_flight_ = false;
+
+  // Pre-compute which cells have outgoing reflecting boundary faces.
+  // This allows counting down following angle set latches as soon as all
+  // reflecting boundary data has been written, rather than waiting for
+  // the entire sweep to complete.
+  reflecting_boundary_cells_.clear();
+  reflecting_boundary_completed_ = 0;
+  latch_counted_down_ = false;
+  if (not following_angle_sets_.empty())
+  {
+    const auto& outgoing_boundary_nodes = cbcd_fluds_.GetOutgoingBoundaryNodeMap();
+    for (const auto& [cell_id, nodes] : outgoing_boundary_nodes)
+    {
+      for (const auto& node : nodes)
+      {
+        auto it = boundaries_.find(node.boundary_id);
+        if (it != boundaries_.end() and it->second->IsReflecting())
+        {
+          reflecting_boundary_cells_.insert(cell_id);
+          break;
+        }
+      }
+    }
+  }
+  total_reflecting_boundary_cells_ = reflecting_boundary_cells_.size();
+
+  // If there are no reflecting boundary cells but we have followers,
+  // count down immediately — we have no reflecting data to produce.
+  if (not following_angle_sets_.empty() and total_reflecting_boundary_cells_ == 0)
+  {
+    for (auto& [bid, boundary] : boundaries_)
+      boundary->UpdateAnglesReadyStatus(angles_);
+    for (auto* following_as : following_angle_sets_)
+      following_as->starting_latch_->count_down();
+    latch_counted_down_ = true;
+  }
+
   initialized_ = true;
   return true;
 }
@@ -113,6 +150,23 @@ CBCD_AngleSet::TryAdvanceOneStep()
       }
       task->completed = true;
       ++completed_count_;
+
+      // Track reflecting boundary cell completions for early latch count-down
+      if (not latch_counted_down_ and reflecting_boundary_cells_.count(task->reference_id))
+        ++reflecting_boundary_completed_;
+    }
+
+    // Early latch count-down: once all reflecting boundary cells are done,
+    // notify following angle sets so they can begin initialization.
+    if (not latch_counted_down_ and
+        reflecting_boundary_completed_ >= total_reflecting_boundary_cells_ and
+        total_reflecting_boundary_cells_ > 0)
+    {
+      for (auto& [bid, boundary] : boundaries_)
+        boundary->UpdateAnglesReadyStatus(angles_);
+      for (auto* following_as : following_angle_sets_)
+        following_as->starting_latch_->count_down();
+      latch_counted_down_ = true;
     }
 
     in_flight_tasks_.clear();
@@ -176,12 +230,14 @@ CBCD_AngleSet::FinalizeSweep()
   // Signal to the aggregated communicator that this angle set has no more outgoing data
   agg_comm_->SignalAngleSetComplete(id_);
 
-  // Update boundary readiness and notify following angle sets
-  for (auto& [bid, boundary] : boundaries_)
-    boundary->UpdateAnglesReadyStatus(angles_);
-
-  for (auto* following_as : following_angle_sets_)
-    following_as->starting_latch_->count_down();
+  // Count down following angle set latches if not already done by early latch logic
+  if (not latch_counted_down_)
+  {
+    for (auto& [bid, boundary] : boundaries_)
+      boundary->UpdateAnglesReadyStatus(angles_);
+    for (auto* following_as : following_angle_sets_)
+      following_as->starting_latch_->count_down();
+  }
 
   // Copy saved psi from device to host
   cbcd_fluds_.CopySavedPsiFromDevice();
@@ -225,16 +281,20 @@ CBCD_AngleSet::ResetSweepBuffers()
   in_flight_cell_ids_.clear();
   completed_count_ = 0;
   total_tasks_ = 0;
+  reflecting_boundary_cells_.clear();
+  reflecting_boundary_completed_ = 0;
+  total_reflecting_boundary_cells_ = 0;
+  latch_counted_down_ = false;
 }
 
 const double*
 CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
-                            unsigned int angle_num,
-                            uint64_t cell_local_id,
-                            unsigned int face_num,
-                            unsigned int fi,
-                            unsigned int g,
-                            bool surface_source_active)
+                           unsigned int angle_num,
+                           uint64_t cell_local_id,
+                           unsigned int face_num,
+                           unsigned int fi,
+                           unsigned int g,
+                           bool surface_source_active)
 {
   if (boundaries_[boundary_id]->IsReflecting())
     return boundaries_[boundary_id]->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
@@ -247,10 +307,10 @@ CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
 
 double*
 CBCD_AngleSet::PsiReflected(uint64_t boundary_id,
-                             unsigned int angle_num,
-                             uint64_t cell_local_id,
-                             unsigned int face_num,
-                             unsigned int fi)
+                            unsigned int angle_num,
+                            uint64_t cell_local_id,
+                            unsigned int face_num,
+                            unsigned int fi)
 {
   return boundaries_[boundary_id]->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
 }

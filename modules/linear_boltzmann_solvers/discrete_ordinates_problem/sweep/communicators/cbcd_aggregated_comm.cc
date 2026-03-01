@@ -14,93 +14,63 @@
 namespace opensn
 {
 
-CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(
-  const std::vector<AngleSet*>& angle_sets,
-  const MPICommunicatorSet& comm_set)
-  : comm_set_(comm_set),
-    num_angle_sets_(angle_sets.size()),
-    incoming_mailboxes_(num_angle_sets_),
-    aggregated_tag_(static_cast<int>(num_angle_sets_)),
-    angle_set_done_(num_angle_sets_)
-{
-  // Collect the union of all location dependencies and successors across all angle sets
-  for (const auto* as : angle_sets)
-  {
-    const auto& spds = as->GetSPDS();
-    for (int dep : spds.GetLocationDependencies())
-      all_location_dependencies_.insert(dep);
-    for (int succ : spds.GetLocationSuccessors())
-      all_location_successors_.insert(succ);
-  }
-
-  // Pre-create per-destination queues for all successors
-  for (int succ : all_location_successors_)
-    outgoing_queues_[succ]; // default-construct
-
-  // Initialize completion flags
-  for (size_t i = 0; i < num_angle_sets_; ++i)
-    angle_set_done_[i].store(false, std::memory_order_relaxed);
-}
-
-CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
-{
-  if (comm_thread_.joinable())
-    Stop();
-
-  // Clean up any remaining lock-free nodes
-  for (auto& [dest, queue] : outgoing_queues_)
-  {
-    auto* node = queue.head.load(std::memory_order_relaxed);
-    while (node)
-    {
-      auto* next = node->next;
-      delete node;
-      node = next;
-    }
-  }
-  for (auto& mailbox : incoming_mailboxes_)
-  {
-    auto* node = mailbox.head.load(std::memory_order_relaxed);
-    while (node)
-    {
-      auto* next = node->next;
-      delete node;
-      node = next;
-    }
-  }
-}
+// ---------------------------------------------------------------------------
+// PerDestQueue lock-free methods (Treiber stack)
+// ---------------------------------------------------------------------------
 
 void
-CBCD_AggregatedCommunicator::EnqueueOutgoing(int dest_location,
-                                              size_t angle_set_id,
-                                              uint64_t cell_global_id,
-                                              unsigned int face_id,
-                                              std::vector<double>&& psi_data)
+CBCD_AggregatedCommunicator::PerDestQueue::Push(OutgoingEntry&& entry)
 {
-  auto it = outgoing_queues_.find(dest_location);
-  assert(it != outgoing_queues_.end());
-
-  // Lock-free CAS push (Treiber stack)
-  auto* node =
-    new OutgoingNode{{angle_set_id, cell_global_id, face_id, std::move(psi_data)}, nullptr};
-  auto& queue = it->second;
-  OutgoingNode* expected = queue.head.load(std::memory_order_relaxed);
+  auto* node = new OutgoingNode{std::move(entry), nullptr};
+  auto* expected = head.load(std::memory_order_relaxed);
   do
   {
     node->next = expected;
-  } while (not queue.head.compare_exchange_weak(
+  } while (not head.compare_exchange_weak(
+    expected, node, std::memory_order_release, std::memory_order_relaxed));
+}
+
+std::vector<CBCD_AggregatedCommunicator::OutgoingEntry>
+CBCD_AggregatedCommunicator::PerDestQueue::Drain()
+{
+  auto* chain = head.exchange(nullptr, std::memory_order_acquire);
+  std::vector<OutgoingEntry> result;
+  while (chain)
+  {
+    result.push_back(std::move(chain->entry));
+    auto* next = chain->next;
+    delete chain;
+    chain = next;
+  }
+  return result;
+}
+
+bool
+CBCD_AggregatedCommunicator::PerDestQueue::Empty() const
+{
+  return head.load(std::memory_order_acquire) == nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// PerAngleSetMailbox lock-free methods (Treiber stack)
+// ---------------------------------------------------------------------------
+
+void
+CBCD_AggregatedCommunicator::PerAngleSetMailbox::Push(std::vector<IncomingEntry>&& batch)
+{
+  auto* node = new IncomingNode{std::move(batch), nullptr};
+  auto* expected = head.load(std::memory_order_relaxed);
+  do
+  {
+    node->next = expected;
+  } while (not head.compare_exchange_weak(
     expected, node, std::memory_order_release, std::memory_order_relaxed));
 }
 
 std::vector<IncomingEntry>
-CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
+CBCD_AggregatedCommunicator::PerAngleSetMailbox::Drain()
 {
-  assert(angle_set_id < num_angle_sets_);
-  auto& mailbox = incoming_mailboxes_[angle_set_id];
-
-  // Lock-free: atomically take the entire chain
-  IncomingNode* chain = mailbox.head.exchange(nullptr, std::memory_order_acquire);
-
+  auto* chain = head.exchange(nullptr, std::memory_order_acquire);
   std::vector<IncomingEntry> result;
   while (chain)
   {
@@ -113,12 +83,79 @@ CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Constructor / Destructor
+// ---------------------------------------------------------------------------
+
+CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
+                                                         const MPICommunicatorSet& comm_set)
+  : comm_set_(comm_set),
+    num_angle_sets_(angle_sets.size()),
+    incoming_mailboxes_(num_angle_sets_),
+    aggregated_tag_(static_cast<int>(num_angle_sets_)),
+    angle_set_done_(num_angle_sets_)
+{
+  for (const auto* as : angle_sets)
+  {
+    const auto& spds = as->GetSPDS();
+    for (int dep : spds.GetLocationDependencies())
+      all_location_dependencies_.insert(dep);
+    for (int succ : spds.GetLocationSuccessors())
+      all_location_successors_.insert(succ);
+  }
+
+  for (int succ : all_location_successors_)
+    outgoing_queues_[succ]; // default-construct
+
+  for (size_t i = 0; i < num_angle_sets_; ++i)
+    angle_set_done_[i].store(false, std::memory_order_relaxed);
+}
+
+CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
+{
+  if (comm_thread_.joinable())
+    Stop();
+
+  // Drain any remaining lock-free nodes
+  for (auto& [dest, queue] : outgoing_queues_)
+    queue.Drain();
+  for (auto& mailbox : incoming_mailboxes_)
+    mailbox.Drain();
+}
+
+// ---------------------------------------------------------------------------
+// Worker thread interface
+// ---------------------------------------------------------------------------
+
+void
+CBCD_AggregatedCommunicator::EnqueueOutgoing(int dest_location,
+                                             size_t angle_set_id,
+                                             uint64_t cell_global_id,
+                                             unsigned int face_id,
+                                             std::vector<double>&& psi_data)
+{
+  auto it = outgoing_queues_.find(dest_location);
+  assert(it != outgoing_queues_.end());
+  it->second.Push({angle_set_id, cell_global_id, face_id, std::move(psi_data)});
+}
+
+std::vector<IncomingEntry>
+CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
+{
+  assert(angle_set_id < num_angle_sets_);
+  return incoming_mailboxes_[angle_set_id].Drain();
+}
+
 void
 CBCD_AggregatedCommunicator::SignalAngleSetComplete(size_t angle_set_id)
 {
   assert(angle_set_id < num_angle_sets_);
   angle_set_done_[angle_set_id].store(true, std::memory_order_release);
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
 
 void
 CBCD_AggregatedCommunicator::Start()
@@ -137,6 +174,10 @@ CBCD_AggregatedCommunicator::Stop()
   if (comm_thread_.joinable())
     comm_thread_.join();
 }
+
+// ---------------------------------------------------------------------------
+// Communication thread
+// ---------------------------------------------------------------------------
 
 void
 CBCD_AggregatedCommunicator::CommThreadLoop()
@@ -175,77 +216,47 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
   for (auto& [dest, queue] : outgoing_queues_)
   {
-    // Lock-free: atomically drain the entire chain
-    OutgoingNode* chain = queue.head.exchange(nullptr, std::memory_order_acquire);
-    if (not chain)
+    auto entries = queue.Drain();
+    if (entries.empty())
       continue;
 
-    // Collect entries from the chain
-    std::vector<OutgoingEntry> entries_to_send;
-    while (chain)
-    {
-      entries_to_send.push_back(std::move(chain->entry));
-      auto* next = chain->next;
-      delete chain;
-      chain = next;
-    }
-
-    // Group entries by angle set id for serialization
+    // Group by angle set id
     std::map<size_t, std::vector<const OutgoingEntry*>> by_angle_set;
-    for (const auto& entry : entries_to_send)
+    for (const auto& entry : entries)
       by_angle_set[entry.angle_set_id].push_back(&entry);
 
-    // Serialize using ByteArray wire format:
-    // [num_angle_sets_in_batch : size_t]
-    // repeated {
-    //   [angle_set_id : size_t]
-    //   [num_entries : size_t]
-    //   repeated {
-    //     [cell_global_id : uint64_t]
-    //     [face_id : unsigned int]
-    //     [data_size : size_t]
-    //     [psi_data : double x data_size]
-    //   }
-    // }
-
-    // Pre-compute exact buffer size to avoid repeated reallocations
-    size_t total_bytes = sizeof(size_t); // num_as_in_batch
-    for (const auto& [as_id, entry_ptrs] : by_angle_set)
+    // Pre-compute buffer size
+    size_t total_bytes = sizeof(size_t); // num_angle_sets_in_batch
+    for (const auto& [as_id, ptrs] : by_angle_set)
     {
       total_bytes += sizeof(size_t) + sizeof(size_t); // as_id + num_entries
-      for (const auto* entry : entry_ptrs)
+      for (const auto* e : ptrs)
         total_bytes += sizeof(uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
-                       entry->psi_data.size() * sizeof(double);
+                       e->psi_data.size() * sizeof(double);
     }
 
+    // Serialize
     ByteArray buffer;
     buffer.Data().reserve(total_bytes);
 
-    size_t num_as_in_batch = by_angle_set.size();
-    buffer.Write(num_as_in_batch);
-
-    for (const auto& [as_id, entry_ptrs] : by_angle_set)
+    buffer.Write(by_angle_set.size());
+    for (const auto& [as_id, ptrs] : by_angle_set)
     {
       buffer.Write(as_id);
-      size_t num_entries = entry_ptrs.size();
-      buffer.Write(num_entries);
-
-      for (const auto* entry : entry_ptrs)
+      buffer.Write(ptrs.size());
+      for (const auto* e : ptrs)
       {
-        buffer.Write(entry->cell_global_id);
-        buffer.Write(entry->face_id);
-        size_t data_size = entry->psi_data.size();
+        buffer.Write(e->cell_global_id);
+        buffer.Write(e->face_id);
+        const size_t data_size = e->psi_data.size();
         buffer.Write(data_size);
-        // Bulk write: one memcpy for all doubles instead of N element-by-element writes
-        const size_t n_bytes = data_size * sizeof(double);
         auto& raw = buffer.Data();
         const size_t old_sz = raw.size();
-        raw.resize(old_sz + n_bytes);
-        std::memcpy(&raw[old_sz], entry->psi_data.data(), n_bytes);
+        raw.resize(old_sz + data_size * sizeof(double));
+        std::memcpy(&raw[old_sz], e->psi_data.data(), data_size * sizeof(double));
       }
     }
 
-    // Send via MPI
     const auto& comm = comm_set_.LocICommunicator(dest);
     auto dest_rank = comm_set_.MapIonJ(dest, dest);
 
@@ -276,20 +287,16 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
       comm.recv(source_rank, status.tag(), recv_buffer.data(), num_bytes);
 
       ByteArray data_array(std::move(recv_buffer));
-
-      // Deserialize
       auto num_as_in_batch = data_array.Read<size_t>();
 
       for (size_t as_batch = 0; as_batch < num_as_in_batch; ++as_batch)
       {
         auto as_id = data_array.Read<size_t>();
         auto num_entries = data_array.Read<size_t>();
-
         assert(as_id < num_angle_sets_);
 
-        // Accumulate entries locally (no synchronization needed)
-        std::vector<IncomingEntry> batch_entries;
-        batch_entries.reserve(num_entries);
+        std::vector<IncomingEntry> batch;
+        batch.reserve(num_entries);
 
         for (size_t e = 0; e < num_entries; ++e)
         {
@@ -297,54 +304,39 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
           entry.cell_global_id = data_array.Read<uint64_t>();
           entry.face_id = data_array.Read<unsigned int>();
           auto data_size = data_array.Read<size_t>();
-          // Bulk read: one memcpy for all doubles instead of N element-by-element reads
           entry.psi_data.resize(data_size);
-          const size_t n_bytes = data_size * sizeof(double);
-          std::memcpy(entry.psi_data.data(), &data_array.Data()[data_array.Offset()], n_bytes);
-          data_array.Seek(data_array.Offset() + n_bytes);
-
-          batch_entries.push_back(std::move(entry));
+          std::memcpy(entry.psi_data.data(),
+                      &data_array.Data()[data_array.Offset()],
+                      data_size * sizeof(double));
+          data_array.Seek(data_array.Offset() + data_size * sizeof(double));
+          batch.push_back(std::move(entry));
         }
 
-        // Lock-free CAS push to the mailbox (Treiber stack)
-        auto& mailbox = incoming_mailboxes_[as_id];
-        auto* node = new IncomingNode{std::move(batch_entries), nullptr};
-        IncomingNode* expected = mailbox.head.load(std::memory_order_relaxed);
-        do
-        {
-          node->next = expected;
-        } while (not mailbox.head.compare_exchange_weak(
-          expected, node, std::memory_order_release, std::memory_order_relaxed));
+        incoming_mailboxes_[as_id].Push(std::move(batch));
       }
-    } // while iprobe
+    }
   }
 }
 
 void
 CBCD_AggregatedCommunicator::PollPendingSends()
 {
-  pending_sends_.erase(
-    std::remove_if(pending_sends_.begin(),
-                   pending_sends_.end(),
-                   [](PendingSend& ps) { return mpi::test(ps.request); }),
-    pending_sends_.end());
+  pending_sends_.erase(std::remove_if(pending_sends_.begin(),
+                                      pending_sends_.end(),
+                                      [](PendingSend& ps) { return mpi::test(ps.request); }),
+                       pending_sends_.end());
 }
 
 bool
 CBCD_AggregatedCommunicator::AllWorkComplete() const
 {
-  // Check all angle sets are done
   for (size_t i = 0; i < num_angle_sets_; ++i)
     if (not angle_set_done_[i].load(std::memory_order_acquire))
       return false;
 
-  // After all angle sets signal done, no more enqueues happen.
-  // Check all outgoing queues are drained.
   for (const auto& [dest, queue] : outgoing_queues_)
-  {
-    if (queue.head.load(std::memory_order_acquire) != nullptr)
+    if (not queue.Empty())
       return false;
-  }
 
   return true;
 }

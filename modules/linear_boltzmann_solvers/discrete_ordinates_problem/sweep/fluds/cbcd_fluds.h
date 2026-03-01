@@ -95,6 +95,12 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
+  /// Get the outgoing boundary node map (cell_local_id → boundary nodes).
+  const std::map<std::uint64_t, std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
+  {
+    return cell_to_outgoing_boundary_nodes_;
+  }
+
   // cell_global_id, face_id
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
@@ -102,8 +108,7 @@ public:
   {
     size_t operator()(const CellFaceKey& k) const noexcept
     {
-      return std::hash<uint64_t>{}(k.first) ^
-             (std::hash<unsigned int>{}(k.second) * 2654435761ULL);
+      return std::hash<uint64_t>{}(k.first) ^ (std::hash<unsigned int>{}(k.second) * 2654435761ULL);
     }
   };
 
@@ -150,8 +155,7 @@ private:
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
   /// Non-local outgoing messages storage (pulled up from CBC_FLUDS).
-  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>
-    deplocs_outgoing_messages_;
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash> deplocs_outgoing_messages_;
 
   /// Pre-computed face-grouped outgoing nonlocal nodes, built once in the constructor.
   /// Avoids rebuilding a nodes-by-face map on every CopyOutgoingPsiBackToHost call.

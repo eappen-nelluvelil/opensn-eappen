@@ -213,7 +213,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                           false});
   }
   // SimulateLocalSweep();
-  // opensn::log.Log() << "CBC_SPDS constructed with " << task_list_.size() << " tasks and max_num_pool_allocator_slots_ = " << max_num_pool_allocator_slots_ << ".\n";
+  // opensn::log.Log() << "CBC_SPDS constructed with " << task_list_.size() << " tasks and
+  // max_num_pool_allocator_slots_ = " << max_num_pool_allocator_slots_ << ".\n";
 }
 
 const std::vector<Task>&
@@ -232,7 +233,8 @@ CBC_SPDS::SimulateLocalSweep()
     return;
 
   // Construct reflexive, transitive closure of the local sweep dependency graph
-  std::vector<boost::dynamic_bitset<>> reachability_matrix(num_tasks, boost::dynamic_bitset<>(num_tasks));
+  std::vector<boost::dynamic_bitset<>> reachability_matrix(num_tasks,
+                                                           boost::dynamic_bitset<>(num_tasks));
   for (auto it = spls_.rbegin(); it != spls_.rend(); ++it)
   {
     const auto u = *it;
@@ -246,13 +248,16 @@ CBC_SPDS::SimulateLocalSweep()
   ImplicitHopcroftKarp matcher(num_tasks, task_list_, reachability_matrix);
   size_t matching_size = matcher.Solve();
 
-  // Use Dilworth's theorem to compute maximum antichain size = minimum path cover size = num_tasks - matching_size
+  // Use Dilworth's theorem to compute maximum antichain size = minimum path cover size = num_tasks
+  // - matching_size
   if (matcher.VerifyMatching())
     max_num_pool_allocator_slots_ = num_tasks - matching_size;
   else
   {
-    max_num_pool_allocator_slots_ = num_tasks; // Fallback to worst case if matching verification fails
-    opensn::log.Log0Warning() << "CBC_SPDS::SimulateLocalSweep: Matching verification failed. Falling back to worst case for max_num_pool_allocator_slots_.\n";
+    max_num_pool_allocator_slots_ =
+      num_tasks; // Fallback to worst case if matching verification fails
+    opensn::log.Log0Warning() << "CBC_SPDS::SimulateLocalSweep: Matching verification failed. "
+                                 "Falling back to worst case for max_num_pool_allocator_slots_.\n";
   }
 }
 

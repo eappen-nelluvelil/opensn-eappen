@@ -32,32 +32,32 @@ struct IncomingEntry
 /// Aggregated MPI communicator for threaded CBCD sweep.
 ///
 /// A dedicated communication thread aggregates MPI sends/receives across all angle sets,
-/// reducing the number of MPI calls by ~N× and eliminating MPI contention between worker threads.
-/// All inter-thread communication uses lock-free atomic operations (no mutexes).
+/// reducing the number of MPI calls and eliminating MPI contention between worker threads.
+/// All inter-thread data handoff uses lock-free Treiber stacks (CAS push, atomic-exchange drain).
 class CBCD_AggregatedCommunicator
 {
 public:
   CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
-                               const MPICommunicatorSet& comm_set);
+                              const MPICommunicatorSet& comm_set);
 
   ~CBCD_AggregatedCommunicator();
 
   // --- Worker thread interface ---
 
-  /// Push outgoing psi for a cell-face to the per-destination queue (lock-free CAS).
+  /// Push outgoing psi for a cell-face to the per-destination queue (lock-free).
   void EnqueueOutgoing(int dest_location,
                        size_t angle_set_id,
                        uint64_t cell_global_id,
                        unsigned int face_id,
                        std::vector<double>&& psi_data);
 
-  /// Pull all received data for this angle set (lock-free atomic exchange).
+  /// Pull all received data for this angle set (lock-free).
   std::vector<IncomingEntry> DequeueIncoming(size_t angle_set_id);
 
   /// Signal that this angle set has no more outgoing data.
   void SignalAngleSetComplete(size_t angle_set_id);
 
-  // --- Lifecycle (called by CBCDSweepChunk / scheduler) ---
+  // --- Lifecycle ---
 
   /// Launch the dedicated communication thread.
   void Start();
@@ -66,22 +66,13 @@ public:
   void Stop();
 
 private:
-  /// Main loop of the communication thread.
   void CommThreadLoop();
-
-  /// Drain per-destination outgoing queues, serialize, and isend.
   void FlushOutgoing();
-
-  /// Probe all dependencies, recv, deserialize, and dispatch to mailboxes.
   void ProbeAndReceive();
-
-  /// Test pending isend completion and clean up completed sends.
   void PollPendingSends();
-
-  /// Check if all angle sets are done and all outgoing queues are empty.
   bool AllWorkComplete() const;
 
-  // --- Internal data structures ---
+  // --- Internal types ---
 
   struct OutgoingEntry
   {
@@ -91,32 +82,47 @@ private:
     std::vector<double> psi_data;
   };
 
-  /// Lock-free singly-linked node for outgoing data (Treiber stack).
+  /// Lock-free node for the per-destination Treiber stack.
   struct OutgoingNode
   {
     OutgoingEntry entry;
     OutgoingNode* next;
   };
 
-  /// Lock-free singly-linked node for incoming data batches (Treiber stack).
+  /// Lock-free node for the per-angle-set Treiber stack.
   struct IncomingNode
   {
     std::vector<IncomingEntry> entries;
     IncomingNode* next;
   };
 
-  /// Lock-free per-destination outgoing queue.
-  /// Workers push via CAS, comm thread drains via atomic exchange.
+  /// Lock-free per-destination outgoing queue (Treiber stack).
+  /// Workers push via CAS; comm thread drains via atomic exchange.
   struct PerDestQueue
   {
     alignas(64) std::atomic<OutgoingNode*> head{nullptr};
+
+    /// CAS push — safe for concurrent producers, never blocks.
+    void Push(OutgoingEntry&& entry);
+
+    /// Atomic-exchange drain — returns all queued entries, deletes nodes.
+    std::vector<OutgoingEntry> Drain();
+
+    /// Read-only empty check (single atomic load, no cache-line write).
+    bool Empty() const;
   };
 
-  /// Lock-free per-angle-set incoming mailbox.
-  /// Comm thread pushes via CAS, worker drains via atomic exchange.
+  /// Lock-free per-angle-set incoming mailbox (Treiber stack).
+  /// Comm thread pushes via CAS; worker drains via atomic exchange.
   struct PerAngleSetMailbox
   {
     alignas(64) std::atomic<IncomingNode*> head{nullptr};
+
+    /// CAS push — used by comm thread to deposit received data.
+    void Push(std::vector<IncomingEntry>&& batch);
+
+    /// Atomic-exchange drain — returns all received entries, deletes nodes.
+    std::vector<IncomingEntry> Drain();
   };
 
   struct PendingSend
@@ -136,25 +142,18 @@ private:
   /// One lock-free mailbox per angle set for incoming data.
   std::vector<PerAngleSetMailbox> incoming_mailboxes_;
 
-  /// Union of all location dependencies across all SPDS.
+  /// Union of location dependencies / successors across all SPDS.
   std::set<int> all_location_dependencies_;
-
-  /// Union of all location successors across all SPDS.
   std::set<int> all_location_successors_;
 
-  /// MPI tag used by the aggregated communicator (set to num_angle_sets to avoid collisions).
+  /// MPI tag (set to num_angle_sets to avoid collisions with per-angle-set tags).
   int aggregated_tag_;
 
-  /// Tracks in-flight MPI_Isends.
+  /// In-flight MPI_Isends.
   std::vector<PendingSend> pending_sends_;
 
-  /// Shutdown signal for the communication thread.
   std::atomic<bool> stop_requested_{false};
-
-  /// Per-angle-set completion flags.
   std::vector<std::atomic<bool>> angle_set_done_;
-
-  /// The dedicated communication thread.
   std::thread comm_thread_;
 };
 

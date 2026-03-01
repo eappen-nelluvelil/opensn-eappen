@@ -111,13 +111,12 @@ CBCD_FLUDS::CreatePointerSet()
 
 double*
 CBCD_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
-                         unsigned int face_id,
-                         unsigned int face_node_mapped,
-                         size_t as_ss_idx)
+                        unsigned int face_id,
+                        unsigned int face_node_mapped,
+                        size_t as_ss_idx)
 {
   std::vector<double>& psi = deplocs_outgoing_messages_.at({cell_global_id, face_id});
-  const size_t dof_map =
-    face_node_mapped * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  const size_t dof_map = face_node_mapped * num_groups_and_angles_ + as_ss_idx * num_groups_;
 
   assert((dof_map >= 0) and (dof_map < psi.size()));
   return &psi[dof_map];
@@ -125,8 +124,8 @@ CBCD_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
 
 double*
 CBCD_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
-                           size_t face_node,
-                           size_t as_ss_idx)
+                          size_t face_node,
+                          size_t as_ss_idx)
 {
   assert(psi_nonlocal_outgoing != nullptr);
   const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
@@ -238,8 +237,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         {
           for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
           {
-            double* dst_psi = staged_buffer.data() +
-                              node->face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+            double* dst_psi = staged_buffer.data() + node->face_node * num_groups_and_angles_ +
+                              as_ss_idx * num_groups_;
             const double* src_psi = outgoing_nonlocal_psi_.data() +
                                     node->storage_index * num_groups_and_angles_ +
                                     as_ss_idx * num_groups_;
