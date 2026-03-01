@@ -9,6 +9,7 @@
 #include <latch>
 #include <memory>
 #include <set>
+#include <unordered_set>
 
 namespace crb = caribou;
 
@@ -149,6 +150,17 @@ private:
   /// Number of completed tasks and total tasks for this sweep.
   size_t completed_count_ = 0;
   size_t total_tasks_ = 0;
+
+  // --- Early latch count-down for reflecting BCs ---
+
+  /// Cell local IDs that have outgoing reflecting boundary faces.
+  std::unordered_set<uint64_t> reflecting_boundary_cells_;
+  /// Number of reflecting boundary cells completed so far.
+  size_t reflecting_boundary_completed_ = 0;
+  /// Total reflecting boundary cells (set during init).
+  size_t total_reflecting_boundary_cells_ = 0;
+  /// Whether the latch has already been counted down early.
+  bool latch_counted_down_ = false;
 };
 
 } // namespace opensn

@@ -96,7 +96,8 @@ AAHDSweepChunk::Sweep(AngleSet& angle_set)
   const auto& spds = static_cast<const AAH_SPDS&>(aahd_angle_set.GetSPDS());
   const auto& levelized_spls = spds.GetLevelizedLocalSubgrid();
   // compute block size
-  unsigned int stride_size = gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
+  unsigned int stride_size =
+    gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
   unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);
   unsigned int block_size_y = gpu_kernel::threshold / block_size_x;
   ::dim3 block_size{block_size_x, block_size_y};

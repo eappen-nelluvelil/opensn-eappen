@@ -73,8 +73,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
 
   // Create aggregated communicator and set it on all angle sets
   std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
-  agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(
-    base_angle_sets, problem_.GetMPICommunicatorSet());
+  agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
+                                                            problem_.GetMPICommunicatorSet());
   for (auto* as : angle_sets_)
     as->SetAggregatedCommunicator(agg_comm_.get());
 }
