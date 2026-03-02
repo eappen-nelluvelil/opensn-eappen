@@ -22,6 +22,7 @@ class CBCD_AngleSet;
 class UnknownManager;
 class SpatialDiscretization;
 class Cell;
+class MeshContinuum;
 class CBCDSweepChunk;
 
 /// CBC FLUDS for device.
@@ -126,6 +127,8 @@ private:
   std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
   /// Map from cell to outgoing nonlocal node indexing metadata.
   std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
+  /// Cached grid pointer — avoids shared_ptr copy on the hot path.
+  const MeshContinuum* grid_ptr_;
   /// Mapped host vectors for boundary and non-local angular fluxes.
   crb::MappedHostVector<double> incoming_boundary_psi_;
   crb::MappedHostVector<double> outgoing_boundary_psi_;
@@ -143,11 +146,15 @@ private:
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
   /// Pre-computed face-grouped outgoing nonlocal nodes, built once in the constructor.
-  /// Avoids rebuilding a nodes-by-face map on every CopyOutgoingPsiBackToHost call.
+  /// Caches all mesh-derived metadata so CopyOutgoingPsiBackToHost needs no per-call lookups.
   struct FaceOutgoingInfo
   {
     unsigned int face_id;
     std::vector<const NonlocalNodeInfo*> nodes;
+    size_t face_data_size;        ///< num_face_nodes * num_groups_and_angles_
+    int locality;                 ///< Destination MPI rank (neighbor partition ID).
+    uint64_t neighbor_global_id;  ///< Global ID of the neighbor cell across this face.
+    unsigned int associated_face; ///< Face index on the neighbor cell.
   };
   std::unordered_map<uint64_t, std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
 

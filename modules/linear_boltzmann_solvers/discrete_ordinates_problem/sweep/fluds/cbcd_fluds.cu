@@ -9,6 +9,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
+#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include <utility>
@@ -43,16 +44,33 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     local_cell_ids_(num_local_cells),
     save_angular_flux_(save_angular_flux)
 {
+  // Cache grid pointer to avoid shared_ptr copy on the hot path.
+  grid_ptr_ = GetSPDS().GetGrid().get();
+  const auto& grid = *grid_ptr_;
+
   // Pre-compute face-grouped outgoing nonlocal nodes once at construction.
-  // This avoids rebuilding a std::map<face_id, nodes> on every CopyOutgoingPsiBackToHost call.
+  // Caches face_data_size, locality, neighbor_global_id, and associated_face so that
+  // CopyOutgoingPsiBackToHost needs no per-call mesh queries, virtual dispatches, or map lookups.
   for (const auto& [cell_id, nodes] : cell_to_outgoing_nonlocal_nodes_)
   {
+    const auto& cell = grid.local_cells[cell_id];
+    const auto& cell_mapping = sdm_.GetCellMapping(cell);
     std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
     for (const auto& node : nodes)
       by_face[node.face_id].push_back(&node);
     auto& grouped = cell_to_face_grouped_outgoing_[cell_id];
     for (auto& [fid, fnodes] : by_face)
-      grouped.push_back({fid, std::move(fnodes)});
+    {
+      const auto& face = cell.faces[fid];
+      const auto& face_nodal_mapping = common_data_.GetFaceNodalMapping(cell_id, fid);
+      const auto num_face_nodes = cell_mapping.GetNumFaceNodes(fid);
+      grouped.push_back({fid,
+                         std::move(fnodes),
+                         num_face_nodes * num_groups_and_angles_,
+                         grid.cells[face.neighbor_id].partition_id,
+                         face.neighbor_id,
+                         static_cast<unsigned int>(face_nodal_mapping.associated_face_)});
+    }
   }
 
   // Pre-compute incoming nonlocal scatter lookup: (cell_global_id, face_id) → nodes.
@@ -166,13 +184,13 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_face_grouped_outgoing_.empty())
     return;
   const auto& angle_indices = angle_set->GetAngleIndices();
-  const auto& num_angles = angle_indices.size();
-  const auto& grid = *(GetSPDS().GetGrid());
+  const auto num_angles = angle_indices.size();
   for (const auto& cell_local_id : cell_local_ids)
   {
-    const auto& cell = grid.local_cells[cell_local_id];
     auto boundary_it = cell_to_outgoing_boundary_nodes_.find(cell_local_id);
     if (boundary_it != cell_to_outgoing_boundary_nodes_.end())
+    {
+      const auto& cell = grid_ptr_->local_cells[cell_local_id];
       for (const auto& node : boundary_it->second)
       {
         const auto& face = cell.faces[node.face_id];
@@ -190,23 +208,14 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           }
         }
       }
-    // Use pre-computed face grouping — avoids rebuilding nodes_by_face map per call
+    }
+    // Use pre-computed face grouping with cached metadata — no per-call mesh queries needed.
     auto grouped_it = cell_to_face_grouped_outgoing_.find(cell_local_id);
     if (grouped_it != cell_to_face_grouped_outgoing_.end())
     {
       for (const auto& face_info : grouped_it->second)
       {
-        const auto& face = cell.faces[face_info.face_id];
-        const auto& cell_mapping = sdm_.GetCellMapping(cell);
-        const auto& face_nodal_mapping =
-          common_data_.GetFaceNodalMapping(cell_local_id, face_info.face_id);
-        const auto num_face_nodes = cell_mapping.GetNumFaceNodes(face_info.face_id);
-        const auto face_data_size = num_face_nodes * num_groups_and_angles_;
-        const int locality =
-          sweep_chunk.GetCellTransportView(cell_local_id).FaceLocality(face_info.face_id);
-
-        // Build one staging buffer for the entire face
-        std::vector<double> staged_buffer(face_data_size, 0.0);
+        std::vector<double> staged_buffer(face_info.face_data_size, 0.0);
         for (const auto* node : face_info.nodes)
         {
           double* dst = staged_buffer.data() + node->face_node * num_groups_and_angles_;
@@ -216,10 +225,10 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         }
 
         auto* agg_comm = angle_set->GetAggregatedCommunicator();
-        agg_comm->EnqueueOutgoing(locality,
+        agg_comm->EnqueueOutgoing(face_info.locality,
                                   angle_set->GetID(),
-                                  face.neighbor_id,
-                                  face_nodal_mapping.associated_face_,
+                                  face_info.neighbor_global_id,
+                                  face_info.associated_face,
                                   std::move(staged_buffer));
       }
     }
