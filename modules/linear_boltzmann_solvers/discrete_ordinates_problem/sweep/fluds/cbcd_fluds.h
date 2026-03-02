@@ -68,9 +68,11 @@ public:
   /// Copies incoming boundary psi from host to device.
   void CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
 
-  /// Copies incoming non-local psi from host to device.
-  void CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
-                                       const std::vector<std::uint64_t>& cell_local_ids);
+  /// Scatter received face data directly into incoming_nonlocal_psi_ (mapped host memory).
+  /// Called at MPI receive time — eliminates the intermediate deplocs_outgoing_messages_ hash map.
+  void ScatterReceivedFaceData(uint64_t cell_global_id,
+                               unsigned int face_id,
+                               const std::vector<double>& psi_data);
 
   /// Copy outgoing psi on host after D2H copy is done.
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
@@ -79,15 +81,7 @@ public:
 
   // --- Pulled up from CBC_FLUDS ---
 
-  double* NLUpwindPsi(uint64_t cell_global_id,
-                      unsigned int face_id,
-                      unsigned int face_node_mapped,
-                      size_t as_ss_idx);
-
-  double*
-  NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
-
-  void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
+  void ClearLocalAndReceivePsi() override {}
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
   void AllocateOutgoingPsi() override {}
@@ -111,12 +105,6 @@ public:
       return std::hash<uint64_t>{}(k.first) ^ (std::hash<unsigned int>{}(k.second) * 2654435761ULL);
     }
   };
-
-  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>&
-  GetDeplocsOutgoingMessages()
-  {
-    return deplocs_outgoing_messages_;
-  }
 
 private:
   /// Reference to the common data.
@@ -154,9 +142,6 @@ private:
   crb::HostVector<double> host_saved_psi_;
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
-  /// Non-local outgoing messages storage (pulled up from CBC_FLUDS).
-  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash> deplocs_outgoing_messages_;
-
   /// Pre-computed face-grouped outgoing nonlocal nodes, built once in the constructor.
   /// Avoids rebuilding a nodes-by-face map on every CopyOutgoingPsiBackToHost call.
   struct FaceOutgoingInfo
@@ -165,6 +150,12 @@ private:
     std::vector<const NonlocalNodeInfo*> nodes;
   };
   std::unordered_map<uint64_t, std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
+
+  /// Pre-computed scatter lookup: (cell_global_id, face_id) → nodes to scatter into.
+  /// Built once in constructor from cell_to_incoming_nonlocal_nodes_.
+  /// Enables O(1) lookup + direct scatter into incoming_nonlocal_psi_ at MPI receive time.
+  std::unordered_map<CellFaceKey, std::vector<const NonlocalNodeInfo*>, CellFaceKeyHash>
+    incoming_nonlocal_face_lookup_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();

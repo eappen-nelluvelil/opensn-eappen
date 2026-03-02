@@ -182,8 +182,8 @@ CBCD_AngleSet::TryAdvanceOneStep()
     {
       for (auto& entry : received_entries)
       {
-        cbcd_fluds_.GetDeplocsOutgoingMessages()[{entry.cell_global_id, entry.face_id}] =
-          std::move(entry.psi_data);
+        cbcd_fluds_.ScatterReceivedFaceData(
+          entry.cell_global_id, entry.face_id, entry.psi_data);
         auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
         if (--current_task_list_[local_id].num_dependencies == 0)
           ready_queue_.push_back(local_id);
@@ -208,7 +208,6 @@ CBCD_AngleSet::TryAdvanceOneStep()
     }
     ready_queue_.clear();
 
-    cbcd_fluds_.CopyIncomingNonlocalPsiToDevice(this, ready_cell_ids);
     cbcd_sweep_chunk_->GPUSweep(*this, ready_cell_ids);
 
     in_flight_tasks_ = std::move(ready_tasks);

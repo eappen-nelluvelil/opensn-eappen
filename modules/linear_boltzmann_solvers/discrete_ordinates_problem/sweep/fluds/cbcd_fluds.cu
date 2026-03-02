@@ -54,6 +54,12 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     for (auto& [fid, fnodes] : by_face)
       grouped.push_back({fid, std::move(fnodes)});
   }
+
+  // Pre-compute incoming nonlocal scatter lookup: (cell_global_id, face_id) → nodes.
+  // Enables O(1) direct scatter into incoming_nonlocal_psi_ at MPI receive time.
+  for (const auto& [cell_id, nodes] : cell_to_incoming_nonlocal_nodes_)
+    for (const auto& node : nodes)
+      incoming_nonlocal_face_lookup_[{node.cell_global_id, node.face_id}].push_back(&node);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -109,29 +115,6 @@ CBCD_FLUDS::CreatePointerSet()
   pointer_set_.stride_size = num_groups_and_angles_;
 }
 
-double*
-CBCD_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
-                        unsigned int face_id,
-                        unsigned int face_node_mapped,
-                        size_t as_ss_idx)
-{
-  std::vector<double>& psi = deplocs_outgoing_messages_.at({cell_global_id, face_id});
-  const size_t dof_map = face_node_mapped * num_groups_and_angles_ + as_ss_idx * num_groups_;
-
-  assert((dof_map >= 0) and (dof_map < psi.size()));
-  return &psi[dof_map];
-}
-
-double*
-CBCD_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
-                          size_t face_node,
-                          size_t as_ss_idx)
-{
-  assert(psi_nonlocal_outgoing != nullptr);
-  const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  return &(*psi_nonlocal_outgoing)[addr_offset];
-}
-
 void
 CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
 {
@@ -158,29 +141,20 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 }
 
 void
-CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
-                                            const std::vector<std::uint64_t>& cell_local_ids)
+CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
+                                    unsigned int face_id,
+                                    const std::vector<double>& psi_data)
 {
-  if (cell_to_incoming_nonlocal_nodes_.empty())
+  auto it = incoming_nonlocal_face_lookup_.find({cell_global_id, face_id});
+  if (it == incoming_nonlocal_face_lookup_.end())
     return;
-  const auto& angle_indices = angle_set->GetAngleIndices();
-  const auto& num_angles = angle_indices.size();
-  for (const auto& cell_local_id : cell_local_ids)
+  for (const auto* node : it->second)
   {
-    auto it = cell_to_incoming_nonlocal_nodes_.find(cell_local_id);
-    if (it == cell_to_incoming_nonlocal_nodes_.end())
-      continue;
-    for (const auto& node : it->second)
-    {
-      for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
-      {
-        double* dst_psi = incoming_nonlocal_psi_.data() +
-                          node.storage_index * num_groups_and_angles_ + as_ss_idx * num_groups_;
-        const double* src_psi =
-          NLUpwindPsi(node.cell_global_id, node.face_id, node.face_node_mapped, as_ss_idx);
-        std::copy(src_psi, src_psi + num_groups_, dst_psi);
-      }
-    }
+    double* dst = incoming_nonlocal_psi_.data() +
+                  node->storage_index * num_groups_and_angles_;
+    const double* src = psi_data.data() +
+                        node->face_node_mapped * num_groups_and_angles_;
+    std::copy(src, src + num_groups_and_angles_, dst);
   }
 }
 
@@ -235,15 +209,10 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         std::vector<double> staged_buffer(face_data_size, 0.0);
         for (const auto* node : face_info.nodes)
         {
-          for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
-          {
-            double* dst_psi = staged_buffer.data() + node->face_node * num_groups_and_angles_ +
-                              as_ss_idx * num_groups_;
-            const double* src_psi = outgoing_nonlocal_psi_.data() +
-                                    node->storage_index * num_groups_and_angles_ +
-                                    as_ss_idx * num_groups_;
-            std::copy(src_psi, src_psi + num_groups_, dst_psi);
-          }
+          double* dst = staged_buffer.data() + node->face_node * num_groups_and_angles_;
+          const double* src = outgoing_nonlocal_psi_.data() +
+                              node->storage_index * num_groups_and_angles_;
+          std::copy(src, src + num_groups_and_angles_, dst);
         }
 
         auto* agg_comm = angle_set->GetAggregatedCommunicator();
