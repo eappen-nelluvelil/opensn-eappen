@@ -8,10 +8,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <map>
-#include <set>
-#include <thread>
+#include <memory>
 #include <vector>
+#include <thread>
 
 namespace mpi = mpicpp_lite;
 
@@ -29,11 +28,67 @@ struct IncomingEntry
   std::vector<double> psi_data;
 };
 
+// --- Lock-Free Treiber Stack Template ---
+// A zero-overhead abstraction for concurrent thread hand-offs.
+template <typename T>
+class LockFreeTreiberStack
+{
+  struct Node
+  {
+    T payload;
+    Node* next;
+  };
+  // alignas(64) std::atomic<Node*> head{nullptr};
+  alignas(std::hardware_destructive_interference_size) std::atomic<Node*> head{nullptr};
+
+public:
+  ~LockFreeTreiberStack()
+  {
+    auto* chain = head.exchange(nullptr, std::memory_order_acquire);
+    while (chain)
+    {
+      auto* next = chain->next;
+      delete chain;
+      chain = next;
+    }
+  }
+
+  /// CAS push — safe for concurrent producers, never blocks.
+  void Push(T&& payload)
+  {
+    auto* node = new Node{std::move(payload), nullptr};
+    auto* expected = head.load(std::memory_order_relaxed);
+    do
+    {
+      node->next = expected;
+    } while (not head.compare_exchange_weak(
+      expected, node, std::memory_order_release, std::memory_order_relaxed));
+  }
+
+  /// Atomic-exchange drain — returns all queued entries, deletes nodes.
+  std::vector<T> Drain()
+  {
+    auto* chain = head.exchange(nullptr, std::memory_order_acquire);
+    std::vector<T> result;
+    while (chain)
+    {
+      result.push_back(std::move(chain->payload));
+      auto* next = chain->next;
+      delete chain;
+      chain = next;
+    }
+    return result;
+  }
+
+  /// Read-only empty check (single atomic load, no cache-line write).
+  bool Empty() const { return head.load(std::memory_order_acquire) == nullptr; }
+};
+
 /// Aggregated MPI communicator for threaded CBCD sweep.
 ///
 /// A dedicated communication thread aggregates MPI sends/receives across all angle sets,
 /// reducing the number of MPI calls and eliminating MPI contention between worker threads.
-/// All inter-thread data handoff uses lock-free Treiber stacks (CAS push, atomic-exchange drain).
+/// All inter-thread data handoff uses lock-free Treiber stacks.
 class CBCD_AggregatedCommunicator
 {
 public:
@@ -66,12 +121,6 @@ public:
   void Stop();
 
 private:
-  void CommThreadLoop();
-  void FlushOutgoing();
-  void ProbeAndReceive();
-  void PollPendingSends();
-  bool AllWorkComplete() const;
-
   // --- Internal types ---
 
   struct OutgoingEntry
@@ -82,47 +131,10 @@ private:
     std::vector<double> psi_data;
   };
 
-  /// Lock-free node for the per-destination Treiber stack.
-  struct OutgoingNode
+  struct NeighborQueue
   {
-    OutgoingEntry entry;
-    OutgoingNode* next;
-  };
-
-  /// Lock-free node for the per-angle-set Treiber stack.
-  struct IncomingNode
-  {
-    std::vector<IncomingEntry> entries;
-    IncomingNode* next;
-  };
-
-  /// Lock-free per-destination outgoing queue (Treiber stack).
-  /// Workers push via CAS; comm thread drains via atomic exchange.
-  struct PerDestQueue
-  {
-    alignas(64) std::atomic<OutgoingNode*> head{nullptr};
-
-    /// CAS push — safe for concurrent producers, never blocks.
-    void Push(OutgoingEntry&& entry);
-
-    /// Atomic-exchange drain — returns all queued entries, deletes nodes.
-    std::vector<OutgoingEntry> Drain();
-
-    /// Read-only empty check (single atomic load, no cache-line write).
-    bool Empty() const;
-  };
-
-  /// Lock-free per-angle-set incoming mailbox (Treiber stack).
-  /// Comm thread pushes via CAS; worker drains via atomic exchange.
-  struct PerAngleSetMailbox
-  {
-    alignas(64) std::atomic<IncomingNode*> head{nullptr};
-
-    /// CAS push — used by comm thread to deposit received data.
-    void Push(std::vector<IncomingEntry>&& batch);
-
-    /// Atomic-exchange drain — returns all received entries, deletes nodes.
-    std::vector<IncomingEntry> Drain();
+    int dest_location;
+    std::unique_ptr<LockFreeTreiberStack<OutgoingEntry>> queue;
   };
 
   struct PendingSend
@@ -131,20 +143,30 @@ private:
     ByteArray data;
   };
 
+  // --- Private Methods ---
+
+  void CommThreadLoop();
+  void FlushOutgoing(std::vector<std::vector<const OutgoingEntry*>>& by_angle_set);
+  void ProbeAndReceive();
+  void PollPendingSends();
+  bool AllWorkComplete() const;
+
   // --- Data members ---
 
   const MPICommunicatorSet& comm_set_;
   size_t num_angle_sets_;
 
-  /// One lock-free queue per destination location for outgoing data.
-  std::map<int, PerDestQueue> outgoing_queues_;
+  /// Flat array of lock-free queues for outgoing data (O(N) search is faster than map for small N).
+  std::vector<NeighborQueue> outgoing_queues_;
 
-  /// One lock-free mailbox per angle set for incoming data.
-  std::vector<PerAngleSetMailbox> incoming_mailboxes_;
+  /// One lock-free mailbox per angle set for incoming data batches.
+  std::vector<LockFreeTreiberStack<std::vector<IncomingEntry>>> incoming_mailboxes_;
 
-  /// Union of location dependencies / successors across all SPDS.
-  std::set<int> all_location_dependencies_;
-  std::set<int> all_location_successors_;
+  /// Contiguous array of location dependencies for cache-friendly polling.
+  std::vector<int> location_dependencies_;
+
+  /// Pre-allocated ByteArray for incoming MPI messages.
+  ByteArray persistent_recv_buffer_;
 
   /// MPI tag (set to num_angle_sets to avoid collisions with per-angle-set tags).
   int aggregated_tag_;
