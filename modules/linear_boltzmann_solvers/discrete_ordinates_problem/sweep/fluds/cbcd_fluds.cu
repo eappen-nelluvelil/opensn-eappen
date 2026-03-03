@@ -168,10 +168,8 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
     return;
   for (const auto* node : it->second)
   {
-    double* dst = incoming_nonlocal_psi_.data() +
-                  node->storage_index * num_groups_and_angles_;
-    const double* src = psi_data.data() +
-                        node->face_node_mapped * num_groups_and_angles_;
+    double* dst = incoming_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
+    const double* src = psi_data.data() + node->face_node_mapped * num_groups_and_angles_;
     std::copy(src, src + num_groups_and_angles_, dst);
   }
 }
@@ -219,8 +217,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         for (const auto* node : face_info.nodes)
         {
           double* dst = staged_buffer.data() + node->face_node * num_groups_and_angles_;
-          const double* src = outgoing_nonlocal_psi_.data() +
-                              node->storage_index * num_groups_and_angles_;
+          const double* src =
+            outgoing_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
           std::copy(src, src + num_groups_and_angles_, dst);
         }
 

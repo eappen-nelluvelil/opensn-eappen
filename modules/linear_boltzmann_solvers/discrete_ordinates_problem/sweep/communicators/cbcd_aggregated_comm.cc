@@ -72,9 +72,8 @@ CBCD_AggregatedCommunicator::EnqueueOutgoing(int dest_location,
 {
   auto it = std::find_if(outgoing_queues_.begin(),
                          outgoing_queues_.end(),
-                         [dest_location](const NeighborQueue& nq) {
-                           return nq.dest_location == dest_location;
-                         });
+                         [dest_location](const NeighborQueue& nq)
+                         { return nq.dest_location == dest_location; });
   assert(it != outgoing_queues_.end());
   it->queue->Push({angle_set_id, cell_global_id, face_id, std::move(psi_data)});
 }
@@ -84,7 +83,7 @@ CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
 {
   assert(angle_set_id < num_angle_sets_);
   auto batches = incoming_mailboxes_[angle_set_id].Drain();
-  
+
   std::vector<IncomingEntry> result;
   for (auto& batch : batches)
     for (auto& entry : batch)
@@ -157,7 +156,8 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 }
 
 void
-CBCD_AggregatedCommunicator::FlushOutgoing(std::vector<std::vector<const OutgoingEntry*>>& by_angle_set)
+CBCD_AggregatedCommunicator::FlushOutgoing(
+  std::vector<std::vector<const OutgoingEntry*>>& by_angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::FlushOutgoing");
 
@@ -180,7 +180,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing(std::vector<std::vector<const Outgoin
         total_bytes += sizeof(size_t) + sizeof(size_t); // as_id + num_entries
       }
       ptrs.push_back(&entry);
-      
+
       total_bytes += sizeof(uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
                      entry.psi_data.size() * sizeof(double);
     }
@@ -190,7 +190,8 @@ CBCD_AggregatedCommunicator::FlushOutgoing(std::vector<std::vector<const Outgoin
     ps.data.Data().resize(total_bytes);
     size_t offset = 0;
 
-    auto WriteBytes = [&](const void* ptr, size_t size) {
+    auto WriteBytes = [&](const void* ptr, size_t size)
+    {
       std::memcpy(ps.data.Data().data() + offset, ptr, size);
       offset += size;
     };
@@ -248,8 +249,7 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 
       // Use pointer+size overload to go directly to MPI_Recv.
       // The vector overload would do a redundant blocking MPI_Probe.
-      comm.recv(source_rank, status.tag(),
-                persistent_recv_buffer_.Data().data(), num_bytes);
+      comm.recv(source_rank, status.tag(), persistent_recv_buffer_.Data().data(), num_bytes);
 
       persistent_recv_buffer_.Seek(0);
 
@@ -269,16 +269,17 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
           IncomingEntry entry;
           entry.cell_global_id = persistent_recv_buffer_.Read<uint64_t>();
           entry.face_id = persistent_recv_buffer_.Read<unsigned int>();
-          
+
           auto data_size = persistent_recv_buffer_.Read<size_t>();
           entry.psi_data.resize(data_size);
-          
+
           std::memcpy(entry.psi_data.data(),
                       &persistent_recv_buffer_.Data()[persistent_recv_buffer_.Offset()],
                       data_size * sizeof(double));
-                      
-          persistent_recv_buffer_.Seek(persistent_recv_buffer_.Offset() + data_size * sizeof(double));
-          
+
+          persistent_recv_buffer_.Seek(persistent_recv_buffer_.Offset() +
+                                       data_size * sizeof(double));
+
           batch.push_back(std::move(entry));
         }
 
@@ -292,7 +293,7 @@ void
 CBCD_AggregatedCommunicator::PollPendingSends()
 {
   // O(1) swap-and-pop removal logic
-  for (size_t i = 0; i < pending_sends_.size(); )
+  for (size_t i = 0; i < pending_sends_.size();)
   {
     if (mpi::test(pending_sends_[i].request))
     {
