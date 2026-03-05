@@ -79,15 +79,6 @@ int CBCD_AggregatedCommunicator::GetQueueIndex(int dest_location) const
 }
 
 void
-CBCD_AggregatedCommunicator::EnqueueOutgoingBatch(int dest_location,
-                                                  std::vector<OutgoingEntry>&& batch)
-{
-  auto it = dest_to_queue_index_.find(dest_location);
-  assert(it != dest_to_queue_index_.end());
-  outgoing_queues_[it->second].queue->Push(std::move(batch));
-}
-
-void
 CBCD_AggregatedCommunicator::EnqueueOutgoingBatchByIndex(int queue_index,
                                                          std::vector<OutgoingEntry>&& batch)
 {
