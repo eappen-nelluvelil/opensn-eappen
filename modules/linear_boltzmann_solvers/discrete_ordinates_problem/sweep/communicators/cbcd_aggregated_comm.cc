@@ -20,7 +20,8 @@ namespace opensn
 // ---------------------------------------------------------------------------
 
 CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
-                                                         const MPICommunicatorSet& comm_set)
+                                                         const MPICommunicatorSet& comm_set,
+                                                         size_t max_single_message_size_in_bytes)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
     incoming_mailboxes_(num_angle_sets_),
@@ -41,16 +42,22 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
 
   location_dependencies_.assign(temp_dependencies.begin(), temp_dependencies.end());
 
+  int queue_idx = 0;
   for (int succ : temp_successors)
   {
     NeighborQueue nq;
     nq.dest_location = succ;
-    nq.queue = std::make_unique<LockFreeTreiberStack<OutgoingEntry>>();
+    nq.queue = std::make_unique<LockFreeTreiberStack<std::vector<OutgoingEntry>>>();
     outgoing_queues_.push_back(std::move(nq));
+    dest_to_queue_index_[succ] = queue_idx++;
   }
 
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
+
+  // Reserve receive buffer
+  if (max_single_message_size_in_bytes > 0)
+    persistent_recv_buffer_.Data().reserve(max_single_message_size_in_bytes);
 }
 
 CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
@@ -63,34 +70,36 @@ CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
 // Worker thread interface
 // ---------------------------------------------------------------------------
 
-void
-CBCD_AggregatedCommunicator::EnqueueOutgoing(int dest_location,
-                                             size_t angle_set_id,
-                                             uint64_t cell_global_id,
-                                             unsigned int face_id,
-                                             std::vector<double>&& psi_data)
+int CBCD_AggregatedCommunicator::GetQueueIndex(int dest_location) const
 {
-  auto it = std::find_if(outgoing_queues_.begin(),
-                         outgoing_queues_.end(),
-                         [dest_location](const NeighborQueue& nq) {
-                           return nq.dest_location == dest_location;
-                         });
-  assert(it != outgoing_queues_.end());
-  it->queue->Push({angle_set_id, cell_global_id, face_id, std::move(psi_data)});
+  auto it = dest_to_queue_index_.find(dest_location);
+  if (it == dest_to_queue_index_.end())
+    return -1;
+  return it->second;
 }
 
-std::vector<IncomingEntry>
+void
+CBCD_AggregatedCommunicator::EnqueueOutgoingBatch(int dest_location,
+                                                  std::vector<OutgoingEntry>&& batch)
+{
+  auto it = dest_to_queue_index_.find(dest_location);
+  assert(it != dest_to_queue_index_.end());
+  outgoing_queues_[it->second].queue->Push(std::move(batch));
+}
+
+void
+CBCD_AggregatedCommunicator::EnqueueOutgoingBatchByIndex(int queue_index,
+                                                         std::vector<OutgoingEntry>&& batch)
+{
+  assert(queue_index >= 0 and queue_index < static_cast<int>(outgoing_queues_.size()));
+  outgoing_queues_[queue_index].queue->Push(std::move(batch));
+}
+
+std::vector<std::vector<IncomingEntry>>
 CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
 {
   assert(angle_set_id < num_angle_sets_);
-  auto batches = incoming_mailboxes_[angle_set_id].Drain();
-  
-  std::vector<IncomingEntry> result;
-  for (auto& batch : batches)
-    for (auto& entry : batch)
-      result.push_back(std::move(entry));
-
-  return result;
+  return incoming_mailboxes_[angle_set_id].Drain();
 }
 
 void
@@ -133,6 +142,9 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 
   std::vector<std::vector<const OutgoingEntry*>> by_angle_set(num_angle_sets_);
 
+  // Maybe pre-reserve pointer vectors to avoid dynamic growth during FlushOutgoing?
+  // I think this can be done exactly instead of using a heuristic
+
   while (true)
   {
     FlushOutgoing(by_angle_set);
@@ -156,76 +168,84 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
   }
 }
 
-void
+bool
 CBCD_AggregatedCommunicator::FlushOutgoing(std::vector<std::vector<const OutgoingEntry*>>& by_angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::FlushOutgoing");
 
+  bool any_sent = false;
+
   for (auto& nq : outgoing_queues_)
   {
-    auto entries = nq.queue->Drain();
-    if (entries.empty())
+    // Drain returns std::vector<std::vector<OutgoingEntry>>
+    // (each element is one batch push)
+    auto entry_batches = nq.queue->Drain();
+    if (entry_batches.empty())
       continue;
+    any_sent = true;
 
-    size_t total_bytes = sizeof(size_t); // num_angle_sets_in_batch
-    size_t active_angle_sets = 0;
-
-    // 1. Group items and track byte sizes in a single pass
-    for (const auto& entry : entries)
+    // Flatten the batches-of-batches in to angle_set grouping and compute total
+    // bytes needed
+    size_t total_bytes = sizeof(size_t); // num_anglesets_in_batch
+    size_t active_anglesets = 0;
+    for (const auto& batch : entry_batches)
     {
-      auto& ptrs = by_angle_set[entry.angle_set_id];
-      if (ptrs.empty())
+      for (const auto& entry : batch)
       {
-        active_angle_sets++;
-        total_bytes += sizeof(size_t) + sizeof(size_t); // as_id + num_entries
+        auto& ptrs = by_angle_set[entry.angle_set_id];
+        if (ptrs.empty())
+        {
+          active_anglesets++;
+          total_bytes += sizeof(size_t) + sizeof(size_t); // angle_set_id + num_entries
+        }
+        ptrs.push_back(&entry);
+
+        total_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t)
+                      + entry.psi_data.size() * sizeof(double);
       }
-      ptrs.push_back(&entry);
-      
-      total_bytes += sizeof(uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
-                     entry.psi_data.size() * sizeof(double);
     }
 
-    // 2. Allocate and manually pack the contiguous byte buffer
+    // Allocate and manually pack the contiguous byte buffer
     PendingSend ps;
     ps.data.Data().resize(total_bytes);
     size_t offset = 0;
 
-    auto WriteBytes = [&](const void* ptr, size_t size) {
+    auto WriteBytes = [&](const void* ptr, size_t size)
+    {
       std::memcpy(ps.data.Data().data() + offset, ptr, size);
       offset += size;
     };
 
-    WriteBytes(&active_angle_sets, sizeof(size_t));
+    WriteBytes(&active_anglesets, sizeof(size_t));
 
     for (size_t as_id = 0; as_id < num_angle_sets_; ++as_id)
     {
       auto& ptrs = by_angle_set[as_id];
       if (ptrs.empty())
         continue;
-
       WriteBytes(&as_id, sizeof(size_t));
       size_t num_entries = ptrs.size();
       WriteBytes(&num_entries, sizeof(size_t));
-
       for (const auto* e : ptrs)
       {
-        WriteBytes(&e->cell_global_id, sizeof(uint64_t));
+        WriteBytes(&e->cell_global_id, sizeof(std::uint64_t));
         WriteBytes(&e->face_id, sizeof(unsigned int));
-        const size_t data_size = e->psi_data.size();
+        size_t data_size = e->psi_data.size();
         WriteBytes(&data_size, sizeof(size_t));
         WriteBytes(e->psi_data.data(), data_size * sizeof(double));
       }
-
-      ptrs.clear(); // Reset for the next destination partition
+      // Reset for the next destination partition
+      ptrs.clear();
     }
 
-    // 3. Dispatch the Isend request using the mpicpp-lite vector overload
+    // Dispatch the MPI Isend request
     const auto& comm = comm_set_.LocICommunicator(nq.dest_location);
     auto dest_rank = comm_set_.MapIonJ(nq.dest_location, nq.dest_location);
-
     ps.request = comm.isend(dest_rank, aggregated_tag_, ps.data.Data());
     pending_sends_.push_back(std::move(ps));
   }
+
+  return any_sent;
 }
 
 void

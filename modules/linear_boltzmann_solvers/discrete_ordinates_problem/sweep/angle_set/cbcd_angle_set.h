@@ -59,8 +59,6 @@ public:
   /// Must be called after UpdateSweepDependencies and before launching threads.
   void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
-  // --- Cooperative scheduling interface ---
-
   /// Non-blocking initialization. Returns true when ready (latch satisfied).
   /// Returns false if waiting on predecessor angle sets (reflecting BCs).
   bool TryInitialize();
@@ -74,8 +72,6 @@ public:
 
   /// Check if initialization has been done.
   bool IsInitialized() const { return initialized_; }
-
-  // --- AngleSet pure virtual overrides ---
 
   AsynchronousCommunicator* GetCommunicator() override { return nullptr; }
 
@@ -135,9 +131,6 @@ private:
   std::unique_ptr<std::latch> starting_latch_;
   /// Anglesets whose latches this angleset counts down upon completion.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
-
-  // --- Cooperative scheduling state ---
-
   /// Whether TryInitialize has completed successfully.
   bool initialized_ = false;
   /// Ready queue: task indices whose dependencies have been satisfied.
@@ -150,9 +143,6 @@ private:
   /// Number of completed tasks and total tasks for this sweep.
   size_t completed_count_ = 0;
   size_t total_tasks_ = 0;
-
-  // --- Early latch count-down for reflecting BCs ---
-
   /// Cell local IDs that have outgoing reflecting boundary faces.
   std::unordered_set<uint64_t> reflecting_boundary_cells_;
   /// Number of reflecting boundary cells completed so far.

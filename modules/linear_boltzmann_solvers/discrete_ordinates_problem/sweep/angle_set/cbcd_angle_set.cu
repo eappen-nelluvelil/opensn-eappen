@@ -64,7 +64,8 @@ CBCD_AngleSet::TryInitialize()
   assert(cbcd_sweep_chunk_ != nullptr);
   assert(agg_comm_ != nullptr);
 
-  // Non-blocking latch check. For non-reflecting problems, num_dependencies_ == 0,
+  // Non-blocking latch check. 
+  // For non-reflecting problems, num_dependencies_ == 0,
   // so latch(0).try_wait() returns true immediately.
   if (not starting_latch_->try_wait())
     return false;
@@ -75,8 +76,8 @@ CBCD_AngleSet::TryInitialize()
 
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(*cbcd_sweep_chunk_, this);
 
-  // Build initial ready queue from zero-dependency tasks (O(N) once at start).
-  // After this, the queue is maintained incrementally — O(1) per task completion.
+  // Build initial ready queue from zero-dependency tasks.
+  // After this, the queue is maintained incrementally.
   ready_queue_.reserve(current_task_list_.size());
   for (size_t i = 0; i < current_task_list_.size(); ++i)
     if (current_task_list_[i].num_dependencies == 0)
@@ -177,16 +178,20 @@ CBCD_AngleSet::TryAdvanceOneStep()
 
   // Pull received data from aggregated comm
   {
-    auto received_entries = agg_comm_->DequeueIncoming(id_);
-    if (not received_entries.empty())
+    auto received_batches = agg_comm_->DequeueIncoming(id_);
+    if (not received_batches.empty())
     {
-      for (auto& entry : received_entries)
+      for (auto& batch : received_batches)
       {
-        cbcd_fluds_.ScatterReceivedFaceData(
-          entry.cell_global_id, entry.face_id, entry.psi_data);
-        auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
-        if (--current_task_list_[local_id].num_dependencies == 0)
-          ready_queue_.push_back(local_id);
+        for (auto& entry : batch)
+        {
+          cbcd_fluds_.ScatterReceivedFaceData(
+            entry.cell_global_id, entry.face_id, entry.psi_data
+          );
+          auto local_id = spds_.GetGrid()->MapCellGlobalID2LocalID(entry.cell_global_id);
+          if (--current_task_list_[local_id].num_dependencies == 0)
+            ready_queue_.push_back(local_id);
+        }
       }
       any_work_done = true;
     }
