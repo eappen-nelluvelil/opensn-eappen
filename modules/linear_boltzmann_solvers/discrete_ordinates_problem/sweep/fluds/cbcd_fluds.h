@@ -69,7 +69,7 @@ public:
   /// Copies incoming boundary psi from host to device.
   void CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
 
-  /// Scatter received face data directly into incoming_nonlocal_psi_ (mapped host memory).
+  /// Scatter received face data directly into incoming_nonlocal_psi_.
   /// Called at MPI receive time — eliminates the intermediate deplocs_outgoing_messages_ hash map.
   void ScatterReceivedFaceData(uint64_t cell_global_id,
                                unsigned int face_id,
@@ -80,8 +80,6 @@ public:
                                  CBCD_AngleSet* angle_set,
                                  const std::vector<std::uint64_t>& cell_local_ids);
 
-  // --- Pulled up from CBC_FLUDS ---
-
   void ClearLocalAndReceivePsi() override {}
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
@@ -90,7 +88,7 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
-  /// Get the outgoing boundary node map (cell_local_id → boundary nodes).
+  /// Get the outgoing boundary node map (cell_local_id -> boundary nodes).
   const std::map<std::uint64_t, std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
   {
     return cell_to_outgoing_boundary_nodes_;
@@ -158,7 +156,19 @@ private:
   };
   std::unordered_map<uint64_t, std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
 
-  /// Pre-computed scatter lookup: (cell_global_id, face_id) → nodes to scatter into.
+  /// Pre-computed map from destination locality to the list of cell IDs that have
+  /// outgoing faces to that destination.
+  /// Built once in ctor.
+  /// Enables per-destination batch accumulation in CopyOutgoingPsiBackToHost.
+  struct DestinationInfo
+  {
+    int locality;
+    int queue_index; ///< Pre-resolved inex into aggregated comm's outgoing_queues_.
+  };
+  std::vector<DestinationInfo> outgoing_destinations_;
+  std::unordered_map<int, size_t> locality_to_dest_index_;
+
+  /// Pre-computed scatter lookup: (cell_global_id, face_id) -> nodes to scatter into.
   /// Built once in constructor from cell_to_incoming_nonlocal_nodes_.
   /// Enables O(1) lookup + direct scatter into incoming_nonlocal_psi_ at MPI receive time.
   std::unordered_map<CellFaceKey, std::vector<const NonlocalNodeInfo*>, CellFaceKeyHash>

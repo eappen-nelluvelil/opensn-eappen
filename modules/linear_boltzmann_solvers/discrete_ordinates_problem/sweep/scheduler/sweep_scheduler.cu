@@ -136,10 +136,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           any_work |= as->TryAdvanceOneStep();
         }
 
-        // Yield when idle to avoid starving the comm thread. This is necessary because
-        // std::thread::hardware_concurrency() may return the total node core count rather
-        // than the cores available to this MPI rank, leading to over-subscription.
-        // The comm thread needs CPU time to service MPI sends/receives.
+        // Yield when idle to avoid starving the comm thread.
         if (not any_work and not all_done)
           std::this_thread::yield();
       }

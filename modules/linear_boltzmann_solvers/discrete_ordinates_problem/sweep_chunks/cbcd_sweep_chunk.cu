@@ -71,10 +71,81 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     streams_list_.push_back(&(angle_set->GetStream()));
   }
 
+  // Compute exact per-source worst-case message size for the receive buffer
+  // For each dependency location J, sum the wire-format size of all incoming
+  // non-local face data from J across all angle sets.
+  // The maximum over all J gives the tightest possible reservation for
+  // persistent_recv_buffer_.
+  const auto& grid = *problem_.GetGrid();
+
+  // Per-source, per-angle-set: accumulate (num_entries, total_psi_bytes).
+  // Key: source partition ID
+  // Value: per-angle-set entry counts and data sizes
+  struct PerSourceAngleSetInfo
+  {
+    size_t num_entries = 0;
+    size_t psi_bytes = 0;
+  };
+
+  // Source partition -> (angle_set_id -> per-angle-set info)
+  std::unordered_map<int, std::unordered_map<size_t, PerSourceAngleSetInfo>> source_as_info;
+  for (size_t as_idx = 0; as_idx < angle_sets_.size(); ++as_idx)
+  {
+    auto& fluds = *fluds_list_[as_idx];
+    const auto stride = fluds.GetStrideSize();
+    const auto& incoming_map = fluds.GetCommonData().GetIncomingNonlocalNodeMap();
+
+    // Group incoming nodes by (source_partition, cell_global_id, face_id) to get
+    // the face node count for each distinct face entry.
+    // face_key: (cell_global_id, face_id) -> node count
+    std::unordered_map<int, std::map<std::pair<std::uint64_t, unsigned int>, size_t>>
+      source_face_node_counts;
+
+    for (const auto& [cell_local_id, nodes] : incoming_map)
+    {
+      for (const auto& node : nodes)
+      {
+        // Resolve source partition from cell_global_id
+        int source_partition = grid.cells[node.cell_global_id].partition_id;
+        source_face_node_counts[source_partition][{node.cell_global_id, node.face_id}]++;
+      }
+    }
+
+    // Convert per-face counts to per-source per-angleset totals
+    for (const auto& [source_partition, face_counts] : source_face_node_counts)
+    {
+      auto& info = source_as_info[source_partition][as_idx];
+      for (const auto& [face_key, num_nodes] : face_counts)
+      {
+        info.num_entries += 1; // Each face corresponds to one entry in the message
+        // Per entry: cell_global_id + face_id + data_size + psi_data
+        info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + 
+                          sizeof(size_t) + num_nodes * stride * sizeof(double);
+      }
+    }
+  }
+
+  // Compute the worst-case message size: max over all sources
+  size_t max_single_message_size_in_bytes = 0;
+  for (const auto& [source_partition, as_map] : source_as_info)
+  {
+    // num_active_angle_sets header
+    size_t msg_size_in_bytes = sizeof(size_t);
+    for (const auto& [as_idx, info] : as_map)
+    {
+      // Per active angle set: as_id + num_entries
+      msg_size_in_bytes += sizeof(size_t) + sizeof(size_t);
+      // Data for all entries in this angle set
+      msg_size_in_bytes += info.psi_bytes;
+    }
+    max_single_message_size_in_bytes = std::max(max_single_message_size_in_bytes, msg_size_in_bytes);
+  }
+
   // Create aggregated communicator and set it on all angle sets
   std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
   agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
-                                                            problem_.GetMPICommunicatorSet());
+                                                            problem_.GetMPICommunicatorSet(),
+                                                            max_single_message_size_in_bytes);
   for (auto* as : angle_sets_)
     as->SetAggregatedCommunicator(agg_comm_.get());
 }

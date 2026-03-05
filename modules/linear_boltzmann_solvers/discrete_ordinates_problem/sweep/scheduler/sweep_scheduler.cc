@@ -45,6 +45,8 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     // This avoids spawning hundreds of busy-polling threads for large quadratures.
     num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
                             static_cast<size_t>(std::thread::hardware_concurrency()));
+    opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
+                      << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);
   }
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
