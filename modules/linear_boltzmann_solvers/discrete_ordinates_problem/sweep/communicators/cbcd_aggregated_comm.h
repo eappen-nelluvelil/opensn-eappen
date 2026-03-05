@@ -113,10 +113,6 @@ public:
 
   ~CBCD_AggregatedCommunicator();
 
-  /// Push a batch of outgoing entries for a single destination
-  /// (one Treiber node per batch)
-  void EnqueueOutgoingBatch(int dest_location, std::vector<OutgoingEntry>&& batch);
-
   /// Push all received batches for this angle set (lock-free).
   /// Returns the raw batches to avoid flattening overhead.
   std::vector<std::vector<IncomingEntry>> DequeueIncoming(size_t angle_set_id);
@@ -127,7 +123,6 @@ public:
   int GetQueueIndex(int dest_location) const; 
 
   /// Push a batch of outgoing entries by pre-resolved queue index.
-  /// (Avoids hash lookup)
   void EnqueueOutgoingBatchByIndex(int queue_index, std::vector<OutgoingEntry>&& batch);
 
   /// Signal that this angle set has no more outgoing data.
