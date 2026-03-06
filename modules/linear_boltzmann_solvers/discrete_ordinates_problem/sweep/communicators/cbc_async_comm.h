@@ -8,6 +8,7 @@
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <cstdint>
 #include <cstddef>
@@ -55,7 +56,19 @@ protected:
 
   // location_id, cell_global_id, face_id
   using MessageKey = std::tuple<int, uint64_t, unsigned int>;
-  std::map<MessageKey, std::vector<double>> outgoing_message_queue_;
+
+  struct MessageKeyHash
+  {
+    size_t operator()(const MessageKey& key) const noexcept
+    {
+      size_t h = std::hash<int>{}(std::get<0>(key));
+      h ^= std::hash<uint64_t>{}(std::get<1>(key)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      h ^= std::hash<unsigned int>{}(std::get<2>(key)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+
+  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
 
   struct BufferItem
   {

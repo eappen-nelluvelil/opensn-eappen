@@ -6,7 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include <cstddef>
-#include <map>
+#include <unordered_map>
 #include <functional>
 
 namespace opensn
@@ -83,7 +83,18 @@ public:
   // cell_global_id, face_id
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
-  std::map<CellFaceKey, std::vector<double>>& GetDeplocsOutgoingMessages()
+  struct CellFaceKeyHash
+  {
+    size_t operator()(const CellFaceKey& key) const noexcept
+    {
+      size_t h = std::hash<uint64_t>{}(key.first);
+      h ^= std::hash<unsigned int>{}(key.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>&
+  GetDeplocsOutgoingMessages()
   {
     return deplocs_outgoing_messages_;
   }
@@ -104,7 +115,10 @@ private:
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
 
-  std::map<CellFaceKey, std::vector<double>> deplocs_outgoing_messages_;
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash> deplocs_outgoing_messages_;
+
+  /// Pre-computed start index into local_psi_data_ for each local cell.
+  std::vector<size_t> cell_psi_start_;
 };
 
 } // namespace opensn

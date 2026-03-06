@@ -102,11 +102,12 @@ CBCSweepChunk::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
   cell_num_faces_ = cell_->faces.size();
   cell_num_nodes_ = cell_mapping_->GetNumNodes();
 
-  // Get cell matrices
-  G_ = unit_cell_matrices_[cell_local_id_].intV_shapeI_gradshapeJ;
-  M_ = unit_cell_matrices_[cell_local_id_].intV_shapeI_shapeJ;
-  M_surf_ = unit_cell_matrices_[cell_local_id_].intS_shapeI_shapeJ;
-  IntS_shapeI_ = unit_cell_matrices_[cell_local_id_].intS_shapeI;
+  // Get cell matrices (pointers to avoid per-cell heap allocations)
+  const auto& unit_mats = unit_cell_matrices_[cell_local_id_];
+  G_ = &unit_mats.intV_shapeI_gradshapeJ;
+  M_ = &unit_mats.intV_shapeI_shapeJ;
+  M_surf_ = &unit_mats.intS_shapeI_shapeJ;
+  IntS_shapeI_ = &unit_mats.intS_shapeI;
 }
 
 void
@@ -149,7 +150,7 @@ CBCSweepChunk::Sweep_Generic(AngleSet& angle_set)
 
     for (size_t i = 0; i < cell_num_nodes_; ++i)
       for (size_t j = 0; j < cell_num_nodes_; ++j)
-        Amat(i, j) = omega.Dot(G_(i, j));
+        Amat(i, j) = omega.Dot((*G_)(i, j));
 
     // Update face orientations
     for (size_t f = 0; f < cell_num_faces_; ++f)
@@ -177,7 +178,7 @@ CBCSweepChunk::Sweep_Generic(AngleSet& angle_set)
         {
           const int j = cell_mapping_->MapFaceNode(f, fj);
 
-          const double mu_Nij = -face_mu_values[f] * M_surf_[f](i, j);
+          const double mu_Nij = -face_mu_values[f] * (*M_surf_)[f](i, j);
           Amat(i, j) += mu_Nij;
 
           const double* psi = nullptr;
@@ -230,7 +231,7 @@ CBCSweepChunk::Sweep_Generic(AngleSet& angle_set)
         double temp = 0.0;
         for (size_t j = 0; j < cell_num_nodes_; ++j)
         {
-          const double Mij = M_(i, j);
+          const double Mij = (*M_)(i, j);
           Atemp(i, j) = Amat(i, j) + Mij * sigma_tg;
           temp += Mij * source[j];
         }
@@ -280,7 +281,7 @@ CBCSweepChunk::Sweep_Generic(AngleSet& angle_set)
       const bool is_boundary_face = not face.has_neighbor;
       const bool is_reflecting_boundary_face =
         (is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting());
-      const auto& IntF_shapeI = IntS_shapeI_[f];
+      const auto& IntF_shapeI = (*IntS_shapeI_)[f];
 
       const int locality = cell_transport_view_->FaceLocality(f);
       const size_t num_face_nodes = cell_mapping_->GetNumFaceNodes(f);

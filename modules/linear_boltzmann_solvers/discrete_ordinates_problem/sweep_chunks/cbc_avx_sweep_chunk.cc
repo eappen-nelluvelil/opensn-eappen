@@ -31,10 +31,9 @@ CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
   const double rho = densities_[cell_local_id_];
   const auto& sigma_t = xs_.at(cell_->block_id)->GetSigmaTotal();
 
-  const auto& unit_mats = unit_cell_matrices_[cell_local_id_];
-  const auto& G = unit_mats.intV_shapeI_gradshapeJ;
-  const auto& M = unit_mats.intV_shapeI_shapeJ;
-  const auto& M_surf = unit_mats.intS_shapeI_shapeJ;
+  const auto& G = *G_;
+  const auto& M = *M_;
+  const auto& M_surf = *M_surf_;
 
   constexpr size_t matrix_size = static_cast<size_t>(NumNodes) * static_cast<size_t>(NumNodes);
   auto idx = [](int i, int j) -> size_t
@@ -46,7 +45,7 @@ CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
   {
     PRAGMA_UNROLL
     for (int j = 0; j < static_cast<int>(NumNodes); ++j)
-      mass_matrix[idx(i, j)] = M_(i, j);
+      mass_matrix[idx(i, j)] = M(i, j);
   }
 
   std::vector<std::array<size_t, NumNodes>> moment_dof_map(num_moments_);
@@ -80,7 +79,7 @@ CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
     {
       PRAGMA_UNROLL
       for (int j = 0; j < static_cast<int>(NumNodes); ++j)
-        Amat[idx(i, j)] = omega.Dot(G_(i, j));
+        Amat[idx(i, j)] = omega.Dot(G(i, j));
     }
 
     for (size_t f = 0; f < cell_num_faces_; ++f)
@@ -266,7 +265,7 @@ CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
       const bool is_boundary_face = not face.has_neighbor;
       const bool is_reflecting_boundary_face =
         (is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting());
-      const auto& IntF_shapeI = unit_mats.intS_shapeI[f];
+      const auto& IntF_shapeI = (*IntS_shapeI_)[f];
 
       const int locality = cell_transport_view_->FaceLocality(f);
       const size_t num_face_nodes = cell_mapping_->GetNumFaceNodes(f);

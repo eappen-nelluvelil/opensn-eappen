@@ -74,10 +74,10 @@ private:
   size_t cell_num_faces_;
   size_t cell_num_nodes_;
 
-  DenseMatrix<Vector3> G_;
-  DenseMatrix<double> M_;
-  std::vector<DenseMatrix<double>> M_surf_;
-  std::vector<Vector<double>> IntS_shapeI_;
+  const DenseMatrix<Vector3>* G_;
+  const DenseMatrix<double>* M_;
+  const std::vector<DenseMatrix<double>>* M_surf_;
+  const std::vector<Vector<double>>* IntS_shapeI_;
 };
 
 } // namespace opensn

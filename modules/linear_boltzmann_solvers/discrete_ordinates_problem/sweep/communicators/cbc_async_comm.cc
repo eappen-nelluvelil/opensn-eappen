@@ -9,6 +9,7 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
+#include <cstring>
 
 namespace opensn
 {
@@ -52,8 +53,14 @@ CBC_ASynchronousCommunicator::SendData()
       buffer_array.Write(cell_global_id);
       buffer_array.Write(face_id);
       buffer_array.Write(data_size);
-      for (const double value : data) // actual psi_data
-        buffer_array.Write(value);
+
+      // Bulk-write the double array directly to avoid per-element
+      // ByteArray::Write overhead (temporary vector + heap allocation per double)
+      auto& raw = buffer_array.Data();
+      const size_t old_size = raw.size();
+      const size_t num_bytes = data_size * sizeof(double);
+      raw.resize(old_size + num_bytes);
+      std::memcpy(&raw[old_size], data.data(), num_bytes);
     }
 
     for (auto& [locI, buffer] : locI_buffer_map)
@@ -93,8 +100,9 @@ CBC_ASynchronousCommunicator::ReceiveData()
 {
   CALI_CXX_MARK_SCOPE("CBC_ASynchronousCommunicator::ReceiveData");
 
-  using CellFaceKey = std::pair<uint64_t, unsigned int>; // cell_gid + face_id
-  std::map<CellFaceKey, std::vector<double>> received_messages;
+  using CellFaceKey = CBC_FLUDS::CellFaceKey;
+  using CellFaceKeyHash = CBC_FLUDS::CellFaceKeyHash;
+  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash> received_messages;
   std::vector<uint64_t> cells_who_received_data;
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   for (int locJ : location_dependencies)
@@ -116,10 +124,11 @@ CBC_ASynchronousCommunicator::ReceiveData()
         const auto face_id = data_array.Read<unsigned int>();
         const auto data_size = data_array.Read<size_t>();
 
-        std::vector<double> psi_data;
-        psi_data.reserve(data_size);
-        for (size_t k = 0; k < data_size; ++k)
-          psi_data.push_back(data_array.Read<double>());
+        // Bulk-read the double array to avoid per-element ByteArray::Read overhead
+        std::vector<double> psi_data(data_size);
+        const size_t num_bytes = data_size * sizeof(double);
+        std::memcpy(psi_data.data(), &data_array.Data()[data_array.Offset()], num_bytes);
+        data_array.Seek(data_array.Offset() + num_bytes);
 
         received_messages[{cell_global_id, face_id}] = std::move(psi_data);
         cells_who_received_data.push_back(

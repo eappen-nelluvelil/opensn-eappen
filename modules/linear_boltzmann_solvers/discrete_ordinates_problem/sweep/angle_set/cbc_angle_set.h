@@ -60,6 +60,8 @@ public:
 protected:
   const CBC_SPDS& cbc_spds_;
   std::vector<Task> current_task_list_;
+  std::vector<uint64_t> ready_tasks_;
+  size_t num_completed_tasks_ = 0;
   CBC_ASynchronousCommunicator async_comm_;
 };
 
