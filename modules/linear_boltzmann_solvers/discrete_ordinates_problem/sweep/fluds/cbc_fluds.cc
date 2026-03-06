@@ -36,6 +36,10 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
       (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_) *
       num_groups_and_angles_;
   }
+
+  // Pre-reserve capacity for the non-local incoming data map to avoid
+  // rehashing during the sweep.
+  deplocs_outgoing_messages_.reserve(common_data.GetNumNonLocalIncomingFaces());
 }
 
 const FLUDSCommonData&

@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <map>
@@ -32,6 +33,11 @@ public:
       angle_set_id_(angle_set_id),
       cbc_fluds_(dynamic_cast<CBC_FLUDS&>(fluds))
   {
+    // Pre-reserve capacity for the outgoing message queue to avoid
+    // rehashing during the sweep.
+    const auto& common_data =
+      dynamic_cast<const CBC_FLUDSCommonData&>(cbc_fluds_.GetCommonData());
+    outgoing_message_queue_.reserve(common_data.GetNumNonLocalOutgoingFaces());
   }
 
   std::vector<double>& InitGetDownwindMessageData(int location_id,
@@ -57,6 +63,8 @@ protected:
   // location_id, cell_global_id, face_id
   using MessageKey = std::tuple<int, uint64_t, unsigned int>;
 
+  /// Hash for MessageKey using Boost's hash_combine algorithm.
+  /// 0x9e3779b9 = floor(2^32 / golden_ratio), chosen for maximal bit dispersion.
   struct MessageKeyHash
   {
     size_t operator()(const MessageKey& key) const noexcept

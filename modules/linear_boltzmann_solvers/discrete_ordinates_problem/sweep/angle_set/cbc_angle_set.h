@@ -5,12 +5,21 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include <cstdint>
 
 namespace opensn
 {
 
 struct Task;
 class CBC_SPDS;
+
+/// Mutable per-sweep state extracted from the immutable Task struct,
+/// avoiding a full copy of the task list (which heap-allocates successors vectors).
+struct TaskMutableState
+{
+  unsigned int num_dependencies;
+  bool completed;
+};
 
 class CBC_AngleSet : public AngleSet
 {
@@ -59,7 +68,8 @@ public:
 
 protected:
   const CBC_SPDS& cbc_spds_;
-  std::vector<Task> current_task_list_;
+  const std::vector<Task>* task_list_ptr_ = nullptr;
+  std::vector<TaskMutableState> task_states_;
   std::vector<uint64_t> ready_tasks_;
   size_t num_completed_tasks_ = 0;
   CBC_ASynchronousCommunicator async_comm_;

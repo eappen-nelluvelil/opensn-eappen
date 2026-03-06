@@ -83,6 +83,8 @@ public:
   // cell_global_id, face_id
   using CellFaceKey = std::pair<uint64_t, unsigned int>;
 
+  /// Hash for CellFaceKey using Boost's hash_combine algorithm.
+  /// 0x9e3779b9 = floor(2^32 / golden_ratio), chosen for maximal bit dispersion.
   struct CellFaceKeyHash
   {
     size_t operator()(const CellFaceKey& key) const noexcept
