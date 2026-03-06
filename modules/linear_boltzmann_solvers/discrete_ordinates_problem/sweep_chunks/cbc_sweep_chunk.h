@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/avx_sweep_chunk_utils.h"
 
 namespace opensn
 {
@@ -33,7 +34,7 @@ public:
 
   /**
    * Performs the discrete ordinates sweep calculation for the currently
-   *        set cell, for all angles and groups within the provided AngleSet
+   * set cell, for all angles and groups within the provided AngleSet
    *
    * It:
    * - Assembles the local transport equation system for each angle and group
@@ -49,6 +50,15 @@ public:
   void Sweep(AngleSet& angle_set) override;
 
 private:
+  using SweepFunc = void (CBCSweepChunk::*)(AngleSet&);
+  SweepFunc sweep_impl_ = nullptr;
+
+  void Sweep_Generic(AngleSet& angle_set);
+  template <unsigned int NumNodes>
+  void Sweep_FixedN(AngleSet& angle_set);
+
+  unsigned int group_block_size_;
+
   CBC_FLUDS* fluds_;
   size_t gs_size_;
   unsigned int gs_gi_;
