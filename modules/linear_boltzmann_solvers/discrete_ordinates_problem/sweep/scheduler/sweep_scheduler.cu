@@ -105,7 +105,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   pool_.run(
     [&angle_sets, num_angle_sets, num_workers](std::size_t worker_id)
     {
-      // Partition angle sets among workers (contiguous ranges)
+      // Partition angle sets among worker threads 
+      // Each worker thread processes a contiguous range of anglesets
       const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
       const size_t begin = worker_id * chunk_size;
       const size_t end = std::min(begin + chunk_size, num_angle_sets);
@@ -142,7 +143,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       }
     });
 
-  // Flush + join communication thread
+  // Flush MPI sends and join communication thread
   cbcd_chunk.StopCommunicator();
 
   // Copy phi and outflow data back to host
