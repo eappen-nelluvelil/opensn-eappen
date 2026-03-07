@@ -35,16 +35,15 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     angle_agg_.SetupAngleSetDependencies();
   }
 
-  // AAO (AAHD) needs one thread per angle set — threads mostly block on MPI, so this is fine.
   if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE)
     pool_.Resize(angle_agg_.GetNumAngleSets());
   else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
     // Use a bounded number of worker threads: min(angle_sets, hardware threads).
     // Each worker cooperatively processes multiple angle sets in a round-robin loop.
-    // This avoids spawning hundreds of busy-polling threads for large quadratures.
     num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
                             static_cast<size_t>(std::thread::hardware_concurrency()));
+    // num_workers_ = static_cast<size_t>(angle_agg_.GetNumAngleSets());
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
                       << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);
