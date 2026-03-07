@@ -31,7 +31,7 @@ class TotalXSCarrier;
 class OutflowCarrier;
 class MeshCarrier;
 template <typename T>
-class MemoryPinner;
+struct MemoryPinner;
 
 /// Base class for all Linear Boltzmann Solvers.
 class LBSProblem : public Problem
@@ -169,6 +169,15 @@ public:
 
   /// Returns a const reference to the MPI communicator set.
   const MPICommunicatorSet& GetMPICommunicatorSet() const;
+
+  TotalXSCarrier* GetTotalXSCarrier() { return total_xs_carrier_.get(); }
+  const TotalXSCarrier* GetTotalXSCarrier() const { return total_xs_carrier_.get(); }
+
+  OutflowCarrier* GetOutflowCarrier() { return outflow_carrier_.get(); }
+  const OutflowCarrier* GetOutflowCarrier() const { return outflow_carrier_.get(); }
+
+  MeshCarrier* GetMeshCarrier() { return mesh_carrier_.get(); }
+  const MeshCarrier* GetMeshCarrier() const { return mesh_carrier_.get(); }
 
   MemoryPinner<double>* GetSourceMomentsPinner() { return source_pinner_.get(); }
   const MemoryPinner<double>* GetSourceMomentsPinner() const { return source_pinner_.get(); }
