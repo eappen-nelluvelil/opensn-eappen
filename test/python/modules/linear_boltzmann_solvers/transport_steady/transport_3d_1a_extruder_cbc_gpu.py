@@ -101,6 +101,7 @@ if __name__ == "__main__":
              "type": "isotropic",
              "group_strength": bsrc},
         ],
+        sweep_type="CBC",
         use_gpus=True
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)

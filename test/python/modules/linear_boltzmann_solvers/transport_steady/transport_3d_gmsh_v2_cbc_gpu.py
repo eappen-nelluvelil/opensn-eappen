@@ -66,8 +66,6 @@ if __name__ == "__main__":
             {"name": "xmin", "type": "reflecting"},
             {"name": "ymin", "type": "reflecting"},
         ],
-        sweep_type="CBC",
-        use_gpus=True
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)
     ss_solver.Initialize()

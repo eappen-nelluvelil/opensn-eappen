@@ -100,7 +100,6 @@ if __name__ == "__main__":
         options={
             "save_angular_flux": True,
         },
-        sweep_type="CBC",
         use_gpus=True
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)
