@@ -161,6 +161,23 @@ public:
   /// Pull all received batches for this angle set (lock-free).
   std::vector<std::vector<IncomingEntry>> DequeueIncoming(size_t angle_set_id);
 
+  /// Process all ready incoming batches in-place (zero-allocation path).
+  /// The callback receives a const reference to each batch. Slots are freed after
+  /// all batches are processed, preserving psi_data vector capacity for reuse.
+  template <typename Callback>
+  bool ProcessIncoming(size_t angle_set_id, Callback&& cb)
+  {
+    assert(angle_set_id < num_angle_sets_);
+    auto& mailbox = incoming_mailboxes_[angle_set_id];
+    auto ready_slots = mailbox.GetReadySlots();
+    if (ready_slots.empty())
+      return false;
+    for (auto* slot : ready_slots)
+      cb(slot->payload);
+    mailbox.FreeSlots(ready_slots.size());
+    return true;
+  }
+
   /// Signal that this angle set has no more outgoing data.
   void SignalAngleSetComplete(size_t angle_set_id);
 
@@ -189,8 +206,8 @@ private:
   void CommThreadLoop();
 
   bool FlushOutgoing(std::vector<std::vector<const OutgoingEntry*>>& by_angle_set);
-  void ProbeAndReceive();
-  void PollPendingSends();
+  bool ProbeAndReceive();
+  bool PollPendingSends();
   bool AllWorkComplete() const;
 
   const MPICommunicatorSet& comm_set_;

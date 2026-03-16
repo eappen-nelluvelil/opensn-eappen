@@ -8,7 +8,6 @@
 #include "caribou/main.hpp"
 #include <atomic>
 #include <set>
-#include <unordered_set>
 
 namespace crb = caribou;
 
@@ -137,11 +136,18 @@ private:
   /// Tasks and cell IDs for the currently in-flight kernel batch.
   std::vector<Task*> in_flight_tasks_;
   std::vector<std::uint64_t> in_flight_cell_ids_;
+  /// Staging vectors for kernel launch (reused across calls to avoid allocation).
+  std::vector<Task*> staging_ready_tasks_;
+  std::vector<std::uint64_t> staging_ready_cell_ids_;
+  /// Cached initial dependency counts for fast reset (avoids re-copying task list).
+  std::vector<int> initial_deps_;
+  /// Working copy of dependency counts, decremented during sweep.
+  std::vector<int> remaining_deps_;
   /// Number of completed tasks and total tasks for this sweep.
   size_t completed_count_ = 0;
   size_t total_tasks_ = 0;
-  /// Cell local IDs that have outgoing reflecting boundary faces.
-  std::unordered_set<uint64_t> reflecting_boundary_cells_;
+  /// Fast O(1) lookup: is this cell a reflecting boundary cell? Indexed by cell_local_id.
+  std::vector<bool> is_reflecting_boundary_cell_;
   /// Number of reflecting boundary cells completed so far.
   size_t reflecting_boundary_completed_ = 0;
   /// Total reflecting boundary cells (set during init).

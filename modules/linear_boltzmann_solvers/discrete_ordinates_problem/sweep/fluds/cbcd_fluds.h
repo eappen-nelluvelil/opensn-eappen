@@ -68,9 +68,10 @@ public:
   void CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
 
   /// Scatter received face data directly into incoming_nonlocal_psi_.
-  void ScatterReceivedFaceData(uint64_t cell_global_id,
-                               unsigned int face_id,
-                               const std::vector<double>& psi_data);
+  /// Returns the local cell ID (avoids caller needing a second global→local lookup).
+  uint64_t ScatterReceivedFaceData(uint64_t cell_global_id,
+                                   unsigned int face_id,
+                                   const std::vector<double>& psi_data);
 
   /// Copy outgoing psi on host after D2H copy is done.
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
@@ -150,6 +151,10 @@ private:
   size_t num_incoming_faces_ = 0;
   size_t max_face_data_size_ = 0;
   std::vector<double> face_staging_buffer_; ///< Replaces dynamic vector allocations.
+
+  /// Fast global→local cell ID lookup for incoming nonlocal cells only.
+  /// Uses unordered_map (O(1) amortized) instead of std::map (O(log n)) on the hot path.
+  std::unordered_map<uint64_t, uint64_t> incoming_global_to_local_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();

@@ -157,9 +157,9 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 
   while (true)
   {
-    FlushOutgoing(by_angle_set);
-    ProbeAndReceive();
-    PollPendingSends();
+    bool work_done = FlushOutgoing(by_angle_set);
+    work_done |= ProbeAndReceive();
+    work_done |= PollPendingSends();
 
     if (stop_requested_.load(std::memory_order_acquire) and AllWorkComplete())
     {
@@ -174,7 +174,9 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
       break;
     }
 
-    std::this_thread::yield();
+    // Only yield when no work was done to reduce latency when there is active communication
+    if (not work_done)
+      std::this_thread::yield();
   }
 }
 
@@ -280,11 +282,12 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
   return flushed_any;
 }
 
-void
+bool
 CBCD_AggregatedCommunicator::ProbeAndReceive()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::ProbeAndReceive");
 
+  bool received_any = false;
   const int my_rank = opensn::mpi_comm.rank();
 
   for (int locJ : location_dependencies_)
@@ -295,6 +298,7 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
     mpi::Status status;
     while (comm.iprobe(source_rank, aggregated_tag_, status))
     {
+      received_any = true;
       int num_bytes = status.count<std::byte>();
       persistent_recv_buffer_.Data().resize(num_bytes);
 
@@ -336,16 +340,19 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
       }
     }
   }
+  return received_any;
 }
 
-void
+bool
 CBCD_AggregatedCommunicator::PollPendingSends()
 {
+  bool completed_any = false;
   // O(1) swap-and-pop removal logic
   for (size_t i = 0; i < pending_sends_.size();)
   {
     if (mpi::test(pending_sends_[i].request))
     {
+      completed_any = true;
       pending_sends_[i] = std::move(pending_sends_.back());
       pending_sends_.pop_back();
     }
@@ -354,6 +361,7 @@ CBCD_AggregatedCommunicator::PollPendingSends()
       ++i;
     }
   }
+  return completed_any;
 }
 
 bool

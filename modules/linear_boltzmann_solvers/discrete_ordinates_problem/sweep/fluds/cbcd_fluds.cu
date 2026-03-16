@@ -89,6 +89,10 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     if (nodes.empty())
       continue;
 
+    // Build fast global→local lookup for cells that receive nonlocal data
+    uint64_t global_id = grid.local_cells[cell_id].global_id;
+    incoming_global_to_local_[global_id] = cell_id;
+
     std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
     for (const auto& node : nodes)
       by_face[node.face_id].push_back(&node);
@@ -184,12 +188,12 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
   }
 }
 
-void
+uint64_t
 CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
                                     unsigned int face_id,
                                     const std::vector<double>& psi_data)
 {
-  uint64_t cell_local_id = grid_ptr_->MapCellGlobalID2LocalID(cell_global_id);
+  uint64_t cell_local_id = incoming_global_to_local_.find(cell_global_id)->second;
   const auto& grouped = cell_to_face_grouped_incoming_[cell_local_id];
 
   for (const auto& face_info : grouped)
@@ -205,6 +209,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
       break;
     }
   }
+  return cell_local_id;
 }
 
 void
