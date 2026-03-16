@@ -23,7 +23,7 @@ if "opensn_console" not in globals():
 if __name__ == "__main__":
 
     meshgen = FromFileMeshGenerator(
-        filename="../../../../assets/mesh/inclusions_gmsh_v2.msh",
+        filename="../../../../assets/mesh/inclusions_gmsh_v4.msh",
     )
     grid = meshgen.Execute()
     grid.SetOrthogonalBoundaries()
@@ -69,6 +69,7 @@ if __name__ == "__main__":
         sweep_type="CBC",
         use_gpus=True
     )
+
     ss_solver = SteadyStateSourceSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()

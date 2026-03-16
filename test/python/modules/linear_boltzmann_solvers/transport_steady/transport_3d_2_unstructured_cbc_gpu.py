@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-3D Transport test with Vacuum and Incident-isotropic BC.
-SDM: PWLD
-Test: Max-value=5.27450e-01 and 3.76339e-04
+3D PWLD unstructured mesh ransport test with vacuum and incident-isotropic boundary conditions
+Test: Max-value=5.41465e-01 and 3.78243e-04
 """
 
 import os
@@ -16,74 +15,73 @@ if "opensn_console" not in globals():
     size = MPI.COMM_WORLD.size
     rank = MPI.COMM_WORLD.rank
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../")))
-    from pyopensn.mesh import OrthogonalMeshGenerator, ExtruderMeshGenerator, KBAGraphPartitioner
-    from pyopensn.mesh import FromFileMeshGenerator
+    from pyopensn.mesh import ExtruderMeshGenerator, FromFileMeshGenerator, KBAGraphPartitioner
+    from pyopensn.logvol import RPPLogicalVolume
     from pyopensn.xs import MultiGroupXS
     from pyopensn.source import VolumetricSource
     from pyopensn.aquad import GLCProductQuadrature3DXYZ
     from pyopensn.solver import DiscreteOrdinatesProblem, SteadyStateSourceSolver
-    from pyopensn.fieldfunc import FieldFunctionGridBased
-    from pyopensn.fieldfunc import FieldFunctionInterpolationLine, FieldFunctionInterpolationVolume
-    from pyopensn.context import EnableCaliper
-    from pyopensn.math import Vector3
-    from pyopensn.logvol import RPPLogicalVolume
+    from pyopensn.fieldfunc import FieldFunctionInterpolationVolume
 
 if __name__ == "__main__":
 
     num_procs = 4
-
     if size != num_procs:
-        sys.exit(f"Incorrect number of processors. Expected {num_procs} processors but got {size}.")
+        sys.exit(f"Incorrect number of processors. Expected {num_procs} but got {size}.")
 
     # Setup mesh
     meshgen = ExtruderMeshGenerator(
         inputs=[
             FromFileMeshGenerator(
-                filename="../../../../assets/mesh/square_mesh2x2_quads.obj"
+                filename="../../../../assets/mesh/triangle_mesh2x2_cuts.obj"
             )
         ],
-        layers=[{"z": 0.4, "n": 2},
-                {"z": 0.8, "n": 2},
-                {"z": 1.2, "n": 2},
-                {"z": 1.6, "n": 2},
-                ],  # layers
+        layers=[
+            {"z": 0.4, "n": 2},
+            {"z": 0.8, "n": 2},
+            {"z": 1.2, "n": 2},
+            {"z": 1.6, "n": 2},
+        ],
         partitioner=KBAGraphPartitioner(
             nx=2,
             ny=2,
             xcuts=[0.0],
-            ycuts=[0.0], ),
+            ycuts=[0.0],
+        )
     )
     grid = meshgen.Execute()
     grid.SetOrthogonalBoundaries()
 
-    # Set block IDs
+    # Set block IDs using logical volumes
     vol0 = RPPLogicalVolume(infx=True, infy=True, infz=True)
     grid.SetBlockIDFromLogicalVolume(vol0, 0, True)
     vol1 = RPPLogicalVolume(xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5, infz=True)
     grid.SetBlockIDFromLogicalVolume(vol1, 1, True)
 
-    # Cross sections
+    # Energy groups and cross-section data.
     num_groups = 21
     xs_graphite = MultiGroupXS()
     xs_graphite.LoadFromOpenSn("xs_graphite_pure.xs")
 
-    # Source
+    # Define sources
     strength = [0.0 for _ in range(num_groups)]
     mg_src1 = VolumetricSource(block_ids=[1], group_strength=strength)
     mg_src2 = VolumetricSource(block_ids=[2], group_strength=strength)
 
-    # Setup Physics
+    # Angular quadrature
     pquad = GLCProductQuadrature3DXYZ(n_polar=4, n_azimuthal=8, scattering_order=1)
 
+    # Set up the boundary source.
     bsrc = [0.0 for _ in range(num_groups)]
     bsrc[0] = 1.0
 
+    # Create and configure the discrete ordinates solver
     phys = DiscreteOrdinatesProblem(
         mesh=grid,
         num_groups=num_groups,
         groupsets=[
             {
-                "groups_from_to": [0, 20],
+                "groups_from_to": (0, 20),
                 "angular_quadrature": pquad,
                 "angle_aggregation_num_subsets": 1,
                 "inner_linear_method": "petsc_gmres",
@@ -97,36 +95,39 @@ if __name__ == "__main__":
         ],
         volumetric_sources=[mg_src1, mg_src2],
         boundary_conditions=[
-            {"name": "zmin",
-             "type": "isotropic",
-             "group_strength": bsrc},
+            {"name": "zmin", "type": "isotropic", "group_strength": bsrc},
         ],
+        options={
+            "save_angular_flux": True,
+        },
+        sweep_type="CBC",
         use_gpus=True
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)
     ss_solver.Initialize()
     ss_solver.Execute()
 
-    # Get field functions
-    fflist = phys.GetScalarFluxFieldFunction()
+    # Retrieve the scalar field function list.
+    fflist = phys.GetScalarFluxFieldFunction(only_scalar_flux=False)
 
-    # Volume integrations
+    # Volume integration for the first field function
     ffi1 = FieldFunctionInterpolationVolume()
     curffi = ffi1
     curffi.SetOperationType("max")
     curffi.SetLogicalVolume(vol0)
-    curffi.AddFieldFunction(fflist[0])
+    curffi.AddFieldFunction(fflist[0][0])
     curffi.Initialize()
     curffi.Execute()
     maxval = curffi.GetValue()
     if rank == 0:
         print(f"Max-value1={maxval:.5e}")
 
+    # Volume integration for the twentieth field function
     ffi1 = FieldFunctionInterpolationVolume()
     curffi = ffi1
     curffi.SetOperationType("max")
     curffi.SetLogicalVolume(vol0)
-    curffi.AddFieldFunction(fflist[19])
+    curffi.AddFieldFunction(fflist[19][0])
     curffi.Initialize()
     curffi.Execute()
     maxval = curffi.GetValue()

@@ -4,7 +4,7 @@
 """
 3D Transport test with Vacuum and Incident-isotropic BC.
 SDM: PWLD
-Test: Max-value=5.27450e-01 and 3.76339e-04
+Test: Max-value=5.28310e-01 and 8.04576e-04
 """
 
 import os
@@ -16,8 +16,7 @@ if "opensn_console" not in globals():
     size = MPI.COMM_WORLD.size
     rank = MPI.COMM_WORLD.rank
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../")))
-    from pyopensn.mesh import OrthogonalMeshGenerator, ExtruderMeshGenerator, KBAGraphPartitioner
-    from pyopensn.mesh import FromFileMeshGenerator
+    from pyopensn.mesh import OrthogonalMeshGenerator, KBAGraphPartitioner
     from pyopensn.xs import MultiGroupXS
     from pyopensn.source import VolumetricSource
     from pyopensn.aquad import GLCProductQuadrature3DXYZ
@@ -36,31 +35,19 @@ if __name__ == "__main__":
         sys.exit(f"Incorrect number of processors. Expected {num_procs} processors but got {size}.")
 
     # Setup mesh
-    meshgen = ExtruderMeshGenerator(
-        inputs=[
-            FromFileMeshGenerator(
-                filename="../../../../assets/mesh/square_mesh2x2_quads.obj"
-            )
-        ],
-        layers=[{"z": 0.4, "n": 2},
-                {"z": 0.8, "n": 2},
-                {"z": 1.2, "n": 2},
-                {"z": 1.6, "n": 2},
-                ],  # layers
-        partitioner=KBAGraphPartitioner(
-            nx=2,
-            ny=2,
-            xcuts=[0.0],
-            ycuts=[0.0], ),
-    )
+    nodes = []
+    N = 10
+    L = 5.0
+    xmin = -L / 2
+    dx = L / N
+    for i in range(N + 1):
+        nodes.append(xmin + i * dx)
+    meshgen = OrthogonalMeshGenerator(node_sets=[nodes, nodes, nodes])
     grid = meshgen.Execute()
-    grid.SetOrthogonalBoundaries()
 
     # Set block IDs
     vol0 = RPPLogicalVolume(infx=True, infy=True, infz=True)
     grid.SetBlockIDFromLogicalVolume(vol0, 0, True)
-    vol1 = RPPLogicalVolume(xmin=-0.5, xmax=0.5, ymin=-0.5, ymax=0.5, infz=True)
-    grid.SetBlockIDFromLogicalVolume(vol1, 1, True)
 
     # Cross sections
     num_groups = 21
@@ -69,8 +56,7 @@ if __name__ == "__main__":
 
     # Source
     strength = [0.0 for _ in range(num_groups)]
-    mg_src1 = VolumetricSource(block_ids=[1], group_strength=strength)
-    mg_src2 = VolumetricSource(block_ids=[2], group_strength=strength)
+    mg_src = VolumetricSource(block_ids=[1], group_strength=strength)
 
     # Setup Physics
     pquad = GLCProductQuadrature3DXYZ(n_polar=4, n_azimuthal=8, scattering_order=1)
@@ -85,6 +71,7 @@ if __name__ == "__main__":
             {
                 "groups_from_to": [0, 20],
                 "angular_quadrature": pquad,
+                "angle_aggregation_type": "single",
                 "angle_aggregation_num_subsets": 1,
                 "inner_linear_method": "petsc_gmres",
                 "l_abs_tol": 1.0e-6,
@@ -95,12 +82,13 @@ if __name__ == "__main__":
         xs_map=[
             {"block_ids": [0, 1], "xs": xs_graphite},
         ],
-        volumetric_sources=[mg_src1, mg_src2],
+        volumetric_sources=[mg_src],
         boundary_conditions=[
-            {"name": "zmin",
+            {"name": "xmin",
              "type": "isotropic",
              "group_strength": bsrc},
         ],
+        sweep_type="CBC",
         use_gpus=True
     )
     ss_solver = SteadyStateSourceSolver(problem=phys)
