@@ -147,7 +147,7 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
   if (device_cell_face_node_map_ != nullptr)
   {
     crb::DeviceMemory<std::uint64_t> device_cell_face_node_map(device_cell_face_node_map_);
-    device_cell_face_node_map.release();
+    device_cell_face_node_map.reset();
     device_cell_face_node_map_ = nullptr;
   }
 }
