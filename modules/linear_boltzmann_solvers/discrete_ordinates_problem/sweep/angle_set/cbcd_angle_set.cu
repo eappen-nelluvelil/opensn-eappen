@@ -148,10 +148,14 @@ CBCD_AngleSet::TryAdvanceOneStep()
   //    so the next GPU kernel can be launched sooner, overlapping GPU compute with host work).
   if (kernel_in_flight_ and stream_.is_completed())
   {
-    // Update task dependencies and push newly-ready successors to the queue
-    for (auto* task : in_flight_tasks_)
+    // Update task dependencies and build deferred cell IDs for step D in one pass.
+    deferred_cell_ids_.clear();
+    for (uint64_t task_idx : in_flight_task_indices_)
     {
-      for (uint64_t succ : task->successors)
+      auto& task = current_task_list_[task_idx];
+      deferred_cell_ids_.push_back(task.reference_id);
+
+      for (uint64_t succ : task.successors)
       {
         if (--remaining_deps_[succ] == 0)
           ready_queue_.push_back(succ);
@@ -161,14 +165,11 @@ CBCD_AngleSet::TryAdvanceOneStep()
       // Track reflecting boundary cell completions for early dependency countdown
       if (not latch_counted_down_ and
           not is_reflecting_boundary_cell_.empty() and
-          is_reflecting_boundary_cell_[task->reference_id])
+          is_reflecting_boundary_cell_[task.reference_id])
         ++reflecting_boundary_completed_;
     }
 
-    // Save cell IDs for deferred outgoing processing
-    deferred_cell_ids_.swap(in_flight_cell_ids_);
-    in_flight_tasks_.clear();
-    in_flight_cell_ids_.clear();
+    in_flight_task_indices_.clear();
     kernel_in_flight_ = false;
     has_deferred_outgoing = true;
     any_work_done = true;
@@ -188,25 +189,22 @@ CBCD_AngleSet::TryAdvanceOneStep()
     });
 
   // C: Launch next kernel IMMEDIATELY (GPU starts working while we process outgoing data below).
+  //    Write cell IDs directly to the FLUDS MappedHostVector (eliminates intermediate staging
+  //    vector and the std::copy inside GPUSweep).
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
-    staging_ready_tasks_.clear();
-    staging_ready_cell_ids_.clear();
-    staging_ready_tasks_.reserve(ready_queue_.size());
-    staging_ready_cell_ids_.reserve(ready_queue_.size());
+    auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
+    unsigned int ready_count = 0;
+    in_flight_task_indices_.clear();
 
     for (uint64_t task_idx : ready_queue_)
     {
-      auto& task = current_task_list_[task_idx];
-      staging_ready_tasks_.push_back(&task);
-      staging_ready_cell_ids_.push_back(task.reference_id);
+      in_flight_task_indices_.push_back(task_idx);
+      host_cell_ids[ready_count++] = current_task_list_[task_idx].reference_id;
     }
     ready_queue_.clear();
 
-    cbcd_sweep_chunk_->GPUSweep(*this, staging_ready_cell_ids_);
-
-    in_flight_tasks_.swap(staging_ready_tasks_);
-    in_flight_cell_ids_.swap(staging_ready_cell_ids_);
+    cbcd_sweep_chunk_->GPUSweep(*this, ready_count);
     kernel_in_flight_ = true;
     any_work_done = true;
   }
@@ -292,8 +290,7 @@ CBCD_AngleSet::ResetSweepBuffers()
   initialized_ = false;
   ready_queue_.clear();
   kernel_in_flight_ = false;
-  in_flight_tasks_.clear();
-  in_flight_cell_ids_.clear();
+  in_flight_task_indices_.clear();
   deferred_cell_ids_.clear();
   completed_count_ = 0;
   total_tasks_ = 0;

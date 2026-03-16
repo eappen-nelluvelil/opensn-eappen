@@ -133,12 +133,9 @@ private:
   std::vector<uint64_t> ready_queue_;
   /// Whether a GPU kernel is currently in-flight on this angle set's stream.
   bool kernel_in_flight_ = false;
-  /// Tasks and cell IDs for the currently in-flight kernel batch.
-  std::vector<Task*> in_flight_tasks_;
-  std::vector<std::uint64_t> in_flight_cell_ids_;
-  /// Staging vectors for kernel launch (reused across calls to avoid allocation).
-  std::vector<Task*> staging_ready_tasks_;
-  std::vector<std::uint64_t> staging_ready_cell_ids_;
+  /// Task indices for the currently in-flight kernel batch (replaces separate task pointer and
+  /// cell ID vectors — cell IDs are derived from task.reference_id, eliminating redundant storage).
+  std::vector<std::uint64_t> in_flight_task_indices_;
   /// Deferred cell IDs for outgoing data processing (GPU-host overlap).
   std::vector<std::uint64_t> deferred_cell_ids_;
   /// Cached initial dependency counts for fast reset (avoids re-copying task list).
