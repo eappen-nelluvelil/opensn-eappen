@@ -29,63 +29,91 @@ struct IncomingEntry
   std::vector<double> psi_data;
 };
 
-/// Lock-free Treiber stack for single-consumer, multiple-producer communication 
-/// between worker threads and the comm thread.
+/// Lock-free MPSC ring buffer for zero-allocation inter-thread communication.
+/// Producers reserve slots via atomic fetch_add; the single consumer drains in FIFO order.
 template <typename T>
-class LockFreeTreiberStack
+class LockFreeRingBuffer
 {
-  struct Node
+public:
+  struct Slot
   {
     T payload;
-    Node* next;
+    std::atomic<bool> ready{false};
   };
-  // Align head to a separate cache line to prevent false sharing between 
-  // producers and consumer.
-  alignas(std::hardware_destructive_interference_size) std::atomic<Node*> head{nullptr};
+
+private:
+  std::vector<Slot> buffer_;
+  alignas(std::hardware_destructive_interference_size) std::atomic<size_t> head_{0};
+  alignas(std::hardware_destructive_interference_size) size_t tail_{0};
 
 public:
-  ~LockFreeTreiberStack()
+  void Preallocate(size_t capacity)
   {
-    auto* chain = head.exchange(nullptr, std::memory_order_acquire);
-    while (chain)
+    buffer_ = std::vector<Slot>(capacity);
+  }
+
+  /// Reserve a slot by atomic fetch_add. Spins if slot is still in use by consumer.
+  Slot& ReserveSlot()
+  {
+    size_t idx = head_.fetch_add(1, std::memory_order_relaxed) % buffer_.size();
+    while (buffer_[idx].ready.load(std::memory_order_acquire))
+      std::this_thread::yield();
+    return buffer_[idx];
+  }
+
+  /// Mark a slot as ready for the consumer.
+  void PublishSlot(Slot& slot)
+  {
+    slot.ready.store(true, std::memory_order_release);
+  }
+
+  /// Returns pointers to contiguous ready slots (consumer only).
+  std::vector<Slot*> GetReadySlots()
+  {
+    std::vector<Slot*> ready_slots;
+    if (buffer_.empty())
+      return ready_slots;
+    size_t current_tail = tail_;
+    while (buffer_[current_tail % buffer_.size()].ready.load(std::memory_order_acquire))
     {
-      auto* next = chain->next;
-      delete chain;
-      chain = next;
+      ready_slots.push_back(&buffer_[current_tail % buffer_.size()]);
+      current_tail++;
+    }
+    return ready_slots;
+  }
+
+  /// Free slots for producer reuse after consumer has serialized the data.
+  void FreeSlots(size_t count)
+  {
+    for (size_t i = 0; i < count; ++i)
+    {
+      buffer_[tail_ % buffer_.size()].ready.store(false, std::memory_order_release);
+      tail_++;
     }
   }
 
-  /// Compare-and-swap (CAS) push
-  /// Safe for concurrent producers, never blocks.
-  void Push(T&& payload)
-  {
-    auto* node = new Node{std::move(payload), nullptr};
-    auto* expected = head.load(std::memory_order_relaxed);
-    do
-    {
-      node->next = expected;
-    } while (not head.compare_exchange_weak(
-      expected, node, std::memory_order_release, std::memory_order_relaxed));
-  }
-
-  /// Atomic-exchange drain
-  /// Returns all queued entries, deletes nodes.
+  /// Drain all ready slots (consumer only).
   std::vector<T> Drain()
   {
-    auto* chain = head.exchange(nullptr, std::memory_order_acquire);
     std::vector<T> result;
-    while (chain)
+    if (buffer_.empty())
+      return result;
+    while (buffer_[tail_ % buffer_.size()].ready.load(std::memory_order_acquire))
     {
-      result.push_back(std::move(chain->payload));
-      auto* next = chain->next;
-      delete chain;
-      chain = next;
+      size_t idx = tail_ % buffer_.size();
+      result.push_back(std::move(buffer_[idx].payload));
+      buffer_[idx].ready.store(false, std::memory_order_release);
+      tail_++;
     }
     return result;
   }
 
-  /// Read-only empty check (single atomic load, no cache-line write).
-  bool Empty() const { return head.load(std::memory_order_acquire) == nullptr; }
+  bool Empty() const
+  {
+    if (buffer_.empty())
+      return true;
+    return not buffer_[tail_ % buffer_.size()].ready.load(std::memory_order_acquire);
+  }
 };
 
 /**
@@ -93,7 +121,8 @@ public:
  *
  * A dedicated communication thread aggregates MPI sends/receives across all angle sets,
  * reducing the number of MPI calls and eliminating MPI contention between worker threads.
- * All inter-thread data handoff uses lock-free Treiber stacks.
+ * All inter-thread data handoff uses lock-free MPSC ring buffers (zero heap allocation at
+ * runtime after warm-up).
  */
 class CBCD_AggregatedCommunicator
 {
@@ -107,23 +136,30 @@ public:
     std::vector<double> psi_data;
   };
 
+  /// Per-angle-set ring buffer capacity info, computed externally.
+  struct AngleSetCapacity
+  {
+    size_t outgoing_faces = 0;
+    size_t incoming_faces = 0;
+  };
+
   CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
                               const MPICommunicatorSet& comm_set,
-                              size_t max_single_message_size_in_bytes = 0);
+                              size_t max_single_message_size_in_bytes,
+                              const std::vector<AngleSetCapacity>& capacities);
 
   ~CBCD_AggregatedCommunicator();
 
-  /// Push all received batches for this angle set (lock-free).
-  /// Returns the raw batches to avoid flattening overhead.
+  /// Enqueue a single outgoing entry directly from a raw buffer (zero-allocation path).
+  void EnqueueOutgoing(int dest_location,
+                       size_t angle_set_id,
+                       uint64_t cell_global_id,
+                       unsigned int face_id,
+                       const double* psi_data,
+                       size_t data_size);
+
+  /// Pull all received batches for this angle set (lock-free).
   std::vector<std::vector<IncomingEntry>> DequeueIncoming(size_t angle_set_id);
-
-  /// Return the queue index for a destination location.
-  /// Returns -1 if not found.
-  /// Allows callers to pre-resolve the destination once and batch efficiently.
-  int GetQueueIndex(int dest_location) const; 
-
-  /// Push a batch of outgoing entries by pre-resolved queue index.
-  void EnqueueOutgoingBatchByIndex(int queue_index, std::vector<OutgoingEntry>&& batch);
 
   /// Signal that this angle set has no more outgoing data.
   void SignalAngleSetComplete(size_t angle_set_id);
@@ -135,11 +171,11 @@ public:
   void Stop();
 
 private:
-  /// Struct for per-destination queues of outgoing batches.
+  /// Struct for per-destination queues of outgoing entries.
   struct NeighborQueue
   {
     int dest_location;
-    std::unique_ptr<LockFreeTreiberStack<std::vector<OutgoingEntry>>> queue;
+    std::unique_ptr<LockFreeRingBuffer<OutgoingEntry>> queue;
   };
 
   /// Struct for tracking in-flight MPI sends initiated by the comm thread.
@@ -149,10 +185,7 @@ private:
     ByteArray data;
   };
 
-  /// Main loop of the communication thread: 
-  // - flush outgoing queues,
-  // - probe/receive incoming messages, and
-  // - track pending sends.
+  /// Main loop of the communication thread.
   void CommThreadLoop();
 
   bool FlushOutgoing(std::vector<std::vector<const OutgoingEntry*>>& by_angle_set);
@@ -163,14 +196,14 @@ private:
   const MPICommunicatorSet& comm_set_;
   size_t num_angle_sets_;
 
-  /// Flat array of lock-free queues for outgoing data batches.
+  /// Flat array of ring-buffer queues for outgoing data entries.
   std::vector<NeighborQueue> outgoing_queues_;
 
   /// Lookup map from destination location to outgoing queue index.
   std::unordered_map<int, int> dest_to_queue_index_;
 
-  /// One lock-free mailbox per angle set for incoming data batches.
-  std::vector<LockFreeTreiberStack<std::vector<IncomingEntry>>> incoming_mailboxes_;
+  /// One ring-buffer mailbox per angle set for incoming data batches.
+  std::vector<LockFreeRingBuffer<std::vector<IncomingEntry>>> incoming_mailboxes_;
 
   /// Contiguous array of location dependencies for cache-friendly polling.
   std::vector<int> location_dependencies_;
@@ -180,6 +213,9 @@ private:
 
   /// MPI tag (set to num_angle_sets to avoid collisions with per-angle-set tags).
   int aggregated_tag_;
+
+  /// Maximum single MPI message size for message splitting.
+  size_t max_single_message_size_in_bytes_;
 
   /// In-flight MPI_Isends.
   std::vector<PendingSend> pending_sends_;

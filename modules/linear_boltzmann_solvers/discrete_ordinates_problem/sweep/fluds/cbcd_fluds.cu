@@ -13,6 +13,8 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include <utility>
+#include <map>
+#include <algorithm>
 
 namespace opensn
 {
@@ -33,10 +35,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
     local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
-    cell_to_outgoing_boundary_nodes_(common_data_.GetOutgoingBoundaryNodeMap()),
-    cell_to_incoming_nonlocal_nodes_(common_data_.GetIncomingNonlocalNodeMap()),
-    cell_to_outgoing_nonlocal_nodes_(common_data_.GetOutgoingNonlocalNodeMap()),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
@@ -44,48 +42,67 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     local_cell_ids_(num_local_cells),
     save_angular_flux_(save_angular_flux)
 {
-  // Cache grid pointer to avoid shared_ptr copy on the hot path.
   grid_ptr_ = GetSPDS().GetGrid().get();
   const auto& grid = *grid_ptr_;
 
-  // Pre-compute face-grouped outgoing nonlocal nodes once at construction.
-  // Caches face_data_size, locality, neighbor_global_id, and associated_face so that
-  // CopyOutgoingPsiBackToHost needs no per-call mesh queries, virtual dispatches, or map lookups.
-  for (const auto& [cell_id, nodes] : cell_to_outgoing_nonlocal_nodes_)
+  cell_to_face_grouped_outgoing_.resize(num_local_cells);
+  cell_to_face_grouped_incoming_.resize(num_local_cells);
+
+  // Group outgoing nodes by face and compute max face data size
+  const auto& outgoing_nonlocal_map = common_data_.GetOutgoingNonlocalNodeMap();
+  for (size_t cell_id = 0; cell_id < num_local_cells; ++cell_id)
   {
+    const auto& nodes = outgoing_nonlocal_map[cell_id];
+    if (nodes.empty())
+      continue;
+
     const auto& cell = grid.local_cells[cell_id];
     const auto& cell_mapping = sdm_.GetCellMapping(cell);
     std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
     for (const auto& node : nodes)
       by_face[node.face_id].push_back(&node);
+
     auto& grouped = cell_to_face_grouped_outgoing_[cell_id];
     for (auto& [fid, fnodes] : by_face)
     {
       const auto& face = cell.faces[fid];
       const auto& face_nodal_mapping = common_data_.GetFaceNodalMapping(cell_id, fid);
-      const auto num_face_nodes = cell_mapping.GetNumFaceNodes(fid);
-      const int locality = grid.cells[face.neighbor_id].partition_id;
+      size_t face_data_size = cell_mapping.GetNumFaceNodes(fid) * num_groups_and_angles_;
+
+      max_face_data_size_ = std::max(max_face_data_size_, face_data_size);
+      num_outgoing_faces_++;
+
       grouped.push_back({fid,
                          std::move(fnodes),
-                         num_face_nodes * num_groups_and_angles_,
-                         locality,
+                         face_data_size,
+                         grid.cells[face.neighbor_id].partition_id,
                          face.neighbor_id,
                          static_cast<unsigned int>(face_nodal_mapping.associated_face_)});
-
-      // Track unique destinations
-      if (locality_to_dest_index_.find(locality) == locality_to_dest_index_.end())
-      {
-        locality_to_dest_index_[locality] = outgoing_destinations_.size();
-        outgoing_destinations_.push_back({locality, -1}); // queue_index resolved later
-      }
     }
   }
 
-  // Pre-compute incoming nonlocal scatter lookup: (cell_global_id, face_id) -> nodes.
-  // Enables O(1) direct scatter into incoming_nonlocal_psi_ at MPI receive time.
-  for (const auto& [cell_id, nodes] : cell_to_incoming_nonlocal_nodes_)
+  // Group incoming nodes by face for fast linear scattering
+  const auto& incoming_nonlocal_map = common_data_.GetIncomingNonlocalNodeMap();
+  for (size_t cell_id = 0; cell_id < num_local_cells; ++cell_id)
+  {
+    const auto& nodes = incoming_nonlocal_map[cell_id];
+    if (nodes.empty())
+      continue;
+
+    std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
     for (const auto& node : nodes)
-      incoming_nonlocal_face_lookup_[{node.cell_global_id, node.face_id}].push_back(&node);
+      by_face[node.face_id].push_back(&node);
+
+    auto& grouped = cell_to_face_grouped_incoming_[cell_id];
+    for (auto& [fid, fnodes] : by_face)
+    {
+      num_incoming_faces_++;
+      grouped.push_back({fid, std::move(fnodes)});
+    }
+  }
+
+  // Pre-allocate flat staging buffer for zero-allocation outgoing face data
+  face_staging_buffer_.resize(max_face_data_size_, 0.0);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -146,8 +163,9 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 {
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_indices.size();
+  const auto& incoming_boundary_node_map = common_data_.GetIncomingBoundaryNodeMap();
 
-  for (const auto& node : incoming_boundary_node_map_)
+  for (const auto& node : incoming_boundary_node_map)
   {
     for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
     {
@@ -171,16 +189,21 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
                                     unsigned int face_id,
                                     const std::vector<double>& psi_data)
 {
-  auto it = incoming_nonlocal_face_lookup_.find({cell_global_id, face_id});
-  if (it == incoming_nonlocal_face_lookup_.end())
-    return;
-  for (const auto* node : it->second)
+  uint64_t cell_local_id = grid_ptr_->MapCellGlobalID2LocalID(cell_global_id);
+  const auto& grouped = cell_to_face_grouped_incoming_[cell_local_id];
+
+  for (const auto& face_info : grouped)
   {
-    double* dst = incoming_nonlocal_psi_.data() +
-                  node->storage_index * num_groups_and_angles_;
-    const double* src = psi_data.data() +
-                        node->face_node_mapped * num_groups_and_angles_;
-    std::copy(src, src + num_groups_and_angles_, dst);
+    if (face_info.face_id == face_id)
+    {
+      for (const auto* node : face_info.nodes)
+      {
+        double* dst = incoming_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
+        const double* src = psi_data.data() + node->face_node_mapped * num_groups_and_angles_;
+        std::copy(src, src + num_groups_and_angles_, dst);
+      }
+      break;
+    }
   }
 }
 
@@ -189,33 +212,18 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AngleSet* angle_set,
                                       const std::vector<std::uint64_t>& cell_local_ids)
 {
-  if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_face_grouped_outgoing_.empty())
-    return;
-  auto* agg_comm = angle_set->GetAggregatedCommunicator();
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto num_angles = angle_indices.size();
-  const auto angle_set_id = angle_set->GetID();
-
-  // Resolve queue indices on first call (agg_comm is not available at FLUDS construction time).
-  if (not outgoing_destinations_.empty() and outgoing_destinations_[0].queue_index < 0)
-  {
-    for (auto& dest : outgoing_destinations_)
-      dest.queue_index = agg_comm->GetQueueIndex(dest.locality);
-  }
-
-  // Per-destination batch accumulators, index by locality_to_dest_index_.
-  // Allocated once per call, reused across all cells in this kernel completion.
-  std::vector<std::vector<CBCD_AggregatedCommunicator::OutgoingEntry>> dest_batches(
-    outgoing_destinations_.size()
-  );
+  const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
 
   for (const auto& cell_local_id : cell_local_ids)
   {
-    auto boundary_it = cell_to_outgoing_boundary_nodes_.find(cell_local_id);
-    if (boundary_it != cell_to_outgoing_boundary_nodes_.end())
+    // Handle outgoing boundary (reflecting) faces
+    const auto& boundary_nodes = outgoing_boundary_map[cell_local_id];
+    if (not boundary_nodes.empty())
     {
       const auto& cell = grid_ptr_->local_cells[cell_local_id];
-      for (const auto& node : boundary_it->second)
+      for (const auto& node : boundary_nodes)
       {
         const auto& face = cell.faces[node.face_id];
         if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
@@ -233,40 +241,32 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         }
       }
     }
-    // Use pre-computed face grouping with cached metadata — no per-call mesh queries needed.
-    // Handle outgoing non-local faces (accumulate into per-destination batches)
-    auto grouped_it = cell_to_face_grouped_outgoing_.find(cell_local_id);
-    if (grouped_it != cell_to_face_grouped_outgoing_.end())
+
+    // Handle outgoing non-local faces: stage data into flat buffer, then enqueue
+    const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
+    for (const auto& face_info : grouped_nodes)
     {
-      for (const auto& face_info : grouped_it->second)
+      // Use pre-allocated staging buffer instead of dynamic vector allocation
+      double* dst_base = face_staging_buffer_.data();
+
+      for (const auto* node : face_info.nodes)
       {
-        std::vector<double> psi_data(face_info.face_data_size, 0.0);
-        for (const auto* node : face_info.nodes)
-        {
-          double* dst = psi_data.data() + node->face_node * num_groups_and_angles_;
-          const double* src = outgoing_nonlocal_psi_.data() +
-                              node->storage_index * num_groups_and_angles_;
-          std::copy(src, src + num_groups_and_angles_, dst);
-        }
-
-        // Accumulate into destination batch
-        auto dest_index = locality_to_dest_index_.at(face_info.locality);
-        dest_batches[dest_index].push_back({angle_set_id,
-                                            face_info.neighbor_global_id,
-                                            face_info.associated_face,
-                                            std::move(psi_data)});
+        double* dst = dst_base + node->face_node * num_groups_and_angles_;
+        const double* src = outgoing_nonlocal_psi_.data() +
+                            node->storage_index * num_groups_and_angles_;
+        std::copy(src, src + num_groups_and_angles_, dst);
       }
-    }
-  }
 
-  // Push one batch per destination
-  // (1 Treiber node per destination per kernel completion).
-  for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
-  {
-    if (dest_batches[d].empty())
-      continue;
-    agg_comm->EnqueueOutgoingBatchByIndex(outgoing_destinations_[d].queue_index,
-                                          std::move(dest_batches[d]));
+      auto* agg_comm = angle_set->GetAggregatedCommunicator();
+
+      // Enqueue directly into ring buffer slot — zero heap allocation
+      agg_comm->EnqueueOutgoing(face_info.locality,
+                                angle_set->GetID(),
+                                face_info.neighbor_global_id,
+                                face_info.associated_face,
+                                face_staging_buffer_.data(),
+                                face_info.face_data_size);
+    }
   }
 }
 

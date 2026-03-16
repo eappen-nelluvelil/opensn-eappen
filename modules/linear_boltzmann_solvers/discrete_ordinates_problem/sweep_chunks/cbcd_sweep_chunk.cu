@@ -101,8 +101,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     std::unordered_map<int, std::map<std::pair<std::uint64_t, unsigned int>, size_t>>
       source_face_node_counts;
 
-    for (const auto& [cell_local_id, nodes] : incoming_map)
+    for (size_t cell_local_id = 0; cell_local_id < incoming_map.size(); ++cell_local_id)
     {
+      const auto& nodes = incoming_map[cell_local_id];
       for (const auto& node : nodes)
       {
         // Resolve source partition from cell_global_id
@@ -141,11 +142,20 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     max_single_message_size_in_bytes = std::max(max_single_message_size_in_bytes, msg_size_in_bytes);
   }
 
+  // Build per-angle-set capacity info for ring buffer pre-allocation
+  std::vector<CBCD_AggregatedCommunicator::AngleSetCapacity> capacities(angle_sets_.size());
+  for (size_t i = 0; i < angle_sets_.size(); ++i)
+  {
+    capacities[i].outgoing_faces = fluds_list_[i]->GetNumOutgoingFaces();
+    capacities[i].incoming_faces = fluds_list_[i]->GetNumIncomingFaces();
+  }
+
   // Create aggregated communicator and set it on all angle sets
   std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
   agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
                                                             problem_.GetMPICommunicatorSet(),
-                                                            max_single_message_size_in_bytes);
+                                                            max_single_message_size_in_bytes,
+                                                            capacities);
   for (auto* as : angle_sets_)
     as->SetAggregatedCommunicator(agg_comm_.get());
 }

@@ -39,9 +39,9 @@ CBCD_AngleSet::~CBCD_AngleSet()
 }
 
 void
-CBCD_AngleSet::SetStartingLatch()
+CBCD_AngleSet::ResetDependencyCounter()
 {
-  starting_latch_ = std::make_unique<std::latch>(num_dependencies_);
+  dependency_counter_.store(num_dependencies_, std::memory_order_release);
 }
 
 void
@@ -64,10 +64,10 @@ CBCD_AngleSet::TryInitialize()
   assert(cbcd_sweep_chunk_ != nullptr);
   assert(agg_comm_ != nullptr);
 
-  // Non-blocking latch check. 
+  // Non-blocking dependency check.
   // For non-reflecting problems, num_dependencies_ == 0,
-  // so latch(0).try_wait() returns true immediately.
-  if (not starting_latch_->try_wait())
+  // so dependency_counter_ is 0 immediately.
+  if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
   // Initialize task list
@@ -88,7 +88,7 @@ CBCD_AngleSet::TryInitialize()
   kernel_in_flight_ = false;
 
   // Pre-compute which cells have outgoing reflecting boundary faces.
-  // This allows counting down following angle set latches as soon as all
+  // This allows counting down following angle set dependency counters as soon as all
   // reflecting boundary data has been written, rather than waiting for
   // the entire sweep to complete.
   reflecting_boundary_cells_.clear();
@@ -97,8 +97,9 @@ CBCD_AngleSet::TryInitialize()
   if (not following_angle_sets_.empty())
   {
     const auto& outgoing_boundary_nodes = cbcd_fluds_.GetOutgoingBoundaryNodeMap();
-    for (const auto& [cell_id, nodes] : outgoing_boundary_nodes)
+    for (size_t cell_id = 0; cell_id < outgoing_boundary_nodes.size(); ++cell_id)
     {
+      const auto& nodes = outgoing_boundary_nodes[cell_id];
       for (const auto& node : nodes)
       {
         auto it = boundaries_.find(node.boundary_id);
@@ -119,7 +120,7 @@ CBCD_AngleSet::TryInitialize()
     for (auto& [bid, boundary] : boundaries_)
       boundary->UpdateAnglesReadyStatus(angles_);
     for (auto* following_as : following_angle_sets_)
-      following_as->starting_latch_->count_down();
+      following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
     latch_counted_down_ = true;
   }
 
@@ -152,12 +153,12 @@ CBCD_AngleSet::TryAdvanceOneStep()
       task->completed = true;
       ++completed_count_;
 
-      // Track reflecting boundary cell completions for early latch count-down
+      // Track reflecting boundary cell completions for early dependency countdown
       if (not latch_counted_down_ and reflecting_boundary_cells_.count(task->reference_id))
         ++reflecting_boundary_completed_;
     }
 
-    // Early latch count-down: once all reflecting boundary cells are done,
+    // Early dependency countdown: once all reflecting boundary cells are done,
     // notify following angle sets so they can begin initialization.
     if (not latch_counted_down_ and
         reflecting_boundary_completed_ >= total_reflecting_boundary_cells_ and
@@ -166,7 +167,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
       for (auto& [bid, boundary] : boundaries_)
         boundary->UpdateAnglesReadyStatus(angles_);
       for (auto* following_as : following_angle_sets_)
-        following_as->starting_latch_->count_down();
+        following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
       latch_counted_down_ = true;
     }
 
@@ -234,13 +235,13 @@ CBCD_AngleSet::FinalizeSweep()
   // Signal to the aggregated communicator that this angle set has no more outgoing data
   agg_comm_->SignalAngleSetComplete(id_);
 
-  // Count down following angle set latches if not already done by early latch logic
+  // Count down following angle set dependency counters if not already done by early logic
   if (not latch_counted_down_)
   {
     for (auto& [bid, boundary] : boundaries_)
       boundary->UpdateAnglesReadyStatus(angles_);
     for (auto* following_as : following_angle_sets_)
-      following_as->starting_latch_->count_down();
+      following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
   }
 
   // Copy saved psi from device to host

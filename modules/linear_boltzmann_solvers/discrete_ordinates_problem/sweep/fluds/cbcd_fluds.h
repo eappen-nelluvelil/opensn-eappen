@@ -9,9 +9,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/storage.h"
 #include "caribou/main.hpp"
 #include <cstddef>
-#include <functional>
-#include <map>
-#include <unordered_map>
+#include <vector>
 
 namespace crb = caribou;
 
@@ -70,7 +68,6 @@ public:
   void CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
 
   /// Scatter received face data directly into incoming_nonlocal_psi_.
-  /// Called at MPI receive time — eliminates the intermediate deplocs_outgoing_messages_ hash map.
   void ScatterReceivedFaceData(uint64_t cell_global_id,
                                unsigned int face_id,
                                const std::vector<double>& psi_data);
@@ -88,22 +85,14 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
-  /// Get the outgoing boundary node map (cell_local_id -> boundary nodes).
-  const std::map<std::uint64_t, std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
+  /// Get the outgoing boundary node map (indexed by cell_local_id).
+  const std::vector<std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
   {
-    return cell_to_outgoing_boundary_nodes_;
+    return common_data_.GetOutgoingBoundaryNodeMap();
   }
 
-  // cell_global_id, face_id
-  using CellFaceKey = std::pair<uint64_t, unsigned int>;
-
-  struct CellFaceKeyHash
-  {
-    size_t operator()(const CellFaceKey& k) const noexcept
-    {
-      return std::hash<uint64_t>{}(k.first) ^ (std::hash<unsigned int>{}(k.second) * 2654435761ULL);
-    }
-  };
+  size_t GetNumOutgoingFaces() const { return num_outgoing_faces_; }
+  size_t GetNumIncomingFaces() const { return num_incoming_faces_; }
 
 private:
   /// Reference to the common data.
@@ -117,14 +106,6 @@ private:
   size_t num_quadrature_local_dofs_;
   size_t num_local_spatial_dofs_;
   size_t local_psi_data_size_;
-  /// Map from incoming face boundary node to indexing metadata
-  std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
-  /// Map from cell to outgoing boundary node indexing metadata.
-  std::map<std::uint64_t, std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
-  /// Map from cell to incoming nonlocal nodes indexing metadata.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
-  /// Map from cell to outgoing nonlocal node indexing metadata.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
   /// Cached grid pointer — avoids shared_ptr copy on the hot path.
   const MeshContinuum* grid_ptr_;
   /// Mapped host vectors for boundary and non-local angular fluxes.
@@ -143,8 +124,8 @@ private:
   crb::HostVector<double> host_saved_psi_;
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
-  /// Pre-computed face-grouped outgoing nonlocal nodes, built once in the constructor.
-  /// Caches all mesh-derived metadata so CopyOutgoingPsiBackToHost needs no per-call lookups.
+
+  /// Pre-computed face-grouped outgoing nonlocal nodes (indexed by cell_local_id).
   struct FaceOutgoingInfo
   {
     unsigned int face_id;
@@ -154,25 +135,21 @@ private:
     uint64_t neighbor_global_id;  ///< Global ID of the neighbor cell across this face.
     unsigned int associated_face; ///< Face index on the neighbor cell.
   };
-  std::unordered_map<uint64_t, std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
+  std::vector<std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
 
-  /// Pre-computed map from destination locality to the list of cell IDs that have
-  /// outgoing faces to that destination.
-  /// Built once in ctor.
-  /// Enables per-destination batch accumulation in CopyOutgoingPsiBackToHost.
-  struct DestinationInfo
+  /// Pre-computed face-grouped incoming nonlocal nodes (indexed by cell_local_id).
+  struct FaceIncomingInfo
   {
-    int locality;
-    int queue_index; ///< Pre-resolved inex into aggregated comm's outgoing_queues_.
+    unsigned int face_id;
+    std::vector<const NonlocalNodeInfo*> nodes;
   };
-  std::vector<DestinationInfo> outgoing_destinations_;
-  std::unordered_map<int, size_t> locality_to_dest_index_;
+  std::vector<std::vector<FaceIncomingInfo>> cell_to_face_grouped_incoming_;
 
-  /// Pre-computed scatter lookup: (cell_global_id, face_id) -> nodes to scatter into.
-  /// Built once in constructor from cell_to_incoming_nonlocal_nodes_.
-  /// Enables O(1) lookup + direct scatter into incoming_nonlocal_psi_ at MPI receive time.
-  std::unordered_map<CellFaceKey, std::vector<const NonlocalNodeInfo*>, CellFaceKeyHash>
-    incoming_nonlocal_face_lookup_;
+  /// Pre-allocated bounds and flat memory.
+  size_t num_outgoing_faces_ = 0;
+  size_t num_incoming_faces_ = 0;
+  size_t max_face_data_size_ = 0;
+  std::vector<double> face_staging_buffer_; ///< Replaces dynamic vector allocations.
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();

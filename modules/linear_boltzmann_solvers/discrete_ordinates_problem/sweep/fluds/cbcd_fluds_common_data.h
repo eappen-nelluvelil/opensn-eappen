@@ -6,7 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include <cstdint>
-#include <map>
+#include <vector>
 
 namespace opensn
 {
@@ -41,20 +41,20 @@ public:
     return incoming_boundary_node_map_;
   }
 
-  /// Get outgoing boundary node map.
-  const std::map<std::uint64_t, std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
+  /// Get outgoing boundary node map (indexed by cell_local_id).
+  const std::vector<std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
   {
     return cell_to_outgoing_boundary_nodes_;
   }
 
-  /// Get incoming nonlocal node map.
-  const std::map<std::uint64_t, std::vector<NonlocalNodeInfo>>& GetIncomingNonlocalNodeMap() const
+  /// Get incoming nonlocal node map (indexed by cell_local_id).
+  const std::vector<std::vector<NonlocalNodeInfo>>& GetIncomingNonlocalNodeMap() const
   {
     return cell_to_incoming_nonlocal_nodes_;
   }
 
-  /// Get outgoing nonlocal node map.
-  const std::map<std::uint64_t, std::vector<NonlocalNodeInfo>>& GetOutgoingNonlocalNodeMap() const
+  /// Get outgoing nonlocal node map (indexed by cell_local_id).
+  const std::vector<std::vector<NonlocalNodeInfo>>& GetOutgoingNonlocalNodeMap() const
   {
     return cell_to_outgoing_nonlocal_nodes_;
   }
@@ -75,12 +75,10 @@ private:
   std::uint64_t* device_cell_face_node_map_;
   /// Map from incoming face boundary node to indexing metadata.
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
-  /// Map from cell to outgoing boundary nodes.
-  std::map<std::uint64_t, std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
-  /// Map from cell to incoming nonlocal nodes.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
-  /// Map from cell to outgoing nonlocal nodes.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
+  /// Flat O(1) arrays indexed by cell_local_id.
+  std::vector<std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
+  std::vector<std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
+  std::vector<std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
 
   /**
    * Compute cell-face-node map for device angular flux buffer access, and

@@ -91,21 +91,21 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   const auto& angle_sets = cbcd_chunk.GetAngleSets();
   const size_t num_angle_sets = angle_sets.size();
 
-  // Set sweep chunk reference and initialize latches for all angle sets
+  // Set sweep chunk reference and reset dependency counters for all angle sets
   for (auto* as : angle_sets)
   {
     as->SetSweepChunk(&cbcd_chunk);
-    as->SetStartingLatch();
+    as->ResetDependencyCounter();
   }
 
   // Start aggregated communication thread
   cbcd_chunk.StartCommunicator();
 
   const auto num_workers = num_workers_;
-  pool_.run(
+  pool_.ExecuteBatch(
     [&angle_sets, num_angle_sets, num_workers](std::size_t worker_id)
     {
-      // Partition angle sets among worker threads 
+      // Partition angle sets among worker threads
       // Each worker thread processes a contiguous range of anglesets
       const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
       const size_t begin = worker_id * chunk_size;
@@ -126,7 +126,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
             continue;
           all_done = false;
 
-          // Try initialization (non-blocking; waits for predecessor latches)
+          // Try initialization (non-blocking; waits for predecessor dependency counter)
           if (not as->IsInitialized())
           {
             any_work |= as->TryInitialize();

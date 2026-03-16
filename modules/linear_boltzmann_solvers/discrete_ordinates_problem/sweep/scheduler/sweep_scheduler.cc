@@ -36,7 +36,10 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   }
 
   if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE)
+  {
     pool_.Resize(angle_agg_.GetNumAngleSets());
+    execution_order_.reserve(angle_agg_.GetNumAngleSets());
+  }
   else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
     // Use a bounded number of worker threads: min(angle_sets, hardware threads).

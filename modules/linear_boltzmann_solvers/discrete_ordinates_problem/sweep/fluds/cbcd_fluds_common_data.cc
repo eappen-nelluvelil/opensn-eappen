@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
+#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 
 namespace opensn
 {
@@ -18,11 +20,13 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
     num_incoming_nonlocal_nodes_(0),
     num_outgoing_nonlocal_nodes_(0),
     device_cell_face_node_map_(nullptr),
-    incoming_boundary_node_map_(),
-    cell_to_outgoing_boundary_nodes_(),
-    cell_to_incoming_nonlocal_nodes_(),
-    cell_to_outgoing_nonlocal_nodes_()
+    incoming_boundary_node_map_()
 {
+  const size_t num_local_cells = spds_.GetGrid()->local_cells.size();
+  cell_to_outgoing_boundary_nodes_.resize(num_local_cells);
+  cell_to_incoming_nonlocal_nodes_.resize(num_local_cells);
+  cell_to_outgoing_nonlocal_nodes_.resize(num_local_cells);
+
   CopyFlattenedNodeIndexToDevice(sdm);
 }
 

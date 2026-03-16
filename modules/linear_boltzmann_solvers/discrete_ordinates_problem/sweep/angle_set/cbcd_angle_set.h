@@ -6,8 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "caribou/main.hpp"
-#include <latch>
-#include <memory>
+#include <atomic>
 #include <set>
 #include <unordered_set>
 
@@ -53,13 +52,13 @@ public:
   /// Get the aggregated communicator pointer.
   CBCD_AggregatedCommunicator* GetAggregatedCommunicator() const { return agg_comm_; }
 
-  /// Initialize the starting latch.
-  void SetStartingLatch();
+  /// Reset the dependency counter for the next sweep.
+  void ResetDependencyCounter();
 
   /// Must be called after UpdateSweepDependencies and before launching threads.
   void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
-  /// Non-blocking initialization. Returns true when ready (latch satisfied).
+  /// Non-blocking initialization. Returns true when ready (dependencies resolved).
   /// Returns false if waiting on predecessor angle sets (reflecting BCs).
   bool TryInitialize();
 
@@ -125,11 +124,9 @@ private:
   CBCD_AggregatedCommunicator* agg_comm_ = nullptr;
   /// Number of angle sets this one must wait for before starting.
   std::size_t num_dependencies_ = 0;
-  /// A starting latch.
-  /// Thread waits here until all predecessors count_down.
-  /// A latch(0) is immediately released.
-  std::unique_ptr<std::latch> starting_latch_;
-  /// Anglesets whose latches this angleset counts down upon completion.
+  /// Atomic counter for un-resolved dependencies (replaces std::latch to avoid heap allocation).
+  std::atomic<std::size_t> dependency_counter_{0};
+  /// Anglesets whose dependency counters this angleset decrements upon completion.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
   /// Whether TryInitialize has completed successfully.
   bool initialized_ = false;
@@ -149,7 +146,7 @@ private:
   size_t reflecting_boundary_completed_ = 0;
   /// Total reflecting boundary cells (set during init).
   size_t total_reflecting_boundary_cells_ = 0;
-  /// Whether the latch has already been counted down early.
+  /// Whether the dependency counter has already been counted down early.
   bool latch_counted_down_ = false;
 };
 
