@@ -68,8 +68,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
       const auto& face = cell.faces[fid];
       const auto& face_nodal_mapping = common_data_.GetFaceNodalMapping(cell_id, fid);
       size_t face_data_size = cell_mapping.GetNumFaceNodes(fid) * num_groups_and_angles_;
-
-      max_face_data_size_ = std::max(max_face_data_size_, face_data_size);
       num_outgoing_faces_++;
 
       grouped.push_back({fid,
@@ -105,8 +103,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     }
   }
 
-  // Pre-allocate flat staging buffer for zero-allocation outgoing face data
-  face_staging_buffer_.resize(max_face_data_size_, 0.0);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -247,30 +243,30 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       }
     }
 
-    // Handle outgoing non-local faces: stage data into flat buffer, then enqueue
+    // Handle outgoing non-local faces: write directly into ring buffer slot
     const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
-    for (const auto& face_info : grouped_nodes)
+    if (not grouped_nodes.empty())
     {
-      // Use pre-allocated staging buffer instead of dynamic vector allocation
-      double* dst_base = face_staging_buffer_.data();
-
-      for (const auto* node : face_info.nodes)
-      {
-        double* dst = dst_base + node->face_node * num_groups_and_angles_;
-        const double* src = outgoing_nonlocal_psi_.data() +
-                            node->storage_index * num_groups_and_angles_;
-        std::copy(src, src + num_groups_and_angles_, dst);
-      }
-
       auto* agg_comm = angle_set->GetAggregatedCommunicator();
-
-      // Enqueue directly into ring buffer slot — zero heap allocation
-      agg_comm->EnqueueOutgoing(face_info.locality,
-                                angle_set->GetID(),
-                                face_info.neighbor_global_id,
-                                face_info.associated_face,
-                                face_staging_buffer_.data(),
-                                face_info.face_data_size);
+      for (const auto& face_info : grouped_nodes)
+      {
+        agg_comm->EnqueueOutgoingDirect(
+          face_info.locality,
+          angle_set->GetID(),
+          face_info.neighbor_global_id,
+          face_info.associated_face,
+          face_info.face_data_size,
+          [&](double* dst_base)
+          {
+            for (const auto* node : face_info.nodes)
+            {
+              double* dst = dst_base + node->face_node * num_groups_and_angles_;
+              const double* src = outgoing_nonlocal_psi_.data() +
+                                  node->storage_index * num_groups_and_angles_;
+              std::copy(src, src + num_groups_and_angles_, dst);
+            }
+          });
+      }
     }
   }
 }

@@ -146,11 +146,8 @@ private:
   };
   std::vector<std::vector<FaceIncomingInfo>> cell_to_face_grouped_incoming_;
 
-  /// Pre-allocated bounds and flat memory.
   size_t num_outgoing_faces_ = 0;
   size_t num_incoming_faces_ = 0;
-  size_t max_face_data_size_ = 0;
-  std::vector<double> face_staging_buffer_; ///< Replaces dynamic vector allocations.
 
   /// Fast global→local cell ID lookup for incoming nonlocal cells only.
   /// Uses unordered_map (O(1) amortized) instead of std::map (O(log n)) on the hot path.

@@ -142,13 +142,12 @@ CBCD_AngleSet::TryAdvanceOneStep()
     return false;
 
   bool any_work_done = false;
+  bool has_deferred_outgoing = false;
 
-  // Poll for kernel completion
+  // A: Poll for kernel completion — update dependencies only (defer outgoing data processing
+  //    so the next GPU kernel can be launched sooner, overlapping GPU compute with host work).
   if (kernel_in_flight_ and stream_.is_completed())
   {
-    // Copy back outgoing boundary (reflecting) and non-local psi to host
-    cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, in_flight_cell_ids_);
-
     // Update task dependencies and push newly-ready successors to the queue
     for (auto* task : in_flight_tasks_)
     {
@@ -160,40 +159,27 @@ CBCD_AngleSet::TryAdvanceOneStep()
       ++completed_count_;
 
       // Track reflecting boundary cell completions for early dependency countdown
-      // O(1) vector<bool> lookup replaces unordered_set hash lookup
       if (not latch_counted_down_ and
           not is_reflecting_boundary_cell_.empty() and
           is_reflecting_boundary_cell_[task->reference_id])
         ++reflecting_boundary_completed_;
     }
 
-    // Early dependency countdown: once all reflecting boundary cells are done,
-    // notify following angle sets so they can begin initialization.
-    if (not latch_counted_down_ and
-        reflecting_boundary_completed_ >= total_reflecting_boundary_cells_ and
-        total_reflecting_boundary_cells_ > 0)
-    {
-      for (auto& [bid, boundary] : boundaries_)
-        boundary->UpdateAnglesReadyStatus(angles_);
-      for (auto* following_as : following_angle_sets_)
-        following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
-      latch_counted_down_ = true;
-    }
-
+    // Save cell IDs for deferred outgoing processing
+    deferred_cell_ids_.swap(in_flight_cell_ids_);
     in_flight_tasks_.clear();
     in_flight_cell_ids_.clear();
     kernel_in_flight_ = false;
+    has_deferred_outgoing = true;
     any_work_done = true;
   }
 
-  // Pull received data from aggregated comm (zero-allocation in-place processing).
-  // Slots retain psi_data vector capacity for reuse by the comm thread.
+  // B: Pull received data from aggregated comm (zero-allocation in-place processing).
   any_work_done |= agg_comm_->ProcessIncoming(id_,
     [this](const std::vector<IncomingEntry>& batch)
     {
       for (const auto& entry : batch)
       {
-        // ScatterReceivedFaceData returns local_id, avoiding a second map lookup
         auto local_id = cbcd_fluds_.ScatterReceivedFaceData(
           entry.cell_global_id, entry.face_id, entry.psi_data);
         if (--remaining_deps_[local_id] == 0)
@@ -201,7 +187,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
       }
     });
 
-  // Drain ready queue and launch kernel (reuses staging vectors to avoid allocation)
+  // C: Launch next kernel IMMEDIATELY (GPU starts working while we process outgoing data below).
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
     staging_ready_tasks_.clear();
@@ -225,7 +211,27 @@ CBCD_AngleSet::TryAdvanceOneStep()
     any_work_done = true;
   }
 
-  // Check completion
+  // D: Process deferred outgoing data (overlaps with GPU kernel from step C).
+  //    Safe because different kernel batches write to different cell positions in outgoing buffers.
+  if (has_deferred_outgoing)
+  {
+    cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, deferred_cell_ids_);
+
+    // Early dependency countdown: once all reflecting boundary cells are done,
+    // notify following angle sets so they can begin initialization.
+    if (not latch_counted_down_ and
+        reflecting_boundary_completed_ >= total_reflecting_boundary_cells_ and
+        total_reflecting_boundary_cells_ > 0)
+    {
+      for (auto& [bid, boundary] : boundaries_)
+        boundary->UpdateAnglesReadyStatus(angles_);
+      for (auto* following_as : following_angle_sets_)
+        following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
+      latch_counted_down_ = true;
+    }
+  }
+
+  // E: Check completion
   if (completed_count_ >= total_tasks_)
     FinalizeSweep();
 
@@ -288,6 +294,7 @@ CBCD_AngleSet::ResetSweepBuffers()
   kernel_in_flight_ = false;
   in_flight_tasks_.clear();
   in_flight_cell_ids_.clear();
+  deferred_cell_ids_.clear();
   completed_count_ = 0;
   total_tasks_ = 0;
   reflecting_boundary_completed_ = 0;

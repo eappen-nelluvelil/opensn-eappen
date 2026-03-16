@@ -82,6 +82,20 @@ public:
     return ready_slots;
   }
 
+  /// Output-parameter variant (avoids vector allocation in hot loops).
+  void GetReadySlots(std::vector<Slot*>& out)
+  {
+    out.clear();
+    if (buffer_.empty())
+      return;
+    size_t current_tail = tail_;
+    while (buffer_[current_tail % buffer_.size()].ready.load(std::memory_order_acquire))
+    {
+      out.push_back(&buffer_[current_tail % buffer_.size()]);
+      current_tail++;
+    }
+  }
+
   /// Free slots for producer reuse after consumer has serialized the data.
   void FreeSlots(size_t count)
   {
@@ -157,6 +171,28 @@ public:
                        unsigned int face_id,
                        const double* psi_data,
                        size_t data_size);
+
+  /// Enqueue an outgoing entry with a callback that fills psi_data directly in the ring
+  /// buffer slot, eliminating the intermediate staging buffer copy.
+  template <typename FillCallback>
+  void EnqueueOutgoingDirect(int dest_location,
+                             size_t angle_set_id,
+                             uint64_t cell_global_id,
+                             unsigned int face_id,
+                             size_t data_size,
+                             FillCallback&& fill)
+  {
+    auto it = dest_to_queue_index_.find(dest_location);
+    assert(it != dest_to_queue_index_.end());
+    auto& queue = outgoing_queues_[it->second].queue;
+    auto& slot = queue->ReserveSlot();
+    slot.payload.angle_set_id = angle_set_id;
+    slot.payload.cell_global_id = cell_global_id;
+    slot.payload.face_id = face_id;
+    slot.payload.psi_data.resize(data_size);
+    fill(slot.payload.psi_data.data());
+    queue->PublishSlot(slot);
+  }
 
   /// Pull all received batches for this angle set (lock-free).
   std::vector<std::vector<IncomingEntry>> DequeueIncoming(size_t angle_set_id);
@@ -243,6 +279,9 @@ private:
 
   /// Dedicated communication thread.
   std::thread comm_thread_;
+
+  /// Pre-allocated cache for GetReadySlots in comm thread hot loop.
+  std::vector<typename LockFreeRingBuffer<OutgoingEntry>::Slot*> ready_slots_cache_;
 };
 
 } // namespace opensn

@@ -190,8 +190,8 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
 
   for (auto& nq : outgoing_queues_)
   {
-    auto ready_slots = nq.queue->GetReadySlots();
-    if (ready_slots.empty())
+    nq.queue->GetReadySlots(ready_slots_cache_);
+    if (ready_slots_cache_.empty())
       continue;
 
     size_t current_payload_bytes = sizeof(size_t); // num_anglesets_in_batch header
@@ -239,9 +239,9 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
       pending_sends_.push_back(std::move(ps));
     };
 
-    for (size_t s = 0; s < ready_slots.size(); ++s)
+    for (size_t s = 0; s < ready_slots_cache_.size(); ++s)
     {
-      auto* slot = ready_slots[s];
+      auto* slot = ready_slots_cache_[s];
       const auto& entry = slot->payload;
 
       size_t entry_bytes = sizeof(uint64_t) + sizeof(unsigned int) + sizeof(size_t) +

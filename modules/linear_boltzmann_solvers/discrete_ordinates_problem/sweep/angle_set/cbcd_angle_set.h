@@ -139,6 +139,8 @@ private:
   /// Staging vectors for kernel launch (reused across calls to avoid allocation).
   std::vector<Task*> staging_ready_tasks_;
   std::vector<std::uint64_t> staging_ready_cell_ids_;
+  /// Deferred cell IDs for outgoing data processing (GPU-host overlap).
+  std::vector<std::uint64_t> deferred_cell_ids_;
   /// Cached initial dependency counts for fast reset (avoids re-copying task list).
   std::vector<int> initial_deps_;
   /// Working copy of dependency counts, decremented during sweep.
