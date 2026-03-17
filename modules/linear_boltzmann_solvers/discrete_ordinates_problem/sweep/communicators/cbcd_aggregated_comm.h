@@ -21,12 +21,30 @@ namespace opensn
 class AngleSet;
 class MPICommunicatorSet;
 
-/// An entry received from a remote location, destined for a specific angle set.
-struct IncomingEntry
+/// A single face's angular flux data received from a remote MPI rank.
+/// Deserialized from the aggregated wire format and routed to the target angle set.
+struct IncomingFaceData
 {
   uint64_t cell_global_id;
   unsigned int face_id;
   std::vector<double> psi_data;
+};
+
+/// A single face's angular flux data queued for sending to a remote MPI rank.
+/// Produced by worker threads and consumed by the communication thread for serialization.
+struct OutgoingFaceData
+{
+  size_t angle_set_id;
+  std::uint64_t cell_global_id;
+  unsigned int face_id;
+  std::vector<double> psi_data;
+};
+
+/// Per-angle-set ring buffer capacity, computed by CBCDSweepChunk at construction time.
+struct AngleSetCapacity
+{
+  size_t outgoing_faces = 0;
+  size_t incoming_faces = 0;
 };
 
 /// Lock-free MPSC ring buffer for zero-allocation inter-thread communication.
@@ -130,44 +148,40 @@ public:
  * reducing the number of MPI calls and eliminating MPI contention between worker threads.
  * All inter-thread data handoff uses lock-free MPSC ring buffers (zero heap allocation at
  * runtime after warm-up).
+ *
+ * Wire format for aggregated MPI messages (one message per destination per flush):
+ *   [num_active_angle_sets : size_t]
+ *   For each active angle set:
+ *     [angle_set_id : size_t]
+ *     [num_entries  : size_t]
+ *     For each entry (one per outgoing face):
+ *       [cell_global_id : uint64_t]
+ *       [face_id        : unsigned int]
+ *       [data_size      : size_t]         // number of doubles
+ *       [psi_data       : double[data_size]]
  */
 class CBCD_AggregatedCommunicator
 {
 public:
-  /// Struct for outgoing data entries
-  struct OutgoingEntry
-  {
-    size_t angle_set_id;
-    std::uint64_t cell_global_id;
-    unsigned int face_id;
-    std::vector<double> psi_data;
-  };
-
-  /// Per-angle-set ring buffer capacity info, computed externally.
-  struct AngleSetCapacity
-  {
-    size_t outgoing_faces = 0;
-    size_t incoming_faces = 0;
-  };
-
   CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
                               const MPICommunicatorSet& comm_set,
-                              size_t max_single_message_size_in_bytes,
+                              size_t max_message_bytes,
                               const std::vector<AngleSetCapacity>& capacities);
 
   ~CBCD_AggregatedCommunicator();
 
-  /// Enqueue an outgoing entry with a callback that fills psi_data directly in the ring
-  /// buffer slot, eliminating the intermediate staging buffer copy.
+  /// Enqueue outgoing face data for a remote MPI rank. The fill callback writes psi_data
+  /// directly into the ring buffer slot, avoiding an intermediate staging copy.
+  /// Called by worker threads; consumed by the communication thread.
   template <typename FillCallback>
-  void EnqueueOutgoingDirect(int dest_location,
-                             size_t angle_set_id,
-                             uint64_t cell_global_id,
-                             unsigned int face_id,
-                             size_t data_size,
-                             FillCallback&& fill)
+  void EnqueueOutgoing(int dest_rank,
+                       size_t angle_set_id,
+                       uint64_t cell_global_id,
+                       unsigned int face_id,
+                       size_t data_size,
+                       FillCallback&& fill)
   {
-    auto it = dest_to_queue_index_.find(dest_location);
+    auto it = dest_to_queue_index_.find(dest_rank);
     assert(it != dest_to_queue_index_.end());
     auto& queue = outgoing_queues_[it->second].queue;
     auto& slot = queue->ReserveSlot();
@@ -179,8 +193,9 @@ public:
     queue->PublishSlot(slot);
   }
 
-  /// Process all ready incoming batches in-place (zero-allocation path).
-  /// The callback receives a reference to each batch. Slots are freed inline.
+  /// Process all ready incoming face data batches for a given angle set.
+  /// The callback receives each batch by reference; slots are freed inline (zero-allocation).
+  /// Called by worker threads from CBCD_AngleSet::TryAdvanceOneStep.
   template <typename Callback>
   bool ProcessIncoming(size_t angle_set_id, Callback&& cb)
   {
@@ -198,64 +213,75 @@ public:
   void Stop();
 
 private:
-  /// Struct for per-destination queues of outgoing entries.
-  struct NeighborQueue
+  /// Per-destination outgoing ring buffer. One per MPI rank we send data to.
+  struct DestinationQueue
   {
-    int dest_location;
-    std::unique_ptr<LockFreeRingBuffer<OutgoingEntry>> queue;
+    int dest_rank;
+    std::unique_ptr<LockFreeRingBuffer<OutgoingFaceData>> queue;
   };
 
-  /// Struct for tracking in-flight MPI sends initiated by the comm thread.
-  struct PendingSend
+  /// An in-flight MPI_Isend and its serialized message data.
+  struct InFlightSend
   {
     mpi::Request request;
     ByteArray data;
   };
 
-  /// Main loop of the communication thread.
-  void CommThreadLoop();
+  // -- Communication thread methods ------------------------------------------
 
-  bool FlushOutgoing(std::vector<std::vector<const OutgoingEntry*>>& by_angle_set);
+  void CommThreadLoop();
+  bool SerializeAndSend();
   bool ProbeAndReceive();
-  bool PollPendingSends();
-  bool AllWorkComplete() const;
+  bool PollInFlightSends();
+  bool AllAngleSetsComplete() const;
+
+  // -- Configuration (immutable after construction) --------------------------
 
   const MPICommunicatorSet& comm_set_;
   size_t num_angle_sets_;
 
-  /// Flat array of ring-buffer queues for outgoing data entries.
-  std::vector<NeighborQueue> outgoing_queues_;
+  /// MPI tag used for all aggregated messages (set to num_angle_sets to avoid
+  /// collisions with per-angle-set tags used by other communicator types).
+  int mpi_tag_;
 
-  /// Lookup map from destination location to outgoing queue index.
+  /// Maximum bytes per MPI message; larger batches are split. Zero means no limit.
+  size_t max_message_bytes_;
+
+  /// MPI ranks from which this rank receives face data (union over all angle sets).
+  std::vector<int> source_ranks_;
+
+  // -- Outgoing path (worker threads → comm thread) --------------------------
+
+  /// One ring buffer per destination MPI rank for outgoing face data.
+  std::vector<DestinationQueue> outgoing_queues_;
+
+  /// Maps destination MPI rank → index into outgoing_queues_.
   std::unordered_map<int, int> dest_to_queue_index_;
 
-  /// One ring-buffer mailbox per angle set for incoming data batches.
-  std::vector<LockFreeRingBuffer<std::vector<IncomingEntry>>> incoming_mailboxes_;
+  // -- Incoming path (comm thread → worker threads) --------------------------
 
-  /// Contiguous array of location dependencies for cache-friendly polling.
-  std::vector<int> location_dependencies_;
+  /// One ring buffer per angle set for incoming face data batches.
+  std::vector<LockFreeRingBuffer<std::vector<IncomingFaceData>>> incoming_mailboxes_;
 
-  /// Pre-allocated ByteArray for incoming MPI messages.
-  ByteArray persistent_recv_buffer_;
+  // -- Communication thread state --------------------------------------------
 
-  /// MPI tag (set to num_angle_sets to avoid collisions with per-angle-set tags).
-  int aggregated_tag_;
+  /// Pre-allocated receive buffer for MPI messages.
+  ByteArray recv_buffer_;
 
-  /// Maximum single MPI message size for message splitting.
-  size_t max_single_message_size_in_bytes_;
+  /// In-flight MPI_Isends awaiting completion.
+  std::vector<InFlightSend> in_flight_sends_;
 
-  /// In-flight MPI_Isends.
-  std::vector<PendingSend> pending_sends_;
+  /// Pre-allocated slot pointer cache for draining outgoing ring buffers.
+  std::vector<typename LockFreeRingBuffer<OutgoingFaceData>::Slot*> slot_cache_;
 
-  /// Flags to track completion status of angle sets and overall stop request.
+  /// Scratch buffer for grouping outgoing entries by angle set during serialization.
+  std::vector<std::vector<const OutgoingFaceData*>> send_batch_by_angle_set_;
+
+  // -- Synchronization -------------------------------------------------------
+
   std::atomic<bool> stop_requested_{false};
   std::vector<std::atomic<bool>> angle_set_done_;
-
-  /// Dedicated communication thread.
   std::thread comm_thread_;
-
-  /// Pre-allocated cache for GetReadySlots in comm thread hot loop.
-  std::vector<typename LockFreeRingBuffer<OutgoingEntry>::Slot*> ready_slots_cache_;
 };
 
 } // namespace opensn

@@ -177,7 +177,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
 
   // B: Pull received data from aggregated comm (zero-allocation in-place processing).
   any_work_done |= agg_comm_->ProcessIncoming(id_,
-    [this](const std::vector<IncomingEntry>& batch)
+    [this](const std::vector<IncomingFaceData>& batch)
     {
       for (const auto& entry : batch)
       {

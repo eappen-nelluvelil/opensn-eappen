@@ -247,7 +247,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       auto* agg_comm = angle_set->GetAggregatedCommunicator();
       for (const auto& face_info : grouped_nodes)
       {
-        agg_comm->EnqueueOutgoingDirect(
+        agg_comm->EnqueueOutgoing(
           face_info.locality,
           angle_set->GetID(),
           face_info.neighbor_global_id,

@@ -125,7 +125,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   }
 
   // Compute the worst-case message size: max over all sources
-  size_t max_single_message_size_in_bytes = 0;
+  size_t max_message_bytes = 0;
   for (const auto& [source_partition, as_map] : source_as_info)
   {
     // num_active_angle_sets header
@@ -137,11 +137,11 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       // Data for all entries in this angle set
       msg_size_in_bytes += info.psi_bytes;
     }
-    max_single_message_size_in_bytes = std::max(max_single_message_size_in_bytes, msg_size_in_bytes);
+    max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
   }
 
   // Build per-angle-set capacity info for ring buffer pre-allocation
-  std::vector<CBCD_AggregatedCommunicator::AngleSetCapacity> capacities(angle_sets_.size());
+  std::vector<opensn::AngleSetCapacity> capacities(angle_sets_.size());
   for (size_t i = 0; i < angle_sets_.size(); ++i)
   {
     capacities[i].outgoing_faces = fluds_list[i]->GetNumOutgoingFaces();
@@ -152,7 +152,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
   agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
                                                             problem_.GetMPICommunicatorSet(),
-                                                            max_single_message_size_in_bytes,
+                                                            max_message_bytes,
                                                             capacities);
   for (auto* as : angle_sets_)
   {

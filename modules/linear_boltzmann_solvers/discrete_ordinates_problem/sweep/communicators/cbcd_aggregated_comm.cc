@@ -21,18 +21,19 @@ namespace opensn
 
 CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
                                                          const MPICommunicatorSet& comm_set,
-                                                         size_t max_single_message_size_in_bytes,
+                                                         size_t max_message_bytes,
                                                          const std::vector<AngleSetCapacity>& capacities)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
+    mpi_tag_(static_cast<int>(num_angle_sets_)),
+    max_message_bytes_(max_message_bytes),
     incoming_mailboxes_(num_angle_sets_),
-    aggregated_tag_(static_cast<int>(num_angle_sets_)),
-    max_single_message_size_in_bytes_(max_single_message_size_in_bytes),
+    send_batch_by_angle_set_(num_angle_sets_),
     angle_set_done_(num_angle_sets_)
 {
-  std::set<int> temp_dependencies;
-  std::set<int> temp_successors;
-
+  // Collect the union of source/destination MPI ranks across all angle sets.
+  std::set<int> sources;
+  std::set<int> destinations;
   size_t total_outgoing_faces = 0;
 
   for (size_t i = 0; i < angle_sets.size(); ++i)
@@ -40,9 +41,9 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
     const auto* as = angle_sets[i];
     const auto& spds = as->GetSPDS();
     for (int dep : spds.GetLocationDependencies())
-      temp_dependencies.insert(dep);
+      sources.insert(dep);
     for (int succ : spds.GetLocationSuccessors())
-      temp_successors.insert(succ);
+      destinations.insert(succ);
 
     total_outgoing_faces += capacities[i].outgoing_faces;
     size_t num_incoming = capacities[i].incoming_faces;
@@ -50,26 +51,26 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
       incoming_mailboxes_[as->GetID()].Preallocate(num_incoming + 1);
   }
 
-  location_dependencies_.assign(temp_dependencies.begin(), temp_dependencies.end());
+  source_ranks_.assign(sources.begin(), sources.end());
 
+  // Create one outgoing ring buffer per destination MPI rank.
   int queue_idx = 0;
-  for (int succ : temp_successors)
+  for (int dest : destinations)
   {
-    NeighborQueue nq;
-    nq.dest_location = succ;
-    nq.queue = std::make_unique<LockFreeRingBuffer<OutgoingEntry>>();
+    DestinationQueue dq;
+    dq.dest_rank = dest;
+    dq.queue = std::make_unique<LockFreeRingBuffer<OutgoingFaceData>>();
     if (total_outgoing_faces > 0)
-      nq.queue->Preallocate(total_outgoing_faces + 1);
-    outgoing_queues_.push_back(std::move(nq));
-    dest_to_queue_index_[succ] = queue_idx++;
+      dq.queue->Preallocate(total_outgoing_faces + 1);
+    outgoing_queues_.push_back(std::move(dq));
+    dest_to_queue_index_[dest] = queue_idx++;
   }
 
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
 
-  // Reserve receive buffer
-  if (max_single_message_size_in_bytes > 0)
-    persistent_recv_buffer_.Data().reserve(max_single_message_size_in_bytes);
+  if (max_message_bytes > 0)
+    recv_buffer_.Data().reserve(max_message_bytes);
 }
 
 CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
@@ -99,7 +100,7 @@ CBCD_AggregatedCommunicator::Start()
   stop_requested_.store(false, std::memory_order_relaxed);
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
-  pending_sends_.clear();
+  in_flight_sends_.clear();
   comm_thread_ = std::thread(&CBCD_AggregatedCommunicator::CommThreadLoop, this);
 }
 
@@ -120,60 +121,59 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::CommThreadLoop");
 
-  std::vector<std::vector<const OutgoingEntry*>> by_angle_set(num_angle_sets_);
-
   while (true)
   {
-    bool work_done = FlushOutgoing(by_angle_set);
+    bool work_done = SerializeAndSend();
     work_done |= ProbeAndReceive();
-    work_done |= PollPendingSends();
+    work_done |= PollInFlightSends();
 
-    if (stop_requested_.load(std::memory_order_acquire) and AllWorkComplete())
+    if (stop_requested_.load(std::memory_order_acquire) and AllAngleSetsComplete())
     {
-      FlushOutgoing(by_angle_set);
+      // Final flush: drain any remaining outgoing entries.
+      SerializeAndSend();
 
-      while (not pending_sends_.empty())
+      // Wait for all in-flight sends to complete.
+      while (not in_flight_sends_.empty())
       {
-        PollPendingSends();
-        if (not pending_sends_.empty())
+        PollInFlightSends();
+        if (not in_flight_sends_.empty())
           std::this_thread::yield();
       }
       break;
     }
 
-    // Only yield when no work was done to reduce latency when there is active communication
     if (not work_done)
       std::this_thread::yield();
   }
 }
 
 bool
-CBCD_AggregatedCommunicator::FlushOutgoing(
-  std::vector<std::vector<const OutgoingEntry*>>& by_angle_set)
+CBCD_AggregatedCommunicator::SerializeAndSend()
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::FlushOutgoing");
+  CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::SerializeAndSend");
 
-  bool flushed_any = false;
+  bool sent_any = false;
 
-  for (auto& nq : outgoing_queues_)
+  for (auto& dq : outgoing_queues_)
   {
-    nq.queue->GetReadySlots(ready_slots_cache_);
-    if (ready_slots_cache_.empty())
+    dq.queue->GetReadySlots(slot_cache_);
+    if (slot_cache_.empty())
       continue;
 
-    size_t current_payload_bytes = sizeof(size_t); // num_anglesets_in_batch header
+    size_t current_payload_bytes = sizeof(size_t); // num_active_angle_sets header
     size_t active_angle_sets = 0;
     size_t slots_processed = 0;
 
-    auto DispatchBatch = [&]()
+    // Serialize accumulated entries into a single MPI message and initiate async send.
+    auto SendBatch = [&]()
     {
-      PendingSend ps;
-      ps.data.Data().resize(current_payload_bytes);
+      InFlightSend ifs;
+      ifs.data.Data().resize(current_payload_bytes);
       size_t offset = 0;
 
       auto WriteBytes = [&](const void* ptr, size_t size)
       {
-        std::memcpy(ps.data.Data().data() + offset, ptr, size);
+        std::memcpy(ifs.data.Data().data() + offset, ptr, size);
         offset += size;
       };
 
@@ -181,7 +181,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
 
       for (size_t as_id = 0; as_id < num_angle_sets_; ++as_id)
       {
-        auto& ptrs = by_angle_set[as_id];
+        auto& ptrs = send_batch_by_angle_set_[as_id];
         if (ptrs.empty())
           continue;
 
@@ -200,34 +200,34 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
         ptrs.clear();
       }
 
-      const auto& comm = comm_set_.LocICommunicator(nq.dest_location);
-      auto dest_rank = comm_set_.MapIonJ(nq.dest_location, nq.dest_location);
-      ps.request = comm.isend(dest_rank, aggregated_tag_, ps.data.Data());
-      pending_sends_.push_back(std::move(ps));
+      const auto& comm = comm_set_.LocICommunicator(dq.dest_rank);
+      auto mapped_rank = comm_set_.MapIonJ(dq.dest_rank, dq.dest_rank);
+      ifs.request = comm.isend(mapped_rank, mpi_tag_, ifs.data.Data());
+      in_flight_sends_.push_back(std::move(ifs));
     };
 
-    for (size_t s = 0; s < ready_slots_cache_.size(); ++s)
+    for (size_t s = 0; s < slot_cache_.size(); ++s)
     {
-      auto* slot = ready_slots_cache_[s];
+      auto* slot = slot_cache_[s];
       const auto& entry = slot->payload;
 
       size_t entry_bytes = sizeof(uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
                            entry.psi_data.size() * sizeof(double);
 
-      // Split messages if they exceed the maximum size
-      if (max_single_message_size_in_bytes_ > 0 and
-          current_payload_bytes + entry_bytes > max_single_message_size_in_bytes_ and
+      // Split into multiple messages if the batch exceeds the maximum message size.
+      if (max_message_bytes_ > 0 and
+          current_payload_bytes + entry_bytes > max_message_bytes_ and
           active_angle_sets > 0)
       {
-        DispatchBatch();
-        nq.queue->FreeSlots(slots_processed);
+        SendBatch();
+        dq.queue->FreeSlots(slots_processed);
 
         current_payload_bytes = sizeof(size_t);
         active_angle_sets = 0;
         slots_processed = 0;
       }
 
-      auto& ptrs = by_angle_set[entry.angle_set_id];
+      auto& ptrs = send_batch_by_angle_set_[entry.angle_set_id];
       if (ptrs.empty())
       {
         active_angle_sets++;
@@ -240,13 +240,13 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
 
     if (active_angle_sets > 0)
     {
-      DispatchBatch();
-      nq.queue->FreeSlots(slots_processed);
+      SendBatch();
+      dq.queue->FreeSlots(slots_processed);
     }
 
-    flushed_any = true;
+    sent_any = true;
   }
-  return flushed_any;
+  return sent_any;
 }
 
 bool
@@ -257,50 +257,47 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
   bool received_any = false;
   const int my_rank = opensn::mpi_comm.rank();
 
-  for (int locJ : location_dependencies_)
+  for (int source_loc : source_ranks_)
   {
     const auto& comm = comm_set_.LocICommunicator(my_rank);
-    auto source_rank = comm_set_.MapIonJ(locJ, my_rank);
+    auto mapped_source = comm_set_.MapIonJ(source_loc, my_rank);
 
     mpi::Status status;
-    while (comm.iprobe(source_rank, aggregated_tag_, status))
+    while (comm.iprobe(mapped_source, mpi_tag_, status))
     {
       received_any = true;
       int num_bytes = status.count<std::byte>();
-      persistent_recv_buffer_.Data().resize(num_bytes);
+      recv_buffer_.Data().resize(num_bytes);
 
-      comm.recv(source_rank, status.tag(),
-                persistent_recv_buffer_.Data().data(), num_bytes);
+      comm.recv(mapped_source, status.tag(), recv_buffer_.Data().data(), num_bytes);
 
-      persistent_recv_buffer_.Seek(0);
+      // Deserialize the aggregated wire format (see class-level doc for layout).
+      recv_buffer_.Seek(0);
+      auto num_active_angle_sets = recv_buffer_.Read<size_t>();
 
-      auto num_as_in_batch = persistent_recv_buffer_.Read<size_t>();
-
-      for (size_t as_batch = 0; as_batch < num_as_in_batch; ++as_batch)
+      for (size_t as_batch = 0; as_batch < num_active_angle_sets; ++as_batch)
       {
-        auto as_id = persistent_recv_buffer_.Read<size_t>();
-        auto num_entries = persistent_recv_buffer_.Read<size_t>();
+        auto as_id = recv_buffer_.Read<size_t>();
+        auto num_entries = recv_buffer_.Read<size_t>();
         assert(as_id < num_angle_sets_);
 
-        // Use ring buffer slot for incoming batch
         auto& slot = incoming_mailboxes_[as_id].ReserveSlot();
         auto& batch = slot.payload;
         batch.resize(num_entries);
 
         for (size_t e = 0; e < num_entries; ++e)
         {
-          batch[e].cell_global_id = persistent_recv_buffer_.Read<uint64_t>();
-          batch[e].face_id = persistent_recv_buffer_.Read<unsigned int>();
+          batch[e].cell_global_id = recv_buffer_.Read<uint64_t>();
+          batch[e].face_id = recv_buffer_.Read<unsigned int>();
 
-          auto data_size = persistent_recv_buffer_.Read<size_t>();
+          auto data_size = recv_buffer_.Read<size_t>();
           batch[e].psi_data.resize(data_size);
 
           std::memcpy(batch[e].psi_data.data(),
-                      &persistent_recv_buffer_.Data()[persistent_recv_buffer_.Offset()],
+                      &recv_buffer_.Data()[recv_buffer_.Offset()],
                       data_size * sizeof(double));
 
-          persistent_recv_buffer_.Seek(persistent_recv_buffer_.Offset() +
-                                       data_size * sizeof(double));
+          recv_buffer_.Seek(recv_buffer_.Offset() + data_size * sizeof(double));
         }
 
         incoming_mailboxes_[as_id].PublishSlot(slot);
@@ -311,17 +308,17 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 }
 
 bool
-CBCD_AggregatedCommunicator::PollPendingSends()
+CBCD_AggregatedCommunicator::PollInFlightSends()
 {
   bool completed_any = false;
-  // O(1) swap-and-pop removal logic
-  for (size_t i = 0; i < pending_sends_.size();)
+  // O(1) swap-and-pop removal of completed sends.
+  for (size_t i = 0; i < in_flight_sends_.size();)
   {
-    if (mpi::test(pending_sends_[i].request))
+    if (mpi::test(in_flight_sends_[i].request))
     {
       completed_any = true;
-      pending_sends_[i] = std::move(pending_sends_.back());
-      pending_sends_.pop_back();
+      in_flight_sends_[i] = std::move(in_flight_sends_.back());
+      in_flight_sends_.pop_back();
     }
     else
     {
@@ -332,14 +329,14 @@ CBCD_AggregatedCommunicator::PollPendingSends()
 }
 
 bool
-CBCD_AggregatedCommunicator::AllWorkComplete() const
+CBCD_AggregatedCommunicator::AllAngleSetsComplete() const
 {
   for (size_t i = 0; i < num_angle_sets_; ++i)
     if (not angle_set_done_[i].load(std::memory_order_acquire))
       return false;
 
-  for (const auto& nq : outgoing_queues_)
-    if (not nq.queue->Empty())
+  for (const auto& dq : outgoing_queues_)
+    if (not dq.queue->Empty())
       return false;
 
   return true;
