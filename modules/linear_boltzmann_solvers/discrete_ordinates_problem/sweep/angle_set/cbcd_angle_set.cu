@@ -308,10 +308,7 @@ CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
                            unsigned int g,
                            bool surface_source_active)
 {
-  if (boundaries_[boundary_id]->IsReflecting())
-    return boundaries_[boundary_id]->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
-
-  if (not surface_source_active)
+  if (not boundaries_[boundary_id]->IsReflecting() and not surface_source_active)
     return boundaries_[boundary_id]->ZeroFlux(g);
 
   return boundaries_[boundary_id]->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);

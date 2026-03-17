@@ -91,12 +91,9 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   const auto& angle_sets = cbcd_chunk.GetAngleSets();
   const size_t num_angle_sets = angle_sets.size();
 
-  // Set sweep chunk reference and reset dependency counters for all angle sets
+  // Reset dependency counters for all angle sets
   for (auto* as : angle_sets)
-  {
-    as->SetSweepChunk(&cbcd_chunk);
     as->ResetDependencyCounter();
-  }
 
   // Start aggregated communication thread
   cbcd_chunk.StartCommunicator();

@@ -155,7 +155,10 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                                                             max_single_message_size_in_bytes,
                                                             capacities);
   for (auto* as : angle_sets_)
+  {
     as->SetAggregatedCommunicator(agg_comm_.get());
+    as->SetSweepChunk(this);
+  }
 
   // Pre-compute and cache kernel arguments and launch dimensions per angle set.
   // These are constant across all kernel launches for a given angle set.

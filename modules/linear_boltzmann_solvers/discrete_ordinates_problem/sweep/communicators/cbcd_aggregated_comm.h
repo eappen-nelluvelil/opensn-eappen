@@ -73,10 +73,11 @@ public:
     out.clear();
     if (buffer_.empty())
       return;
+    const size_t cap = buffer_.size();
     size_t current_tail = tail_;
-    while (buffer_[current_tail % buffer_.size()].ready.load(std::memory_order_acquire))
+    while (buffer_[current_tail % cap].ready.load(std::memory_order_acquire))
     {
-      out.push_back(&buffer_[current_tail % buffer_.size()]);
+      out.push_back(&buffer_[current_tail % cap]);
       current_tail++;
     }
   }
@@ -84,9 +85,10 @@ public:
   /// Free slots for producer reuse after consumer has serialized the data.
   void FreeSlots(size_t count)
   {
+    const size_t cap = buffer_.size();
     for (size_t i = 0; i < count; ++i)
     {
-      buffer_[tail_ % buffer_.size()].ready.store(false, std::memory_order_release);
+      buffer_[tail_ % cap].ready.store(false, std::memory_order_release);
       tail_++;
     }
   }
@@ -98,11 +100,15 @@ public:
   {
     if (buffer_.empty())
       return 0;
+    const size_t cap = buffer_.size();
     size_t count = 0;
-    while (buffer_[tail_ % buffer_.size()].ready.load(std::memory_order_acquire))
+    while (true)
     {
-      cb(buffer_[tail_ % buffer_.size()].payload);
-      buffer_[tail_ % buffer_.size()].ready.store(false, std::memory_order_release);
+      auto& slot = buffer_[tail_ % cap];
+      if (not slot.ready.load(std::memory_order_acquire))
+        break;
+      cb(slot.payload);
+      slot.ready.store(false, std::memory_order_release);
       tail_++;
       count++;
     }
