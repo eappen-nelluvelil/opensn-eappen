@@ -100,12 +100,7 @@ private:
   const CBCD_FLUDSCommonData& common_data_;
   /// Unknown manager for psi.
   const UnknownManager& psi_uk_man_;
-  /// Spatial discretization reference.
-  const SpatialDiscretization& sdm_;
-  /// Size computation helpers (pulled up from CBC_FLUDS).
-  size_t num_angles_in_gs_quadrature_;
-  size_t num_quadrature_local_dofs_;
-  size_t num_local_spatial_dofs_;
+  /// Total number of local spatial DOFs times groups-and-angles (device allocation size).
   size_t local_psi_data_size_;
   /// Cached grid pointer — avoids shared_ptr copy on the hot path.
   const MeshContinuum* grid_ptr_;

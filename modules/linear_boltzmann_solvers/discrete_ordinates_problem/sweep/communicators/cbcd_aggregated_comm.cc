@@ -83,39 +83,6 @@ CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
 // ---------------------------------------------------------------------------
 
 void
-CBCD_AggregatedCommunicator::EnqueueOutgoing(int dest_location,
-                                             size_t angle_set_id,
-                                             uint64_t cell_global_id,
-                                             unsigned int face_id,
-                                             const double* psi_data,
-                                             size_t data_size)
-{
-  auto it = dest_to_queue_index_.find(dest_location);
-  assert(it != dest_to_queue_index_.end());
-  auto& queue = outgoing_queues_[it->second].queue;
-
-  // Wait-free slot reservation via atomic fetch_add
-  auto& slot = queue->ReserveSlot();
-
-  slot.payload.angle_set_id = angle_set_id;
-  slot.payload.cell_global_id = cell_global_id;
-  slot.payload.face_id = face_id;
-
-  // Reuse pre-allocated vector capacity from previous iterations
-  slot.payload.psi_data.resize(data_size);
-  std::memcpy(slot.payload.psi_data.data(), psi_data, data_size * sizeof(double));
-
-  queue->PublishSlot(slot);
-}
-
-std::vector<std::vector<IncomingEntry>>
-CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
-{
-  assert(angle_set_id < num_angle_sets_);
-  return incoming_mailboxes_[angle_set_id].Drain();
-}
-
-void
 CBCD_AggregatedCommunicator::SignalAngleSetComplete(size_t angle_set_id)
 {
   assert(angle_set_id < num_angle_sets_);

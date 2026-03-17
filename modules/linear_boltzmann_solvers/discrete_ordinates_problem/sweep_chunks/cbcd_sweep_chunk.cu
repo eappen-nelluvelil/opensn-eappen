@@ -59,16 +59,14 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
     problem_(problem),
-    angle_sets_(),
-    fluds_list_(),
-    streams_list_()
+    angle_sets_()
 {
+  std::vector<CBCD_FLUDS*> fluds_list;
   for (auto& as : *(groupset_.angle_agg))
   {
     auto* angle_set = static_cast<CBCD_AngleSet*>(as.get());
     angle_sets_.push_back(angle_set);
-    fluds_list_.push_back(static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS())));
-    streams_list_.push_back(&(angle_set->GetStream()));
+    fluds_list.push_back(static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS())));
   }
 
   // Compute exact per-source worst-case message size for the receive buffer
@@ -91,7 +89,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   std::unordered_map<int, std::unordered_map<size_t, PerSourceAngleSetInfo>> source_as_info;
   for (size_t as_idx = 0; as_idx < angle_sets_.size(); ++as_idx)
   {
-    auto& fluds = *fluds_list_[as_idx];
+    auto& fluds = *fluds_list[as_idx];
     const auto stride = fluds.GetStrideSize();
     const auto& incoming_map = fluds.GetCommonData().GetIncomingNonlocalNodeMap();
 
@@ -146,8 +144,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   std::vector<CBCD_AggregatedCommunicator::AngleSetCapacity> capacities(angle_sets_.size());
   for (size_t i = 0; i < angle_sets_.size(); ++i)
   {
-    capacities[i].outgoing_faces = fluds_list_[i]->GetNumOutgoingFaces();
-    capacities[i].incoming_faces = fluds_list_[i]->GetNumIncomingFaces();
+    capacities[i].outgoing_faces = fluds_list[i]->GetNumOutgoingFaces();
+    capacities[i].incoming_faces = fluds_list[i]->GetNumIncomingFaces();
   }
 
   // Create aggregated communicator and set it on all angle sets
@@ -164,13 +162,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   cached_kernel_params_.reserve(angle_sets_.size());
   for (size_t i = 0; i < angle_sets_.size(); ++i)
   {
-    cbc_gpu_kernel::CBC_Arguments args(problem_, groupset_, *angle_sets_[i], *fluds_list_[i]);
+    cbc_gpu_kernel::CBC_Arguments args(problem_, groupset_, *angle_sets_[i], *fluds_list[i]);
     unsigned int stride_size =
       gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
     unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);
     unsigned int block_size_y = gpu_kernel::threshold / block_size_x;
     unsigned int grid_size_x = (stride_size + block_size_x - 1) / block_size_x;
-    double* device_saved_psi = fluds_list_[i]->GetSavedAngularFluxDevicePointer();
+    double* device_saved_psi = fluds_list[i]->GetSavedAngularFluxDevicePointer();
     cached_kernel_params_.emplace_back(args,
                                        ::dim3{block_size_x, block_size_y},
                                        grid_size_x,
@@ -205,7 +203,7 @@ CBCDSweepChunk::GPUSweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells)
 
   auto id = angle_set.GetID();
   auto& ck = cached_kernel_params_[id];
-  auto& stream = *streams_list_[id];
+  auto& stream = angle_set.GetStream();
   unsigned int grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
   ::dim3 grid_size{ck.grid_size_x, grid_size_y};
   cbc_gpu_kernel::CBCSweepKernel<<<grid_size, ck.block_size, 0, stream>>>(

@@ -8,10 +8,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/arguments.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
-#include "caribou/main.hpp"
 #include <memory>
-
-namespace crb = caribou;
 
 namespace opensn
 {
@@ -32,20 +29,11 @@ public:
 
   unsigned int GetGroupsetGroupIndex() const { return groupset_.first_group; }
 
-  const CellLBSView& GetCellTransportView(std::uint64_t cell_local_id) const
-  {
-    return cell_transport_views_[cell_local_id];
-  }
-
   /// Launch the GPU sweep kernel for the given angle set.
   /// Cell IDs must already be written to the FLUDS MappedHostVector by the caller.
   void GPUSweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells);
 
   const std::vector<CBCD_AngleSet*>& GetAngleSets() const { return angle_sets_; }
-
-  const std::vector<CBCD_FLUDS*>& GetFLUDSList() const { return fluds_list_; }
-
-  const std::vector<crb::Stream*>& GetStreamsList() const { return streams_list_; }
 
   /// Start the aggregated communication thread.
   void StartCommunicator();
@@ -76,8 +64,6 @@ private:
 
   DiscreteOrdinatesProblem& problem_;
   std::vector<CBCD_AngleSet*> angle_sets_;
-  std::vector<CBCD_FLUDS*> fluds_list_;
-  std::vector<crb::Stream*> streams_list_;
   std::unique_ptr<CBCD_AggregatedCommunicator> agg_comm_;
   /// Cached kernel arguments and launch dimensions per angle set (avoids re-construction each call).
   std::vector<CachedKernelParams> cached_kernel_params_;

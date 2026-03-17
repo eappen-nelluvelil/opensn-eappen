@@ -29,12 +29,9 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
-    sdm_(sdm),
-    num_angles_in_gs_quadrature_(psi_uk_man_.GetNumberOfUnknowns()),
-    num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
-    num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
-                            num_groups_),
-    local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
+    local_psi_data_size_((sdm.GetNumLocalDOFs(psi_uk_man) / psi_uk_man.GetNumberOfUnknowns() /
+                          num_groups) *
+                         num_groups_and_angles_),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
@@ -57,7 +54,7 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
       continue;
 
     const auto& cell = grid.local_cells[cell_id];
-    const auto& cell_mapping = sdm_.GetCellMapping(cell);
+    const auto& cell_mapping = sdm.GetCellMapping(cell);
     std::map<unsigned int, std::vector<const NonlocalNodeInfo*>> by_face;
     for (const auto& node : nodes)
       by_face[node.face_id].push_back(&node);
@@ -287,7 +284,6 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
     return;
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();
-  auto grid = problem.GetGrid();
   auto& groupset = sweep_chunk.GetGroupset();
   auto& destination_psi = problem.GetPsiNewLocal()[groupset.id];
   const auto& discretization = problem.GetSpatialDiscretization();
@@ -295,7 +291,7 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
     groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_set->GetNumAngles();
-  for (const auto& cell : grid->local_cells)
+  for (const auto& cell : grid_ptr_->local_cells)
   {
     double* dst_psi = &destination_psi[discretization.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0)];
     double* src_psi =

@@ -41,8 +41,6 @@ public:
 
   std::uint32_t* GetDeviceAngleIndices() { return device_angle_indices_.get(); }
 
-  std::vector<Task>& GetCurrentTaskList() { return current_task_list_; }
-
   void SetSweepChunk(CBCDSweepChunk* sweep_chunk) { cbcd_sweep_chunk_ = sweep_chunk; }
 
   /// Set the aggregated communicator pointer.

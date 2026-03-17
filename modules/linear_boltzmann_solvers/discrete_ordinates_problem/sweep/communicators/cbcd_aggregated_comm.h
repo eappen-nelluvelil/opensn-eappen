@@ -67,21 +67,6 @@ public:
     slot.ready.store(true, std::memory_order_release);
   }
 
-  /// Returns pointers to contiguous ready slots (consumer only).
-  std::vector<Slot*> GetReadySlots()
-  {
-    std::vector<Slot*> ready_slots;
-    if (buffer_.empty())
-      return ready_slots;
-    size_t current_tail = tail_;
-    while (buffer_[current_tail % buffer_.size()].ready.load(std::memory_order_acquire))
-    {
-      ready_slots.push_back(&buffer_[current_tail % buffer_.size()]);
-      current_tail++;
-    }
-    return ready_slots;
-  }
-
   /// Output-parameter variant (avoids vector allocation in hot loops).
   void GetReadySlots(std::vector<Slot*>& out)
   {
@@ -106,20 +91,22 @@ public:
     }
   }
 
-  /// Drain all ready slots (consumer only).
-  std::vector<T> Drain()
+  /// Process all ready slots in-place without allocation (consumer only).
+  /// Returns the number of slots processed.
+  template <typename Callback>
+  size_t ProcessReady(Callback&& cb)
   {
-    std::vector<T> result;
     if (buffer_.empty())
-      return result;
+      return 0;
+    size_t count = 0;
     while (buffer_[tail_ % buffer_.size()].ready.load(std::memory_order_acquire))
     {
-      size_t idx = tail_ % buffer_.size();
-      result.push_back(std::move(buffer_[idx].payload));
-      buffer_[idx].ready.store(false, std::memory_order_release);
+      cb(buffer_[tail_ % buffer_.size()].payload);
+      buffer_[tail_ % buffer_.size()].ready.store(false, std::memory_order_release);
       tail_++;
+      count++;
     }
-    return result;
+    return count;
   }
 
   bool Empty() const
@@ -164,14 +151,6 @@ public:
 
   ~CBCD_AggregatedCommunicator();
 
-  /// Enqueue a single outgoing entry directly from a raw buffer (zero-allocation path).
-  void EnqueueOutgoing(int dest_location,
-                       size_t angle_set_id,
-                       uint64_t cell_global_id,
-                       unsigned int face_id,
-                       const double* psi_data,
-                       size_t data_size);
-
   /// Enqueue an outgoing entry with a callback that fills psi_data directly in the ring
   /// buffer slot, eliminating the intermediate staging buffer copy.
   template <typename FillCallback>
@@ -194,24 +173,13 @@ public:
     queue->PublishSlot(slot);
   }
 
-  /// Pull all received batches for this angle set (lock-free).
-  std::vector<std::vector<IncomingEntry>> DequeueIncoming(size_t angle_set_id);
-
   /// Process all ready incoming batches in-place (zero-allocation path).
-  /// The callback receives a const reference to each batch. Slots are freed after
-  /// all batches are processed, preserving psi_data vector capacity for reuse.
+  /// The callback receives a reference to each batch. Slots are freed inline.
   template <typename Callback>
   bool ProcessIncoming(size_t angle_set_id, Callback&& cb)
   {
     assert(angle_set_id < num_angle_sets_);
-    auto& mailbox = incoming_mailboxes_[angle_set_id];
-    auto ready_slots = mailbox.GetReadySlots();
-    if (ready_slots.empty())
-      return false;
-    for (auto* slot : ready_slots)
-      cb(slot->payload);
-    mailbox.FreeSlots(ready_slots.size());
-    return true;
+    return incoming_mailboxes_[angle_set_id].ProcessReady(std::forward<Callback>(cb)) > 0;
   }
 
   /// Signal that this angle set has no more outgoing data.
