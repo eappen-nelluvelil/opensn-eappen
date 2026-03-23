@@ -110,8 +110,40 @@
     ]
   },
   {
+    "file": "transient_zero_3d_1g_v1_inf_med_cbc.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient (CBC)",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 2.330956,
+        "abs_tol": 0.000001
+      }
+    ]
+  },
+  {
     "file": "transient_zero_3d_2g_inf_med_downscatter.py",
     "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0(2s) = ",
+        "goldvalue": 3.658193,
+        "abs_tol": 0.000001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1(2s) = ",
+        "goldvalue": 1.027354,
+        "abs_tol": 0.000001
+      }
+    ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_downscatter_cbc.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient (CBC)",
     "num_procs": 4,
     "checks": [
       {
@@ -155,6 +187,19 @@
     ]
   },
   {
+    "file": "transient_zero_3d_1g_v1_inf_med_swap_cbc.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient, swap xs at 0.5s (CBC)",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 1.736077,
+        "abs_tol": 0.000001
+      }
+    ]
+  },
+  {
     "file": "transient_zero_3d_1g_v2_inf_med.py",
     "comment": "3D unstructured mesh, 1 group, vel = 2.0, zero-init transient",
     "num_procs": 4,
@@ -170,6 +215,25 @@
   {
     "file": "transient_zero_3d_2g_inf_med_downscatter_swap.py",
     "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, swap xs at 0.5s",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0(1s) = ",
+        "goldvalue": 1.978816,
+        "abs_tol": 0.000001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1(1s) = ",
+        "goldvalue": 0.394171,
+        "abs_tol": 0.000001
+      }
+    ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_downscatter_swap_cbc.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, swap xs at 0.5s (CBC)",
     "num_procs": 4,
     "checks": [
       {
@@ -206,8 +270,27 @@
     ]
   },
   {
-    "file": "transient_zero_3d_2g_inf_med_pydrvr_ramp_dt.py",
-    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop, ramp dt",
+    "file": "transient_zero_3d_2g_inf_med_pydrvr_cbc.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop (CBC)",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0 = ",
+        "goldvalue": 3.672537,
+        "abs_tol": 0.000001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1 = ",
+        "goldvalue": 1.035548,
+        "abs_tol": 0.000001
+      }
+    ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_pydrvr_ramp_dt_cbc.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop, ramp dt (CBC)",
     "num_procs": 4,
     "checks": [
       {
@@ -227,6 +310,19 @@
   {
     "file": "transient_zero_3d_openmc_xs.py",
     "comment": "3D orthogonal mesh, 30 group, zero-init transient, OpenMC cross sections",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(0.1s) = ",
+        "goldvalue": 51.057722,
+        "abs_tol": 0.0001
+      }
+    ]
+  },
+  {
+    "file": "transient_zero_3d_openmc_xs_cbc.py",
+    "comment": "3D orthogonal mesh, 30 group, zero-init transient, OpenMC cross sections (CBC)",
     "num_procs": 4,
     "checks": [
       {
