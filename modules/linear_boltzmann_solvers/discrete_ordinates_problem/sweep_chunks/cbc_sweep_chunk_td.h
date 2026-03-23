@@ -11,19 +11,12 @@ namespace opensn
 class CellMapping;
 class DiscreteOrdinatesProblem;
 
-/**
- * Time-dependent variant of the CBC sweep chunk.
- *
- * Extends CBCSweepChunk with time-dependent terms for transient transport:
- *   - Adds tau = 1/(v * theta * dt) to the total cross-section (time absorption)
- *   - Adds tau * psi_old to the RHS source term
- *   - Applies theta-method reconstruction when saving angular flux:
- *     psi_new = (1/theta) * (psi_sol + (theta - 1) * psi_old)
- */
 class CBCSweepChunkTD : public SweepChunk
 {
 public:
   CBCSweepChunkTD(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset);
+
+  ~CBCSweepChunkTD() override;
 
   void SetAngleSet(AngleSet& angle_set) override;
 
@@ -33,29 +26,18 @@ public:
 
   bool IsTimeDependent() const override { return true; }
 
-private:
+protected:
+  void Sweep_Generic(AngleSet& angle_set);
+  template <int NumNodes>
+  void Sweep_FixedN(AngleSet& angle_set);
+
   DiscreteOrdinatesProblem& problem_;
   const std::vector<double>& psi_old_;
-
-  CBC_FLUDS* fluds_;
-  size_t gs_size_;
-  unsigned int gs_gi_;
-  size_t num_angles_in_as_;
-  unsigned int group_stride_;
-  size_t group_angle_stride_;
-  bool surface_source_active_;
-
-  const Cell* cell_;
-  std::uint32_t cell_local_id_;
-  const CellMapping* cell_mapping_;
-  CellLBSView* cell_transport_view_;
-  size_t cell_num_faces_;
-  size_t cell_num_nodes_;
-
-  DenseMatrix<Vector3> G_;
-  DenseMatrix<double> M_;
-  std::vector<DenseMatrix<double>> M_surf_;
-  std::vector<Vector<double>> IntS_shapeI_;
+  unsigned int group_block_size_ = 0;
+  bool use_fixed_n_ = false;
+  unsigned int fixed_num_nodes_ = 0;
+  CBC_FLUDS* fluds_ = nullptr;
+  const Cell* cell_ = nullptr;
 };
 
 } // namespace opensn

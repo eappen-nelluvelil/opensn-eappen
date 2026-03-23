@@ -60,6 +60,10 @@ public:
 protected:
   const CBC_SPDS& cbc_spds_;
   std::vector<Task> current_task_list_;
+  /// Ready queue: indices into current_task_list_ for tasks with zero unmet dependencies.
+  std::vector<uint64_t> ready_tasks_;
+  /// Number of completed tasks in current sweep.
+  size_t num_completed_ = 0;
   CBC_ASynchronousCommunicator async_comm_;
 };
 

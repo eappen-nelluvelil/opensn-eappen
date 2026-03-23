@@ -4,6 +4,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/logging/log.h"
@@ -93,9 +94,8 @@ CBC_ASynchronousCommunicator::ReceiveData()
 {
   CALI_CXX_MARK_SCOPE("CBC_ASynchronousCommunicator::ReceiveData");
 
-  using CellFaceKey = std::pair<uint64_t, unsigned int>; // cell_gid + face_id
-  std::map<CellFaceKey, std::vector<double>> received_messages;
   std::vector<uint64_t> cells_who_received_data;
+  auto& deplocs = cbc_fluds_.GetDeplocsOutgoingMessages();
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   for (int locJ : location_dependencies)
   {
@@ -121,14 +121,12 @@ CBC_ASynchronousCommunicator::ReceiveData()
         for (size_t k = 0; k < data_size; ++k)
           psi_data.push_back(data_array.Read<double>());
 
-        received_messages[{cell_global_id, face_id}] = std::move(psi_data);
+        deplocs[{cell_global_id, face_id}] = std::move(psi_data);
         cells_who_received_data.push_back(
           fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
       } // while not at end of buffer
     } // Process each message embedded in buffer
   }
-
-  cbc_fluds_.GetDeplocsOutgoingMessages().merge(received_messages);
 
   return cells_who_received_data;
 }
