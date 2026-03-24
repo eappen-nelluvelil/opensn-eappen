@@ -67,5 +67,65 @@
         "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transport_3d_2_unstructured.py",
+    "comment": "3D LinearBSolver Test Extruded Unstructured - PWLD",
+    "num_procs": 4,
+    "requires_gpu": "True",
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value1=",
+        "goldvalue": 0.541465,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value2=",
+        "goldvalue": 0.000378243,
+        "abs_tol": 0.0001
+      }
+    ]
+  },
+  {
+    "file": "transport_3d_1a_extruder.py",
+    "comment": "3D LinearBSolver Test - PWLD",
+    "num_procs": 4,
+    "requires_gpu": "True",
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value1=",
+        "goldvalue": 0.52745,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value2=",
+        "goldvalue": 0.000376339,
+        "abs_tol": 0.0001
+      }
+    ]
+  },
+  {
+    "file": "transport_3d_1b_ortho.py",
+    "comment": "3D LinearBSolver Test - PWLD Reflecting BC",
+    "requires_gpu": "True",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value1=",
+        "goldvalue": 0.52831,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value2=",
+        "goldvalue": 0.000804576,
+        "abs_tol": 0.0001
+      }
+    ]
   }
 ]

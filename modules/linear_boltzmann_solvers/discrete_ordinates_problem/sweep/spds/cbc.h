@@ -24,9 +24,14 @@ public:
   /// Returns the cell-by-cell task list.
   const std::vector<Task>& GetTaskList() const;
 
+  /// Returns the immutable task topology (no mutable state).
+  const std::vector<TaskTopology>& GetTaskTopology() const;
+
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+  /// Immutable task topology — shared across sweeps.
+  std::vector<TaskTopology> task_topology_;
 };
 
 } // namespace opensn

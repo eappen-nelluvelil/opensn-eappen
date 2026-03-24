@@ -93,6 +93,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
     }
 
     task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
+    task_topology_.push_back({num_dependencies, successors, cell.local_id, &cell});
   }
 }
 
@@ -100,6 +101,12 @@ const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
 {
   return task_list_;
+}
+
+const std::vector<TaskTopology>&
+CBC_SPDS::GetTaskTopology() const
+{
+  return task_topology_;
 }
 
 } // namespace opensn

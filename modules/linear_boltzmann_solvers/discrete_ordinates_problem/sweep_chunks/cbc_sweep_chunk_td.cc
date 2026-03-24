@@ -49,6 +49,28 @@ CBCSweepChunkTD::SetAngleSet(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::SetAngleSet");
   fluds_ = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
+
+  // Build persistent sweep data (only cell pointer changes per-cell)
+  sweep_data_ = CBCSweepData{&discretization_,
+                              &unit_cell_matrices_,
+                              &cell_transport_views_,
+                              &source_moments_,
+                              &groupset_,
+                              &xs_,
+                              num_moments_,
+                              max_num_cell_dofs_,
+                              SaveAngularFluxEnabled(),
+                              groupset_angle_group_stride_,
+                              groupset_group_stride_,
+                              &destination_phi_,
+                              &destination_psi_,
+                              surface_source_active_,
+                              include_rhs_time_term_,
+                              &problem_,
+                              &psi_old_,
+                              group_block_size_,
+                              fluds_,
+                              nullptr};
 }
 
 void
@@ -100,29 +122,8 @@ void
 CBCSweepChunkTD::Sweep_Generic(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::Sweep");
-
-  CBCSweepData data{discretization_,
-                    unit_cell_matrices_,
-                    cell_transport_views_,
-                    source_moments_,
-                    groupset_,
-                    xs_,
-                    num_moments_,
-                    max_num_cell_dofs_,
-                    SaveAngularFluxEnabled(),
-                    groupset_angle_group_stride_,
-                    groupset_group_stride_,
-                    destination_phi_,
-                    destination_psi_,
-                    surface_source_active_,
-                    include_rhs_time_term_,
-                    &problem_,
-                    &psi_old_,
-                    group_block_size_,
-                    fluds_,
-                    cell_};
-
-  CBC_Sweep_CellKernel_Generic<true>(data, angle_set);
+  sweep_data_.cell = cell_;
+  CBC_Sweep_CellKernel_Generic<true>(sweep_data_, angle_set);
 }
 
 CBCSweepChunkTD::~CBCSweepChunkTD() = default;

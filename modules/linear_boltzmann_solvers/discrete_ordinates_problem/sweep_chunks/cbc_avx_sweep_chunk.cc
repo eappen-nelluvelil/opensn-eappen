@@ -22,14 +22,14 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
   CALI_CXX_MARK_SCOPE("CBC_Sweep_CellKernel_FixedN");
 
-  const auto& groupset = data.groupset;
+  const auto& groupset = *data.groupset;
   const auto gs_size = groupset.GetNumGroups();
   const auto gs_gi = groupset.first_group;
 
   const auto& cell = *data.cell;
   const auto cell_local_id = cell.local_id;
-  auto& cell_transport_view = data.cell_transport_views[cell_local_id];
-  const auto& cell_mapping = data.discretization.GetCellMapping(cell);
+  auto& cell_transport_view = (*data.cell_transport_views)[cell_local_id];
+  const auto& cell_mapping = data.discretization->GetCellMapping(cell);
   const size_t cell_num_nodes = cell_mapping.GetNumNodes();
   constexpr auto expected_nodes = static_cast<size_t>(NumNodes);
   OpenSnInvalidArgumentIf(cell_num_nodes != expected_nodes,
@@ -39,9 +39,9 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
   const size_t cell_num_faces = cell.faces.size();
   std::vector<double> face_mu_values(cell_num_faces, 0.0);
 
-  const auto& sigma_t = data.xs.at(cell.block_id)->GetSigmaTotal();
+  const auto& sigma_t = data.xs->at(cell.block_id)->GetSigmaTotal();
 
-  const auto& unit_mats = data.unit_cell_matrices[cell_local_id];
+  const auto& unit_mats = (*data.unit_cell_matrices)[cell_local_id];
   const auto& G = unit_mats.intV_shapeI_gradshapeJ;
   const auto& M = unit_mats.intV_shapeI_shapeJ;
   const auto& M_surf = unit_mats.intS_shapeI_shapeJ;
@@ -71,7 +71,7 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
   std::vector<double> tau_gsg;
   if constexpr (time_dependent)
   {
-    const auto& inv_velg = data.xs.at(cell.block_id)->GetInverseVelocity();
+    const auto& inv_velg = data.xs->at(cell.block_id)->GetInverseVelocity();
     const double theta = data.problem->GetTheta();
     const double inv_theta = 1.0 / theta;
     const double dt = data.problem->GetTimeStep();
@@ -91,7 +91,7 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
   const double* psi_old_cell =
     (time_dependent and data.psi_old)
-      ? &(*data.psi_old)[data.discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)]
+      ? &(*data.psi_old)[data.discretization->MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)]
       : nullptr;
 
   const std::vector<std::uint32_t>& as_angle_indices = angle_set.GetAngleIndices();
@@ -145,7 +145,7 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
                                       as_ss_idx);
         else if (not is_boundary_face)
           psi = data.fluds->NLUpwindPsi(
-            cell.global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+            cell_local_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
         else
           psi = angle_set.PsiBoundary(face.neighbor_id,
                                       direction_num,
@@ -194,7 +194,7 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
           const double w = m2d_row[m];
           std::array<double, NumNodes> nodal_source{};
           for (int i = 0; i < NumNodes; ++i)
-            nodal_source[i] = w * data.source_moments[moment_dof_map[m][i] + gsg];
+            nodal_source[i] = w * (*data.source_moments)[moment_dof_map[m][i] + gsg];
 
           for (int i = 0; i < NumNodes; ++i)
           {
@@ -299,7 +299,7 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
           for (int i = 0; i < NumNodes; ++i)
           {
             const size_t dof = cell_transport_view.MapDOF(i, m, gs_gi);
-            data.destination_phi[dof + gsg] += w * bg[i];
+            (*data.destination_phi)[dof + gsg] += w * bg[i];
           }
         }
       }
@@ -309,8 +309,8 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
     if (data.save_angular_flux)
     {
       double* cell_psi_data =
-        &data
-           .destination_psi[data.discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
+        &(*data.destination_psi)[data.discretization->MapDOFLocal(
+          cell, 0, groupset.psi_uk_man_, 0, 0)];
       PRAGMA_UNROLL
       for (int i = 0; i < NumNodes; ++i)
       {
@@ -347,22 +347,10 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
         is_boundary && angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting();
       const double mu_wt_f = wt * face_mu_values[f];
 
-      const int locality = cell_transport_view.FaceLocality(f);
-      const auto& face_nodal_mapping =
-        data.fluds->GetCommonData().GetFaceNodalMapping(cell_local_id, f);
-      std::vector<double>* psi_nonlocal_outgoing = nullptr;
-
+      // Get send buffer offset for non-local outgoing faces
+      size_t nl_face_offset = SIZE_MAX;
       if (not is_boundary and not is_local_face)
-      {
-        auto& async_comm = *angle_set.GetCommunicator();
-        const size_t data_size_for_msg = num_face_nodes * group_angle_stride;
-        psi_nonlocal_outgoing =
-          &async_comm.InitGetDownwindMessageData(locality,
-                                                 face.neighbor_id,
-                                                 face_nodal_mapping.associated_face_,
-                                                 angle_set.GetID(),
-                                                 data_size_for_msg);
-      }
+        nl_face_offset = data.fluds->GetNLSendFaceOffset(cell_local_id, f);
 
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
       {
@@ -379,7 +367,7 @@ CBC_Sweep_CellKernel_FixedN(CBCSweepData& data, AngleSet& angle_set)
         if (is_local_face)
           psi = data.fluds->OutgoingPsi(cell, i, as_ss_idx);
         else if (not is_boundary)
-          psi = data.fluds->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
+          psi = data.fluds->NLOutgoingPsi(nl_face_offset, fi, as_ss_idx);
         else if (is_reflecting)
           psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id, f, fi);
         else
@@ -400,28 +388,8 @@ template <unsigned int NumNodes>
 void
 CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
 {
-  CBCSweepData data{discretization_,
-                    unit_cell_matrices_,
-                    cell_transport_views_,
-                    source_moments_,
-                    groupset_,
-                    xs_,
-                    num_moments_,
-                    max_num_cell_dofs_,
-                    SaveAngularFluxEnabled(),
-                    groupset_angle_group_stride_,
-                    groupset_group_stride_,
-                    destination_phi_,
-                    destination_psi_,
-                    surface_source_active_,
-                    include_rhs_time_term_,
-                    nullptr,
-                    nullptr,
-                    group_block_size_,
-                    fluds_,
-                    cell_};
-
-  CBC_Sweep_CellKernel_FixedN<NumNodes, false>(data, angle_set);
+  sweep_data_.cell = cell_;
+  CBC_Sweep_CellKernel_FixedN<NumNodes, false>(sweep_data_, angle_set);
 }
 
 // CBCSweepChunkTD Fixed-N member function implementations
@@ -429,28 +397,8 @@ template <int NumNodes>
 void
 CBCSweepChunkTD::Sweep_FixedN(AngleSet& angle_set)
 {
-  CBCSweepData data{discretization_,
-                    unit_cell_matrices_,
-                    cell_transport_views_,
-                    source_moments_,
-                    groupset_,
-                    xs_,
-                    num_moments_,
-                    max_num_cell_dofs_,
-                    SaveAngularFluxEnabled(),
-                    groupset_angle_group_stride_,
-                    groupset_group_stride_,
-                    destination_phi_,
-                    destination_psi_,
-                    surface_source_active_,
-                    include_rhs_time_term_,
-                    &problem_,
-                    &psi_old_,
-                    group_block_size_,
-                    fluds_,
-                    cell_};
-
-  CBC_Sweep_CellKernel_FixedN<NumNodes, true>(data, angle_set);
+  sweep_data_.cell = cell_;
+  CBC_Sweep_CellKernel_FixedN<NumNodes, true>(sweep_data_, angle_set);
 }
 
 // Explicit template instantiations for CBC_Sweep_CellKernel_FixedN

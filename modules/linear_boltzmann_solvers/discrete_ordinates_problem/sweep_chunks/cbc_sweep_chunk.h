@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_kernels.h"
 
 namespace opensn
 {
@@ -27,6 +28,7 @@ protected:
   unsigned int group_block_size_;
   CBC_FLUDS* fluds_ = nullptr;
   const Cell* cell_ = nullptr;
+  CBCSweepData sweep_data_{}; ///< Persistent sweep data, constructed once in SetAngleSet.
 
 private:
   using SweepFunc = void (CBCSweepChunk::*)(AngleSet&);

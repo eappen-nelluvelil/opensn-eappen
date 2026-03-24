@@ -41,15 +41,22 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (executed_)
     return AngleSetStatus::FINISHED;
 
-  // First call: copy the task list and initialize the ready queue
-  if (current_task_list_.empty())
+  // First call: initialize from immutable topology
+  if (task_topology_ == nullptr)
   {
-    current_task_list_ = cbc_spds_.GetTaskList();
+    task_topology_ = &cbc_spds_.GetTaskTopology();
+    const size_t n = task_topology_->size();
+    task_states_.resize(n);
+    for (size_t i = 0; i < n; ++i)
+    {
+      task_states_[i].num_dependencies = (*task_topology_)[i].initial_num_dependencies;
+      task_states_[i].completed = false;
+    }
     num_completed_ = 0;
     ready_tasks_.clear();
-    ready_tasks_.reserve(current_task_list_.size());
-    for (size_t i = 0; i < current_task_list_.size(); ++i)
-      if (current_task_list_[i].num_dependencies == 0)
+    ready_tasks_.reserve(n);
+    for (size_t i = 0; i < n; ++i)
+      if (task_states_[i].num_dependencies == 0)
         ready_tasks_.push_back(i);
   }
 
@@ -59,8 +66,8 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   auto tasks_who_received_data = async_comm_.ReceiveData();
   for (const uint64_t task_number : tasks_who_received_data)
   {
-    if (--current_task_list_[task_number].num_dependencies == 0 and
-        not current_task_list_[task_number].completed)
+    if (--task_states_[task_number].num_dependencies == 0 and
+        not task_states_[task_number].completed)
       ready_tasks_.push_back(task_number);
   }
 
@@ -72,34 +79,39 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
       return AngleSetStatus::NOT_FINISHED;
 
   // Process all ready tasks
+  const auto& topology = *task_topology_;
   while (not ready_tasks_.empty())
   {
     const auto task_idx = ready_tasks_.back();
     ready_tasks_.pop_back();
 
-    auto& cell_task = current_task_list_[task_idx];
-
-    if (cell_task.completed)
+    auto& state = task_states_[task_idx];
+    if (state.completed)
       continue;
 
-    sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+    const auto& topo = topology[task_idx];
+
+    sweep_chunk.SetCell(topo.cell_ptr, *this);
     sweep_chunk.Sweep(*this);
 
-    for (uint64_t local_task_num : cell_task.successors)
+    // Notify communicator that this cell's outgoing non-local faces are written
+    async_comm_.CellSwept(topo.cell_ptr->local_id);
+
+    for (uint64_t local_task_num : topo.successors)
     {
-      if (--current_task_list_[local_task_num].num_dependencies == 0 and
-          not current_task_list_[local_task_num].completed)
+      if (--task_states_[local_task_num].num_dependencies == 0 and
+          not task_states_[local_task_num].completed)
         ready_tasks_.push_back(local_task_num);
     }
 
-    cell_task.completed = true;
+    state.completed = true;
     ++num_completed_;
     async_comm_.SendData();
   }
 
   async_comm_.SendData();
 
-  const bool all_tasks_completed = (num_completed_ == current_task_list_.size());
+  const bool all_tasks_completed = (num_completed_ == task_topology_->size());
   const bool all_messages_sent = async_comm_.SendData();
 
   if (all_tasks_completed and all_messages_sent)
@@ -117,7 +129,15 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
-  current_task_list_.clear();
+  if (task_topology_)
+  {
+    const size_t n = task_topology_->size();
+    for (size_t i = 0; i < n; ++i)
+    {
+      task_states_[i].num_dependencies = (*task_topology_)[i].initial_num_dependencies;
+      task_states_[i].completed = false;
+    }
+  }
   ready_tasks_.clear();
   num_completed_ = 0;
   async_comm_.Reset();

@@ -14,18 +14,22 @@
 namespace opensn
 {
 
-std::vector<double>&
-CBC_ASynchronousCommunicator::InitGetDownwindMessageData(int location_id,
-                                                         uint64_t cell_global_id,
-                                                         unsigned int face_id,
-                                                         size_t angle_set_id,
-                                                         size_t data_size)
+void
+CBC_ASynchronousCommunicator::InitStates()
 {
-  MessageKey key{location_id, cell_global_id, face_id};
-  std::vector<double>& data = outgoing_message_queue_[key];
-  if (data.empty())
-    data.assign(data_size, 0.0);
-  return data;
+  const auto& send_msgs = cbc_fluds_.GetNLSendMessages();
+  send_states_.resize(send_msgs.size());
+  send_remaining_ = cbc_fluds_.GetNLSendTotalFacesPerMsg();
+
+  const auto& recv_msgs = cbc_fluds_.GetNLRecvMessages();
+  recv_states_.resize(recv_msgs.size());
+}
+
+void
+CBC_ASynchronousCommunicator::CellSwept(uint64_t cell_local_id)
+{
+  for (const auto& contrib : cbc_fluds_.GetCellSendContributions(cell_local_id))
+    send_remaining_[contrib.msg_index] -= contrib.face_count;
 }
 
 bool
@@ -33,60 +37,40 @@ CBC_ASynchronousCommunicator::SendData()
 {
   CALI_CXX_MARK_SCOPE("CBC_ASynchronousCommunicator::SendData");
 
-  // First we convert any new outgoing messages from the queue into
-  // buffer messages. We aggregate these messages per location-id
-  // they need to be sent to
-  if (not outgoing_message_queue_.empty())
+  const auto& send_msgs = cbc_fluds_.GetNLSendMessages();
+  bool all_done = true;
+
+  for (size_t i = 0; i < send_msgs.size(); ++i)
   {
-    std::map<int, BufferItem> locI_buffer_map;
+    auto& state = send_states_[i];
 
-    for (const auto& [msg_key, data] : outgoing_message_queue_)
+    // Post the send once all contributing faces have been written
+    if (not state.send_initiated and send_remaining_[i] == 0)
     {
-      const int locI = std::get<0>(msg_key);
-      const uint64_t cell_global_id = std::get<1>(msg_key);
-      const unsigned int face_id = std::get<2>(msg_key);
-      const size_t data_size = data.size();
-
-      BufferItem& buffer_item = locI_buffer_map[locI];
-      buffer_item.destination = locI;
-      auto& buffer_array = buffer_item.data_array;
-      buffer_array.Write(cell_global_id);
-      buffer_array.Write(face_id);
-      buffer_array.Write(data_size);
-      for (const double value : data) // actual psi_data
-        buffer_array.Write(value);
-    }
-
-    for (auto& [locI, buffer] : locI_buffer_map)
-      send_buffer_.push_back(std::move(buffer));
-
-    outgoing_message_queue_.clear();
-  } // if there are outgoing messages
-
-  // Now we attempt to flush items in the send buffer
-  bool all_messages_sent = true;
-  for (auto& buffer_item : send_buffer_)
-  {
-    if (not buffer_item.send_initiated)
-    {
-      const int locJ = buffer_item.destination;
-      const auto& comm = comm_set_.LocICommunicator(locJ);
-      auto dest = comm_set_.MapIonJ(locJ, locJ);
+      const auto& msg = send_msgs[i];
+      const auto& comm = comm_set_.LocICommunicator(msg.rank);
+      auto dest = comm_set_.MapIonJ(msg.rank, msg.rank);
       auto tag = static_cast<int>(angle_set_id_);
-      buffer_item.mpi_request = comm.isend(dest, tag, buffer_item.data_array.Data());
-      buffer_item.send_initiated = true;
+      double* buf = cbc_fluds_.GetNLSendBufferPtr() + msg.buf_start;
+      auto count = static_cast<int>(msg.buf_size);
+      state.request = comm.isend(dest, tag, buf, count);
+      state.send_initiated = true;
     }
 
-    if (not buffer_item.completed)
+    if (state.send_initiated and not state.completed)
     {
-      if (mpi::test(buffer_item.mpi_request))
-        buffer_item.completed = true;
+      if (mpi::test(state.request))
+        state.completed = true;
       else
-        all_messages_sent = false;
+        all_done = false;
     }
-  } // for item in buffer
+    else if (not state.send_initiated)
+    {
+      all_done = false;
+    }
+  }
 
-  return all_messages_sent;
+  return all_done;
 }
 
 std::vector<uint64_t>
@@ -95,40 +79,55 @@ CBC_ASynchronousCommunicator::ReceiveData()
   CALI_CXX_MARK_SCOPE("CBC_ASynchronousCommunicator::ReceiveData");
 
   std::vector<uint64_t> cells_who_received_data;
-  auto& deplocs = cbc_fluds_.GetDeplocsOutgoingMessages();
-  const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  for (int locJ : location_dependencies)
+  const auto& recv_msgs = cbc_fluds_.GetNLRecvMessages();
+  const auto& recv_cell_ids = cbc_fluds_.GetRecvMsgCellLocalIDs();
+
+  for (size_t i = 0; i < recv_msgs.size(); ++i)
   {
+    if (recv_states_[i].completed)
+      continue;
+
+    const auto& msg = recv_msgs[i];
     const auto& comm = comm_set_.LocICommunicator(opensn::mpi_comm.rank());
-    auto source_rank = comm_set_.MapIonJ(locJ, opensn::mpi_comm.rank());
+    auto source_rank = comm_set_.MapIonJ(msg.rank, opensn::mpi_comm.rank());
     auto tag = static_cast<int>(angle_set_id_);
     mpi::Status status;
+
     if (comm.iprobe(source_rank, tag, status))
     {
-      int num_items = status.count<std::byte>();
-      std::vector<std::byte> recv_buffer(num_items);
-      comm.recv(source_rank, status.tag(), recv_buffer.data(), num_items);
-      ByteArray data_array(recv_buffer);
+      double* buf = cbc_fluds_.GetNLRecvBufferPtr() + msg.buf_start;
+      auto count = static_cast<int>(msg.buf_size);
+      comm.recv(source_rank, status.tag(), buf, count);
+      recv_states_[i].completed = true;
 
-      while (not data_array.EndOfBuffer())
-      {
-        const auto cell_global_id = data_array.Read<uint64_t>();
-        const auto face_id = data_array.Read<unsigned int>();
-        const auto data_size = data_array.Read<size_t>();
-
-        std::vector<double> psi_data;
-        psi_data.reserve(data_size);
-        for (size_t k = 0; k < data_size; ++k)
-          psi_data.push_back(data_array.Read<double>());
-
-        deplocs[{cell_global_id, face_id}] = std::move(psi_data);
-        cells_who_received_data.push_back(
-          fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
-      } // while not at end of buffer
-    } // Process each message embedded in buffer
+      // Report which local cells received data (one entry per face)
+      for (const auto cell_local_id : recv_cell_ids[i])
+        cells_who_received_data.push_back(cell_local_id);
+    }
   }
 
   return cells_who_received_data;
+}
+
+void
+CBC_ASynchronousCommunicator::Reset()
+{
+  std::fill(cbc_fluds_.GetNLSendBufferPtr(),
+            cbc_fluds_.GetNLSendBufferPtr() + cbc_fluds_.GetNLSendMessages().empty()
+              ? 0
+              : (cbc_fluds_.GetNLSendMessages().back().buf_start +
+                 cbc_fluds_.GetNLSendMessages().back().buf_size),
+            0.0);
+
+  for (auto& s : send_states_)
+  {
+    s.send_initiated = false;
+    s.completed = false;
+  }
+  send_remaining_ = cbc_fluds_.GetNLSendTotalFacesPerMsg();
+
+  for (auto& r : recv_states_)
+    r.completed = false;
 }
 
 } // namespace opensn

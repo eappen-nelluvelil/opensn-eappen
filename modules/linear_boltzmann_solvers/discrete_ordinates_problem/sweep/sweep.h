@@ -43,6 +43,22 @@ struct Task
   bool completed = false;
 };
 
+/// Immutable task topology — shared across sweeps for the same SPDS direction.
+struct TaskTopology
+{
+  unsigned int initial_num_dependencies;
+  std::vector<std::uint32_t> successors;
+  uint64_t reference_id;
+  const Cell* cell_ptr;
+};
+
+/// Mutable per-sweep task state — reset at the start of each sweep.
+struct TaskState
+{
+  unsigned int num_dependencies;
+  bool completed;
+};
+
 /// Stage Task Dependency Graphs
 struct STDG
 {

@@ -20,21 +20,22 @@ namespace opensn
 {
 
 /// Data struct holding all state needed by CBC cell-level sweep kernels.
+/// Uses pointers so the struct can be constructed once and reused across cells.
 struct CBCSweepData
 {
-  const SpatialDiscretization& discretization;
-  const std::vector<UnitCellMatrices>& unit_cell_matrices;
-  std::vector<CellLBSView>& cell_transport_views;
-  const std::vector<double>& source_moments;
-  const LBSGroupset& groupset;
-  const BlockID2XSMap& xs;
-  const unsigned int num_moments;
-  const unsigned int max_num_cell_dofs;
-  const bool save_angular_flux;
-  const size_t groupset_angle_group_stride;
-  const size_t groupset_group_stride;
-  std::vector<double>& destination_phi;
-  std::vector<double>& destination_psi;
+  const SpatialDiscretization* discretization;
+  const std::vector<UnitCellMatrices>* unit_cell_matrices;
+  std::vector<CellLBSView>* cell_transport_views;
+  const std::vector<double>* source_moments;
+  const LBSGroupset* groupset;
+  const BlockID2XSMap* xs;
+  unsigned int num_moments;
+  unsigned int max_num_cell_dofs;
+  bool save_angular_flux;
+  size_t groupset_angle_group_stride;
+  size_t groupset_group_stride;
+  std::vector<double>* destination_phi;
+  std::vector<double>* destination_psi;
   bool surface_source_active;
   bool include_rhs_time_term;
   DiscreteOrdinatesProblem* problem; // non-null for time_dependent
@@ -51,23 +52,23 @@ template <bool time_dependent>
 inline void
 CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
 {
-  const auto& groupset = data.groupset;
+  const auto& groupset = *data.groupset;
   const auto gs_size = groupset.GetNumGroups();
   const auto gs_gi = groupset.first_group;
 
   const auto& cell = *data.cell;
   const auto cell_local_id = cell.local_id;
-  auto& cell_transport_view = data.cell_transport_views[cell_local_id];
-  const auto& cell_mapping = data.discretization.GetCellMapping(cell);
+  auto& cell_transport_view = (*data.cell_transport_views)[cell_local_id];
+  const auto& cell_mapping = data.discretization->GetCellMapping(cell);
   const size_t cell_num_faces = cell.faces.size();
   const size_t cell_num_nodes = cell_mapping.GetNumNodes();
 
   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell_local_id];
   std::vector<double> face_mu_values(cell_num_faces);
 
-  const auto& sigma_t = data.xs.at(cell.block_id)->GetSigmaTotal();
+  const auto& sigma_t = data.xs->at(cell.block_id)->GetSigmaTotal();
 
-  const auto& unit_mats = data.unit_cell_matrices[cell_local_id];
+  const auto& unit_mats = (*data.unit_cell_matrices)[cell_local_id];
   const auto& G = unit_mats.intV_shapeI_gradshapeJ;
   const auto& M = unit_mats.intV_shapeI_shapeJ;
   const auto& M_surf = unit_mats.intS_shapeI_shapeJ;
@@ -83,7 +84,7 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
   std::vector<double> tau_gsg;
   if constexpr (time_dependent)
   {
-    const auto& inv_velg = data.xs.at(cell.block_id)->GetInverseVelocity();
+    const auto& inv_velg = data.xs->at(cell.block_id)->GetInverseVelocity();
     const double theta = data.problem->GetTheta();
     const double inv_theta = 1.0 / theta;
     const double dt = data.problem->GetTimeStep();
@@ -95,7 +96,7 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
 
   const double* psi_old_cell =
     (time_dependent and data.psi_old)
-      ? &(*data.psi_old)[data.discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)]
+      ? &(*data.psi_old)[data.discretization->MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)]
       : nullptr;
 
   const std::vector<std::uint32_t>& as_angle_indices = angle_set.GetAngleIndices();
@@ -151,10 +152,15 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
                                         as_ss_idx);
           else if (not is_boundary_face)
             psi = data.fluds->NLUpwindPsi(
-              cell.global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+              cell_local_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
           else
-            psi = angle_set.PsiBoundary(
-              face.neighbor_id, direction_num, cell_local_id, f, fj, gs_gi, data.surface_source_active);
+            psi = angle_set.PsiBoundary(face.neighbor_id,
+                                        direction_num,
+                                        cell_local_id,
+                                        f,
+                                        fj,
+                                        gs_gi,
+                                        data.surface_source_active);
 
           if (psi != nullptr)
             for (size_t gsg = 0; gsg < gs_size; ++gsg)
@@ -176,7 +182,7 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
         for (unsigned int m = 0; m < data.num_moments; ++m)
         {
           const auto ir = cell_transport_view.MapDOF(i, m, gs_gi + gsg);
-          temp_src += m2d_op[direction_num][m] * data.source_moments[ir];
+          temp_src += m2d_op[direction_num][m] * (*data.source_moments)[ir];
         }
 
         if constexpr (time_dependent)
@@ -215,7 +221,7 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
       {
         const auto ir = cell_transport_view.MapDOF(i, m, gs_gi);
         for (size_t gsg = 0; gsg < gs_size; ++gsg)
-          data.destination_phi[ir + gsg] += wn_d2m * b[gsg](i);
+          (*data.destination_phi)[ir + gsg] += wn_d2m * b[gsg](i);
       }
     }
 
@@ -223,7 +229,8 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
     if (data.save_angular_flux)
     {
       double* cell_psi =
-        &data.destination_psi[data.discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
+        &(*data.destination_psi)[data.discretization->MapDOFLocal(
+          cell, 0, groupset.psi_uk_man_, 0, 0)];
 
       for (size_t i = 0; i < cell_num_nodes; ++i)
       {
@@ -261,23 +268,14 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
         (is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting());
       const auto& IntF_shapeI = unit_mats.intS_shapeI[f];
 
-      const int locality = cell_transport_view.FaceLocality(f);
       const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
       const auto& face_nodal_mapping =
         data.fluds->GetCommonData().GetFaceNodalMapping(cell_local_id, f);
-      std::vector<double>* psi_nonlocal_outgoing = nullptr;
 
+      // Get send buffer offset for non-local outgoing faces
+      size_t nl_face_offset = SIZE_MAX;
       if (not is_boundary_face and not is_local_face)
-      {
-        auto& async_comm = *angle_set.GetCommunicator();
-        const size_t data_size_for_msg = num_face_nodes * group_angle_stride;
-        psi_nonlocal_outgoing =
-          &async_comm.InitGetDownwindMessageData(locality,
-                                                 face.neighbor_id,
-                                                 face_nodal_mapping.associated_face_,
-                                                 angle_set.GetID(),
-                                                 data_size_for_msg);
-      }
+        nl_face_offset = data.fluds->GetNLSendFaceOffset(cell_local_id, f);
 
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
       {
@@ -294,7 +292,7 @@ CBC_Sweep_CellKernel_Generic(CBCSweepData& data, AngleSet& angle_set)
         if (is_local_face)
           psi = data.fluds->OutgoingPsi(cell, i, as_ss_idx);
         else if (not is_boundary_face)
-          psi = data.fluds->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
+          psi = data.fluds->NLOutgoingPsi(nl_face_offset, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)
           psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id, f, fi);
 
