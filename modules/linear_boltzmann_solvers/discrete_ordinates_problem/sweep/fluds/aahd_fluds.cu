@@ -298,6 +298,8 @@ AAHD_FLUDS::GetDevicePointerSet()
   {
     assert(pointer_set.boundary_psi != nullptr);
   }
+  // psi_old (time-dependent)
+  pointer_set.psi_old = psi_old_bank_.device_storage.get();
   // stride size
   pointer_set.stride_size = num_groups_and_angles_;
   return pointer_set;
@@ -337,6 +339,55 @@ AAHD_FLUDS::CopyBoundaryPsiToAngleSet(MeshContinuum& grid, AngleSet& angle_set)
       src += num_groups_;
     }
   }
+}
+
+void
+AAHD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                                const LBSGroupset& groupset,
+                                AngleSet& angle_set)
+{
+  auto* mesh_carrier = problem.GetMeshCarrier();
+  const std::size_t bank_size = mesh_carrier->num_nodes_total * num_groups_and_angles_;
+
+  // Allocate if needed
+  if (psi_old_bank_.IsNotInitialized())
+    psi_old_bank_ = AAHD_Bank(bank_size, stream_);
+
+  // Repack psi_old from host layout to GPU stride-based layout
+  // This is the inverse of CopySaveAngularFluxToDestinationPsi.
+  auto grid = problem.GetGrid();
+  const auto& psi_old_host = problem.GetPsiOldLocal()[groupset.id];
+  if (psi_old_host.empty())
+    return;
+
+  const auto& discretization = problem.GetSpatialDiscretization();
+  const std::size_t groupset_angle_group_stride =
+    groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
+  const std::vector<std::uint32_t>& as_angle_indices = angle_set.GetAngleIndices();
+
+  for (const Cell& cell : grid->local_cells)
+  {
+    const double* src_psi =
+      &psi_old_host[discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
+    double* dst_psi = psi_old_bank_.host_storage.data() +
+                      mesh_carrier->saved_psi_offset[cell.local_id] * num_groups_and_angles_;
+    const std::uint32_t cell_num_nodes = discretization.GetCellMapping(cell).GetNumNodes();
+
+    for (std::uint32_t i = 0; i < cell_num_nodes; ++i)
+    {
+      for (std::uint32_t as_ss_idx = 0; as_ss_idx < angle_set.GetNumAngles(); ++as_ss_idx)
+      {
+        auto direction_num = as_angle_indices[as_ss_idx];
+        const double* src = src_psi + direction_num * num_groups_;
+        double* dst = dst_psi + as_ss_idx * num_groups_;
+        std::memcpy(dst, src, num_groups_ * sizeof(double));
+      }
+      src_psi += groupset_angle_group_stride;
+      dst_psi += num_groups_and_angles_;
+    }
+  }
+
+  psi_old_bank_.UploadToDevice(stream_);
 }
 
 void

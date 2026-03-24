@@ -18,7 +18,9 @@ gpu_kernel::Arguments::Arguments(DiscreteOrdinatesProblem& problem,
                                  const LBSGroupset& groupset,
                                  AAHD_AngleSet& angle_set,
                                  AAHD_FLUDS& fluds,
-                                 bool is_surface_source_active)
+                                 bool is_surface_source_active,
+                                 bool is_time_dependent,
+                                 bool include_rhs_time_term_flag)
 {
   // get mesh and quadrature data
   auto* mesh = problem.GetMeshCarrier();
@@ -40,6 +42,23 @@ gpu_kernel::Arguments::Arguments(DiscreteOrdinatesProblem& problem,
   // copy FLUDS data to GPU and retrieve the pointer set
   flud_data = fluds.GetDevicePointerSet();
   flud_index = fluds.GetCommonData().GetDeviceIndex();
+  // time-dependent parameters
+  time_dependent = is_time_dependent;
+  include_rhs_time_term = include_rhs_time_term_flag;
+  if (is_time_dependent)
+  {
+    theta = problem.GetTheta();
+    inv_theta = 1.0 / theta;
+    inv_dt = 1.0 / problem.GetTimeStep();
+    psi_old = fluds.GetPsiOldDevicePointer();
+  }
+  else
+  {
+    theta = 1.0;
+    inv_theta = 1.0;
+    inv_dt = 0.0;
+    psi_old = nullptr;
+  }
 }
 
 } // namespace opensn

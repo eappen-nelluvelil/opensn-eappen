@@ -14,7 +14,8 @@ namespace crb = caribou;
 namespace opensn::gpu_kernel
 {
 
-/// Compute the sweep matrix from gradient, mass and the source term
+/// Compute the sweep matrix from gradient, mass and the source term.
+/// For time-dependent sweeps, tau_g is added to sigma_t and psi_old contributes to the source.
 template <std::size_t ndofs>
 __device__ void
 ComputeGMS(double* sweep_matrix,
@@ -24,11 +25,14 @@ ComputeGMS(double* sweep_matrix,
            DirectionView& direction,
            const unsigned int& group_idx,
            const std::uint32_t& num_moments,
-           const Arguments& args)
+           const Arguments& args,
+           const double* psi_old_nodes)
 {
-  // get sigmaT
+  // get sigmaT, with time-dependent tau_g added
   double sigma_t = cell.total_xs[args.groupset_start + group_idx];
-  // compute source term
+  if (args.time_dependent)
+    sigma_t += cell.inv_velocity[args.groupset_start + group_idx] * args.inv_theta * args.inv_dt;
+  // compute source term from scattering moments
   const double* src_moment = args.src_moment + cell.phi_address + args.groupset_start + group_idx;
   _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
   {
@@ -37,6 +41,13 @@ ComputeGMS(double* sweep_matrix,
     {
       src_per_moment += direction.m2d[m] * (*src_moment);
       src_moment += args.num_groups;
+    }
+    // add time-dependent RHS source: tau_g * psi_old
+    if (args.time_dependent && args.include_rhs_time_term && psi_old_nodes != nullptr)
+    {
+      double tau_g =
+        cell.inv_velocity[args.groupset_start + group_idx] * args.inv_theta * args.inv_dt;
+      src_per_moment += tau_g * psi_old_nodes[i];
     }
     s[i] = src_per_moment;
   }
@@ -216,19 +227,26 @@ ComputePhi(double* psi,
   }
 }
 
-/// Store the angular flux
+/// Store the angular flux with time extrapolation for time-dependent sweeps.
+/// For steady-state: saved = psi_sol.
+/// For time-dependent: saved = inv_theta * (psi_sol + (theta - 1) * psi_old).
 template <std::size_t ndofs>
 __device__ void
 SaveAngularFlux(const double* psi,
                 double* saved_psi,
                 CellView& cell,
                 const unsigned int& angle_group_idx,
-                const std::uint64_t& stride_size)
+                const std::uint64_t& stride_size,
+                const Arguments& args,
+                const double* psi_old_nodes)
 {
   saved_psi += cell.save_psi_index * stride_size + angle_group_idx;
   _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
   {
-    *saved_psi = psi[i];
+    if (args.time_dependent)
+      *saved_psi = args.inv_theta * (psi[i] + (args.theta - 1.0) * psi_old_nodes[i]);
+    else
+      *saved_psi = psi[i];
     saved_psi += stride_size;
   }
 }
@@ -245,23 +263,41 @@ Sweep(const Arguments& args,
       const std::uint32_t& num_moments,
       double* saved_psi)
 {
+  // load psi_old for this cell if time-dependent
+  double psi_old_nodes[ndofs];
+  if (args.time_dependent && args.psi_old != nullptr)
+  {
+    const double* psi_old_cell =
+      args.psi_old + cell.save_psi_index * args.flud_data.stride_size + angle_group_idx;
+    _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
+    {
+      psi_old_nodes[i] = *psi_old_cell;
+      psi_old_cell += args.flud_data.stride_size;
+    }
+  }
+  else
+  {
+    _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
+      psi_old_nodes[i] = 0.0;
+  }
   // initialize buffer
   Buffer<ndofs> buffer;
   // prepare linear system to solve
   ComputeGMS<ndofs>(
-    buffer.A(), buffer.b(), buffer.s(), cell, direction, group_idx, num_moments, args);
+    buffer.A(), buffer.b(), buffer.s(), cell, direction, group_idx, num_moments, args, psi_old_nodes);
   ComputeSurfaceIntegral<ndofs>(
     buffer.A(), buffer.b(), cell, direction, cell_edge_data, angle_group_idx, args);
-  // solve for the angular flux
+  // solve for the angular flux (buffer.b() = psi_sol)
   GaussianElimination<ndofs>(buffer.A(), buffer.b());
-  // save the result
+  // save the result — FLUDS and phi use psi_sol directly
   WritePsiToFludsAndOutflow(
     buffer.b(), cell, direction, cell_edge_data, angle_group_idx, group_idx, args);
   ComputePhi<ndofs>(buffer.b(), cell, direction, group_idx, num_moments, args);
+  // saved angular flux gets time-extrapolated value for TD sweeps
   if (saved_psi != nullptr)
   {
     SaveAngularFlux<ndofs>(
-      buffer.b(), saved_psi, cell, angle_group_idx, args.flud_data.stride_size);
+      buffer.b(), saved_psi, cell, angle_group_idx, args.flud_data.stride_size, args, psi_old_nodes);
   }
 }
 

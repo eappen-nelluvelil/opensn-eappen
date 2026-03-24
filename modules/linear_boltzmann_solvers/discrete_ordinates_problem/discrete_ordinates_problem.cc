@@ -129,8 +129,8 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
 {
   if (params.GetParamValue<bool>("time_dependent"))
   {
-    if (UseGPUs())
-      throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
+    // if (UseGPUs())
+    //   throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
     if (options_.adjoint)
       throw std::runtime_error(GetName() + ": Time-dependent adjoint problems are not supported.");
     if (geometry_type_ == GeometryType::TWOD_CYLINDRICAL)
@@ -1509,7 +1509,7 @@ DiscreteOrdinatesProblem::CreateAAHD_AngleSet(
 }
 
 std::shared_ptr<SweepChunk>
-DiscreteOrdinatesProblem::CreateAAHD_SweepChunk(LBSGroupset& groupset)
+DiscreteOrdinatesProblem::CreateAAHD_SweepChunk(LBSGroupset& groupset, bool /*time_dependent*/)
 {
   throw std::runtime_error(
     "DiscreteOrdinatesProblem::CreateAAHD_SweepChunk : OPENSN_WITH_CUDA not enabled.");
@@ -1829,10 +1829,10 @@ DiscreteOrdinatesProblem::SetSweepChunk(LBSGroupset& groupset)
 
   if (sweep_type_ == "AAH")
   {
+    if (use_gpus_)
+      return CreateAAHD_SweepChunk(groupset, use_time_dependent_chunk);
     if (use_time_dependent_chunk)
       return std::make_shared<AAHSweepChunkTD>(*this, groupset);
-    if (use_gpus_)
-      return CreateAAHD_SweepChunk(groupset);
     return std::make_shared<AAHSweepChunk>(*this, groupset);
   }
   else if (sweep_type_ == "CBC")

@@ -25,7 +25,9 @@ struct Arguments
             const LBSGroupset& groupset,
             AAHD_AngleSet& angle_set,
             AAHD_FLUDS& fluds,
-            bool is_surface_source_active);
+            bool is_surface_source_active,
+            bool is_time_dependent,
+            bool include_rhs_time_term);
 
   // mesh and quadrature
   const char* __restrict__ mesh_data;
@@ -43,6 +45,13 @@ struct Arguments
   // fluds
   AAHD_FLUDSPointerSet flud_data;
   const std::uint64_t* __restrict__ flud_index;
+  // time-dependent parameters
+  bool time_dependent;
+  bool include_rhs_time_term;
+  double theta;
+  double inv_theta;
+  double inv_dt;
+  const double* __restrict__ psi_old;
 };
 
 } // namespace opensn::gpu_kernel

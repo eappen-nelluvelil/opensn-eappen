@@ -198,7 +198,8 @@ private:
                       std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                       int maximum_message_size,
                       const MPICommunicatorSet& in_comm_set);
-  std::shared_ptr<SweepChunk> CreateAAHD_SweepChunk(LBSGroupset& groupset);
+  std::shared_ptr<SweepChunk> CreateAAHD_SweepChunk(LBSGroupset& groupset,
+                                                    bool time_dependent = false);
 
   /**
    * This routine groups angle-indices to groups sharing the same sweep ordering. It also takes

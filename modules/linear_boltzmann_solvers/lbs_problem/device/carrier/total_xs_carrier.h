@@ -26,6 +26,9 @@ public:
   /// Retrive the pointer to the total cross section data on GPU for a given block ID.
   double* GetXSGPUData(int block_id);
 
+  /// Retrieve the pointer to the inverse velocity data on GPU for a given block ID.
+  double* GetInvVelocityGPUData(int block_id);
+
   /// Number of groups.
   std::size_t num_groups = std::numeric_limits<std::size_t>::max();
   /// Number of block IDs.

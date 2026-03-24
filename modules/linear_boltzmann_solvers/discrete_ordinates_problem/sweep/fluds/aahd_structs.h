@@ -319,6 +319,8 @@ struct AAHD_FLUDSPointerSet
   double* __restrict__ nonlocal_outgoing_psi = nullptr;
   /// Pointer to boundary angular fluxes.
   double* __restrict__ boundary_psi = nullptr;
+  /// Pointer to previous time step angular fluxes (time-dependent only).
+  double* __restrict__ psi_old = nullptr;
   /// Stride size (number of groups times number of angles).
   std::uint64_t stride_size = 0;
 

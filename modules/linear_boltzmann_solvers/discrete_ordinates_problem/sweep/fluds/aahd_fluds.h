@@ -155,6 +155,10 @@ public:
   void AllocateOutgoingPsi() override {}
   /// Allocate memory for save angular flux if needed.
   void AllocateSaveAngularFlux(DiscreteOrdinatesProblem& problem, const LBSGroupset& groupset);
+  /// Allocate and copy psi_old (previous time step angular flux) to device.
+  void CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                           const LBSGroupset& groupset,
+                           AngleSet& angle_set);
   /// \}
 
   /// \name Size getters
@@ -223,6 +227,8 @@ public:
   double* GetSavedAngularFluxDevicePointer() { return save_angular_flux_.device_storage.get(); }
   /// Check if the FLUDS has save angular flux storage.
   bool HasSaveAngularFlux() const { return not save_angular_flux_.host_storage.empty(); }
+  /// Get psi_old device pointer (nullptr if not allocated).
+  double* GetPsiOldDevicePointer() { return psi_old_bank_.device_storage.get(); }
 
 protected:
   /// Reference to the common data.
@@ -248,6 +254,9 @@ protected:
 
   /// Storage for saved angular fluxes.
   AAHD_Bank save_angular_flux_;
+
+  /// Storage for previous time step angular fluxes (time-dependent only).
+  AAHD_Bank psi_old_bank_;
 
   /// Stream for asynchronous operations.
   crb::Stream stream_;

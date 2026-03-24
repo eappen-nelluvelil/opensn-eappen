@@ -50,9 +50,9 @@ DiscreteOrdinatesProblem::CreateAAHD_AngleSet(
 }
 
 std::shared_ptr<SweepChunk>
-DiscreteOrdinatesProblem::CreateAAHD_SweepChunk(LBSGroupset& groupset)
+DiscreteOrdinatesProblem::CreateAAHD_SweepChunk(LBSGroupset& groupset, bool time_dependent)
 {
-  return std::make_shared<AAHDSweepChunk>(*this, groupset);
+  return std::make_shared<AAHDSweepChunk>(*this, groupset, time_dependent);
 }
 
 void
