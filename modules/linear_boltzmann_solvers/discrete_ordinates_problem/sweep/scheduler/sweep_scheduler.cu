@@ -16,6 +16,13 @@ namespace opensn
 {
 
 void
+SweepScheduler::InitializeAlgoAsyncFIFO()
+{
+  auto& cbcd_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk_);
+  cbcd_chunk.SetupPerWorkerCommunicators(num_workers_);
+}
+
+void
 SweepScheduler::ScheduleAlgoAAO(SweepChunk& sweep_chunk)
 {
   CALI_CXX_MARK_SCOPE("SweepScheduler::ScheduleAlgoAAO");
@@ -69,11 +76,6 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
     as->SetSweepChunk(&cbcd_chunk);
     as->SetStartingLatch();
   }
-
-  // Set up per-worker communicators (only runs once, or when num_workers changes).
-  // This creates one CBCD_AggregatedCommunicator per worker thread, each handling
-  // only the angle sets assigned to that worker's contiguous range.
-  cbcd_chunk.SetupPerWorkerCommunicators(num_workers_);
 
   // Start all per-worker aggregated communication threads
   cbcd_chunk.StartCommunicators();

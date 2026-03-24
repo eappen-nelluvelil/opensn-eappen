@@ -56,6 +56,7 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
                       << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);
+    InitializeAlgoAsyncFIFO();
   }
 
   // Initialize delayed upstream data
@@ -347,6 +348,12 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
 }
 
 #ifndef __OPENSN_WITH_GPU__
+
+void
+SweepScheduler::InitializeAlgoAsyncFIFO()
+{
+  // No-op: per-worker communicators are only used in GPU builds.
+}
 
 void
 SweepScheduler::ScheduleAlgoAAO(SweepChunk& sweep_chunk)

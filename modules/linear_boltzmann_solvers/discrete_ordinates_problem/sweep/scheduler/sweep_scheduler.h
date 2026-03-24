@@ -40,6 +40,9 @@ private:
   /// Applies a first-in-first-out sweep scheduling on device.
   void ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk);
 
+  /// Initializes the ASYNC_FIFO algorithm (per-worker communicators).
+  void InitializeAlgoAsyncFIFO();
+
   /// Initializes the depth-of-graph algorithm.
   void InitializeAlgoDOG();
 
