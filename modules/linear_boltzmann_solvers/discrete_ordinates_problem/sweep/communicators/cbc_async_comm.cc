@@ -113,10 +113,11 @@ void
 CBC_ASynchronousCommunicator::Reset()
 {
   std::fill(cbc_fluds_.GetNLSendBufferPtr(),
-            cbc_fluds_.GetNLSendBufferPtr() + cbc_fluds_.GetNLSendMessages().empty()
-              ? 0
-              : (cbc_fluds_.GetNLSendMessages().back().buf_start +
-                 cbc_fluds_.GetNLSendMessages().back().buf_size),
+            cbc_fluds_.GetNLSendBufferPtr() +
+              (cbc_fluds_.GetNLSendMessages().empty()
+                 ? 0
+                 : (cbc_fluds_.GetNLSendMessages().back().buf_start +
+                    cbc_fluds_.GetNLSendMessages().back().buf_size)),
             0.0);
 
   for (auto& s : send_states_)
