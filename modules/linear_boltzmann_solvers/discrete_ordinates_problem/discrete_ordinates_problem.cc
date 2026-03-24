@@ -727,8 +727,6 @@ DiscreteOrdinatesProblem::ResetMode(SweepChunkMode target_mode)
 
   if (switching_to_transient)
   {
-    if (UseGPUs())
-      throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
     if (options_.adjoint)
       throw std::runtime_error(GetName() + ": Time-dependent adjoint problems are not supported.");
     if (geometry_type_ == GeometryType::TWOD_CYLINDRICAL)

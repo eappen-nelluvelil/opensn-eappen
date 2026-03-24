@@ -37,6 +37,11 @@ AAHD_AngleSet::AAHD_AngleSet(size_t id,
 void
 AAHD_AngleSet::UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets)
 {
+  // Undo previous dependency contributions so this method is idempotent
+  for (auto* following_angle_set : following_angle_sets_)
+    --(following_angle_set->num_dependencies_);
+  following_angle_sets_.clear();
+
   std::transform(following_angle_sets.begin(),
                  following_angle_sets.end(),
                  std::back_inserter(following_angle_sets_),
