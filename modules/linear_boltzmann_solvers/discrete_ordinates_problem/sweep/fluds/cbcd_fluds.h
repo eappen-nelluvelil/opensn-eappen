@@ -52,7 +52,7 @@ public:
   inline std::size_t GetStrideSize() const { return num_groups_and_angles_; }
 
   /// Get vector of local cells to be swept.
-  crb::MappedHostVector<std::uint64_t>& GetLocalCellIDs() { return local_cell_ids_; }
+  crb::MappedHostVector<std::uint32_t>& GetLocalCellIDs() { return local_cell_ids_; }
 
   /// Get saved angular flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
@@ -78,7 +78,7 @@ public:
   /// Copy outgoing psi on host after D2H copy is done.
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                  CBCD_AngleSet* angle_set,
-                                 const std::vector<std::uint64_t>& cell_local_ids);
+                                 const std::vector<std::uint32_t>& cell_local_ids);
 
   void ClearLocalAndReceivePsi() override {}
   void ClearSendPsi() override {}
@@ -134,7 +134,7 @@ private:
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
   /// Associated angleset's stream.
   crb::Stream stream_;
-  crb::MappedHostVector<std::uint64_t> local_cell_ids_;
+  crb::MappedHostVector<std::uint32_t> local_cell_ids_;
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.
   crb::DeviceMemory<double> local_psi_;

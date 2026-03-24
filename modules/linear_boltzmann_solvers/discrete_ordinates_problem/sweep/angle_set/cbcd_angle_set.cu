@@ -201,7 +201,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
     std::vector<Task*> ready_tasks;
-    std::vector<std::uint64_t> ready_cell_ids;
+    std::vector<std::uint32_t> ready_cell_ids;
     ready_tasks.reserve(ready_queue_.size());
     ready_cell_ids.reserve(ready_queue_.size());
 
@@ -213,7 +213,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
     }
     ready_queue_.clear();
 
-    cbcd_sweep_chunk_->GPUSweep(*this, ready_cell_ids);
+    cbcd_sweep_chunk_->Sweep(*this, ready_cell_ids);
 
     in_flight_tasks_ = std::move(ready_tasks);
     in_flight_cell_ids_ = std::move(ready_cell_ids);

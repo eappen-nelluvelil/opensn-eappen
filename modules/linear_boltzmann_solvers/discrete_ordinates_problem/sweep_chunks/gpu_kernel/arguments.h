@@ -3,42 +3,78 @@
 
 #pragma once
 
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aahd_structs.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aahd_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aahd_fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/aahd_angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/quadrature_carrier.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
 #include "caribou/main.hpp"
 #include <cstdint>
+#include <type_traits>
 
 namespace crb = caribou;
-
-namespace opensn
-{
-class DiscreteOrdinatesProblem;
-class LBSGroupset;
-class AAHD_AngleSet;
-class AAHD_FLUDS;
-class CBCD_AngleSet;
-class CBCD_FLUDS;
-} // namespace opensn
 
 namespace opensn::gpu_kernel
 {
 
-#if defined(__NVCC__)
-constexpr unsigned int threshold = 128;
-#elif defined(__HIPCC__)
-constexpr unsigned int threshold = 64;
-#endif
-
-static unsigned int
-RoundUp(unsigned int num, unsigned int divisor = crb::get_warp_size())
+enum class SweepType
 {
-  return (num + divisor - 1) & ~(divisor - 1);
+  AAH = 0,
+  CBC = 1
+};
+
+consteval bool
+to_bool(SweepType t)
+{
+  return t == SweepType::AAH;
 }
 
-/// Common arguments for AAH and CBC kernels.
+template <SweepType t>
+using NodeIndexType = std::conditional_t<to_bool(t), AAHD_NodeIndex, CBCD_NodeIndex>;
+
+/// Arguments for AAHD and CBCD kernels
+template <SweepType t>
 struct Arguments
 {
-  Arguments(DiscreteOrdinatesProblem& problem, const LBSGroupset& groupset);
+  using AngleSetType = std::conditional_t<to_bool(t), AAHD_AngleSet, CBCD_AngleSet>;
+  using FLUDSType = std::conditional_t<to_bool(t), AAHD_FLUDS, CBCD_FLUDS>;
+  using FLUDSPointerSetType =
+    std::conditional_t<to_bool(t), AAHD_FLUDSPointerSet, CBCD_FLUDSPointerSet>;
+
+  Arguments(DiscreteOrdinatesProblem& problem,
+            const LBSGroupset& groupset,
+            AngleSetType& angle_set,
+            FLUDSType& fluds)
+  {
+    // Get mesh and quadrature data
+    auto* mesh = problem.GetMeshCarrier();
+    mesh_data = mesh->GetDevicePtr();
+    auto* quadrature = reinterpret_cast<QuadratureCarrier*>(groupset.quad_carrier);
+    quad_data = quadrature->GetDevicePtr();
+    // Copy source moment and destination phi data to GPU
+    auto* src = problem.GetSourceMomentsPinner();
+    src_moment = src->GetDevicePtr();
+    MemoryPinner<double>* scalar_flux = problem.GetPhiPinner();
+    phi = scalar_flux->GetDevicePtr();
+    // Copy groupset data to GPU
+    groupset_size = groupset.GetNumGroups();
+    groupset_start = groupset.first_group;
+    num_groups = problem.GetNumGroups();
+    // Copy angleset data to GPU
+    directions = angle_set.GetDeviceAngleIndices();
+    angleset_size = angle_set.GetNumAngles();
+    // Copy FLUDS data to GPU and retrieve the pointer set
+    flud_data = fluds.GetDevicePointerSet();
+    flud_index = fluds.GetCommonData().GetDeviceIndex();
+  }
 
   // Mesh and quadrature
   const char* __restrict__ mesh_data;
@@ -55,38 +91,7 @@ struct Arguments
   std::uint32_t groupset_size;
   // FLUDS
   const std::uint64_t* __restrict__ flud_index;
-};
-
-/// Arguments for the AAH sweep kernel.
-struct AAH_Arguments : public Arguments
-{
-  AAH_Arguments(DiscreteOrdinatesProblem& problem,
-                const LBSGroupset& groupset,
-                AAHD_AngleSet& angle_set,
-                AAHD_FLUDS& fluds,
-                bool is_surface_source_active);
-
-  // FLUDS pointer set
-  AAHD_FLUDSPointerSet flud_data;
+  FLUDSPointerSetType flud_data;
 };
 
 } // namespace opensn::gpu_kernel
-
-namespace opensn::cbc_gpu_kernel
-{
-
-/// Arguments for the CBC sweep kernel.
-struct CBC_Arguments : public opensn::gpu_kernel::Arguments
-{
-  CBC_Arguments(DiscreteOrdinatesProblem& problem,
-                const LBSGroupset& groupset,
-                CBCD_AngleSet& angle_set,
-                CBCD_FLUDS& fluds);
-
-  // Ready cell local IDs
-  const std::uint64_t* cell_local_ids;
-  // FLUDS pointer set
-  CBCD_FLUDSPointerSet flud_data;
-};
-
-} // namespace opensn::cbc_gpu_kernel

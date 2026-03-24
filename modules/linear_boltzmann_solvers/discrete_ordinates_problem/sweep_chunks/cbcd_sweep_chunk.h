@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/arguments.h"
 #include "caribou/main.hpp"
 #include <memory>
 
@@ -36,7 +37,8 @@ public:
     return cell_transport_views_[cell_local_id];
   }
 
-  void GPUSweep(CBCD_AngleSet& angle_set, const std::vector<std::uint64_t>& cell_local_ids);
+  using SweepChunk::Sweep;
+  void Sweep(CBCD_AngleSet& angle_set, const std::vector<std::uint32_t>& cell_local_ids);
 
   const std::vector<CBCD_AngleSet*>& GetAngleSets() const { return angle_sets_; }
 
@@ -58,7 +60,18 @@ private:
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<CBCD_FLUDS*> fluds_list_;
   std::vector<crb::Stream*> streams_list_;
+  std::vector<gpu_kernel::Arguments<gpu_kernel::SweepType::CBC>> kernel_args_list_;
+  std::vector<::dim3> block_sizes_;
+  std::vector<unsigned int> grid_size_x_list_;
   std::unique_ptr<CBCD_AggregatedCommunicator> agg_comm_;
+  /// Per-worker aggregated communicators.
+  std::vector<std::unique_ptr<CBCD_AggregatedCommunicator>> agg_comms_;
+
+  /// Pre-computed worst-case receive buffer size (computed once in constructor).
+  size_t max_message_size_ = 0;
+
+  /// Number of workers for which communicators have been set up (0 = not yet set up).
+  size_t setup_num_workers_ = 0;
 };
 
 } // namespace opensn

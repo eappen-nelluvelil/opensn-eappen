@@ -187,7 +187,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
 void
 CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AngleSet* angle_set,
-                                      const std::vector<std::uint64_t>& cell_local_ids)
+                                      const std::vector<std::uint32_t>& cell_local_ids)
 {
   if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_face_grouped_outgoing_.empty())
     return;

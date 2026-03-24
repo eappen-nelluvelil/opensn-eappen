@@ -139,7 +139,7 @@ private:
   bool kernel_in_flight_ = false;
   /// Tasks and cell IDs for the currently in-flight kernel batch.
   std::vector<Task*> in_flight_tasks_;
-  std::vector<std::uint64_t> in_flight_cell_ids_;
+  std::vector<std::uint32_t> in_flight_cell_ids_;
   /// Number of completed tasks and total tasks for this sweep.
   size_t completed_count_ = 0;
   size_t total_tasks_ = 0;
