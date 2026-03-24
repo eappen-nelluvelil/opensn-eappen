@@ -50,23 +50,16 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     grid_size_x_list_.push_back(grid_size_x);
   }
 
-  // Compute exact per-source worst-case message size for the receive buffer
-  // For each dependency location J, sum the wire-format size of all incoming
-  // non-local face data from J across all angle sets.
-  // The maximum over all J gives the tightest possible reservation for
-  // persistent_recv_buffer_.
+  // Compute exact per-source worst-case message size for the receive buffer.
+  // This is stored and used later when per-worker communicators are created.
   const auto& grid = *problem_.GetGrid();
 
-  // Per-source, per-angle-set: accumulate (num_entries, total_psi_bytes).
-  // Key: source partition ID
-  // Value: per-angle-set entry counts and data sizes
   struct PerSourceAngleSetInfo
   {
     size_t num_entries = 0;
     size_t psi_bytes = 0;
   };
 
-  // Source partition -> (angle_set_id -> per-angle-set info)
   std::unordered_map<int, std::unordered_map<size_t, PerSourceAngleSetInfo>> source_as_info;
   for (size_t as_idx = 0; as_idx < angle_sets_.size(); ++as_idx)
   {
@@ -74,9 +67,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     const auto stride = fluds.GetStrideSize();
     const auto& incoming_map = fluds.GetCommonData().GetIncomingNonlocalNodeMap();
 
-    // Group incoming nodes by (source_partition, cell_global_id, face_id) to get
-    // the face node count for each distinct face entry.
-    // face_key: (cell_global_id, face_id) -> node count
     std::unordered_map<int, std::map<std::pair<std::uint64_t, unsigned int>, size_t>>
       source_face_node_counts;
 
@@ -84,69 +74,124 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     {
       for (const auto& node : nodes)
       {
-        // Resolve source partition from cell_global_id
         int source_partition = grid.cells[node.cell_global_id].partition_id;
         source_face_node_counts[source_partition][{node.cell_global_id, node.face_id}]++;
       }
     }
 
-    // Convert per-face counts to per-source per-angleset totals
     for (const auto& [source_partition, face_counts] : source_face_node_counts)
     {
       auto& info = source_as_info[source_partition][as_idx];
       for (const auto& [face_key, num_nodes] : face_counts)
       {
-        info.num_entries += 1; // Each face corresponds to one entry in the message
-        // Per entry: cell_global_id + face_id + data_size + psi_data
-        info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + 
+        info.num_entries += 1;
+        info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) +
                           sizeof(size_t) + num_nodes * stride * sizeof(double);
       }
     }
   }
 
-  // Compute the worst-case message size: max over all sources
-  size_t max_single_message_size_in_bytes = 0;
+  max_message_size_ = 0;
   for (const auto& [source_partition, as_map] : source_as_info)
   {
-    // num_active_angle_sets header
     size_t msg_size_in_bytes = sizeof(size_t);
     for (const auto& [as_idx, info] : as_map)
     {
-      // Per active angle set: as_id + num_entries
       msg_size_in_bytes += sizeof(size_t) + sizeof(size_t);
-      // Data for all entries in this angle set
       msg_size_in_bytes += info.psi_bytes;
     }
-    max_single_message_size_in_bytes = std::max(max_single_message_size_in_bytes, msg_size_in_bytes);
+    max_message_size_ = std::max(max_message_size_, msg_size_in_bytes);
   }
 
-  // Create aggregated communicator and set it on all angle sets
-  std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
-  agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
-                                                            problem_.GetMPICommunicatorSet(),
-                                                            max_single_message_size_in_bytes);
-  for (auto* as : angle_sets_)
-    as->SetAggregatedCommunicator(agg_comm_.get());
+  // Note: communicators are NOT created here. They are created lazily by
+  // SetupPerWorkerCommunicators() once the number of workers is known.
 }
 
 CBCDSweepChunk::~CBCDSweepChunk() = default;
 
 void
-CBCDSweepChunk::StartCommunicator()
+CBCDSweepChunk::SetupPerWorkerCommunicators(size_t num_workers)
 {
-  agg_comm_->Start();
+  if (setup_num_workers_ == num_workers)
+    return; // Already set up for this worker count.
+
+  const size_t num_angle_sets = angle_sets_.size();
+  const size_t total_num_angle_sets = num_angle_sets; // Used for MPI tag base
+
+  // Clear any previous communicators
+  agg_comms_.clear();
+  agg_comms_.resize(num_workers);
+
+  for (size_t w = 0; w < num_workers; ++w)
+  {
+    // Compute this worker's contiguous angle set range [begin, end)
+    const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
+    const size_t begin = w * chunk_size;
+    const size_t end = std::min(begin + chunk_size, num_angle_sets);
+
+    if (begin >= num_angle_sets)
+    {
+      // This worker has no angle sets (more workers than angle sets).
+      // Create a dummy communicator with an empty angle set list.
+      std::vector<AngleSet*> empty_angle_sets;
+      agg_comms_[w] = std::make_unique<CBCD_AggregatedCommunicator>(
+        empty_angle_sets,
+        problem_.GetMPICommunicatorSet(),
+        0,
+        begin,
+        static_cast<int>(total_num_angle_sets + w));
+      continue;
+    }
+
+    // Build the angle set list for this worker
+    std::vector<AngleSet*> worker_angle_sets;
+    worker_angle_sets.reserve(end - begin);
+    for (size_t i = begin; i < end; ++i)
+      worker_angle_sets.push_back(angle_sets_[i]);
+
+    // MPI tag: total_num_angle_sets + worker_id
+    // This ensures no collision with per-angle-set tags [0, N-1]
+    // and uniqueness across workers.
+    int tag = static_cast<int>(total_num_angle_sets + w);
+
+    agg_comms_[w] = std::make_unique<CBCD_AggregatedCommunicator>(
+      worker_angle_sets,
+      problem_.GetMPICommunicatorSet(),
+      max_message_size_,
+      begin,
+      tag);
+
+    // Set each angle set's communicator pointer to this worker's communicator
+    for (size_t i = begin; i < end; ++i)
+      angle_sets_[i]->SetAggregatedCommunicator(agg_comms_[w].get());
+  }
+
+  setup_num_workers_ = num_workers;
 }
 
 void
-CBCDSweepChunk::StopCommunicator()
+CBCDSweepChunk::StartCommunicators()
 {
-  agg_comm_->Stop();
+  for (auto& comm : agg_comms_)
+    if (comm)
+      comm->Start();
+}
+
+void
+CBCDSweepChunk::StopCommunicators()
+{
+  // Request stop on all communicators first, then join.
+  // Each comm thread independently checks its own stop_requested_ flag,
+  // so they can wind down in parallel.
+  for (auto& comm : agg_comms_)
+    if (comm)
+      comm->Stop();
 }
 
 CBCD_AggregatedCommunicator&
-CBCDSweepChunk::GetAggregatedCommunicator()
+CBCDSweepChunk::GetAggregatedCommunicator(size_t worker_id)
 {
-  return *agg_comm_;
+  return *agg_comms_[worker_id];
 }
 
 void

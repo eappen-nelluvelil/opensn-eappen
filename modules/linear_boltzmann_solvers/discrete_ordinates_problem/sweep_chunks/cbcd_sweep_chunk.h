@@ -46,14 +46,21 @@ public:
 
   const std::vector<crb::Stream*>& GetStreamsList() const { return streams_list_; }
 
-  /// Start the aggregated communication thread.
-  void StartCommunicator();
+  /// Set up per-worker aggregated communicators.
+  /// Each worker thread in the SPMD_ThreadPool gets its own CBCD_AggregatedCommunicator
+  /// handling only the angle sets assigned to that worker.
+  /// Must be called before StartCommunicators() and after the pool size is known.
+  /// Safe to call multiple times — only sets up on the first call, or if num_workers changes.
+  void SetupPerWorkerCommunicators(size_t num_workers);
 
-  /// Stop the aggregated communication thread (flush + join).
-  void StopCommunicator();
+  /// Start all per-worker aggregated communication threads.
+  void StartCommunicators();
 
-  /// Get a reference to the aggregated communicator.
-  CBCD_AggregatedCommunicator& GetAggregatedCommunicator();
+  /// Stop all per-worker aggregated communication threads (flush + join).
+  void StopCommunicators();
+
+  /// Get a reference to the aggregated communicator for a given worker.
+  CBCD_AggregatedCommunicator& GetAggregatedCommunicator(size_t worker_id);
 
 private:
   DiscreteOrdinatesProblem& problem_;

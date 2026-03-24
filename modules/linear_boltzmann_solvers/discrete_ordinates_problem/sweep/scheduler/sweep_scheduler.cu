@@ -70,14 +70,19 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
     as->SetStartingLatch();
   }
 
-  // Start aggregated communication thread
-  cbcd_chunk.StartCommunicator();
+  // Set up per-worker communicators (only runs once, or when num_workers changes).
+  // This creates one CBCD_AggregatedCommunicator per worker thread, each handling
+  // only the angle sets assigned to that worker's contiguous range.
+  cbcd_chunk.SetupPerWorkerCommunicators(num_workers_);
+
+  // Start all per-worker aggregated communication threads
+  cbcd_chunk.StartCommunicators();
 
   const auto num_workers = num_workers_;
   pool_.run(
     [&angle_sets, num_angle_sets, num_workers](std::size_t worker_id)
     {
-      // Partition angle sets among worker threads 
+      // Partition angle sets among worker threads
       // Each worker thread processes a contiguous range of anglesets
       const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
       const size_t begin = worker_id * chunk_size;
@@ -115,8 +120,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       }
     });
 
-  // Flush MPI sends and join communication thread
-  cbcd_chunk.StopCommunicator();
+  // Flush MPI sends and join all per-worker communication threads
+  cbcd_chunk.StopCommunicators();
 
   // Copy phi and outflow data back to host
   cbcd_chunk.GetProblem().CopyPhiAndOutflowBackToHost();

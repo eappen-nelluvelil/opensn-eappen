@@ -107,9 +107,23 @@ public:
     std::vector<double> psi_data;
   };
 
+  /// Construct an aggregated communicator for a subset of angle sets.
+  ///
+  /// \param angle_sets  Only the angle sets this communicator is responsible for.
+  /// \param comm_set    MPI communicator set.
+  /// \param max_single_message_size_in_bytes  Pre-computed upper bound for the receive buffer.
+  /// \param begin_as    Global index of the first angle set in this communicator's range.
+  ///                    All incoming/outgoing angle-set IDs are global; this offset is used
+  ///                    internally to map them to local indices.
+  /// \param aggregated_tag  MPI tag for this communicator.  Must be globally unique across
+  ///                        all communicator instances on all ranks.  If -1 (default), uses
+  ///                        begin_as + angle_sets.size() (backward-compatible with the
+  ///                        single-communicator design).
   CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
                               const MPICommunicatorSet& comm_set,
-                              size_t max_single_message_size_in_bytes = 0);
+                              size_t max_single_message_size_in_bytes = 0,
+                              size_t begin_as = 0,
+                              int aggregated_tag = -1);
 
   ~CBCD_AggregatedCommunicator();
 
@@ -162,6 +176,11 @@ private:
 
   const MPICommunicatorSet& comm_set_;
   size_t num_angle_sets_;
+
+  /// Global index of the first angle set handled by this communicator.
+  /// Used to convert between global angle-set IDs (on the wire / from callers)
+  /// and local indices into incoming_mailboxes_ / angle_set_done_.
+  size_t begin_as_;
 
   /// Flat array of lock-free queues for outgoing data batches.
   std::vector<NeighborQueue> outgoing_queues_;

@@ -21,11 +21,15 @@ namespace opensn
 
 CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
                                                          const MPICommunicatorSet& comm_set,
-                                                         size_t max_single_message_size_in_bytes)
+                                                         size_t max_single_message_size_in_bytes,
+                                                         size_t begin_as,
+                                                         int aggregated_tag)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
+    begin_as_(begin_as),
     incoming_mailboxes_(num_angle_sets_),
-    aggregated_tag_(static_cast<int>(num_angle_sets_)),
+    aggregated_tag_(aggregated_tag >= 0 ? aggregated_tag
+                                        : static_cast<int>(begin_as_ + num_angle_sets_)),
     angle_set_done_(num_angle_sets_)
 {
   std::set<int> temp_dependencies;
@@ -89,15 +93,15 @@ CBCD_AggregatedCommunicator::EnqueueOutgoingBatchByIndex(int queue_index,
 std::vector<std::vector<IncomingEntry>>
 CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
 {
-  assert(angle_set_id < num_angle_sets_);
-  return incoming_mailboxes_[angle_set_id].Drain();
+  assert(angle_set_id >= begin_as_ and angle_set_id < begin_as_ + num_angle_sets_);
+  return incoming_mailboxes_[angle_set_id - begin_as_].Drain();
 }
 
 void
 CBCD_AggregatedCommunicator::SignalAngleSetComplete(size_t angle_set_id)
 {
-  assert(angle_set_id < num_angle_sets_);
-  angle_set_done_[angle_set_id].store(true, std::memory_order_release);
+  assert(angle_set_id >= begin_as_ and angle_set_id < begin_as_ + num_angle_sets_);
+  angle_set_done_[angle_set_id - begin_as_].store(true, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +111,11 @@ CBCD_AggregatedCommunicator::SignalAngleSetComplete(size_t angle_set_id)
 void
 CBCD_AggregatedCommunicator::Start()
 {
+  // Skip launching a comm thread if this communicator has no angle sets
+  // (can happen when num_workers > num_angle_sets).
+  if (num_angle_sets_ == 0)
+    return;
+
   stop_requested_.store(false, std::memory_order_relaxed);
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
@@ -183,7 +192,9 @@ CBCD_AggregatedCommunicator::FlushOutgoing(std::vector<std::vector<const Outgoin
     {
       for (const auto& entry : batch)
       {
-        auto& ptrs = by_angle_set[entry.angle_set_id];
+        assert(entry.angle_set_id >= begin_as_ and
+               entry.angle_set_id < begin_as_ + num_angle_sets_);
+        auto& ptrs = by_angle_set[entry.angle_set_id - begin_as_];
         if (ptrs.empty())
         {
           active_anglesets++;
@@ -209,12 +220,14 @@ CBCD_AggregatedCommunicator::FlushOutgoing(std::vector<std::vector<const Outgoin
 
     WriteBytes(&active_anglesets, sizeof(size_t));
 
-    for (size_t as_id = 0; as_id < num_angle_sets_; ++as_id)
+    for (size_t local_id = 0; local_id < num_angle_sets_; ++local_id)
     {
-      auto& ptrs = by_angle_set[as_id];
+      auto& ptrs = by_angle_set[local_id];
       if (ptrs.empty())
         continue;
-      WriteBytes(&as_id, sizeof(size_t));
+      // Write global angle set ID to the wire format
+      size_t global_id = local_id + begin_as_;
+      WriteBytes(&global_id, sizeof(size_t));
       size_t num_entries = ptrs.size();
       WriteBytes(&num_entries, sizeof(size_t));
       for (const auto* e : ptrs)
@@ -268,9 +281,10 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 
       for (size_t as_batch = 0; as_batch < num_as_in_batch; ++as_batch)
       {
-        auto as_id = persistent_recv_buffer_.Read<size_t>();
+        auto global_as_id = persistent_recv_buffer_.Read<size_t>();
         auto num_entries = persistent_recv_buffer_.Read<size_t>();
-        assert(as_id < num_angle_sets_);
+        assert(global_as_id >= begin_as_ and global_as_id < begin_as_ + num_angle_sets_);
+        auto local_as_id = global_as_id - begin_as_;
 
         std::vector<IncomingEntry> batch;
         batch.reserve(num_entries);
@@ -280,20 +294,20 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
           IncomingEntry entry;
           entry.cell_global_id = persistent_recv_buffer_.Read<uint64_t>();
           entry.face_id = persistent_recv_buffer_.Read<unsigned int>();
-          
+
           auto data_size = persistent_recv_buffer_.Read<size_t>();
           entry.psi_data.resize(data_size);
-          
+
           std::memcpy(entry.psi_data.data(),
                       &persistent_recv_buffer_.Data()[persistent_recv_buffer_.Offset()],
                       data_size * sizeof(double));
-                      
+
           persistent_recv_buffer_.Seek(persistent_recv_buffer_.Offset() + data_size * sizeof(double));
-          
+
           batch.push_back(std::move(entry));
         }
 
-        incoming_mailboxes_[as_id].Push(std::move(batch));
+        incoming_mailboxes_[local_as_id].Push(std::move(batch));
       }
     }
   }

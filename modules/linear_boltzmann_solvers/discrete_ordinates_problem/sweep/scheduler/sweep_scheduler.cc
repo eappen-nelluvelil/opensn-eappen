@@ -41,9 +41,18 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   {
     // Use a bounded number of worker threads: min(angle_sets, hardware threads).
     // Each worker cooperatively processes multiple angle sets in a round-robin loop.
-    num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
-                            static_cast<size_t>(std::thread::hardware_concurrency()));
-    // num_workers_ = static_cast<size_t>(angle_agg_.GetNumAngleSets());
+    size_t local_num_workers = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
+                                        static_cast<size_t>(std::thread::hardware_concurrency()));
+
+    // Ensure globally consistent num_workers across all MPI ranks.
+    // This is critical for per-worker CBCD_AggregatedCommunicators: each worker uses
+    // a unique MPI tag, and the sender/receiver must agree on the worker-to-angle-set
+    // partitioning.  Taking the global minimum is safe and conservative.
+    int local_nw = static_cast<int>(local_num_workers);
+    int global_nw = 0;
+    mpi_comm.all_reduce(local_nw, global_nw, mpi::op::min<int>());
+    num_workers_ = static_cast<size_t>(global_nw);
+
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
                       << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);
