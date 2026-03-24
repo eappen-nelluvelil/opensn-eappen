@@ -1525,6 +1525,11 @@ void
 DiscreteOrdinatesProblem::CopyPhiAndOutflowBackToHost()
 {
 }
+
+void
+DiscreteOrdinatesProblem::InvalidateDevicePsiOld()
+{
+}
 #endif
 
 std::pair<UniqueSOGroupings, DirIDToSOMap>
@@ -1853,6 +1858,8 @@ DiscreteOrdinatesProblem::ZeroPsi()
 
   for (auto& psi : psi_old_local_)
     psi.assign(psi.size(), 0.0);
+
+  InvalidateDevicePsiOld();
 }
 
 void
@@ -1863,6 +1870,8 @@ DiscreteOrdinatesProblem::UpdatePsiOld()
     assert(psi_old_local_[gs].size() == psi_new_local_[gs].size());
     std::copy(psi_new_local_[gs].begin(), psi_new_local_[gs].end(), psi_old_local_[gs].begin());
   }
+  // Invalidate device psi_old so it gets re-uploaded at the next time step
+  InvalidateDevicePsiOld();
 }
 
 } // namespace opensn

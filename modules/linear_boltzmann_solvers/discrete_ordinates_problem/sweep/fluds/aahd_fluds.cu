@@ -346,6 +346,10 @@ AAHD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
                                 const LBSGroupset& groupset,
                                 AngleSet& angle_set)
 {
+  // Skip repack + upload if psi_old is already on device for this time step
+  if (psi_old_on_device_)
+    return;
+
   auto* mesh_carrier = problem.GetMeshCarrier();
   const std::size_t bank_size = mesh_carrier->num_nodes_total * num_groups_and_angles_;
 
@@ -388,6 +392,7 @@ AAHD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
   }
 
   psi_old_bank_.UploadToDevice(stream_);
+  psi_old_on_device_ = true;
 }
 
 void

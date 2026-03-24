@@ -82,6 +82,8 @@ public:
 
   /// Copy psi_new to psi_old
   void UpdatePsiOld() override;
+  /// Invalidate device psi_old on all AAHD FLUDS so it will be re-uploaded next time step.
+  void InvalidateDevicePsiOld();
 
   void PrintSimHeader() override;
 

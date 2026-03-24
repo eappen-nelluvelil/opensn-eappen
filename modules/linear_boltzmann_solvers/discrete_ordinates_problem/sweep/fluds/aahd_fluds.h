@@ -229,6 +229,8 @@ public:
   bool HasSaveAngularFlux() const { return not save_angular_flux_.host_storage.empty(); }
   /// Get psi_old device pointer (nullptr if not allocated).
   double* GetPsiOldDevicePointer() { return psi_old_bank_.device_storage.get(); }
+  /// Invalidate device psi_old so it will be re-uploaded on next CopyPsiOldToDevice call.
+  void InvalidateDevicePsiOld() { psi_old_on_device_ = false; }
 
 protected:
   /// Reference to the common data.
@@ -257,6 +259,8 @@ protected:
 
   /// Storage for previous time step angular fluxes (time-dependent only).
   AAHD_Bank psi_old_bank_;
+  /// Flag indicating psi_old has been uploaded to device for the current time step.
+  bool psi_old_on_device_ = false;
 
   /// Stream for asynchronous operations.
   crb::Stream stream_;
