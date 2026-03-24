@@ -129,6 +129,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
+  ready_tasks_.clear();
   if (task_topology_)
   {
     const size_t n = task_topology_->size();
@@ -136,9 +137,10 @@ CBC_AngleSet::ResetSweepBuffers()
     {
       task_states_[i].num_dependencies = (*task_topology_)[i].initial_num_dependencies;
       task_states_[i].completed = false;
+      if (task_states_[i].num_dependencies == 0)
+        ready_tasks_.push_back(i);
     }
   }
-  ready_tasks_.clear();
   num_completed_ = 0;
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
