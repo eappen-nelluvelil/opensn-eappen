@@ -4,6 +4,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_aggregated_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/main.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
@@ -11,38 +12,6 @@
 
 namespace opensn
 {
-
-namespace cbc_gpu_kernel
-{
-
-__global__ void
-CBCSweepKernel(const CBC_Arguments args, const unsigned int num_ready_cells, double* saved_psi)
-{
-  unsigned int cell_idx = threadIdx.y + blockDim.y * blockIdx.y;
-  unsigned int angle_group_idx = threadIdx.x + blockDim.x * blockIdx.x;
-  if ((cell_idx >= num_ready_cells) or (angle_group_idx >= args.flud_data.stride_size))
-    return;
-  unsigned int angle_idx = angle_group_idx / args.groupset_size;
-  unsigned int group_idx = angle_group_idx - angle_idx * args.groupset_size;
-  const std::uint64_t cell_local_idx = args.cell_local_ids[cell_idx];
-  CellView cell;
-  MeshView(args.mesh_data).GetCellView(cell, cell_local_idx);
-  if (cell.num_nodes == 0)
-    return;
-  auto [cell_edge_data, _] = GetCellDataIndex(args.flud_index, cell_local_idx);
-  std::uint32_t num_moments;
-  std::uint32_t direction_num = args.directions[angle_idx];
-  DirectionView direction;
-  {
-    QuadratureView quadrature(args.quad_data);
-    num_moments = quadrature.num_moments;
-    quadrature.GetDirectionView(direction, direction_num);
-  }
-  cbc_sweep_spec_map[cell.num_nodes - 1](
-    args, cell, direction, cell_edge_data, angle_group_idx, group_idx, num_moments, saved_psi);
-}
-
-} // namespace cbc_gpu_kernel
 
 CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset)
   : SweepChunk(problem.GetPhiNewLocal(),
@@ -59,14 +28,14 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
     problem_(problem),
-    angle_sets_()
+    angle_sets_(),
+    fluds_list_()
 {
-  std::vector<CBCD_FLUDS*> fluds_list;
   for (auto& as : *(groupset_.angle_agg))
   {
     auto* angle_set = static_cast<CBCD_AngleSet*>(as.get());
     angle_sets_.push_back(angle_set);
-    fluds_list.push_back(static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS())));
+    fluds_list_.push_back(static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS())));
   }
 
   // Compute exact per-source worst-case message size for the receive buffer
@@ -89,7 +58,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   std::unordered_map<int, std::unordered_map<size_t, PerSourceAngleSetInfo>> source_as_info;
   for (size_t as_idx = 0; as_idx < angle_sets_.size(); ++as_idx)
   {
-    auto& fluds = *fluds_list[as_idx];
+    auto& fluds = *fluds_list_[as_idx];
     const auto stride = fluds.GetStrideSize();
     const auto& incoming_map = fluds.GetCommonData().GetIncomingNonlocalNodeMap();
 
@@ -140,20 +109,11 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
   }
 
-  // Build per-angle-set capacity info for ring buffer pre-allocation
-  std::vector<opensn::AngleSetCapacity> capacities(angle_sets_.size());
-  for (size_t i = 0; i < angle_sets_.size(); ++i)
-  {
-    capacities[i].outgoing_faces = fluds_list[i]->GetNumOutgoingFaces();
-    capacities[i].incoming_faces = fluds_list[i]->GetNumIncomingFaces();
-  }
-
   // Create aggregated communicator and set it on all angle sets
   std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
   agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
                                                             problem_.GetMPICommunicatorSet(),
-                                                            max_message_bytes,
-                                                            capacities);
+                                                            max_message_bytes);
   for (auto* as : angle_sets_)
   {
     as->SetAggregatedCommunicator(agg_comm_.get());
@@ -165,13 +125,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   cached_kernel_params_.reserve(angle_sets_.size());
   for (size_t i = 0; i < angle_sets_.size(); ++i)
   {
-    cbc_gpu_kernel::CBC_Arguments args(problem_, groupset_, *angle_sets_[i], *fluds_list[i]);
+    gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(problem_, groupset_, *angle_sets_[i], *fluds_list_[i]);
     unsigned int stride_size =
       gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
     unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);
     unsigned int block_size_y = gpu_kernel::threshold / block_size_x;
-    unsigned int grid_size_x = (stride_size + block_size_x - 1) / block_size_x;
-    double* device_saved_psi = fluds_list[i]->GetSavedAngularFluxDevicePointer();
+    unsigned int grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
+    double* device_saved_psi = fluds_list_[i]->GetSavedAngularFluxDevicePointer();
     cached_kernel_params_.emplace_back(args,
                                        ::dim3{block_size_x, block_size_y},
                                        grid_size_x,
@@ -200,17 +160,17 @@ CBCDSweepChunk::GetAggregatedCommunicator()
 }
 
 void
-CBCDSweepChunk::GPUSweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells)
+CBCDSweepChunk::Sweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells)
 {
-  CALI_CXX_MARK_SCOPE("CBCDSweepChunk::GPUSweep");
+  CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
   auto id = angle_set.GetID();
   auto& ck = cached_kernel_params_[id];
   auto& stream = angle_set.GetStream();
   unsigned int grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
   ::dim3 grid_size{ck.grid_size_x, grid_size_y};
-  cbc_gpu_kernel::CBCSweepKernel<<<grid_size, ck.block_size, 0, stream>>>(
-    ck.args, num_ready_cells, ck.device_saved_psi);
+  gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
+    ck.args, fluds_list_[id]->GetLocalCellIDs().data(), num_ready_cells, ck.device_saved_psi);
 }
 
 } // namespace opensn

@@ -14,6 +14,7 @@ namespace opensn
 {
 
 class CBCD_AggregatedCommunicator;
+class CBCD_FLUDS;
 
 /// CBC sweep chunk for device.
 class CBCDSweepChunk : public SweepChunk
@@ -31,7 +32,8 @@ public:
 
   /// Launch the GPU sweep kernel for the given angle set.
   /// Cell IDs must already be written to the FLUDS MappedHostVector by the caller.
-  void GPUSweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells);
+  using SweepChunk::Sweep;
+  void Sweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells);
 
   const std::vector<CBCD_AngleSet*>& GetAngleSets() const { return angle_sets_; }
 
@@ -48,12 +50,12 @@ private:
   /// Pre-computed kernel launch parameters cached per angle set.
   struct CachedKernelParams
   {
-    cbc_gpu_kernel::CBC_Arguments args;
+    gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args;
     ::dim3 block_size;
     unsigned int grid_size_x;
     double* device_saved_psi;
 
-    CachedKernelParams(cbc_gpu_kernel::CBC_Arguments a,
+    CachedKernelParams(gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> a,
                        ::dim3 bs,
                        unsigned int gx,
                        double* sp)
@@ -64,6 +66,7 @@ private:
 
   DiscreteOrdinatesProblem& problem_;
   std::vector<CBCD_AngleSet*> angle_sets_;
+  std::vector<CBCD_FLUDS*> fluds_list_;
   std::unique_ptr<CBCD_AggregatedCommunicator> agg_comm_;
   /// Cached kernel arguments and launch dimensions per angle set (avoids re-construction each call).
   std::vector<CachedKernelParams> cached_kernel_params_;
