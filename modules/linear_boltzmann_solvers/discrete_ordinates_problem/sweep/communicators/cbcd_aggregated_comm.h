@@ -21,16 +21,7 @@ namespace opensn
 class AngleSet;
 class MPICommunicatorSet;
 
-/// A single face's angular flux data received from a remote MPI rank.
-/// Deserialized from the aggregated wire format and routed to the target angle set.
-struct IncomingFaceData
-{
-  uint64_t cell_global_id;
-  unsigned int face_id;
-  std::vector<double> psi_data;
-};
-
-// OutgoingFaceData has been eliminated: worker threads now pack the wire format
+// IncomingFaceData and OutgoingFaceData have been eliminated: worker threads now pack the wire format
 // directly into ByteArray buffers (see CopyOutgoingPsiBackToHost), avoiding
 // per-face std::vector<double> heap allocations on the hot path.
 
@@ -213,8 +204,11 @@ private:
 
   // -- Incoming path (comm thread → worker threads) --------------------------
 
-  /// One Treiber stack per angle set for incoming face data batches.
-  std::vector<LockFreeTreiberStack<std::vector<IncomingFaceData>>> incoming_mailboxes_;
+  /// One Treiber stack per angle set for incoming wire-format sections (raw ByteArrays).
+  /// Each ByteArray contains: [num_entries : size_t][entries...] where each entry is
+  /// [cell_global_id : uint64_t][face_id : unsigned int][data_size : size_t][psi doubles].
+  /// Deserialization is deferred to the worker thread (avoids per-face heap allocations).
+  std::vector<LockFreeTreiberStack<ByteArray>> incoming_mailboxes_;
 
   // -- Communication thread state --------------------------------------------
 

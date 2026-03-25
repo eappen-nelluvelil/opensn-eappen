@@ -218,33 +218,51 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 
       comm.recv(mapped_source, status.tag(), recv_buffer_.Data().data(), num_bytes);
 
-      recv_buffer_.Seek(0);
-      auto num_sections = recv_buffer_.Read<size_t>();
+      // Parse just enough of the wire format to route each section to the correct
+      // angle set mailbox as a raw ByteArray.  Deserialization is deferred to the
+      // worker thread, eliminating per-face std::vector<double> heap allocations.
+      const auto* raw = recv_buffer_.Data().data();
+      size_t offset = 0;
+
+      size_t num_sections;
+      std::memcpy(&num_sections, raw + offset, sizeof(size_t));
+      offset += sizeof(size_t);
 
       for (size_t s = 0; s < num_sections; ++s)
       {
-        auto as_id = recv_buffer_.Read<size_t>();
-        auto num_entries = recv_buffer_.Read<size_t>();
+        // Read angle_set_id for routing.
+        size_t as_id;
+        std::memcpy(&as_id, raw + offset, sizeof(size_t));
+        offset += sizeof(size_t);
         assert(as_id < num_angle_sets_);
 
-        std::vector<IncomingFaceData> batch(num_entries);
+        // Record section payload start (beginning at num_entries).
+        const size_t section_start = offset;
+
+        // Walk entries to compute section size without deserializing.
+        size_t num_entries;
+        std::memcpy(&num_entries, raw + offset, sizeof(size_t));
+        offset += sizeof(size_t);
 
         for (size_t e = 0; e < num_entries; ++e)
         {
-          batch[e].cell_global_id = recv_buffer_.Read<uint64_t>();
-          batch[e].face_id = recv_buffer_.Read<unsigned int>();
-
-          auto data_size = recv_buffer_.Read<size_t>();
-          batch[e].psi_data.resize(data_size);
-
-          std::memcpy(batch[e].psi_data.data(),
-                      &recv_buffer_.Data()[recv_buffer_.Offset()],
-                      data_size * sizeof(double));
-
-          recv_buffer_.Seek(recv_buffer_.Offset() + data_size * sizeof(double));
+          // Skip entry header: cell_global_id + face_id
+          offset += sizeof(uint64_t) + sizeof(unsigned int);
+          // Read data_size to skip psi payload
+          size_t data_size;
+          std::memcpy(&data_size, raw + offset, sizeof(size_t));
+          offset += sizeof(size_t);
+          offset += data_size * sizeof(double);
         }
 
-        incoming_mailboxes_[as_id].Push(std::move(batch));
+        // Copy the section bytes [section_start, offset) into a ByteArray
+        // and push to the angle set's mailbox.
+        const size_t section_size = offset - section_start;
+        ByteArray section;
+        section.Data().resize(section_size);
+        std::memcpy(section.Data().data(), raw + section_start, section_size);
+
+        incoming_mailboxes_[as_id].Push(std::move(section));
       }
     }
   }

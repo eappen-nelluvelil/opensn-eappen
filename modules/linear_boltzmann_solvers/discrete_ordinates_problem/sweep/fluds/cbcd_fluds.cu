@@ -108,6 +108,11 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     }
   }
 
+  // Pre-allocate scratch buffers for CopyOutgoingPsiBackToHost.
+  const size_t num_dests = outgoing_destinations_.size();
+  scratch_dest_face_counts_.resize(num_dests, 0);
+  scratch_dest_psi_bytes_.resize(num_dests, 0);
+  scratch_dest_offsets_.resize(num_dests, 0);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -192,7 +197,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 uint64_t
 CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
                                     unsigned int face_id,
-                                    const std::vector<double>& psi_data)
+                                    const double* psi_data)
 {
   uint64_t cell_local_id = incoming_global_to_local_.find(cell_global_id)->second;
   const auto& grouped = cell_to_face_grouped_incoming_[cell_local_id];
@@ -204,7 +209,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
       for (const auto* node : face_info.nodes)
       {
         double* dst = incoming_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
-        const double* src = psi_data.data() + node->face_node_mapped * num_groups_and_angles_;
+        const double* src = psi_data + node->face_node_mapped * num_groups_and_angles_;
         std::copy(src, src + num_groups_and_angles_, dst);
       }
       break;
@@ -235,9 +240,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
 
   const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
 
-  // Per-destination: count faces and total psi bytes in a first pass.
-  std::vector<size_t> dest_face_counts(outgoing_destinations_.size(), 0);
-  std::vector<size_t> dest_psi_bytes(outgoing_destinations_.size(), 0);
+  // Per-destination: count faces and total psi bytes in a first pass (using scratch buffers).
+  std::fill(scratch_dest_face_counts_.begin(), scratch_dest_face_counts_.end(), 0);
+  std::fill(scratch_dest_psi_bytes_.begin(), scratch_dest_psi_bytes_.end(), 0);
 
   for (const auto& cell_local_id : cell_local_ids)
   {
@@ -270,8 +275,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     for (const auto& face_info : grouped_nodes)
     {
       auto dest_index = locality_to_dest_index_.at(face_info.locality);
-      dest_face_counts[dest_index]++;
-      dest_psi_bytes[dest_index] += face_info.face_data_size * sizeof(double);
+      scratch_dest_face_counts_[dest_index]++;
+      scratch_dest_psi_bytes_[dest_index] += face_info.face_data_size * sizeof(double);
     }
   }
 
@@ -283,21 +288,21 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
 
   std::vector<ByteArray> dest_buffers(outgoing_destinations_.size());
-  std::vector<size_t> dest_offsets(outgoing_destinations_.size(), 0);
+  std::fill(scratch_dest_offsets_.begin(), scratch_dest_offsets_.end(), 0);
 
   for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
   {
-    if (dest_face_counts[d] == 0)
+    if (scratch_dest_face_counts_[d] == 0)
       continue;
-    size_t buf_size =
-      section_header_size + dest_face_counts[d] * entry_header_size + dest_psi_bytes[d];
+    size_t buf_size = section_header_size + scratch_dest_face_counts_[d] * entry_header_size +
+                      scratch_dest_psi_bytes_[d];
     dest_buffers[d].Data().resize(buf_size);
 
     // Write section header.
     auto* base = dest_buffers[d].Data().data();
     std::memcpy(base, &angle_set_id, sizeof(size_t));
-    std::memcpy(base + sizeof(size_t), &dest_face_counts[d], sizeof(size_t));
-    dest_offsets[d] = section_header_size;
+    std::memcpy(base + sizeof(size_t), &scratch_dest_face_counts_[d], sizeof(size_t));
+    scratch_dest_offsets_[d] = section_header_size;
   }
 
   // Second pass: pack entry data directly from outgoing_nonlocal_psi_ into the ByteArrays.
@@ -308,7 +313,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     {
       auto dest_index = locality_to_dest_index_.at(face_info.locality);
       auto* base = dest_buffers[dest_index].Data().data();
-      size_t& offset = dest_offsets[dest_index];
+      size_t& offset = scratch_dest_offsets_[dest_index];
 
       // Entry header: cell_global_id, face_id, data_size
       std::memcpy(base + offset, &face_info.neighbor_global_id, sizeof(std::uint64_t));
@@ -335,7 +340,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   // Push one pre-packed section per destination (1 Treiber push per destination).
   for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
   {
-    if (dest_face_counts[d] == 0)
+    if (scratch_dest_face_counts_[d] == 0)
       continue;
     agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[d].queue_index,
                                       std::move(dest_buffers[d]));

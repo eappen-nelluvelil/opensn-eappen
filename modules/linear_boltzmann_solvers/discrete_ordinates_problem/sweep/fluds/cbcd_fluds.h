@@ -71,7 +71,7 @@ public:
   /// Returns the local cell ID (avoids caller needing a second global→local lookup).
   uint64_t ScatterReceivedFaceData(uint64_t cell_global_id,
                                    unsigned int face_id,
-                                   const std::vector<double>& psi_data);
+                                   const double* psi_data);
 
   /// Copy outgoing psi on host after D2H copy is done.
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
@@ -156,6 +156,12 @@ private:
   };
   std::vector<OutgoingDestination> outgoing_destinations_;
   std::unordered_map<int, size_t> locality_to_dest_index_;
+
+  /// Pre-allocated scratch buffers for CopyOutgoingPsiBackToHost (avoids per-call allocation).
+  /// Sized once in the constructor to outgoing_destinations_.size().
+  std::vector<size_t> scratch_dest_face_counts_;
+  std::vector<size_t> scratch_dest_psi_bytes_;
+  std::vector<size_t> scratch_dest_offsets_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();
