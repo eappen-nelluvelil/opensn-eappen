@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -97,6 +96,7 @@ public:
       for (std::size_t i = 0; i < n; ++i)
         ++epoch_states_[i].request;
     }
+    cv_start_.notify_all();
     WaitAll();
   }
 
@@ -109,10 +109,10 @@ private:
 
   /// Persistent worker threads owned by the pool.
   std::vector<std::thread> worker_threads_;
-  /// Per-worker semaphores for waking up workers to start an epoch.
-  std::vector<std::unique_ptr<CacheLineAligned<std::binary_semaphore>>> signals_to_worker_;
   /// Mutex protecting shared state for task publication and epoch completion.
   std::mutex mutex_;
+  /// Notifier that a new epoch has started or that shutdown is requested.
+  std::condition_variable cv_start_;
   /// Notifier that the current epoch has completed (i.e., all workers have finished).
   std::condition_variable cv_done_;
   /// Per-worker state for the current epoch.

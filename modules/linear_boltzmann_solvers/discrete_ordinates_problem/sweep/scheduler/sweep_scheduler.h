@@ -94,6 +94,7 @@ private:
 
   SPMD_ThreadPool pool_;
   std::vector<std::size_t> execution_order_;
+  size_t num_workers_;
 };
 
 } // namespace opensn

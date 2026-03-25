@@ -50,7 +50,6 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
                       << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);
-  }
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
   }
 

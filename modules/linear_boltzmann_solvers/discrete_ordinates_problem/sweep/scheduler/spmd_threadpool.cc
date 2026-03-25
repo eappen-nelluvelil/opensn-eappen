@@ -46,8 +46,7 @@ SPMD_ThreadPool::Start(std::size_t n)
 void
 SPMD_ThreadPool::Stop()
 {
-  bool expected = false;
-  if (!stopped_.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+  if (!workers_initialized_)
     return;
 
   {
