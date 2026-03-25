@@ -50,7 +50,7 @@ public:
   inline std::size_t GetStrideSize() const { return num_groups_and_angles_; }
 
   /// Get vector of local cells to be swept.
-  crb::MappedHostVector<std::uint64_t>& GetLocalCellIDs() { return local_cell_ids_; }
+  crb::MappedHostVector<std::uint32_t>& GetLocalCellIDs() { return local_cell_ids_; }
 
   /// Get saved angular flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
@@ -111,7 +111,7 @@ private:
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
   /// Associated angleset's stream.
   crb::Stream stream_;
-  crb::MappedHostVector<std::uint64_t> local_cell_ids_;
+  crb::MappedHostVector<std::uint32_t> local_cell_ids_;
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.
   crb::DeviceMemory<double> local_psi_;
@@ -147,6 +147,15 @@ private:
   /// Fast global→local cell ID lookup for incoming nonlocal cells only.
   /// Uses unordered_map (O(1) amortized) instead of std::map (O(log n)) on the hot path.
   std::unordered_map<uint64_t, uint64_t> incoming_global_to_local_;
+
+  /// Pre-resolved destination info for batched outgoing enqueue.
+  struct OutgoingDestination
+  {
+    int locality;
+    int queue_index = -1; ///< Resolved lazily on first CopyOutgoingPsiBackToHost call.
+  };
+  std::vector<OutgoingDestination> outgoing_destinations_;
+  std::unordered_map<int, size_t> locality_to_dest_index_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();

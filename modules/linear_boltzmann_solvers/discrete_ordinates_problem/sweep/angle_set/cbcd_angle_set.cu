@@ -175,18 +175,22 @@ CBCD_AngleSet::TryAdvanceOneStep()
     any_work_done = true;
   }
 
-  // B: Pull received data from aggregated comm (zero-allocation in-place processing).
-  any_work_done |= agg_comm_->ProcessIncoming(id_,
-    [this](const std::vector<IncomingFaceData>& batch)
+  // B: Pull received data from aggregated comm (lock-free Treiber drain).
+  auto received_batches = agg_comm_->DequeueIncoming(id_);
+  if (not received_batches.empty())
+  {
+    any_work_done = true;
+    for (auto& batch : received_batches)
     {
-      for (const auto& entry : batch)
+      for (auto& entry : batch)
       {
         auto local_id = cbcd_fluds_.ScatterReceivedFaceData(
           entry.cell_global_id, entry.face_id, entry.psi_data);
         if (--remaining_deps_[local_id] == 0)
           ready_queue_.push_back(local_id);
       }
-    });
+    }
+  }
 
   // C: Launch next kernel IMMEDIATELY (GPU starts working while we process outgoing data below).
   //    Write cell IDs directly to the FLUDS MappedHostVector (eliminates intermediate staging
@@ -204,7 +208,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
     }
     ready_queue_.clear();
 
-    cbcd_sweep_chunk_->GPUSweep(*this, ready_count);
+    cbcd_sweep_chunk_->Sweep(*this, ready_count);
     kernel_in_flight_ = true;
     any_work_done = true;
   }
