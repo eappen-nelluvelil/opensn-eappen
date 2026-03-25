@@ -145,7 +145,6 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
   // Copy phi and outflow data back to host
   cbcd_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
-  opensn::mpi_comm.barrier();
 
   // Reset all angle sets
   for (auto* as : angle_sets)
