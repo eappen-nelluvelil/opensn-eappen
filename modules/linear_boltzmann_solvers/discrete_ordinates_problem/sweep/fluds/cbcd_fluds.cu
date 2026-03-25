@@ -233,14 +233,15 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       dest.queue_index = agg_comm->GetQueueIndex(dest.locality);
   }
 
-  // Per-destination batch accumulators.
-  std::vector<std::vector<OutgoingFaceData>> dest_batches(outgoing_destinations_.size());
-
   const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
+
+  // Per-destination: count faces and total psi bytes in a first pass.
+  std::vector<size_t> dest_face_counts(outgoing_destinations_.size(), 0);
+  std::vector<size_t> dest_psi_bytes(outgoing_destinations_.size(), 0);
 
   for (const auto& cell_local_id : cell_local_ids)
   {
-    // Handle outgoing boundary (reflecting) faces
+    // Handle outgoing boundary (reflecting) faces — no wire format needed.
     const auto& boundary_nodes = outgoing_boundary_map[cell_local_id];
     if (not boundary_nodes.empty())
     {
@@ -264,34 +265,80 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       }
     }
 
-    // Handle outgoing non-local faces: accumulate into per-destination batches
+    // Count outgoing non-local faces per destination.
     const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
     for (const auto& face_info : grouped_nodes)
     {
-      std::vector<double> psi_data(face_info.face_data_size, 0.0);
-      for (const auto* node : face_info.nodes)
-      {
-        double* dst = psi_data.data() + node->face_node * num_groups_and_angles_;
-        const double* src = outgoing_nonlocal_psi_.data() +
-                            node->storage_index * num_groups_and_angles_;
-        std::copy(src, src + num_groups_and_angles_, dst);
-      }
-
       auto dest_index = locality_to_dest_index_.at(face_info.locality);
-      dest_batches[dest_index].push_back({angle_set_id,
-                                          face_info.neighbor_global_id,
-                                          face_info.associated_face,
-                                          std::move(psi_data)});
+      dest_face_counts[dest_index]++;
+      dest_psi_bytes[dest_index] += face_info.face_data_size * sizeof(double);
     }
   }
 
-  // Push one batch per destination (1 Treiber push per destination per kernel completion).
+  // Pack wire-format sections directly into ByteArrays (one per destination).
+  // Section format: [angle_set_id : size_t][num_entries : size_t][entries...]
+  // Entry format:   [cell_global_id : uint64_t][face_id : uint][data_size : size_t][psi doubles]
+  constexpr size_t entry_header_size =
+    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
+  constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
+
+  std::vector<ByteArray> dest_buffers(outgoing_destinations_.size());
+  std::vector<size_t> dest_offsets(outgoing_destinations_.size(), 0);
+
   for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
   {
-    if (dest_batches[d].empty())
+    if (dest_face_counts[d] == 0)
       continue;
-    agg_comm->EnqueueOutgoingBatchByIndex(outgoing_destinations_[d].queue_index,
-                                          std::move(dest_batches[d]));
+    size_t buf_size =
+      section_header_size + dest_face_counts[d] * entry_header_size + dest_psi_bytes[d];
+    dest_buffers[d].Data().resize(buf_size);
+
+    // Write section header.
+    auto* base = dest_buffers[d].Data().data();
+    std::memcpy(base, &angle_set_id, sizeof(size_t));
+    std::memcpy(base + sizeof(size_t), &dest_face_counts[d], sizeof(size_t));
+    dest_offsets[d] = section_header_size;
+  }
+
+  // Second pass: pack entry data directly from outgoing_nonlocal_psi_ into the ByteArrays.
+  for (const auto& cell_local_id : cell_local_ids)
+  {
+    const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
+    for (const auto& face_info : grouped_nodes)
+    {
+      auto dest_index = locality_to_dest_index_.at(face_info.locality);
+      auto* base = dest_buffers[dest_index].Data().data();
+      size_t& offset = dest_offsets[dest_index];
+
+      // Entry header: cell_global_id, face_id, data_size
+      std::memcpy(base + offset, &face_info.neighbor_global_id, sizeof(std::uint64_t));
+      offset += sizeof(std::uint64_t);
+      std::memcpy(base + offset, &face_info.associated_face, sizeof(unsigned int));
+      offset += sizeof(unsigned int);
+      std::memcpy(base + offset, &face_info.face_data_size, sizeof(size_t));
+      offset += sizeof(size_t);
+
+      // Pack psi data: zero-initialize then scatter node data.
+      auto* psi_dst = reinterpret_cast<double*>(base + offset);
+      std::fill(psi_dst, psi_dst + face_info.face_data_size, 0.0);
+      for (const auto* node : face_info.nodes)
+      {
+        double* dst = psi_dst + node->face_node * num_groups_and_angles_;
+        const double* src =
+          outgoing_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
+        std::copy(src, src + num_groups_and_angles_, dst);
+      }
+      offset += face_info.face_data_size * sizeof(double);
+    }
+  }
+
+  // Push one pre-packed section per destination (1 Treiber push per destination).
+  for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
+  {
+    if (dest_face_counts[d] == 0)
+      continue;
+    agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[d].queue_index,
+                                      std::move(dest_buffers[d]));
   }
 }
 

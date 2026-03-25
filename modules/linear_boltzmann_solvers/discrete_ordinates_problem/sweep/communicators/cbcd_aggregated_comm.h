@@ -30,15 +30,9 @@ struct IncomingFaceData
   std::vector<double> psi_data;
 };
 
-/// A single face's angular flux data queued for sending to a remote MPI rank.
-/// Produced by worker threads and consumed by the communication thread for serialization.
-struct OutgoingFaceData
-{
-  size_t angle_set_id;
-  std::uint64_t cell_global_id;
-  unsigned int face_id;
-  std::vector<double> psi_data;
-};
+// OutgoingFaceData has been eliminated: worker threads now pack the wire format
+// directly into ByteArray buffers (see CopyOutgoingPsiBackToHost), avoiding
+// per-face std::vector<double> heap allocations on the hot path.
 
 /// Lock-free Treiber stack for batched inter-thread communication.
 /// Multiple producers push batches via CAS; single consumer drains all via atomic exchange.
@@ -91,6 +85,24 @@ public:
     return result;
   }
 
+  /// Atomic-exchange drain with in-place callback — avoids building a return vector.
+  /// Returns true if any nodes were processed.
+  template <typename F>
+  bool DrainAndProcess(F&& callback)
+  {
+    auto* chain = head.exchange(nullptr, std::memory_order_acquire);
+    if (not chain)
+      return false;
+    while (chain)
+    {
+      callback(std::move(chain->payload));
+      auto* next = chain->next;
+      delete chain;
+      chain = next;
+    }
+    return true;
+  }
+
   /// Read-only empty check (single atomic load, no cache-line write).
   bool Empty() const { return head.load(std::memory_order_acquire) == nullptr; }
 };
@@ -107,8 +119,8 @@ public:
  * drained by worker threads via atomic exchange.
  *
  * Wire format for aggregated MPI messages (one message per destination per flush):
- *   [num_active_angle_sets : size_t]
- *   For each active angle set:
+ *   [num_sections : size_t]              // may have duplicate angle_set_ids
+ *   For each section (pre-packed by worker threads):
  *     [angle_set_id : size_t]
  *     [num_entries  : size_t]
  *     For each entry (one per outgoing face):
@@ -131,14 +143,21 @@ public:
   /// Allows callers to pre-resolve the destination once and batch efficiently.
   int GetQueueIndex(int dest_location) const;
 
-  /// Push a batch of outgoing entries by pre-resolved queue index.
-  /// One push per destination per kernel completion — eliminates per-face atomics.
-  void EnqueueOutgoingBatchByIndex(int queue_index, std::vector<OutgoingFaceData>&& batch);
+  /// Push a pre-packed wire-format ByteArray to a destination queue.
+  /// The buffer contains one "section" of the wire format:
+  ///   [angle_set_id : size_t][num_entries : size_t][entries...]
+  /// The comm thread concatenates sections and prepends a count header before sending.
+  void EnqueuePrepackedByIndex(int queue_index, ByteArray&& data);
 
-  /// Drain all received batches for this angle set (lock-free).
-  /// Returns the raw batches to avoid flattening overhead.
-  std::vector<std::vector<IncomingFaceData>> DequeueIncoming(size_t angle_set_id);
-
+  /// Drain all received batches for this angle set via in-place callback (lock-free).
+  /// Avoids building and returning a vector of vectors.
+  /// Returns true if any batches were processed.
+  template <typename F>
+  bool DrainIncoming(size_t angle_set_id, F&& callback)
+  {
+    assert(angle_set_id < num_angle_sets_);
+    return incoming_mailboxes_[angle_set_id].DrainAndProcess(std::forward<F>(callback));
+  }
 
   /// Signal that this angle set has no more outgoing data.
   void SignalAngleSetComplete(size_t angle_set_id);
@@ -150,11 +169,11 @@ public:
   void Stop();
 
 private:
-  /// Per-destination outgoing Treiber stack for batched face data.
+  /// Per-destination outgoing Treiber stack for pre-packed wire-format sections.
   struct NeighborQueue
   {
     int dest_location;
-    std::unique_ptr<LockFreeTreiberStack<std::vector<OutgoingFaceData>>> queue;
+    std::unique_ptr<LockFreeTreiberStack<ByteArray>> queue;
   };
 
   /// An in-flight MPI_Isend and its serialized message data.
@@ -167,7 +186,7 @@ private:
   // -- Communication thread methods ------------------------------------------
 
   void CommThreadLoop();
-  bool FlushOutgoing(std::vector<std::vector<const OutgoingFaceData*>>& by_angle_set);
+  bool FlushOutgoing();
   bool ProbeAndReceive();
   bool PollInFlightSends();
   bool AllWorkComplete() const;

@@ -175,12 +175,9 @@ CBCD_AngleSet::TryAdvanceOneStep()
     any_work_done = true;
   }
 
-  // B: Pull received data from aggregated comm (lock-free Treiber drain).
-  auto received_batches = agg_comm_->DequeueIncoming(id_);
-  if (not received_batches.empty())
-  {
-    any_work_done = true;
-    for (auto& batch : received_batches)
+  // B: Pull received data from aggregated comm (lock-free callback drain).
+  any_work_done |= agg_comm_->DrainIncoming(id_,
+    [this](std::vector<IncomingFaceData>&& batch)
     {
       for (auto& entry : batch)
       {
@@ -189,8 +186,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
         if (--remaining_deps_[local_id] == 0)
           ready_queue_.push_back(local_id);
       }
-    }
-  }
+    });
 
   // C: Launch next kernel IMMEDIATELY (GPU starts working while we process outgoing data below).
   //    Write cell IDs directly to the FLUDS MappedHostVector (eliminates intermediate staging

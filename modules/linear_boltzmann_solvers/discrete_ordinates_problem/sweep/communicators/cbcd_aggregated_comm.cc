@@ -49,7 +49,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   {
     NeighborQueue nq;
     nq.dest_location = dest;
-    nq.queue = std::make_unique<LockFreeTreiberStack<std::vector<OutgoingFaceData>>>();
+    nq.queue = std::make_unique<LockFreeTreiberStack<ByteArray>>();
     outgoing_queues_.push_back(std::move(nq));
     dest_to_queue_index_[dest] = queue_idx++;
   }
@@ -81,18 +81,10 @@ CBCD_AggregatedCommunicator::GetQueueIndex(int dest_location) const
 }
 
 void
-CBCD_AggregatedCommunicator::EnqueueOutgoingBatchByIndex(int queue_index,
-                                                         std::vector<OutgoingFaceData>&& batch)
+CBCD_AggregatedCommunicator::EnqueuePrepackedByIndex(int queue_index, ByteArray&& data)
 {
   assert(queue_index >= 0 and queue_index < static_cast<int>(outgoing_queues_.size()));
-  outgoing_queues_[queue_index].queue->Push(std::move(batch));
-}
-
-std::vector<std::vector<IncomingFaceData>>
-CBCD_AggregatedCommunicator::DequeueIncoming(size_t angle_set_id)
-{
-  assert(angle_set_id < num_angle_sets_);
-  return incoming_mailboxes_[angle_set_id].Drain();
+  outgoing_queues_[queue_index].queue->Push(std::move(data));
 }
 
 void
@@ -133,17 +125,15 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::CommThreadLoop");
 
-  std::vector<std::vector<const OutgoingFaceData*>> by_angle_set(num_angle_sets_);
-
   while (true)
   {
-    bool work_done = FlushOutgoing(by_angle_set);
+    bool work_done = FlushOutgoing();
     work_done |= ProbeAndReceive();
     work_done |= PollInFlightSends();
 
     if (stop_requested_.load(std::memory_order_acquire) and AllWorkComplete())
     {
-      FlushOutgoing(by_angle_set);
+      FlushOutgoing();
 
       while (not in_flight_sends_.empty())
       {
@@ -160,8 +150,7 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 }
 
 bool
-CBCD_AggregatedCommunicator::FlushOutgoing(
-  std::vector<std::vector<const OutgoingFaceData*>>& by_angle_set)
+CBCD_AggregatedCommunicator::FlushOutgoing()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::FlushOutgoing");
 
@@ -169,65 +158,35 @@ CBCD_AggregatedCommunicator::FlushOutgoing(
 
   for (auto& nq : outgoing_queues_)
   {
-    // Drain returns vector<vector<OutgoingFaceData>> (each element is one batch push)
-    auto entry_batches = nq.queue->Drain();
-    if (entry_batches.empty())
+    // Drain pre-packed wire-format sections from the Treiber stack.
+    // Each section was packed by CopyOutgoingPsiBackToHost on a worker thread:
+    //   [angle_set_id : size_t][num_entries : size_t][entries...]
+    auto sections = nq.queue->Drain();
+    if (sections.empty())
       continue;
     any_sent = true;
 
-    // Flatten the batches into angle_set grouping and compute total bytes needed
-    size_t total_bytes = sizeof(size_t); // num_anglesets_in_batch
-    size_t active_anglesets = 0;
-    for (const auto& batch : entry_batches)
-    {
-      for (const auto& entry : batch)
-      {
-        auto& ptrs = by_angle_set[entry.angle_set_id];
-        if (ptrs.empty())
-        {
-          active_anglesets++;
-          total_bytes += sizeof(size_t) + sizeof(size_t); // angle_set_id + num_entries
-        }
-        ptrs.push_back(&entry);
+    // Compute total message size: header + all sections concatenated.
+    size_t total_bytes = sizeof(size_t); // num_sections header
+    for (const auto& section : sections)
+      total_bytes += section.Size();
 
-        total_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
-                       entry.psi_data.size() * sizeof(double);
-      }
-    }
-
-    // Allocate and manually pack the contiguous byte buffer
+    // Assemble the message: [num_sections][section_0][section_1]...
     InFlightSend ifs;
     ifs.data.Data().resize(total_bytes);
     size_t offset = 0;
 
-    auto WriteBytes = [&](const void* ptr, size_t size)
-    {
-      std::memcpy(ifs.data.Data().data() + offset, ptr, size);
-      offset += size;
-    };
+    size_t num_sections = sections.size();
+    std::memcpy(ifs.data.Data().data() + offset, &num_sections, sizeof(size_t));
+    offset += sizeof(size_t);
 
-    WriteBytes(&active_anglesets, sizeof(size_t));
-
-    for (size_t as_id = 0; as_id < num_angle_sets_; ++as_id)
+    for (auto& section : sections)
     {
-      auto& ptrs = by_angle_set[as_id];
-      if (ptrs.empty())
-        continue;
-      WriteBytes(&as_id, sizeof(size_t));
-      size_t num_entries = ptrs.size();
-      WriteBytes(&num_entries, sizeof(size_t));
-      for (const auto* e : ptrs)
-      {
-        WriteBytes(&e->cell_global_id, sizeof(std::uint64_t));
-        WriteBytes(&e->face_id, sizeof(unsigned int));
-        size_t data_size = e->psi_data.size();
-        WriteBytes(&data_size, sizeof(size_t));
-        WriteBytes(e->psi_data.data(), data_size * sizeof(double));
-      }
-      ptrs.clear();
+      std::memcpy(ifs.data.Data().data() + offset, section.Data().data(), section.Size());
+      offset += section.Size();
     }
 
-    // Dispatch the MPI Isend
+    // Dispatch the MPI Isend.
     const auto& comm = comm_set_.LocICommunicator(nq.dest_location);
     auto dest_rank = comm_set_.MapIonJ(nq.dest_location, nq.dest_location);
     ifs.request = comm.isend(dest_rank, mpi_tag_, ifs.data.Data());
@@ -260,9 +219,9 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
       comm.recv(mapped_source, status.tag(), recv_buffer_.Data().data(), num_bytes);
 
       recv_buffer_.Seek(0);
-      auto num_active_angle_sets = recv_buffer_.Read<size_t>();
+      auto num_sections = recv_buffer_.Read<size_t>();
 
-      for (size_t as_batch = 0; as_batch < num_active_angle_sets; ++as_batch)
+      for (size_t s = 0; s < num_sections; ++s)
       {
         auto as_id = recv_buffer_.Read<size_t>();
         auto num_entries = recv_buffer_.Read<size_t>();
