@@ -27,6 +27,10 @@ class MPICommunicatorSet;
 
 /// Lock-free Treiber stack for batched inter-thread communication.
 /// Multiple producers push batches via CAS; single consumer drains all via atomic exchange.
+///
+/// Uses an internal atomic free-list to recycle nodes, eliminating per-push `new` and
+/// per-drain `delete` after the first cycle. This significantly reduces heap contention
+/// on the hot path when multiple worker threads push concurrently.
 template <typename T>
 class LockFreeTreiberStack
 {
@@ -36,11 +40,41 @@ class LockFreeTreiberStack
     Node* next;
   };
   alignas(std::hardware_destructive_interference_size) std::atomic<Node*> head{nullptr};
+  alignas(std::hardware_destructive_interference_size) std::atomic<Node*> free_head{nullptr};
 
-public:
-  ~LockFreeTreiberStack()
+  /// Allocate a node — try free list first, fall back to heap.
+  Node* AllocNode(T&& payload)
   {
-    auto* chain = head.exchange(nullptr, std::memory_order_acquire);
+    // Try to pop from free list (CAS loop).
+    auto* node = free_head.load(std::memory_order_acquire);
+    while (node)
+    {
+      if (free_head.compare_exchange_weak(
+            node, node->next, std::memory_order_release, std::memory_order_acquire))
+      {
+        node->payload = std::move(payload);
+        node->next = nullptr;
+        return node;
+      }
+    }
+    return new Node{std::move(payload), nullptr};
+  }
+
+  /// Return a chain of nodes to the free list in one atomic exchange.
+  void ReturnChainToFreeList(Node* chain_head, Node* chain_tail)
+  {
+    auto* expected = free_head.load(std::memory_order_relaxed);
+    do
+    {
+      chain_tail->next = expected;
+    } while (not free_head.compare_exchange_weak(
+      expected, chain_head, std::memory_order_release, std::memory_order_relaxed));
+  }
+
+  /// Delete all nodes in a chain.
+  static void DeleteChain(std::atomic<Node*>& list)
+  {
+    auto* chain = list.exchange(nullptr, std::memory_order_acquire);
     while (chain)
     {
       auto* next = chain->next;
@@ -49,10 +83,17 @@ public:
     }
   }
 
+public:
+  ~LockFreeTreiberStack()
+  {
+    DeleteChain(head);
+    DeleteChain(free_head);
+  }
+
   /// CAS push — safe for concurrent producers, never blocks.
   void Push(T&& payload)
   {
-    auto* node = new Node{std::move(payload), nullptr};
+    auto* node = AllocNode(std::move(payload));
     auto* expected = head.load(std::memory_order_relaxed);
     do
     {
@@ -61,36 +102,42 @@ public:
       expected, node, std::memory_order_release, std::memory_order_relaxed));
   }
 
-  /// Atomic-exchange drain — returns all queued entries, deletes nodes.
+  /// Atomic-exchange drain — returns all queued entries, recycles nodes to free list.
   std::vector<T> Drain()
   {
     auto* chain = head.exchange(nullptr, std::memory_order_acquire);
+    if (not chain)
+      return {};
     std::vector<T> result;
+    auto* first = chain;
+    Node* last = nullptr;
     while (chain)
     {
       result.push_back(std::move(chain->payload));
-      auto* next = chain->next;
-      delete chain;
-      chain = next;
+      last = chain;
+      chain = chain->next;
     }
+    ReturnChainToFreeList(first, last);
     return result;
   }
 
   /// Atomic-exchange drain with in-place callback — avoids building a return vector.
-  /// Returns true if any nodes were processed.
+  /// Returns true if any nodes were processed. Recycles drained nodes to free list.
   template <typename F>
   bool DrainAndProcess(F&& callback)
   {
     auto* chain = head.exchange(nullptr, std::memory_order_acquire);
     if (not chain)
       return false;
+    auto* first = chain;
+    Node* last = nullptr;
     while (chain)
     {
       callback(std::move(chain->payload));
-      auto* next = chain->next;
-      delete chain;
-      chain = next;
+      last = chain;
+      chain = chain->next;
     }
+    ReturnChainToFreeList(first, last);
     return true;
   }
 
@@ -217,6 +264,29 @@ private:
 
   /// In-flight MPI_Isends awaiting completion.
   std::vector<InFlightSend> in_flight_sends_;
+
+  // -- Send buffer pool (recycled ByteArrays retain allocated capacity) ------
+
+  std::vector<ByteArray> send_buffer_pool_;
+
+  /// Acquire a ByteArray from the pool (retains previous capacity) or create a new one.
+  ByteArray AcquireSendBuffer()
+  {
+    if (not send_buffer_pool_.empty())
+    {
+      ByteArray buf = std::move(send_buffer_pool_.back());
+      send_buffer_pool_.pop_back();
+      return buf;
+    }
+    return ByteArray();
+  }
+
+  /// Return a ByteArray to the pool (clear content but retain allocated capacity).
+  void ReleaseSendBuffer(ByteArray&& buf)
+  {
+    buf.Data().clear();
+    send_buffer_pool_.push_back(std::move(buf));
+  }
 
   // -- Synchronization -------------------------------------------------------
 

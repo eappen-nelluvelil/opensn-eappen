@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "caribou/main.hpp"
 #include <atomic>
+#include <cstdint>
 #include <set>
 
 namespace crb = caribou;
@@ -115,8 +116,21 @@ private:
   CBCDSweepChunk* cbcd_sweep_chunk_;
   /// Reference to the CBC SPDS (pulled up from CBC_AngleSet).
   const CBC_SPDS& cbc_spds_;
-  /// Cell-by-cell task list (pulled up from CBC_AngleSet).
-  std::vector<Task> current_task_list_;
+
+  /// CSR (Compressed Sparse Row) representation of the SPDS task DAG.
+  /// Built once from the Task list on first sweep; reused across sweeps.
+  /// Replaces std::vector<Task> — eliminates per-task vector copies, unused
+  /// field storage (predecessors, cell_ptr, completed), and improves cache
+  /// locality in the dependency update hot loop.
+  /// @{
+  std::vector<uint64_t> reference_ids_;          ///< Cell local ID per task.
+  std::vector<uint32_t> successor_offsets_;       ///< CSR offset array (size N+1).
+  std::vector<uint32_t> successor_data_;          ///< Flat successor indices.
+  std::vector<int> initial_deps_;                 ///< Initial dep counts per task.
+  std::vector<int> remaining_deps_;               ///< Working copy, reset each sweep.
+  std::vector<uint32_t> initial_ready_tasks_;     ///< Tasks with 0 deps (constant).
+  /// @}
+
   /// Pointer to the aggregated communicator (owned by CBCDSweepChunk).
   CBCD_AggregatedCommunicator* agg_comm_ = nullptr;
   /// Number of angle sets this one must wait for before starting.
@@ -128,18 +142,13 @@ private:
   /// Whether TryInitialize has completed successfully.
   bool initialized_ = false;
   /// Ready queue: task indices whose dependencies have been satisfied.
-  std::vector<uint64_t> ready_queue_;
+  std::vector<uint32_t> ready_queue_;
   /// Whether a GPU kernel is currently in-flight on this angle set's stream.
   bool kernel_in_flight_ = false;
-  /// Task indices for the currently in-flight kernel batch (replaces separate task pointer and
-  /// cell ID vectors — cell IDs are derived from task.reference_id, eliminating redundant storage).
-  std::vector<std::uint64_t> in_flight_task_indices_;
+  /// Task indices for the currently in-flight kernel batch.
+  std::vector<uint32_t> in_flight_task_indices_;
   /// Deferred cell IDs for outgoing data processing (GPU-host overlap).
-  std::vector<std::uint64_t> deferred_cell_ids_;
-  /// Cached initial dependency counts for fast reset (avoids re-copying task list).
-  std::vector<int> initial_deps_;
-  /// Working copy of dependency counts, decremented during sweep.
-  std::vector<int> remaining_deps_;
+  std::vector<uint64_t> deferred_cell_ids_;
   /// Number of completed tasks and total tasks for this sweep.
   size_t completed_count_ = 0;
   size_t total_tasks_ = 0;

@@ -70,13 +70,47 @@ CBCD_AngleSet::TryInitialize()
   if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
-  // Cache the task list on first use (one-time copy); subsequent sweeps just reset deps.
-  if (current_task_list_.empty())
+  // Build CSR representation of the task DAG on first use.
+  // Extracts only the fields used in the hot path (reference_id, successors, num_dependencies),
+  // laid out as flat contiguous arrays for cache-friendly traversal.
+  if (reference_ids_.empty())
   {
-    current_task_list_ = cbc_spds_.GetTaskList();
-    initial_deps_.resize(current_task_list_.size());
-    for (size_t i = 0; i < current_task_list_.size(); ++i)
-      initial_deps_[i] = current_task_list_[i].num_dependencies;
+    const auto& tasks = cbc_spds_.GetTaskList();
+    const size_t N = tasks.size();
+    reference_ids_.resize(N);
+    initial_deps_.resize(N);
+    successor_offsets_.resize(N + 1, 0);
+
+    // First pass: extract per-task data and count successors.
+    for (size_t i = 0; i < N; ++i)
+    {
+      reference_ids_[i] = tasks[i].reference_id;
+      initial_deps_[i] = static_cast<int>(tasks[i].num_dependencies);
+      successor_offsets_[i + 1] = static_cast<uint32_t>(tasks[i].successors.size());
+    }
+
+    // Prefix sum to build CSR offsets.
+    for (size_t i = 0; i < N; ++i)
+      successor_offsets_[i + 1] += successor_offsets_[i];
+
+    // Second pass: flatten successor data into contiguous array.
+    successor_data_.resize(successor_offsets_[N]);
+    for (size_t i = 0; i < N; ++i)
+    {
+      uint32_t off = successor_offsets_[i];
+      for (size_t j = 0; j < tasks[i].successors.size(); ++j)
+        successor_data_[off + j] = tasks[i].successors[j];
+    }
+
+    // Pre-compute initial ready tasks (zero-dependency) — constant across sweeps.
+    for (size_t i = 0; i < N; ++i)
+      if (initial_deps_[i] == 0)
+        initial_ready_tasks_.push_back(static_cast<uint32_t>(i));
+
+    // Pre-allocate working buffers to full capacity (never re-allocates during sweep).
+    ready_queue_.reserve(N);
+    in_flight_task_indices_.reserve(N);
+    deferred_cell_ids_.reserve(N);
   }
 
   // Reset dependency counts from cached initial values (fast memcpy of ints).
@@ -85,14 +119,11 @@ CBCD_AngleSet::TryInitialize()
 
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(*cbcd_sweep_chunk_, this);
 
-  // Build initial ready queue from zero-dependency tasks.
-  // After this, the queue is maintained incrementally.
-  ready_queue_.reserve(current_task_list_.size());
-  for (size_t i = 0; i < current_task_list_.size(); ++i)
-    if (remaining_deps_[i] == 0)
-      ready_queue_.push_back(i);
+  // Populate initial ready queue from pre-computed zero-dependency tasks.
+  for (uint32_t task_idx : initial_ready_tasks_)
+    ready_queue_.push_back(task_idx);
 
-  total_tasks_ = current_task_list_.size();
+  total_tasks_ = reference_ids_.size();
   completed_count_ = 0;
   kernel_in_flight_ = false;
 
@@ -102,7 +133,7 @@ CBCD_AngleSet::TryInitialize()
   latch_counted_down_ = false;
   if (is_reflecting_boundary_cell_.empty() and not following_angle_sets_.empty())
   {
-    is_reflecting_boundary_cell_.assign(current_task_list_.size(), false);
+    is_reflecting_boundary_cell_.assign(reference_ids_.size(), false);
     const auto& outgoing_boundary_nodes = cbcd_fluds_.GetOutgoingBoundaryNodeMap();
     for (size_t cell_id = 0; cell_id < outgoing_boundary_nodes.size(); ++cell_id)
     {
@@ -149,14 +180,17 @@ CBCD_AngleSet::TryAdvanceOneStep()
   if (kernel_in_flight_ and stream_.is_completed())
   {
     // Update task dependencies and build deferred cell IDs for step D in one pass.
+    // Uses CSR successor layout for cache-friendly contiguous traversal.
     deferred_cell_ids_.clear();
-    for (uint64_t task_idx : in_flight_task_indices_)
+    for (uint32_t task_idx : in_flight_task_indices_)
     {
-      auto& task = current_task_list_[task_idx];
-      deferred_cell_ids_.push_back(task.reference_id);
+      deferred_cell_ids_.push_back(reference_ids_[task_idx]);
 
-      for (uint64_t succ : task.successors)
+      const uint32_t succ_begin = successor_offsets_[task_idx];
+      const uint32_t succ_end = successor_offsets_[task_idx + 1];
+      for (uint32_t j = succ_begin; j < succ_end; ++j)
       {
+        uint32_t succ = successor_data_[j];
         if (--remaining_deps_[succ] == 0)
           ready_queue_.push_back(succ);
       }
@@ -165,7 +199,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
       // Track reflecting boundary cell completions for early dependency countdown
       if (not latch_counted_down_ and
           not is_reflecting_boundary_cell_.empty() and
-          is_reflecting_boundary_cell_[task.reference_id])
+          is_reflecting_boundary_cell_[reference_ids_[task_idx]])
         ++reflecting_boundary_completed_;
     }
 
@@ -211,7 +245,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
         auto local_id = cbcd_fluds_.ScatterReceivedFaceData(
           cell_global_id, face_id, psi_data);
         if (--remaining_deps_[local_id] == 0)
-          ready_queue_.push_back(local_id);
+          ready_queue_.push_back(static_cast<uint32_t>(local_id));
       }
     });
 
@@ -224,10 +258,10 @@ CBCD_AngleSet::TryAdvanceOneStep()
     unsigned int ready_count = 0;
     in_flight_task_indices_.clear();
 
-    for (uint64_t task_idx : ready_queue_)
+    for (uint32_t task_idx : ready_queue_)
     {
       in_flight_task_indices_.push_back(task_idx);
-      host_cell_ids[ready_count++] = current_task_list_[task_idx].reference_id;
+      host_cell_ids[ready_count++] = static_cast<uint32_t>(reference_ids_[task_idx]);
     }
     ready_queue_.clear();
 
@@ -310,8 +344,9 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 void
 CBCD_AngleSet::ResetSweepBuffers()
 {
-  // Note: current_task_list_, initial_deps_, and is_reflecting_boundary_cell_
-  // are cached across sweeps (topology doesn't change). Only the working state is reset.
+  // Note: CSR arrays (reference_ids_, successor_offsets_, successor_data_, initial_deps_,
+  // initial_ready_tasks_) and is_reflecting_boundary_cell_ are cached across sweeps
+  // (topology doesn't change). Only the working state is reset.
   cbcd_fluds_.ClearLocalAndReceivePsi();
   executed_ = false;
   initialized_ = false;

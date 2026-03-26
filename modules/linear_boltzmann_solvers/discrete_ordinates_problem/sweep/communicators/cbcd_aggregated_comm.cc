@@ -173,6 +173,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
     // Assemble the message: [num_sections][section_0][section_1]...
     InFlightSend ifs;
+    ifs.data = AcquireSendBuffer();
     ifs.data.Data().resize(total_bytes);
     size_t offset = 0;
 
@@ -278,6 +279,7 @@ CBCD_AggregatedCommunicator::PollInFlightSends()
     if (mpi::test(in_flight_sends_[i].request))
     {
       completed_any = true;
+      ReleaseSendBuffer(std::move(in_flight_sends_[i].data));
       in_flight_sends_[i] = std::move(in_flight_sends_.back());
       in_flight_sends_.pop_back();
     }
