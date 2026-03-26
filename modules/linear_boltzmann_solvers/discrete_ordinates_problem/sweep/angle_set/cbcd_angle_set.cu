@@ -8,6 +8,7 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
 #include <cassert>
+#include <cstring>
 #include <thread>
 
 namespace opensn
@@ -64,15 +65,11 @@ CBCD_AngleSet::TryInitialize()
   assert(cbcd_sweep_chunk_ != nullptr);
   assert(agg_comm_ != nullptr);
 
-  // Non-blocking dependency check.
-  // For non-reflecting problems, num_dependencies_ == 0,
-  // so dependency_counter_ is 0 immediately.
+  // Non-blocking dependency check — returns immediately for non-reflecting problems.
   if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
-  // Build CSR representation of the task DAG on first use.
-  // Extracts only the fields used in the hot path (reference_id, successors, num_dependencies),
-  // laid out as flat contiguous arrays for cache-friendly traversal.
+  // Build CSR task DAG on first use (cached across sweeps).
   if (reference_ids_.empty())
   {
     const auto& tasks = cbc_spds_.GetTaskList();
@@ -81,7 +78,6 @@ CBCD_AngleSet::TryInitialize()
     initial_deps_.resize(N);
     successor_offsets_.resize(N + 1, 0);
 
-    // First pass: extract per-task data and count successors.
     for (size_t i = 0; i < N; ++i)
     {
       reference_ids_[i] = tasks[i].reference_id;
@@ -89,11 +85,11 @@ CBCD_AngleSet::TryInitialize()
       successor_offsets_[i + 1] = static_cast<uint32_t>(tasks[i].successors.size());
     }
 
-    // Prefix sum to build CSR offsets.
+    // Prefix sum → CSR offsets.
     for (size_t i = 0; i < N; ++i)
       successor_offsets_[i + 1] += successor_offsets_[i];
 
-    // Second pass: flatten successor data into contiguous array.
+    // Flatten successors.
     successor_data_.resize(successor_offsets_[N]);
     for (size_t i = 0; i < N; ++i)
     {
@@ -102,65 +98,60 @@ CBCD_AngleSet::TryInitialize()
         successor_data_[off + j] = tasks[i].successors[j];
     }
 
-    // Pre-compute initial ready tasks (zero-dependency) — constant across sweeps.
+    // Pre-compute zero-dependency tasks.
     for (size_t i = 0; i < N; ++i)
       if (initial_deps_[i] == 0)
         initial_ready_tasks_.push_back(static_cast<uint32_t>(i));
 
-    // Pre-allocate working buffers to full capacity (never re-allocates during sweep).
     ready_queue_.reserve(N);
     in_flight_task_indices_.reserve(N);
     deferred_cell_ids_.reserve(N);
+
+    // Build per-task reflecting-boundary flag (cached across sweeps).
+    // Uses vector<char> indexed by task index for direct byte access (no
+    // bit-packing overhead) and avoids the reference_ids_ indirection in
+    // the hot loop.
+    if (not following_angle_sets_.empty())
+    {
+      is_reflecting_task_.assign(N, 0);
+      const auto& outgoing_boundary_nodes = cbcd_fluds_.GetOutgoingBoundaryNodeMap();
+      for (size_t i = 0; i < N; ++i)
+      {
+        uint64_t cell_id = reference_ids_[i];
+        if (cell_id < outgoing_boundary_nodes.size())
+        {
+          for (const auto& node : outgoing_boundary_nodes[cell_id])
+          {
+            auto it = boundaries_.find(node.boundary_id);
+            if (it != boundaries_.end() and it->second->IsReflecting())
+            {
+              is_reflecting_task_[i] = 1;
+              ++total_reflecting_tasks_;
+              break;
+            }
+          }
+        }
+      }
+    }
   }
 
-  // Reset dependency counts from cached initial values (fast memcpy of ints).
+  // Reset working state for this sweep.
   remaining_deps_.resize(initial_deps_.size());
-  std::copy(initial_deps_.begin(), initial_deps_.end(), remaining_deps_.begin());
+  std::memcpy(remaining_deps_.data(), initial_deps_.data(), initial_deps_.size() * sizeof(int));
 
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(*cbcd_sweep_chunk_, this);
 
-  // Populate initial ready queue from pre-computed zero-dependency tasks.
   for (uint32_t task_idx : initial_ready_tasks_)
     ready_queue_.push_back(task_idx);
 
   total_tasks_ = reference_ids_.size();
   completed_count_ = 0;
   kernel_in_flight_ = false;
+  reflecting_tasks_completed_ = 0;
+  followers_notified_ = false;
 
-  // Pre-compute which cells have outgoing reflecting boundary faces (cached across sweeps).
-  // Uses vector<bool> indexed by cell_local_id for O(1) lookup instead of unordered_set.
-  reflecting_boundary_completed_ = 0;
-  latch_counted_down_ = false;
-  if (is_reflecting_boundary_cell_.empty() and not following_angle_sets_.empty())
-  {
-    is_reflecting_boundary_cell_.assign(reference_ids_.size(), false);
-    const auto& outgoing_boundary_nodes = cbcd_fluds_.GetOutgoingBoundaryNodeMap();
-    for (size_t cell_id = 0; cell_id < outgoing_boundary_nodes.size(); ++cell_id)
-    {
-      const auto& nodes = outgoing_boundary_nodes[cell_id];
-      for (const auto& node : nodes)
-      {
-        auto it = boundaries_.find(node.boundary_id);
-        if (it != boundaries_.end() and it->second->IsReflecting())
-        {
-          is_reflecting_boundary_cell_[cell_id] = true;
-          total_reflecting_boundary_cells_++;
-          break;
-        }
-      }
-    }
-  }
-
-  // If there are no reflecting boundary cells but we have followers,
-  // count down immediately — we have no reflecting data to produce.
-  if (not following_angle_sets_.empty() and total_reflecting_boundary_cells_ == 0)
-  {
-    for (auto& [bid, boundary] : boundaries_)
-      boundary->UpdateAnglesReadyStatus(angles_);
-    for (auto* following_as : following_angle_sets_)
-      following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
-    latch_counted_down_ = true;
-  }
+  // Fast path: no reflecting boundaries → notify followers immediately.
+  TryNotifyFollowers();
 
   initialized_ = true;
   return true;
@@ -175,12 +166,11 @@ CBCD_AngleSet::TryAdvanceOneStep()
   bool any_work_done = false;
   bool has_deferred_outgoing = false;
 
-  // A: Poll for kernel completion — update dependencies only (defer outgoing data processing
-  //    so the next GPU kernel can be launched sooner, overlapping GPU compute with host work).
+  // A: Poll for kernel completion — update task dependencies via CSR traversal.
+  //    Outgoing data processing is deferred to step D so the next GPU kernel
+  //    can be launched sooner (step C), overlapping GPU compute with host work.
   if (kernel_in_flight_ and stream_.is_completed())
   {
-    // Update task dependencies and build deferred cell IDs for step D in one pass.
-    // Uses CSR successor layout for cache-friendly contiguous traversal.
     deferred_cell_ids_.clear();
     for (uint32_t task_idx : in_flight_task_indices_)
     {
@@ -190,17 +180,14 @@ CBCD_AngleSet::TryAdvanceOneStep()
       const uint32_t succ_end = successor_offsets_[task_idx + 1];
       for (uint32_t j = succ_begin; j < succ_end; ++j)
       {
-        uint32_t succ = successor_data_[j];
-        if (--remaining_deps_[succ] == 0)
-          ready_queue_.push_back(succ);
+        if (--remaining_deps_[successor_data_[j]] == 0)
+          ready_queue_.push_back(successor_data_[j]);
       }
       ++completed_count_;
 
-      // Track reflecting boundary cell completions for early dependency countdown
-      if (not latch_counted_down_ and
-          not is_reflecting_boundary_cell_.empty() and
-          is_reflecting_boundary_cell_[reference_ids_[task_idx]])
-        ++reflecting_boundary_completed_;
+      // Track reflecting-boundary completions (direct task-index lookup, no indirection).
+      if (not followers_notified_ and is_reflecting_task_[task_idx])
+        ++reflecting_tasks_completed_;
     }
 
     in_flight_task_indices_.clear();
@@ -209,11 +196,8 @@ CBCD_AngleSet::TryAdvanceOneStep()
     any_work_done = true;
   }
 
-  // B: Pull received data from aggregated comm (lock-free callback drain).
-  //    Each ByteArray is a raw wire-format section:
-  //      [num_entries : size_t]
-  //      per entry: [cell_global_id : uint64_t][face_id : uint][data_size : size_t][psi doubles]
-  //    Psi data is read directly from the ByteArray buffer (zero per-face heap allocations).
+  // B: Drain received MPI data from the aggregated communicator (lock-free).
+  //    Psi is read directly from the wire-format buffer — zero per-face heap allocations.
   any_work_done |= agg_comm_->DrainIncoming(id_,
     [this](ByteArray&& section)
     {
@@ -238,20 +222,16 @@ CBCD_AngleSet::TryAdvanceOneStep()
         std::memcpy(&data_size, raw + offset, sizeof(size_t));
         offset += sizeof(size_t);
 
-        // Read psi directly from the wire-format buffer — no intermediate copy.
         const auto* psi_data = reinterpret_cast<const double*>(raw + offset);
         offset += data_size * sizeof(double);
 
-        auto local_id = cbcd_fluds_.ScatterReceivedFaceData(
-          cell_global_id, face_id, psi_data);
+        auto local_id = cbcd_fluds_.ScatterReceivedFaceData(cell_global_id, face_id, psi_data);
         if (--remaining_deps_[local_id] == 0)
           ready_queue_.push_back(static_cast<uint32_t>(local_id));
       }
     });
 
-  // C: Launch next kernel IMMEDIATELY (GPU starts working while we process outgoing data below).
-  //    Write cell IDs directly to the FLUDS MappedHostVector (eliminates intermediate staging
-  //    vector and the std::copy inside GPUSweep).
+  // C: Launch next GPU kernel for all ready tasks.
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
     auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
@@ -270,27 +250,14 @@ CBCD_AngleSet::TryAdvanceOneStep()
     any_work_done = true;
   }
 
-  // D: Process deferred outgoing data (overlaps with GPU kernel from step C).
-  //    Safe because different kernel batches write to different cell positions in outgoing buffers.
+  // D: Process deferred outgoing data (overlapped with GPU kernel from step C).
   if (has_deferred_outgoing)
   {
     cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, deferred_cell_ids_);
-
-    // Early dependency countdown: once all reflecting boundary cells are done,
-    // notify following angle sets so they can begin initialization.
-    if (not latch_counted_down_ and
-        reflecting_boundary_completed_ >= total_reflecting_boundary_cells_ and
-        total_reflecting_boundary_cells_ > 0)
-    {
-      for (auto& [bid, boundary] : boundaries_)
-        boundary->UpdateAnglesReadyStatus(angles_);
-      for (auto* following_as : following_angle_sets_)
-        following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
-      latch_counted_down_ = true;
-    }
+    TryNotifyFollowers();
   }
 
-  // E: Check completion
+  // E: Check completion.
   if (completed_count_ >= total_tasks_)
     FinalizeSweep();
 
@@ -298,21 +265,36 @@ CBCD_AngleSet::TryAdvanceOneStep()
 }
 
 void
-CBCD_AngleSet::FinalizeSweep()
+CBCD_AngleSet::TryNotifyFollowers()
 {
-  // Signal to the aggregated communicator that this angle set has no more outgoing data
-  agg_comm_->SignalAngleSetComplete(id_);
+  if (followers_notified_)
+    return;
 
-  // Count down following angle set dependency counters if not already done by early logic
-  if (not latch_counted_down_)
+  // No followers → mark as notified to skip reflecting-task tracking in step A.
+  if (following_angle_sets_.empty())
   {
-    for (auto& [bid, boundary] : boundaries_)
-      boundary->UpdateAnglesReadyStatus(angles_);
-    for (auto* following_as : following_angle_sets_)
-      following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
+    followers_notified_ = true;
+    return;
   }
 
-  // Copy saved psi from device to host
+  if (reflecting_tasks_completed_ < total_reflecting_tasks_)
+    return;
+
+  for (auto& [bid, boundary] : boundaries_)
+    boundary->UpdateAnglesReadyStatus(angles_);
+  for (auto* following_as : following_angle_sets_)
+    following_as->dependency_counter_.fetch_sub(1, std::memory_order_release);
+  followers_notified_ = true;
+}
+
+void
+CBCD_AngleSet::FinalizeSweep()
+{
+  agg_comm_->SignalAngleSetComplete(id_);
+
+  // Ensure followers are notified (no-op if already done by early countdown).
+  TryNotifyFollowers();
+
   cbcd_fluds_.CopySavedPsiFromDevice();
   cbcd_fluds_.CopySavedPsiToDestinationPsi(*cbcd_sweep_chunk_, this);
 
@@ -344,9 +326,8 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 void
 CBCD_AngleSet::ResetSweepBuffers()
 {
-  // Note: CSR arrays (reference_ids_, successor_offsets_, successor_data_, initial_deps_,
-  // initial_ready_tasks_) and is_reflecting_boundary_cell_ are cached across sweeps
-  // (topology doesn't change). Only the working state is reset.
+  // CSR arrays, is_reflecting_task_, and total_reflecting_tasks_ are cached
+  // across sweeps (topology is constant).  Only working state is reset.
   cbcd_fluds_.ClearLocalAndReceivePsi();
   executed_ = false;
   initialized_ = false;
@@ -356,9 +337,8 @@ CBCD_AngleSet::ResetSweepBuffers()
   deferred_cell_ids_.clear();
   completed_count_ = 0;
   total_tasks_ = 0;
-  reflecting_boundary_completed_ = 0;
-  // total_reflecting_boundary_cells_ is preserved (computed once from cached data)
-  latch_counted_down_ = false;
+  reflecting_tasks_completed_ = 0;
+  followers_notified_ = false;
 }
 
 const double*

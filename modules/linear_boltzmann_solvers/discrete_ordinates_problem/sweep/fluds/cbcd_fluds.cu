@@ -108,11 +108,12 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     }
   }
 
-  // Pre-allocate scratch buffers for CopyOutgoingPsiBackToHost.
+  // Pre-allocate scratch and destination buffers for CopyOutgoingPsiBackToHost.
   const size_t num_dests = outgoing_destinations_.size();
   scratch_dest_face_counts_.resize(num_dests, 0);
   scratch_dest_psi_bytes_.resize(num_dests, 0);
   scratch_dest_offsets_.resize(num_dests, 0);
+  dest_buffers_.resize(num_dests);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -280,42 +281,42 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     }
   }
 
-  // Pack wire-format sections directly into ByteArrays (one per destination).
-  // Section format: [angle_set_id : size_t][num_entries : size_t][entries...]
-  // Entry format:   [cell_global_id : uint64_t][face_id : uint][data_size : size_t][psi doubles]
+  // Pack wire-format sections into reusable ByteArrays (one per destination).
+  // Section: [angle_set_id : size_t][num_entries : size_t][entries...]
+  // Entry:   [cell_global_id : uint64_t][face_id : uint][data_size : size_t][psi doubles]
   constexpr size_t entry_header_size =
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
   constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
 
-  std::vector<ByteArray> dest_buffers(outgoing_destinations_.size());
   std::fill(scratch_dest_offsets_.begin(), scratch_dest_offsets_.end(), 0);
 
   for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
   {
     if (scratch_dest_face_counts_[d] == 0)
+    {
+      dest_buffers_[d].Data().clear();
       continue;
+    }
     size_t buf_size = section_header_size + scratch_dest_face_counts_[d] * entry_header_size +
                       scratch_dest_psi_bytes_[d];
-    dest_buffers[d].Data().resize(buf_size);
+    dest_buffers_[d].Data().resize(buf_size);
 
-    // Write section header.
-    auto* base = dest_buffers[d].Data().data();
+    auto* base = dest_buffers_[d].Data().data();
     std::memcpy(base, &angle_set_id, sizeof(size_t));
     std::memcpy(base + sizeof(size_t), &scratch_dest_face_counts_[d], sizeof(size_t));
     scratch_dest_offsets_[d] = section_header_size;
   }
 
-  // Second pass: pack entry data directly from outgoing_nonlocal_psi_ into the ByteArrays.
+  // Second pass: pack entry data from outgoing_nonlocal_psi_ into the ByteArrays.
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
     for (const auto& face_info : grouped_nodes)
     {
       auto dest_index = locality_to_dest_index_.at(face_info.locality);
-      auto* base = dest_buffers[dest_index].Data().data();
+      auto* base = dest_buffers_[dest_index].Data().data();
       size_t& offset = scratch_dest_offsets_[dest_index];
 
-      // Entry header: cell_global_id, face_id, data_size
       std::memcpy(base + offset, &face_info.neighbor_global_id, sizeof(std::uint64_t));
       offset += sizeof(std::uint64_t);
       std::memcpy(base + offset, &face_info.associated_face, sizeof(unsigned int));
@@ -323,7 +324,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       std::memcpy(base + offset, &face_info.face_data_size, sizeof(size_t));
       offset += sizeof(size_t);
 
-      // Pack psi data: zero-initialize then scatter node data.
       auto* psi_dst = reinterpret_cast<double*>(base + offset);
       std::fill(psi_dst, psi_dst + face_info.face_data_size, 0.0);
       for (const auto* node : face_info.nodes)
@@ -337,13 +337,15 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     }
   }
 
-  // Push one pre-packed section per destination (1 Treiber push per destination).
+  // Enqueue one pre-packed section per destination. The ByteArray content is
+  // moved to the Treiber stack; the dest_buffers_ slot retains its capacity
+  // for reuse on the next call.
   for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
   {
     if (scratch_dest_face_counts_[d] == 0)
       continue;
     agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[d].queue_index,
-                                      std::move(dest_buffers[d]));
+                                      std::move(dest_buffers_[d]));
   }
 }
 

@@ -13,7 +13,20 @@ namespace opensn
 
 class SpatialDiscretization;
 
-/// Common data for CBCD_FLUDS
+/**
+ * Shared (angle-set-independent) topology data for CBCD FLUDS.
+ *
+ * Built once per groupset from the mesh and SPDS, then referenced by every
+ * CBCD_FLUDS instance.  Holds:
+ *
+ *  - A device-resident bit-packed cell-face-node index map used by the GPU
+ *    kernel to resolve angular flux buffer pointers (see CBCD_NodeIndex).
+ *
+ *  - Host-side auxiliary maps that classify every face node as incoming/outgoing
+ *    and boundary/local/non-local, with compact metadata structs
+ *    (BoundaryNodeInfo 24 B, NonlocalNodeInfo 24 B) used by CBCD_FLUDS for
+ *    host-side scatter/gather during MPI communication.
+ */
 class CBCD_FLUDSCommonData : public CBC_FLUDSCommonData
 {
 public:
@@ -23,69 +36,61 @@ public:
 
   ~CBCD_FLUDSCommonData() override;
 
-  /// Get number of incoming boundary face nodes.
   std::size_t GetNumIncomingBoundaryNodes() const { return num_incoming_boundary_nodes_; }
-
-  /// Get number of outgoing boundary face nodes.
   std::size_t GetNumOutgoingBoundaryNodes() const { return num_outgoing_boundary_nodes_; }
-
-  /// Get number of incoming non-local face nodes.
   std::size_t GetNumIncomingNonlocalNodes() const { return num_incoming_nonlocal_nodes_; }
-
-  /// Get number of outgoing non-local face nodes.
   std::size_t GetNumOutgoingNonlocalNodes() const { return num_outgoing_nonlocal_nodes_; }
 
-  /// Get incoming boundary node map.
+  /// Flat list of all incoming boundary face nodes (for host-side psi copy at init).
   const std::vector<BoundaryNodeInfo>& GetIncomingBoundaryNodeMap() const
   {
     return incoming_boundary_node_map_;
   }
 
-  /// Get outgoing boundary node map (indexed by cell_local_id).
+  /// Per-cell outgoing boundary nodes (indexed by cell_local_id).
   const std::vector<std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
   {
     return cell_to_outgoing_boundary_nodes_;
   }
 
-  /// Get incoming nonlocal node map (indexed by cell_local_id).
+  /// Per-cell incoming non-local nodes (indexed by cell_local_id).
   const std::vector<std::vector<NonlocalNodeInfo>>& GetIncomingNonlocalNodeMap() const
   {
     return cell_to_incoming_nonlocal_nodes_;
   }
 
-  /// Get outgoing nonlocal node map (indexed by cell_local_id).
+  /// Per-cell outgoing non-local nodes (indexed by cell_local_id).
   const std::vector<std::vector<NonlocalNodeInfo>>& GetOutgoingNonlocalNodeMap() const
   {
     return cell_to_outgoing_nonlocal_nodes_;
   }
 
-  /// Get pointer to cell-face-node map on device.
+  /// Device pointer to the bit-packed cell-face-node index map.
   const std::uint64_t* GetDeviceIndex() const { return device_cell_face_node_map_; }
 
 private:
-  /// Number of incoming boundary face nodes.
   size_t num_incoming_boundary_nodes_;
-  /// Number of outgoing boundary face nodes.
   size_t num_outgoing_boundary_nodes_;
-  /// Number of incoming non-local face nodes.
   size_t num_incoming_nonlocal_nodes_;
-  /// Number of outgoing non-local face nodes.
   size_t num_outgoing_nonlocal_nodes_;
-  /// Device pointer to cell-face-node map for angular flux buffer access.
+
+  /// Device-resident array: [cell_offset, num_face_nodes] pairs followed by
+  /// packed CBCD_NodeIndex values for every face node of every local cell.
   std::uint64_t* device_cell_face_node_map_;
-  /// Map from incoming face boundary node to indexing metadata.
+
+  /// Flat list of incoming boundary face nodes (traversed once per sweep init).
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
-  /// Flat O(1) arrays indexed by cell_local_id.
+
+  /// Per-cell auxiliary maps (indexed by cell_local_id) for the four non-local
+  /// and boundary categories.  Built once during construction.
   std::vector<std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
   std::vector<std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
   std::vector<std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
 
-  /**
-   * Compute cell-face-node map for device angular flux buffer access, and
-   * create auxiliary indexing maps for boundary and non-local nodes for host access.
-   */
+  /// Build the device index map and populate all auxiliary host-side maps.
   void CopyFlattenedNodeIndexToDevice(const SpatialDiscretization& sdm);
-  /// Deallocate device memory for cell-face-node map.
+
+  /// Free device memory for the cell-face-node map.
   void DeallocateDeviceMemory();
 };
 

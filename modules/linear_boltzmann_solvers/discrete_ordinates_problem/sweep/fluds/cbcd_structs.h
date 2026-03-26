@@ -9,28 +9,29 @@ namespace opensn
 {
 
 /**
- * Node index specific to CBCD FLUDS.
- * Does not support delayed nodes. Reclaims the delayed bit for indices.
- * - Bit 63: Incoming/outgoing bit.
- * - Bit 62: Boundary bit.
- * - Bit 61: Local bit.
- * - Bits 0-60: Index bits (capacity ~2.3e18).
+ * Bit-packed face-node index for CBCD FLUDS device kernels.
+ *
+ * Encodes the buffer identity and offset into a single 64-bit word so the GPU
+ * kernel can resolve any face-node's angular flux pointer with one branch chain
+ * (see GetIncomingFluxPointer / GetOutgoingFluxPointer).
+ *
+ * Layout (MSB → LSB):
+ *   Bit 63   — direction  (0 = incoming, 1 = outgoing)
+ *   Bit 62   — boundary   (1 = boundary buffer, 0 = local or non-local)
+ *   Bit 61   — locality   (1 = local psi buffer, 0 = non-local buffer)
+ *   Bits 0-60 — index into the selected buffer (capacity ~2.3 × 10^18)
+ *
+ * Does not support delayed nodes (reclaims the delayed bit used by AAHD).
  */
 class CBCD_NodeIndex : public NodeIndex
 {
 public:
-  /// Default constructor.
   constexpr CBCD_NodeIndex() = default;
 
-  /// Direct assign core value.
+  /// Construct from a raw 64-bit value (e.g. read back from device memory).
   constexpr CBCD_NodeIndex(const std::uint64_t& value) : NodeIndex(value) {}
 
-  /**
-   * Construct a non-boundary node index.
-   * \param index Index into the corresponding bank. Cannot exceed 2^61 - 1.
-   * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
-   * \param is_local Flag indicating if the index is in a local bank.
-   */
+  /// Construct a non-boundary node index (local or non-local).
   CBCD_NodeIndex(std::uint64_t index, bool is_outgoing, bool is_local)
   {
     if (index >= (std::uint64_t(1) << 61) - 1)
@@ -41,11 +42,7 @@ public:
     SetIndex(index);
   }
 
-  /**
-   * Construct a boundary node index.
-   * \param index Index into the corresponding bank. Cannot exceed 2^61 - 1.
-   * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
-   */
+  /// Construct a boundary node index (always treated as local for buffer selection).
   CBCD_NodeIndex(std::uint64_t index, bool is_outgoing)
   {
     if (index >= (std::uint64_t(1) << 61) - 1)
@@ -56,18 +53,13 @@ public:
     SetIndex(index);
   }
 
-  /// Check if the current index corresponds to a local bank.
   constexpr bool IsLocal() const noexcept { return (value_ & local_bit_mask) != 0; }
-
-  /// Get the index into the bank.
   constexpr std::uint64_t GetIndex() const noexcept { return value_ & index_bit_mask; }
 
 private:
-  /// \name Local bit
-  /// \{
-  /// Third bit mask (``001`` followed by 61 zeros) - Bit 61.
   static constexpr std::uint64_t local_bit_mask = std::uint64_t(1) << (64 - 3);
-  /// Encode the value as local.
+  static constexpr std::uint64_t index_bit_mask = (std::uint64_t(1) << (64 - 3)) - 1;
+
   constexpr void SetLocal(bool is_local) noexcept
   {
     if (is_local)
@@ -75,111 +67,87 @@ private:
     else
       value_ &= ~local_bit_mask;
   }
-  /// \}
 
-  /// \name Index bits
-  /// \{
-  /// Index bit mask (``1`` at the last 61 bits).
-  static constexpr std::uint64_t index_bit_mask = (std::uint64_t(1) << (64 - 3)) - 1;
-  /// Encode the index.
   constexpr void SetIndex(std::uint64_t index) noexcept
   {
     value_ &= ~index_bit_mask;
     value_ |= (index & index_bit_mask);
   }
-  /// \}
 };
 
 /**
- * Set of device pointers to local, boundary, and non-local buffers for CBCD FLUDS.
+ * Device pointer set for CBCD FLUDS angular flux buffers.
+ *
+ * Extends FLUDSPointerSet with incoming/outgoing boundary pointers.  Passed
+ * by value to GPU kernels; the GetIncomingFluxPointer / GetOutgoingFluxPointer
+ * methods decode a CBCD_NodeIndex and return the corresponding buffer address.
  */
 struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
-  /// Pointer to incoming boundary angular fluxes.
   double* __restrict__ incoming_boundary_psi = nullptr;
-  /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
 
-  /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
+  /// Resolve the incoming flux pointer for a face node (nullptr if outgoing or undefined).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
   {
-    // Undefined case (corresponds to a parallel face)
-    if (node_index.IsUndefined())
+    if (node_index.IsUndefined() or node_index.IsOutgoing())
       return nullptr;
-
-    // Outgoing case : nullptr
-    if (node_index.IsOutgoing())
-      return nullptr;
-
-    // Incoming boundary case
     if (node_index.IsBoundary())
-    {
       return incoming_boundary_psi + node_index.GetIndex() * stride_size;
-    }
-    // Incoming local case
     if (node_index.IsLocal())
-    {
       return local_psi + node_index.GetIndex() * stride_size;
-    }
-    // Incoming non-local case
-    else
-    {
-      return nonlocal_incoming_psi + node_index.GetIndex() * stride_size;
-    }
+    return nonlocal_incoming_psi + node_index.GetIndex() * stride_size;
   }
 
-  /// Get pointer to the outgoing angular flux (if the face is not outgoing, a nullptr is returned).
+  /// Resolve the outgoing flux pointer for a face node (nullptr if incoming or undefined).
   constexpr double* GetOutgoingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
   {
-    // Undefined case (corresponds to a parallel face)
-    if (node_index.IsUndefined())
+    if (node_index.IsUndefined() or not node_index.IsOutgoing())
       return nullptr;
-
-    // Incoming case : nullptr
-    if (!node_index.IsOutgoing())
-      return nullptr;
-
-    // Outgoing boundary case
     if (node_index.IsBoundary())
-    {
       return outgoing_boundary_psi + node_index.GetIndex() * stride_size;
-    }
-    // Outgoing local case
     if (node_index.IsLocal())
-    {
       return local_psi + node_index.GetIndex() * stride_size;
-    }
-    // Outgoing non-local case
-    else
-    {
-      return nonlocal_outgoing_psi + node_index.GetIndex() * stride_size;
-    }
+    return nonlocal_outgoing_psi + node_index.GetIndex() * stride_size;
   }
 };
 
 /**
- * Metadata for boundary face nodes.
+ * Host-side metadata for a single boundary face node.
+ *
+ * Used by CBCD_FLUDS to copy angular flux between host boundary buffers and
+ * the sweep boundary conditions (reflecting or surface-source).
+ *
+ * Stored in flat vectors (incoming) and per-cell vectors (outgoing) inside
+ * CBCD_FLUDSCommonData.  Sized to 24 bytes (down from 40) by narrowing fields
+ * that never exceed 32- or 16-bit range.
  */
 struct BoundaryNodeInfo
 {
-  std::uint64_t cell_local_id;
-  unsigned int face_id;
-  size_t face_node;
-  std::uint64_t storage_index;
-  std::uint64_t boundary_id;
+  std::uint64_t boundary_id;   ///< Boundary condition ID (key into the boundary map).
+  std::uint32_t cell_local_id; ///< Local cell index (needed in flat incoming_boundary_node_map_).
+  unsigned int face_id;        ///< Face index within the cell.
+  std::uint32_t storage_index; ///< Offset into the boundary psi MappedHostVector.
+  std::uint16_t face_node;     ///< Face-node index within the face.
 };
 
 /**
- * Metadata for non-local face nodes.
+ * Host-side metadata for a single non-local (inter-partition) face node.
+ *
+ * Used by CBCD_FLUDS to scatter received MPI data into the incoming non-local
+ * psi buffer and to pack outgoing data into the wire format.
+ *
+ * Stored per-cell in CBCD_FLUDSCommonData.  The cell_local_id is omitted
+ * because it is always recoverable from the outer per-cell vector index.
+ * Sized to 24 bytes (down from 48).
  */
 struct NonlocalNodeInfo
 {
-  std::uint64_t cell_local_id;
-  std::uint64_t cell_global_id;
-  unsigned int face_id;
-  size_t face_node;
-  short face_node_mapped;
-  std::uint64_t storage_index;
+  std::uint64_t cell_global_id; ///< Global cell ID (used for MPI message routing / sizing).
+  unsigned int face_id;         ///< Face index within the cell.
+  std::uint32_t storage_index;  ///< Offset into the nonlocal psi MappedHostVector.
+  std::uint16_t face_node;      ///< Face-node index within the face (outgoing pack source).
+  short face_node_mapped;       ///< Mapped face-node index on the neighbor (incoming scatter dest).
 };
 
 } // namespace opensn

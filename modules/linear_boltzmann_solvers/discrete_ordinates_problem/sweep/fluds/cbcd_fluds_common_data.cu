@@ -69,23 +69,22 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
             node_index =
               CBCD_NodeIndex(num_incoming_nonlocal_nodes_, is_outgoing_face, is_local_face);
             cell_to_incoming_nonlocal_nodes_[cell.local_id].emplace_back(
-              NonlocalNodeInfo{cell.local_id,
-                               cell.global_id,
+              NonlocalNodeInfo{cell.global_id,
                                static_cast<unsigned int>(f),
-                               fn,
-                               face_nodal_mapping.face_node_mapping_[fn],
-                               static_cast<std::uint64_t>(num_incoming_nonlocal_nodes_)});
+                               static_cast<std::uint32_t>(num_incoming_nonlocal_nodes_),
+                               static_cast<std::uint16_t>(fn),
+                               face_nodal_mapping.face_node_mapping_[fn]});
             ++num_incoming_nonlocal_nodes_;
           }
           else
           {
             node_index = CBCD_NodeIndex(num_incoming_boundary_nodes_, is_outgoing_face);
             incoming_boundary_node_map_.emplace_back(
-              BoundaryNodeInfo{cell.local_id,
+              BoundaryNodeInfo{face.neighbor_id,
+                               static_cast<std::uint32_t>(cell.local_id),
                                static_cast<unsigned int>(f),
-                               fn,
-                               static_cast<std::uint64_t>(num_incoming_boundary_nodes_),
-                               face.neighbor_id});
+                               static_cast<std::uint32_t>(num_incoming_boundary_nodes_),
+                               static_cast<std::uint16_t>(fn)});
             ++num_incoming_boundary_nodes_;
           }
         }
@@ -102,23 +101,22 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
             node_index =
               CBCD_NodeIndex(num_outgoing_nonlocal_nodes_, is_outgoing_face, is_local_face);
             cell_to_outgoing_nonlocal_nodes_[cell.local_id].emplace_back(
-              NonlocalNodeInfo{cell.local_id,
-                               cell.global_id,
+              NonlocalNodeInfo{cell.global_id,
                                static_cast<unsigned int>(f),
-                               fn,
-                               face_nodal_mapping.face_node_mapping_[fn],
-                               static_cast<std::uint64_t>(num_outgoing_nonlocal_nodes_)});
+                               static_cast<std::uint32_t>(num_outgoing_nonlocal_nodes_),
+                               static_cast<std::uint16_t>(fn),
+                               face_nodal_mapping.face_node_mapping_[fn]});
             ++num_outgoing_nonlocal_nodes_;
           }
           else
           {
             node_index = CBCD_NodeIndex(num_outgoing_boundary_nodes_, is_outgoing_face);
             cell_to_outgoing_boundary_nodes_[cell.local_id].emplace_back(
-              BoundaryNodeInfo{cell.local_id,
+              BoundaryNodeInfo{face.neighbor_id,
+                               static_cast<std::uint32_t>(cell.local_id),
                                static_cast<unsigned int>(f),
-                               fn,
-                               static_cast<std::uint64_t>(num_outgoing_boundary_nodes_),
-                               face.neighbor_id});
+                               static_cast<std::uint32_t>(num_outgoing_boundary_nodes_),
+                               static_cast<std::uint16_t>(fn)});
             ++num_outgoing_boundary_nodes_;
           }
         }

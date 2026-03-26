@@ -25,12 +25,15 @@ class MPICommunicatorSet;
 // directly into ByteArray buffers (see CopyOutgoingPsiBackToHost), avoiding
 // per-face std::vector<double> heap allocations on the hot path.
 
-/// Lock-free Treiber stack for batched inter-thread communication.
-/// Multiple producers push batches via CAS; single consumer drains all via atomic exchange.
-///
-/// Uses an internal atomic free-list to recycle nodes, eliminating per-push `new` and
-/// per-drain `delete` after the first cycle. This significantly reduces heap contention
-/// on the hot path when multiple worker threads push concurrently.
+/**
+ * Lock-free Treiber stack for batched inter-thread communication.
+ *
+ * Multiple producers Push via CAS; a single consumer drains all items via
+ * atomic exchange (Drain / DrainAndProcess).  An internal atomic free-list
+ * recycles nodes after drain, eliminating per-push `new` and per-drain
+ * `delete` after the first cycle — significantly reducing heap contention
+ * when multiple worker threads push concurrently.
+ */
 template <typename T>
 class LockFreeTreiberStack
 {
@@ -147,24 +150,32 @@ public:
 
 
 /**
- * Aggregated MPI communicator for threaded CBCD sweep.
+ * Aggregated MPI communicator for the threaded CBCD sweep.
  *
- * A dedicated communication thread aggregates MPI sends/receives across all angle sets,
- * reducing the number of MPI calls and eliminating MPI contention between worker threads.
+ * A dedicated communication thread runs CommThreadLoop(), which aggregates
+ * outgoing MPI sends across all angle sets and probes for incoming messages.
+ * This eliminates MPI contention between worker threads and reduces the total
+ * number of MPI calls (one message per destination per flush, rather than one
+ * per angle-set per destination).
  *
- * Both outgoing and incoming paths use lock-free Treiber stacks. Outgoing: batched per-destination
- * pushes (one push per destination per kernel completion). Incoming: one stack per angle set,
- * drained by worker threads via atomic exchange.
+ * Data flow:
+ *   Worker threads → outgoing Treiber stacks (one per dest rank, lock-free push)
+ *     → comm thread drains, concatenates sections, Isend
+ *   Comm thread Iprobe/recv → incoming Treiber stacks (one per angle set)
+ *     → worker threads drain via DrainIncoming (lock-free exchange)
  *
- * Wire format for aggregated MPI messages (one message per destination per flush):
- *   [num_sections : size_t]              // may have duplicate angle_set_ids
+ * Lifecycle: Start() launches the comm thread; Stop() sets a flag, flushes
+ * remaining sends, waits for in-flight Isends, and joins the thread.
+ *
+ * Wire format for aggregated MPI messages:
+ *   [num_sections : size_t]
  *   For each section (pre-packed by worker threads):
  *     [angle_set_id : size_t]
  *     [num_entries  : size_t]
  *     For each entry (one per outgoing face):
  *       [cell_global_id : uint64_t]
  *       [face_id        : unsigned int]
- *       [data_size      : size_t]         // number of doubles
+ *       [data_size      : size_t]           // number of doubles
  *       [psi_data       : double[data_size]]
  */
 class CBCD_AggregatedCommunicator

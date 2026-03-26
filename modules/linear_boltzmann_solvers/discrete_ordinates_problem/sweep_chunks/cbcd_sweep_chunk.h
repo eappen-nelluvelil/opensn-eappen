@@ -16,38 +16,41 @@ namespace opensn
 class CBCD_AggregatedCommunicator;
 class CBCD_FLUDS;
 
-/// CBC sweep chunk for device.
+/**
+ * Sweep chunk for cell-by-cell device (CBCD) transport sweep.
+ *
+ * Owns the aggregated communicator and the cached GPU kernel launch parameters
+ * for every angle set in the groupset.  The Sweep(angle_set, num_cells) method
+ * issues a single GPU kernel launch with pre-computed arguments — no per-call
+ * argument reconstruction.
+ *
+ * The constructor also computes the worst-case MPI receive buffer size by
+ * walking all incoming non-local face data across angle sets, so the
+ * aggregated communicator's receive buffer is right-sized without guessing.
+ */
 class CBCDSweepChunk : public SweepChunk
 {
 public:
   CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset);
-
   ~CBCDSweepChunk();
 
   DiscreteOrdinatesProblem& GetProblem() const { return problem_; }
-
   const LBSGroupset& GetGroupset() const { return groupset_; }
-
   unsigned int GetGroupsetGroupIndex() const { return groupset_.first_group; }
 
-  /// Launch the GPU sweep kernel for the given angle set.
-  /// Cell IDs must already be written to the FLUDS MappedHostVector by the caller.
+  /// Launch the GPU sweep kernel.  Cell IDs must already be in the FLUDS
+  /// MappedHostVector (written by CBCD_AngleSet::TryAdvanceOneStep step C).
   using SweepChunk::Sweep;
   void Sweep(CBCD_AngleSet& angle_set, unsigned int num_ready_cells);
 
   const std::vector<CBCD_AngleSet*>& GetAngleSets() const { return angle_sets_; }
 
-  /// Start the aggregated communication thread.
   void StartCommunicator();
-
-  /// Stop the aggregated communication thread (flush + join).
   void StopCommunicator();
-
-  /// Get a reference to the aggregated communicator.
   CBCD_AggregatedCommunicator& GetAggregatedCommunicator();
 
 private:
-  /// Pre-computed kernel launch parameters cached per angle set.
+  /// Cached kernel launch parameters (constant after construction).
   struct CachedKernelParams
   {
     gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args;
@@ -68,7 +71,6 @@ private:
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<CBCD_FLUDS*> fluds_list_;
   std::unique_ptr<CBCD_AggregatedCommunicator> agg_comm_;
-  /// Cached kernel arguments and launch dimensions per angle set (avoids re-construction each call).
   std::vector<CachedKernelParams> cached_kernel_params_;
 };
 
