@@ -24,7 +24,7 @@ public:
 
   AsynchronousCommunicator* GetCommunicator() override;
 
-  void InitializeDelayedUpstreamData() override {}
+  void InitializeDelayedUpstreamData() override;
 
   int GetMaxBufferMessages() const override { return 0; }
 
@@ -38,9 +38,15 @@ public:
     return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
   }
 
+  AngleSetStatus FlushDelayedSendBuffers() override
+  {
+    const bool all_sent = async_comm_.SendDelayedData();
+    return all_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
+  }
+
   void ResetSweepBuffers() override;
 
-  bool ReceiveDelayedData() override { return true; }
+  bool ReceiveDelayedData() override;
 
   const double* PsiBoundary(uint64_t boundary_id,
                             unsigned int angle_num,

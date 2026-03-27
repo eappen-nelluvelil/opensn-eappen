@@ -11,6 +11,7 @@ namespace opensn
 
 class CellMapping;
 class DiscreteOrdinatesProblem;
+class CBC_SPDS;
 
 /**
  * Implements the core sweep operation for a single cell within the
@@ -53,6 +54,7 @@ public:
 
 protected:
   CBC_FLUDS* fluds_;
+  const CBC_SPDS* cbc_spds_;
   size_t gs_size_;
   unsigned int gs_gi_;
   size_t num_angles_in_as_;

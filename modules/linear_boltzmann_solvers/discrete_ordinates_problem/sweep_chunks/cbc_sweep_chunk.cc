@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
@@ -27,6 +28,7 @@ CBCSweepChunk::CBCSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& gro
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
     fluds_(nullptr),
+    cbc_spds_(nullptr),
     gs_size_(0),
     gs_gi_(0),
     num_angles_in_as_(0),
@@ -48,6 +50,7 @@ CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
   CALI_CXX_MARK_SCOPE("CbcSweepChunk::SetAngleSet");
 
   fluds_ = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
+  cbc_spds_ = &dynamic_cast<const CBC_SPDS&>(angle_set.GetSPDS());
 
   gs_size_ = groupset_.GetNumGroups();
   gs_gi_ = groupset_.first_group;
@@ -126,6 +129,14 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
       const auto* face_nodal_mapping =
         &fluds_->GetCommonData().GetFaceNodalMapping(cell_local_id_, f);
 
+      // Check for delayed faces
+      const bool is_delayed_local =
+        cbc_spds_ and
+        cbc_spds_->IsDelayedLocalIncomingFace(cell_local_id_, static_cast<uint32_t>(f));
+      const bool is_delayed_nonlocal =
+        cbc_spds_ and
+        cbc_spds_->IsDelayedNonlocalIncomingFace(cell_local_id_, static_cast<uint32_t>(f));
+
       // IntSf_mu_psi_Mij_dA
       const size_t num_face_nodes = cell_mapping_->GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -141,7 +152,19 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
 
           const double* psi = nullptr;
 
-          if (is_local_face)
+          if (is_delayed_local)
+          {
+            // Read from delayed local psi (old values from previous sweep)
+            psi = fluds_->DelayedLocalUpwindPsi(
+              cell_->global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+          }
+          else if (is_delayed_nonlocal)
+          {
+            // Read from delayed non-local psi (old values from after previous sweep)
+            psi = fluds_->DelayedNLUpwindPsi(
+              cell_->global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+          }
+          else if (is_local_face)
             psi = fluds_->UpwindPsi(*cell_transport_view_->FaceNeighbor(f),
                                     face_nodal_mapping->cell_node_mapping_[fj],
                                     as_ss_idx);
@@ -245,6 +268,12 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
       const size_t num_face_nodes = cell_mapping_->GetNumFaceNodes(f);
       const auto& face_nodal_mapping =
         fluds_->GetCommonData().GetFaceNodalMapping(cell_local_id_, f);
+
+      // Check for delayed outgoing local face
+      const bool is_delayed_local_outgoing =
+        cbc_spds_ and
+        cbc_spds_->IsDelayedLocalOutgoingFace(cell_local_id_, static_cast<uint32_t>(f));
+
       std::vector<double>* psi_nonlocal_outgoing = nullptr;
 
       if (not is_boundary_face and not is_local_face)
@@ -273,7 +302,14 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
 
         double* psi = nullptr;
 
-        if (is_local_face)
+        if (is_delayed_local_outgoing)
+        {
+          // Write to delayed local psi storage (new values)
+          // We use the neighbor cell's global_id and the associated face index on the neighbor
+          psi = fluds_->DelayedLocalOutgoingPsi(
+            face.neighbor_id, face_nodal_mapping.associated_face_, fi, as_ss_idx);
+        }
+        else if (is_local_face)
           psi = fluds_->OutgoingPsi(*cell_, i, as_ss_idx);
         else if (not is_boundary_face)
           psi = fluds_->NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
@@ -284,6 +320,16 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
         if (psi != nullptr)
           for (size_t gsg = 0; gsg < gs_size_; ++gsg)
             psi[gsg] = b[gsg](i);
+
+        // For delayed local outgoing faces, also write to normal local_psi_data_
+        // so the cell's solved data is available for other purposes
+        if (is_delayed_local_outgoing and is_local_face)
+        {
+          double* normal_psi = fluds_->OutgoingPsi(*cell_, i, as_ss_idx);
+          if (normal_psi != nullptr)
+            for (size_t gsg = 0; gsg < gs_size_; ++gsg)
+              normal_psi[gsg] = b[gsg](i);
+        }
       } // for fi
     } // for face
   } // for angleset/subset

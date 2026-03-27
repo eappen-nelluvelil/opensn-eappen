@@ -7,6 +7,7 @@
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <map>
+#include <set>
 #include <vector>
 #include <cstdint>
 #include <cstddef>
@@ -24,29 +25,39 @@ class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
 public:
   explicit CBC_AsynchronousCommunicator(size_t angle_set_id,
                                         FLUDS& fluds,
-                                        const MPICommunicatorSet& comm_set)
-    : AsynchronousCommunicator(fluds, comm_set), angle_set_id_(angle_set_id)
-  {
-  }
+                                        const MPICommunicatorSet& comm_set);
 
   std::vector<double>& InitGetDownwindMessageData(int location_id,
-                                                  uint64_t cell_global_id,
-                                                  unsigned int face_id,
-                                                  size_t angle_set_id,
-                                                  size_t data_size) override;
+                                                   uint64_t cell_global_id,
+                                                   unsigned int face_id,
+                                                   size_t angle_set_id,
+                                                   size_t data_size) override;
 
   bool SendData();
 
+  /// Sends accumulated delayed outgoing data as a single message per destination.
+  /// Must be called after the sweep loop completes and before the barrier.
+  bool SendDelayedData();
+
   std::vector<uint64_t> ReceiveData();
+
+  /// Receives delayed data from delayed location dependencies after the main sweep.
+  bool ReceiveDelayedData();
 
   void Reset()
   {
     outgoing_message_queue_.clear();
     send_buffer_.clear();
+    delayed_send_buffer_.clear();
+    delayed_sends_initiated_ = false;
+    delayed_deps_received_.clear();
   }
 
 protected:
   const size_t angle_set_id_;
+
+  /// Set of partition IDs that are delayed location successors for this SPDS.
+  std::set<int> delayed_successor_set_;
 
   // location_id, cell_global_id, face_id
   using MessageKey = std::tuple<int, uint64_t, unsigned int>;
@@ -61,6 +72,13 @@ protected:
     ByteArray data_array;
   };
   std::vector<BufferItem> send_buffer_;
+
+  /// Separate send buffer for delayed outgoing data (one message per destination).
+  std::vector<BufferItem> delayed_send_buffer_;
+  bool delayed_sends_initiated_ = false;
+
+  /// Tracks which delayed dependency locations have already been received.
+  std::set<int> delayed_deps_received_;
 
   // cell_global_id, face_id
   using CellFaceKey = std::pair<uint64_t, unsigned int>;

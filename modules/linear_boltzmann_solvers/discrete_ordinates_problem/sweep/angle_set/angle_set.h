@@ -83,6 +83,9 @@ public:
 
   virtual AngleSetStatus FlushSendBuffers() = 0;
 
+  /// Flushes delayed send buffers (one batched message per delayed successor destination).
+  virtual AngleSetStatus FlushDelayedSendBuffers() { return AngleSetStatus::MESSAGES_SENT; }
+
   /// Resets the sweep buffer.
   virtual void ResetSweepBuffers() = 0;
 

@@ -197,6 +197,12 @@ SweepScheduler::ScheduleAlgoDOG(SweepChunk& sweep_chunk)
   else
     ScheduleAlgoDOGDefault(sweep_chunk);
 
+  // Initiate delayed sends (one batched message per destination per angle set).
+  // Do NOT loop to completion here — large messages use MPI rendezvous
+  // protocol and won't complete until the receiver posts a matching recv.
+  for (auto& angle_set : angle_agg_)
+    angle_set->FlushDelayedSendBuffers();
+
   // Receive delayed data
   opensn::mpi_comm.barrier();
   bool received_delayed_data = false;
@@ -207,6 +213,9 @@ SweepScheduler::ScheduleAlgoDOG(SweepChunk& sweep_chunk)
     for (auto& angle_set : angle_agg_)
     {
       if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
+        received_delayed_data = false;
+
+      if (angle_set->FlushDelayedSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
         received_delayed_data = false;
 
       if (not angle_set->ReceiveDelayedData())
@@ -303,6 +312,10 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
     } // for angleset
   } // while not finished
 
+  // Initiate delayed sends (one batched message per destination per angle set).
+  for (auto& angle_set : angle_agg_)
+    angle_set->FlushDelayedSendBuffers();
+
   // Receive delayed data
   opensn::mpi_comm.barrier();
   bool received_delayed_data = false;
@@ -313,6 +326,9 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
     for (auto& angle_set : angle_agg_)
     {
       if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
+        received_delayed_data = false;
+
+      if (angle_set->FlushDelayedSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
         received_delayed_data = false;
 
       if (not angle_set->ReceiveDelayedData())

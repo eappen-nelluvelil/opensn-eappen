@@ -5,6 +5,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/data_types/range.h"
 #include "framework/logging/log.h"
@@ -31,6 +32,13 @@ AsynchronousCommunicator*
 CBC_AngleSet::GetCommunicator()
 {
   return static_cast<AsynchronousCommunicator*>(&async_comm_);
+}
+
+void
+CBC_AngleSet::InitializeDelayedUpstreamData()
+{
+  fluds_->AllocateDelayedLocalPsi();
+  fluds_->AllocateDelayedPrelocIOutgoingPsi();
 }
 
 AngleSetStatus
@@ -104,6 +112,12 @@ CBC_AngleSet::ResetSweepBuffers()
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;
+}
+
+bool
+CBC_AngleSet::ReceiveDelayedData()
+{
+  return async_comm_.ReceiveDelayedData();
 }
 
 const double*
