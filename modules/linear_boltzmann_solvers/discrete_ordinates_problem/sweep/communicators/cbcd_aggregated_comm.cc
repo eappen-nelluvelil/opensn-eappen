@@ -43,7 +43,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
 
   source_ranks_.assign(sources.begin(), sources.end());
 
-  // Create one Treiber stack per destination MPI rank (no pre-allocation needed).
+  // Create one Treiber stack per destination MPI rank.
   int queue_idx = 0;
   for (int dest : destinations)
   {
@@ -59,6 +59,21 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
 
   if (max_message_bytes > 0)
     recv_buffer_.Data().reserve(max_message_bytes);
+
+  // Pre-allocate Treiber stack nodes to eliminate heap allocations during sweeps.
+  // Outgoing: at most one section per angle set may be queued before the comm thread drains.
+  for (auto& nq : outgoing_queues_)
+    nq.queue->Preallocate(num_angle_sets_);
+
+  // Incoming: at most one section per source rank may arrive before the worker thread drains.
+  const size_t num_sources = source_ranks_.size();
+  for (auto& mailbox : incoming_mailboxes_)
+    mailbox.Preallocate(num_sources);
+
+  // Recycler: workers may return up to one ByteArray per mailbox drain between comm thread
+  // recycler drains.  Pre-allocate conservatively for all angle sets × sources.
+  incoming_recycler_.Preallocate(num_angle_sets_ * num_sources);
+  incoming_reuse_cache_.reserve(num_angle_sets_ * num_sources);
 }
 
 CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
@@ -158,36 +173,37 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
   for (auto& nq : outgoing_queues_)
   {
-    // Drain pre-packed wire-format sections from the Treiber stack.
+    // Acquire a send buffer from the pool (retains capacity from previous sweeps).
+    ByteArray send_buf = AcquireSendBuffer();
+    size_t num_sections = 0;
+
+    // Reserve space for the num_sections header.
+    send_buf.Data().resize(sizeof(size_t));
+
+    // Drain and append pre-packed wire-format sections directly into the send
+    // buffer via DrainAndProcess, avoiding an intermediate std::vector<ByteArray>.
     // Each section was packed by CopyOutgoingPsiBackToHost on a worker thread:
     //   [angle_set_id : size_t][num_entries : size_t][entries...]
-    auto sections = nq.queue->Drain();
-    if (sections.empty())
+    bool has_data = nq.queue->DrainAndProcess(
+      [&](ByteArray section)
+      {
+        send_buf.Append(section);
+        ++num_sections;
+      });
+
+    if (not has_data)
+    {
+      ReleaseSendBuffer(std::move(send_buf));
       continue;
+    }
     any_sent = true;
 
-    // Compute total message size: header + all sections concatenated.
-    size_t total_bytes = sizeof(size_t); // num_sections header
-    for (const auto& section : sections)
-      total_bytes += section.Size();
-
-    // Assemble the message: [num_sections][section_0][section_1]...
-    InFlightSend ifs;
-    ifs.data = AcquireSendBuffer();
-    ifs.data.Data().resize(total_bytes);
-    size_t offset = 0;
-
-    size_t num_sections = sections.size();
-    std::memcpy(ifs.data.Data().data() + offset, &num_sections, sizeof(size_t));
-    offset += sizeof(size_t);
-
-    for (auto& section : sections)
-    {
-      std::memcpy(ifs.data.Data().data() + offset, section.Data().data(), section.Size());
-      offset += section.Size();
-    }
+    // Write the num_sections count at the header position.
+    std::memcpy(send_buf.Data().data(), &num_sections, sizeof(size_t));
 
     // Dispatch the MPI Isend.
+    InFlightSend ifs;
+    ifs.data = std::move(send_buf);
     const auto& comm = comm_set_.LocICommunicator(nq.dest_location);
     auto dest_rank = comm_set_.MapIonJ(nq.dest_location, nq.dest_location);
     ifs.request = comm.isend(dest_rank, mpi_tag_, ifs.data.Data());
@@ -201,6 +217,10 @@ bool
 CBCD_AggregatedCommunicator::ProbeAndReceive()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::ProbeAndReceive");
+
+  // Reclaim recycled incoming ByteArrays from worker threads (retains heap capacity).
+  incoming_recycler_.DrainAndProcess(
+    [this](ByteArray&& buf) { incoming_reuse_cache_.push_back(std::move(buf)); });
 
   bool received_any = false;
   const int my_rank = opensn::mpi_comm.rank();
@@ -256,10 +276,14 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
           offset += data_size * sizeof(double);
         }
 
-        // Copy the section bytes [section_start, offset) into a ByteArray
-        // and push to the angle set's mailbox.
+        // Reuse a recycled ByteArray (retains heap capacity) or create a new one.
         const size_t section_size = offset - section_start;
         ByteArray section;
+        if (not incoming_reuse_cache_.empty())
+        {
+          section = std::move(incoming_reuse_cache_.back());
+          incoming_reuse_cache_.pop_back();
+        }
         section.Data().resize(section_size);
         std::memcpy(section.Data().data(), raw + section_start, section_size);
 

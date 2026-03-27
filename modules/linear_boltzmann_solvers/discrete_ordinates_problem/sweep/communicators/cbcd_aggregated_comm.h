@@ -33,6 +33,9 @@ class MPICommunicatorSet;
  * recycles nodes after drain, eliminating per-push `new` and per-drain
  * `delete` after the first cycle — significantly reducing heap contention
  * when multiple worker threads push concurrently.
+ *
+ * Call Preallocate() at construction to populate the free list, ensuring
+ * that no heap allocations occur during the sweep hot path.
  */
 template <typename T>
 class LockFreeTreiberStack
@@ -48,7 +51,6 @@ class LockFreeTreiberStack
   /// Allocate a node — try free list first, fall back to heap.
   Node* AllocNode(T&& payload)
   {
-    // Try to pop from free list (CAS loop).
     auto* node = free_head.load(std::memory_order_acquire);
     while (node)
     {
@@ -74,7 +76,6 @@ class LockFreeTreiberStack
       expected, chain_head, std::memory_order_release, std::memory_order_relaxed));
   }
 
-  /// Delete all nodes in a chain.
   static void DeleteChain(std::atomic<Node*>& list)
   {
     auto* chain = list.exchange(nullptr, std::memory_order_acquire);
@@ -91,6 +92,20 @@ public:
   {
     DeleteChain(head);
     DeleteChain(free_head);
+  }
+
+  /// Pre-populate the free list with \p count nodes (call once during construction).
+  /// Ensures that subsequent Push calls during the sweep never call `new`.
+  void Preallocate(size_t count)
+  {
+    if (count == 0)
+      return;
+    // Build a linked chain in one batch.
+    Node* chain_head = new Node{T{}, nullptr};
+    Node* chain_tail = chain_head;
+    for (size_t i = 1; i < count; ++i)
+      chain_head = new Node{T{}, chain_head};
+    ReturnChainToFreeList(chain_head, chain_tail);
   }
 
   /// CAS push — safe for concurrent producers, never blocks.
@@ -199,13 +214,21 @@ public:
   void EnqueuePrepackedByIndex(int queue_index, ByteArray&& data);
 
   /// Drain all received batches for this angle set via in-place callback (lock-free).
-  /// Avoids building and returning a vector of vectors.
+  /// The callback receives a const reference to each incoming ByteArray section;
+  /// after the callback returns, the ByteArray is recycled to the incoming buffer
+  /// pool (retaining allocated capacity for reuse in ProbeAndReceive).
   /// Returns true if any batches were processed.
   template <typename F>
   bool DrainIncoming(size_t angle_set_id, F&& callback)
   {
     assert(angle_set_id < num_angle_sets_);
-    return incoming_mailboxes_[angle_set_id].DrainAndProcess(std::forward<F>(callback));
+    return incoming_mailboxes_[angle_set_id].DrainAndProcess(
+      [this, &callback](ByteArray&& section)
+      {
+        callback(section);
+        section.Data().clear(); // retain capacity
+        incoming_recycler_.Push(std::move(section));
+      });
   }
 
   /// Signal that this angle set has no more outgoing data.
@@ -268,10 +291,20 @@ private:
   /// Deserialization is deferred to the worker thread (avoids per-face heap allocations).
   std::vector<LockFreeTreiberStack<ByteArray>> incoming_mailboxes_;
 
+  /// Lock-free recycler for consumed incoming ByteArrays.  Worker threads push
+  /// used ByteArrays here (via the DrainIncoming wrapper); the comm thread drains
+  /// them for reuse in ProbeAndReceive, retaining allocated capacity to avoid
+  /// per-section heap allocations after the first sweep.
+  LockFreeTreiberStack<ByteArray> incoming_recycler_;
+
   // -- Communication thread state --------------------------------------------
 
   /// Pre-allocated receive buffer for MPI messages.
   ByteArray recv_buffer_;
+
+  /// Comm-thread-local cache of recycled incoming ByteArrays (retains heap capacity).
+  /// Populated by draining incoming_recycler_ at the start of each ProbeAndReceive.
+  std::vector<ByteArray> incoming_reuse_cache_;
 
   /// In-flight MPI_Isends awaiting completion.
   std::vector<InFlightSend> in_flight_sends_;

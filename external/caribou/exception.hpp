@@ -17,7 +17,7 @@ namespace impl {
 class CaribouException;
 }  // namespace impl
 
-/** @brief Exception to be thrwon when encountering a CUDA/HIP error.*/
+/** @brief Exception to be thrown when encountering a CUDA/HIP error.*/
 class impl::CaribouException : public std::runtime_error {
   public:
     /** @brief Constructor.*/
