@@ -272,7 +272,6 @@ private:
 
   struct SourceQueue
   {
-    int source_location;
     int mapped_rank;
   };
 

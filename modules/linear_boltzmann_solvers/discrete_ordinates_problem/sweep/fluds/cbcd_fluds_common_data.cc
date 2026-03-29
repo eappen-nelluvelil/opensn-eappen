@@ -54,12 +54,9 @@ const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace*
 CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_local_id, unsigned int face_id) const
 {
   const auto& face_lookup = incoming_nonlocal_face_lookup_[cell_local_id];
-  if (face_id >= face_lookup.size())
-    return nullptr;
-
+  assert(face_id < face_lookup.size());
   const int grouped_face_index = face_lookup[face_id];
-  if (grouped_face_index < 0)
-    return nullptr;
+  assert(grouped_face_index >= 0);
 
   return &cell_to_incoming_nonlocal_faces_[cell_local_id][grouped_face_index];
 }

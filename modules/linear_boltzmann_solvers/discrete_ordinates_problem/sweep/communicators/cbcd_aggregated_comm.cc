@@ -44,10 +44,11 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
 
   source_queues_.reserve(sources.size());
   for (int source : sources)
-    source_queues_.push_back({source, comm_set_.MapIonJ(source, my_rank)});
+    source_queues_.push_back({comm_set_.MapIonJ(source, my_rank)});
 
   // Create one Treiber stack per destination MPI rank.
   outgoing_queues_.reserve(destinations.size());
+  dest_to_queue_index_.reserve(destinations.size());
   int queue_idx = 0;
   for (int dest : destinations)
   {

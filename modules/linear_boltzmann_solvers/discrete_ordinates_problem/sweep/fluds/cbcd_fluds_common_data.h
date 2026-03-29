@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
+#include <cassert>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -92,7 +93,9 @@ public:
   /// O(1) global-to-local lookup for cells that receive non-local face data.
   std::uint64_t MapIncomingGlobalToLocal(std::uint64_t cell_global_id) const
   {
-    return incoming_global_to_local_.at(cell_global_id);
+    const auto it = incoming_global_to_local_.find(cell_global_id);
+    assert(it != incoming_global_to_local_.end());
+    return it->second;
   }
 
   /// Device pointer to the bit-packed cell-face-node index map.

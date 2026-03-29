@@ -14,6 +14,7 @@
 #include "framework/runtime.h"
 #include "framework/utils/error.h"
 #include <algorithm>
+#include <cstring>
 #include <utility>
 
 namespace opensn
@@ -124,6 +125,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_indices.size();
   const auto& incoming_boundary_node_map = common_data_.GetIncomingBoundaryNodeMap();
+  const size_t groups_bytes = num_groups_ * sizeof(double);
 
   for (const auto& node : incoming_boundary_node_map)
   {
@@ -139,7 +141,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
                                                      node.face_node,
                                                      sweep_chunk.GetGroupsetGroupIndex(),
                                                      sweep_chunk.IsSurfaceSourceActive());
-      std::copy(src_psi, src_psi + num_groups_, dst_psi);
+      std::memcpy(dst_psi, src_psi, groups_bytes);
     }
   }
 }
@@ -164,8 +166,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
 }
 
 void
-CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
-                                      CBCD_AngleSet* angle_set,
+CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
                                       const std::vector<std::uint64_t>& cell_local_ids)
 {
   if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and outgoing_destinations_.empty())
@@ -175,9 +176,12 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto num_angles = angle_indices.size();
   const auto angle_set_id = angle_set->GetID();
+  const size_t groups_bytes = num_groups_ * sizeof(double);
+  const size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
 
   const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
   const auto& grouped_outgoing_faces = common_data_.GetOutgoingNonlocalFaces();
+  const auto& boundaries = angle_set->GetBoundaries();
 
   // Per-destination: count faces and total psi bytes in a first pass (using scratch buffers).
   std::fill(scratch_dest_face_counts_.begin(), scratch_dest_face_counts_.end(), 0);
@@ -193,7 +197,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       for (const auto& node : boundary_nodes)
       {
         const auto& face = cell.faces[node.face_id];
-        if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
+        const auto boundary_it = boundaries.find(face.neighbor_id);
+        if (boundary_it != boundaries.end() and boundary_it->second->IsReflecting())
         {
           for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
           {
@@ -203,7 +208,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
             const double* src_psi = outgoing_boundary_psi_.data() +
                                     node.storage_index * num_groups_and_angles_ +
                                     as_ss_idx * num_groups_;
-            std::copy(src_psi, src_psi + num_groups_, dst_psi);
+            std::memcpy(dst_psi, src_psi, groups_bytes);
           }
         }
       }
@@ -275,7 +280,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         double* dst = psi_dst + node.face_node * num_groups_and_angles_;
         const double* src =
           outgoing_nonlocal_psi_.data() + node.storage_index * num_groups_and_angles_;
-        std::memcpy(dst, src, num_groups_and_angles_ * sizeof(double));
+        std::memcpy(dst, src, stride_bytes);
       }
       offset += face_data_size * sizeof(double);
     }
@@ -318,6 +323,7 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
     groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_set->GetNumAngles();
+  const size_t groups_bytes = num_groups_ * sizeof(double);
   for (const auto& cell : grid_ptr_->local_cells)
   {
     double* dst_psi = &destination_psi[discretization.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0)];
@@ -331,7 +337,7 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
         auto direction_num = angle_indices[as_ss_idx];
         double* dst = dst_psi + direction_num * num_groups_;
         double* src = src_psi + as_ss_idx * num_groups_;
-        std::copy(src, src + num_groups_, dst);
+        std::memcpy(dst, src, groups_bytes);
       }
       dst_psi += groupset_angle_group_stride;
       src_psi += num_groups_and_angles_;

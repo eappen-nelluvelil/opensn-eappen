@@ -7,7 +7,6 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caribou/main.hpp"
 #include <cinttypes>
-#include <map>
 
 namespace crb = caribou;
 
@@ -39,6 +38,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::uint64_t current_index_offset = offsets_size;
   std::uint64_t local_indices_filled = 0;
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
+  incoming_global_to_local_.reserve(num_local_cells);
+  outgoing_localities_.reserve(num_local_cells);
   // Iterate over cells to fill the map and populate metadata structures
   for (const auto& cell : grid.local_cells)
   {
@@ -46,8 +47,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
 
     cell_offsets_ptr[2 * cell.local_id] = current_index_offset;
     std::uint64_t num_cell_nodes = 0;
-    std::map<unsigned int, size_t> incoming_face_to_grouped_index;
-    std::map<unsigned int, size_t> outgoing_face_to_grouped_index;
+    std::vector<int> incoming_face_to_grouped_index(cell.faces.size(), -1);
+    std::vector<int> outgoing_face_to_grouped_index(cell.faces.size(), -1);
     for (size_t f = 0; f < cell.faces.size(); ++f)
     {
       const CellFace& face = cell.faces[f];
@@ -75,17 +76,20 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             node_index =
               CBCD_NodeIndex(num_incoming_nonlocal_nodes_, is_outgoing_face, is_local_face);
-            auto [it, inserted] = incoming_face_to_grouped_index.try_emplace(
-              static_cast<unsigned int>(f), cell_to_incoming_nonlocal_faces_[cell.local_id].size());
-            if (inserted)
+            int& grouped_face_index = incoming_face_to_grouped_index[f];
+            if (grouped_face_index < 0)
             {
-              cell_to_incoming_nonlocal_faces_[cell.local_id].push_back(GroupedIncomingNonlocalFace{});
-              incoming_nonlocal_face_lookup_[cell.local_id][f] = static_cast<int>(it->second);
+              grouped_face_index = cell_to_incoming_nonlocal_faces_[cell.local_id].size();
+              auto& grouped_face =
+                cell_to_incoming_nonlocal_faces_[cell.local_id].emplace_back();
+              grouped_face.nodes.reserve(num_face_nodes);
+              incoming_nonlocal_face_lookup_[cell.local_id][f] = grouped_face_index;
               ++num_incoming_nonlocal_faces_;
               incoming_global_to_local_[cell.global_id] = cell.local_id;
             }
 
-            auto& grouped_face = cell_to_incoming_nonlocal_faces_[cell.local_id][it->second];
+            auto& grouped_face =
+              cell_to_incoming_nonlocal_faces_[cell.local_id][grouped_face_index];
             grouped_face.nodes.emplace_back(NonlocalNodeInfo{cell.global_id,
                                                              static_cast<unsigned int>(f),
                                                              static_cast<std::uint32_t>(
@@ -118,9 +122,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             node_index =
               CBCD_NodeIndex(num_outgoing_nonlocal_nodes_, is_outgoing_face, is_local_face);
-            auto [it, inserted] = outgoing_face_to_grouped_index.try_emplace(
-              static_cast<unsigned int>(f), cell_to_outgoing_nonlocal_faces_[cell.local_id].size());
-            if (inserted)
+            int& grouped_face_index = outgoing_face_to_grouped_index[f];
+            if (grouped_face_index < 0)
             {
               const int locality = grid.cells[face.neighbor_id].partition_id;
               auto dest_slot_it = locality_to_dest_slot.find(locality);
@@ -134,17 +137,21 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               else
                 dest_slot = dest_slot_it->second;
 
-              cell_to_outgoing_nonlocal_faces_[cell.local_id].push_back(GroupedOutgoingNonlocalFace{
-                {},
-                face.neighbor_id,
-                locality,
-                dest_slot,
-                static_cast<unsigned int>(face_nodal_mapping.associated_face_),
-                static_cast<std::uint16_t>(num_face_nodes)});
+              grouped_face_index = cell_to_outgoing_nonlocal_faces_[cell.local_id].size();
+              auto& grouped_face =
+                cell_to_outgoing_nonlocal_faces_[cell.local_id].emplace_back();
+              grouped_face.nodes.reserve(num_face_nodes);
+              grouped_face.neighbor_global_id = face.neighbor_id;
+              grouped_face.locality = locality;
+              grouped_face.dest_slot = dest_slot;
+              grouped_face.associated_face =
+                static_cast<unsigned int>(face_nodal_mapping.associated_face_);
+              grouped_face.num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
               ++num_outgoing_nonlocal_faces_;
             }
 
-            auto& grouped_face = cell_to_outgoing_nonlocal_faces_[cell.local_id][it->second];
+            auto& grouped_face =
+              cell_to_outgoing_nonlocal_faces_[cell.local_id][grouped_face_index];
             grouped_face.nodes.emplace_back(NonlocalNodeInfo{cell.global_id,
                                                              static_cast<unsigned int>(f),
                                                              static_cast<std::uint32_t>(

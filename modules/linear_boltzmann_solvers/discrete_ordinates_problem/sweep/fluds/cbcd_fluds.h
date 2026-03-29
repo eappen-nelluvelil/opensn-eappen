@@ -83,8 +83,7 @@ public:
 
   /// Pack outgoing psi into wire-format ByteArrays and enqueue for MPI send.
   /// Also copies outgoing boundary (reflecting) psi to the sweep boundary.
-  void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
-                                 CBCD_AngleSet* angle_set,
+  void CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
                                  const std::vector<std::uint64_t>& cell_local_ids);
 
   void ClearLocalAndReceivePsi() override {}

@@ -253,7 +253,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
   // D: Process deferred outgoing data (overlapped with GPU kernel from step C).
   if (has_deferred_outgoing)
   {
-    cbcd_fluds_.CopyOutgoingPsiBackToHost(*cbcd_sweep_chunk_, this, deferred_cell_ids_);
+    cbcd_fluds_.CopyOutgoingPsiBackToHost(this, deferred_cell_ids_);
     TryNotifyFollowers();
   }
 
