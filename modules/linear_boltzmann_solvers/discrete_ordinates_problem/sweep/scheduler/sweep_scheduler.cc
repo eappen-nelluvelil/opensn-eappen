@@ -44,9 +44,13 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   {
     // Use a bounded number of worker threads: min(angle_sets, hardware threads).
     // Each worker cooperatively processes multiple angle sets in a round-robin loop.
+    // A thread is set aside for the aggregated communicator, 
+    // which is notified by workers when new messages are ready to send/messages have been received.
     num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
                             static_cast<size_t>(std::thread::hardware_concurrency()));
-    // num_workers_ = static_cast<size_t>(angle_agg_.GetNumAngleSets());
+    // num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
+    //                         std::max(1UL, static_cast<size_t>(std::thread::hardware_concurrency() - 1)));
+    // num_workers_ = angle_agg_.GetNumAngleSets();
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
                       << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);

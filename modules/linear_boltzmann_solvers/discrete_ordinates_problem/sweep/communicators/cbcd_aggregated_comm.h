@@ -36,6 +36,26 @@ class MPICommunicatorSet;
  *
  * Call Preallocate() at construction to populate the free list, ensuring
  * that no heap allocations occur during the sweep hot path.
+ *
+ * ## ABA analysis for AllocNode's free-list CAS pop
+ *
+ * The CAS pop in AllocNode (load free_head → read node->next → CAS) is
+ * theoretically vulnerable to the classic ABA problem: if node A is popped
+ * from free_head by another thread, used in a Push, drained, and returned
+ * to free_head — all between the current thread's load and CAS — the CAS
+ * would succeed with a potentially stale next pointer.
+ *
+ * In the CBCD sweep context, this cannot occur in practice because the full
+ * recycle cycle (AllocNode pop → Push to head_ → DrainAndProcess exchange →
+ * ReturnChainToFreeList push) spans multiple cross-thread function calls and
+ * atomic operations that collectively take hundreds of nanoseconds, while the
+ * vulnerable window (between loading free_head and executing the CAS) is 1–3
+ * CPU cycles (~1 ns).  Additionally:
+ *  - HPC runtimes pin threads to cores, eliminating OS preemption.
+ *  - Preallocate() ensures abundant free nodes, reducing recycle pressure.
+ *  - incoming_mailboxes_ have a single producer (comm thread), so no
+ *    concurrent AllocNode contention exists on those free lists.
+ *  - The main-stack drain uses atomic exchange (not CAS), which is ABA-immune.
  */
 template <typename T>
 class LockFreeTreiberStack

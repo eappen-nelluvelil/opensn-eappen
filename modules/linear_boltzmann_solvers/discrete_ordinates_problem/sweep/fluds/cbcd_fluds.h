@@ -66,7 +66,7 @@ public:
 
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
 
-  void CopySavedPsiFromDevice();
+  // void CopySavedPsiFromDevice();
   void CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
 
   CBCD_FLUDSPointerSet& GetDevicePointerSet() { return pointer_set_; }
@@ -129,7 +129,7 @@ private:
     unsigned int face_id;
     std::vector<const NonlocalNodeInfo*> nodes;
     size_t face_data_size;        ///< num_face_nodes * stride_size
-    int locality;                 ///< Destination MPI rank.
+    size_t dest_index;            ///< Pre-resolved index into outgoing_destinations_ / scratch arrays.
     uint64_t neighbor_global_id;  ///< Neighbor cell global ID (packed into wire format).
     unsigned int associated_face; ///< Face index on the neighbor cell.
   };
@@ -156,7 +156,6 @@ private:
     int queue_index = -1; ///< Resolved lazily (agg_comm not available at construction).
   };
   std::vector<OutgoingDestination> outgoing_destinations_;
-  std::unordered_map<int, size_t> locality_to_dest_index_;
 
   /// Scratch buffers for CopyOutgoingPsiBackToHost (sized once, reused across calls).
   std::vector<size_t> scratch_dest_face_counts_;

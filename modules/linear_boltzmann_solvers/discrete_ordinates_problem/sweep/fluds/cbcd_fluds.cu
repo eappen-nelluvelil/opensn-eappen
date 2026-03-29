@@ -45,7 +45,11 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   cell_to_face_grouped_outgoing_.resize(num_local_cells);
   cell_to_face_grouped_incoming_.resize(num_local_cells);
 
-  // Group outgoing nodes by face and compute max face data size
+  // Group outgoing nodes by face, pre-resolve dest_index per face, and build
+  // the outgoing_destinations_ table.  After this loop, the locality→index
+  // mapping is discarded — dest_index is embedded in each FaceOutgoingInfo,
+  // eliminating two unordered_map lookups per face in CopyOutgoingPsiBackToHost.
+  std::unordered_map<int, size_t> locality_to_dest_index;
   const auto& outgoing_nonlocal_map = common_data_.GetOutgoingNonlocalNodeMap();
   for (size_t cell_id = 0; cell_id < num_local_cells; ++cell_id)
   {
@@ -68,19 +72,17 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
       num_outgoing_faces_++;
 
       int locality = grid.cells[face.neighbor_id].partition_id;
+      auto [it, inserted] =
+        locality_to_dest_index.try_emplace(locality, outgoing_destinations_.size());
+      if (inserted)
+        outgoing_destinations_.push_back({locality, -1});
+
       grouped.push_back({fid,
                          std::move(fnodes),
                          face_data_size,
-                         locality,
+                         it->second,
                          face.neighbor_id,
                          static_cast<unsigned int>(face_nodal_mapping.associated_face_)});
-
-      // Track unique destinations for batched outgoing enqueue
-      if (locality_to_dest_index_.find(locality) == locality_to_dest_index_.end())
-      {
-        locality_to_dest_index_[locality] = outgoing_destinations_.size();
-        outgoing_destinations_.push_back({locality, -1});
-      }
     }
   }
 
@@ -211,7 +213,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
       {
         double* dst = incoming_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
         const double* src = psi_data + node->face_node_mapped * num_groups_and_angles_;
-        std::copy(src, src + num_groups_and_angles_, dst);
+        std::memcpy(dst, src, num_groups_and_angles_ * sizeof(double));
       }
       break;
     }
@@ -271,13 +273,12 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       }
     }
 
-    // Count outgoing non-local faces per destination.
+    // Count outgoing non-local faces per destination (pre-resolved dest_index).
     const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
     for (const auto& face_info : grouped_nodes)
     {
-      auto dest_index = locality_to_dest_index_.at(face_info.locality);
-      scratch_dest_face_counts_[dest_index]++;
-      scratch_dest_psi_bytes_[dest_index] += face_info.face_data_size * sizeof(double);
+      scratch_dest_face_counts_[face_info.dest_index]++;
+      scratch_dest_psi_bytes_[face_info.dest_index] += face_info.face_data_size * sizeof(double);
     }
   }
 
@@ -308,14 +309,16 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   }
 
   // Second pass: pack entry data from outgoing_nonlocal_psi_ into the ByteArrays.
+  // The zero-fill is omitted: every face-node position [0, num_face_nodes) is
+  // written by the inner loop (CBCD_FLUDSCommonData adds ALL face nodes of each
+  // outgoing non-local face), so no position is left uninitialized.
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto& grouped_nodes = cell_to_face_grouped_outgoing_[cell_local_id];
     for (const auto& face_info : grouped_nodes)
     {
-      auto dest_index = locality_to_dest_index_.at(face_info.locality);
-      auto* base = dest_buffers_[dest_index].Data().data();
-      size_t& offset = scratch_dest_offsets_[dest_index];
+      auto* base = dest_buffers_[face_info.dest_index].Data().data();
+      size_t& offset = scratch_dest_offsets_[face_info.dest_index];
 
       std::memcpy(base + offset, &face_info.neighbor_global_id, sizeof(std::uint64_t));
       offset += sizeof(std::uint64_t);
@@ -325,13 +328,12 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       offset += sizeof(size_t);
 
       auto* psi_dst = reinterpret_cast<double*>(base + offset);
-      std::fill(psi_dst, psi_dst + face_info.face_data_size, 0.0);
       for (const auto* node : face_info.nodes)
       {
         double* dst = psi_dst + node->face_node * num_groups_and_angles_;
         const double* src =
           outgoing_nonlocal_psi_.data() + node->storage_index * num_groups_and_angles_;
-        std::copy(src, src + num_groups_and_angles_, dst);
+        std::memcpy(dst, src, num_groups_and_angles_ * sizeof(double));
       }
       offset += face_info.face_data_size * sizeof(double);
     }
@@ -349,20 +351,22 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   }
 }
 
-void
-CBCD_FLUDS::CopySavedPsiFromDevice()
-{
-  if (not save_angular_flux_)
-    return;
-  crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
-  stream_.synchronize();
-}
+// void
+// CBCD_FLUDS::CopySavedPsiFromDevice()
+// {
+//   if (not save_angular_flux_)
+//     return;
+//   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
+//   stream_.synchronize();
+// }
 
 void
 CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
 {
   if (not save_angular_flux_)
     return;
+  crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
+  stream_.synchronize();
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();
   auto& groupset = sweep_chunk.GetGroupset();

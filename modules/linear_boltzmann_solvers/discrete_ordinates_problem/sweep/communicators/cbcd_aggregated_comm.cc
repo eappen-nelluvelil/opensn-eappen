@@ -173,6 +173,11 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
   for (auto& nq : outgoing_queues_)
   {
+    // Fast-path: skip destinations with no queued data (avoids send buffer
+    // pool acquire/release and the DrainAndProcess overhead for empty queues).
+    if (nq.queue->Empty())
+      continue;
+
     // Acquire a send buffer from the pool (retains capacity from previous sweeps).
     ByteArray send_buf = AcquireSendBuffer();
     size_t num_sections = 0;

@@ -296,7 +296,7 @@ CBCD_AngleSet::FinalizeSweep()
   // Ensure followers are notified (no-op if already done by early countdown).
   TryNotifyFollowers();
 
-  cbcd_fluds_.CopySavedPsiFromDevice();
+  // cbcd_fluds_.CopySavedPsiFromDevice();
   cbcd_fluds_.CopySavedPsiToDestinationPsi(*cbcd_sweep_chunk_, this);
 
   executed_ = true;
