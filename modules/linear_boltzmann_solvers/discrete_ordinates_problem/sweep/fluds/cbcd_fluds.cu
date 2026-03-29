@@ -94,6 +94,27 @@ CBCD_FLUDS::InitializeQueueIndices(const CBCD_AggregatedCommunicator& agg_comm)
 }
 
 void
+CBCD_FLUDS::InitializeReflectingBoundaryNodes(
+  const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
+{
+  const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
+  reflecting_outgoing_boundary_nodes_.assign(outgoing_boundary_map.size(), {});
+
+  for (size_t cell_local_id = 0; cell_local_id < outgoing_boundary_map.size(); ++cell_local_id)
+  {
+    const auto& boundary_nodes = outgoing_boundary_map[cell_local_id];
+    auto& reflecting_nodes = reflecting_outgoing_boundary_nodes_[cell_local_id];
+
+    for (const auto& node : boundary_nodes)
+    {
+      const auto boundary_it = boundaries.find(node.boundary_id);
+      if (boundary_it != boundaries.end() and boundary_it->second->IsReflecting())
+        reflecting_nodes.push_back(node);
+    }
+  }
+}
+
+void
 CBCD_FLUDS::CreatePointerSet()
 {
   pointer_set_.local_psi = local_psi_.get();
@@ -179,9 +200,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   const size_t groups_bytes = num_groups_ * sizeof(double);
   const size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
 
-  const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
+  const auto& reflecting_boundary_map = reflecting_outgoing_boundary_nodes_;
   const auto& grouped_outgoing_faces = common_data_.GetOutgoingNonlocalFaces();
-  const auto& boundaries = angle_set->GetBoundaries();
 
   // Per-destination: count faces and total psi bytes in a first pass (using scratch buffers).
   std::fill(scratch_dest_face_counts_.begin(), scratch_dest_face_counts_.end(), 0);
@@ -189,27 +209,21 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
 
   for (const auto& cell_local_id : cell_local_ids)
   {
-    // Handle outgoing boundary (reflecting) faces — no wire format needed.
-    const auto& boundary_nodes = outgoing_boundary_map[cell_local_id];
+    // Handle outgoing reflecting boundary faces — no wire format needed.
+    const auto& boundary_nodes = reflecting_boundary_map[cell_local_id];
     if (not boundary_nodes.empty())
     {
-      const auto& cell = grid_ptr_->local_cells[cell_local_id];
       for (const auto& node : boundary_nodes)
       {
-        const auto& face = cell.faces[node.face_id];
-        const auto boundary_it = boundaries.find(face.neighbor_id);
-        if (boundary_it != boundaries.end() and boundary_it->second->IsReflecting())
+        for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
         {
-          for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
-          {
-            auto direction_num = angle_indices[as_ss_idx];
-            double* dst_psi = angle_set->PsiReflected(
-              face.neighbor_id, direction_num, node.cell_local_id, node.face_id, node.face_node);
-            const double* src_psi = outgoing_boundary_psi_.data() +
-                                    node.storage_index * num_groups_and_angles_ +
-                                    as_ss_idx * num_groups_;
-            std::memcpy(dst_psi, src_psi, groups_bytes);
-          }
+          auto direction_num = angle_indices[as_ss_idx];
+          double* dst_psi = angle_set->PsiReflected(
+            node.boundary_id, direction_num, node.cell_local_id, node.face_id, node.face_node);
+          const double* src_psi = outgoing_boundary_psi_.data() +
+                                  node.storage_index * num_groups_and_angles_ +
+                                  as_ss_idx * num_groups_;
+          std::memcpy(dst_psi, src_psi, groups_bytes);
         }
       }
     }

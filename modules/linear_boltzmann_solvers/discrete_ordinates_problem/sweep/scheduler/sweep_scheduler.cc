@@ -42,17 +42,17 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   }
   else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
-    // Use a bounded number of worker threads: min(angle_sets, hardware threads).
+    // Use a bounded number of worker threads: min(angle_sets, hardware threads - 1).
     // Each worker cooperatively processes multiple angle sets in a round-robin loop.
-    // A thread is set aside for the aggregated communicator, 
-    // which is notified by workers when new messages are ready to send/messages have been received.
-    num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
-                            static_cast<size_t>(std::thread::hardware_concurrency()));
-    // num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()),
-    //                         std::max(1UL, static_cast<size_t>(std::thread::hardware_concurrency() - 1)));
+    // A thread is set aside for the aggregated communicator whenever possible.
+    const size_t hardware_threads = std::max(1u, std::thread::hardware_concurrency());
+    const size_t worker_budget = (hardware_threads > 1) ? hardware_threads - 1 : 1;
+    num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()), worker_budget);
+    // num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()), hardware_threads);
     // num_workers_ = angle_agg_.GetNumAngleSets();
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
-                      << std::thread::hardware_concurrency() << " threads, using " << num_workers_ << " worker threads for ASYNC_FIFO scheduling.";
+                      << hardware_threads << " threads, using " << num_workers_
+                      << " worker threads for ASYNC_FIFO scheduling.";
     pool_.Resize(num_workers_);
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
   }

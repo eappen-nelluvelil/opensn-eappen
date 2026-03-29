@@ -27,9 +27,9 @@ constexpr std::size_t HardwareInterferenceSize =
 struct alignas(HardwareInterferenceSize) EpochState
 {
   /// Number of epochs requested for this worker.
-  std::size_t request;
+  std::size_t request = 0;
   /// Number of epochs completed by this worker.
-  std::size_t done;
+  std::size_t done = 0;
 
   bool IsIncomplete() const noexcept { return request > done; }
 };

@@ -32,6 +32,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
   cbcd_fluds_.GetStream() = stream_;
   cbcd_fluds_.AllocateLocalAndSavedPsi();
+  cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_);
 }
 
 CBCD_AngleSet::~CBCD_AngleSet()
@@ -114,22 +115,15 @@ CBCD_AngleSet::TryInitialize()
     if (not following_angle_sets_.empty())
     {
       is_reflecting_task_.assign(N, 0);
-      const auto& outgoing_boundary_nodes = cbcd_fluds_.GetOutgoingBoundaryNodeMap();
+      const auto& reflecting_boundary_nodes = cbcd_fluds_.GetReflectingOutgoingBoundaryNodeMap();
       for (size_t i = 0; i < N; ++i)
       {
         uint64_t cell_id = reference_ids_[i];
-        if (cell_id < outgoing_boundary_nodes.size())
+        if (cell_id < reflecting_boundary_nodes.size() and
+            not reflecting_boundary_nodes[cell_id].empty())
         {
-          for (const auto& node : outgoing_boundary_nodes[cell_id])
-          {
-            auto it = boundaries_.find(node.boundary_id);
-            if (it != boundaries_.end() and it->second->IsReflecting())
-            {
-              is_reflecting_task_[i] = 1;
-              ++total_reflecting_tasks_;
-              break;
-            }
-          }
+          is_reflecting_task_[i] = 1;
+          ++total_reflecting_tasks_;
         }
       }
     }

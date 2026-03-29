@@ -10,6 +10,8 @@
 #include "framework/data_types/byte_array.h"
 #include "caribou/main.hpp"
 #include <cstddef>
+#include <map>
+#include <memory>
 #include <vector>
 
 namespace crb = caribou;
@@ -19,6 +21,7 @@ namespace opensn
 
 class CBCD_AngleSet;
 class CBCD_AggregatedCommunicator;
+class SweepBoundary;
 class UnknownManager;
 class SpatialDiscretization;
 class Cell;
@@ -59,6 +62,8 @@ public:
   /// Allocate device-side local psi and (optionally) saved psi buffers.
   void AllocateLocalAndSavedPsi();
   void InitializeQueueIndices(const CBCD_AggregatedCommunicator& agg_comm);
+  void InitializeReflectingBoundaryNodes(
+    const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries);
 
   /// Stride (num_groups * num_angles) for each face node's psi data.
   std::size_t GetStrideSize() const { return num_groups_and_angles_; }
@@ -97,6 +102,11 @@ public:
   const std::vector<std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
   {
     return common_data_.GetOutgoingBoundaryNodeMap();
+  }
+
+  const std::vector<std::vector<BoundaryNodeInfo>>& GetReflectingOutgoingBoundaryNodeMap() const
+  {
+    return reflecting_outgoing_boundary_nodes_;
   }
 
   size_t GetNumOutgoingFaces() const { return common_data_.GetNumOutgoingNonlocalFaces(); }
@@ -139,6 +149,9 @@ private:
 
   /// Reusable dest buffer vector (avoids outer vector heap allocation per call).
   std::vector<ByteArray> dest_buffers_;
+
+  /// Per-cell reflecting outgoing boundary nodes for this angle set.
+  std::vector<std::vector<BoundaryNodeInfo>> reflecting_outgoing_boundary_nodes_;
 
   void CreatePointerSet();
 };
