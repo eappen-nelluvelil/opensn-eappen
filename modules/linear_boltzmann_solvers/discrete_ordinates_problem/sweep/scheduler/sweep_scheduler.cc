@@ -47,8 +47,8 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     // A thread is set aside for the aggregated communicator whenever possible.
     const size_t hardware_threads = std::max(1u, std::thread::hardware_concurrency());
     const size_t worker_budget = (hardware_threads > 1) ? hardware_threads - 1 : 1;
-    num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()), worker_budget);
-    // num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()), hardware_threads);
+    // num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()), worker_budget);
+    num_workers_ = std::min(static_cast<size_t>(angle_agg_.GetNumAngleSets()), hardware_threads);
     // num_workers_ = angle_agg_.GetNumAngleSets();
     opensn::log.Log() << "SweepScheduler: std::thread::hardware_concurrency() reports "
                       << hardware_threads << " threads, using " << num_workers_
