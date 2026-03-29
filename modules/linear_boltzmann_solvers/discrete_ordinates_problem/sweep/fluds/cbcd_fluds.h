@@ -18,6 +18,7 @@ namespace opensn
 {
 
 class CBCD_AngleSet;
+class CBCD_AggregatedCommunicator;
 class UnknownManager;
 class SpatialDiscretization;
 class Cell;
@@ -57,6 +58,7 @@ public:
 
   /// Allocate device-side local psi and (optionally) saved psi buffers.
   void AllocateLocalAndSavedPsi();
+  void InitializeQueueIndices(const CBCD_AggregatedCommunicator& agg_comm);
 
   /// Stride (num_groups * num_angles) for each face node's psi data.
   std::size_t GetStrideSize() const { return num_groups_and_angles_; }
@@ -127,7 +129,7 @@ private:
   struct OutgoingDestination
   {
     int locality;
-    int queue_index = -1; ///< Resolved lazily (agg_comm not available at construction).
+    int queue_index = -1;
   };
   std::vector<OutgoingDestination> outgoing_destinations_;
 

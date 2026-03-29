@@ -141,8 +141,7 @@ CBCD_AngleSet::TryInitialize()
 
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(*cbcd_sweep_chunk_, this);
 
-  for (uint32_t task_idx : initial_ready_tasks_)
-    ready_queue_.push_back(task_idx);
+  ready_queue_.assign(initial_ready_tasks_.begin(), initial_ready_tasks_.end());
 
   total_tasks_ = reference_ids_.size();
   completed_count_ = 0;

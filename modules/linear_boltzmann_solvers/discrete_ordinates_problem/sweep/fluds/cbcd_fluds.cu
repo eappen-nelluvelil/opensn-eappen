@@ -86,6 +86,13 @@ CBCD_FLUDS::AllocateLocalAndSavedPsi()
 }
 
 void
+CBCD_FLUDS::InitializeQueueIndices(const CBCD_AggregatedCommunicator& agg_comm)
+{
+  for (auto& dest : outgoing_destinations_)
+    dest.queue_index = agg_comm.GetQueueIndex(dest.locality);
+}
+
+void
 CBCD_FLUDS::CreatePointerSet()
 {
   pointer_set_.local_psi = local_psi_.get();
@@ -168,13 +175,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto num_angles = angle_indices.size();
   const auto angle_set_id = angle_set->GetID();
-
-  // Lazily resolve queue indices on first call (agg_comm not available at construction time).
-  if (not outgoing_destinations_.empty() and outgoing_destinations_[0].queue_index < 0)
-  {
-    for (auto& dest : outgoing_destinations_)
-      dest.queue_index = agg_comm->GetQueueIndex(dest.locality);
-  }
 
   const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
   const auto& grouped_outgoing_faces = common_data_.GetOutgoingNonlocalFaces();
