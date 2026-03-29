@@ -30,6 +30,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
 {
   std::set<int> sources;
   std::set<int> destinations;
+  const int my_rank = opensn::mpi_comm.rank();
 
   for (size_t i = 0; i < angle_sets.size(); ++i)
   {
@@ -41,14 +42,18 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
       destinations.insert(succ);
   }
 
-  source_ranks_.assign(sources.begin(), sources.end());
+  source_queues_.reserve(sources.size());
+  for (int source : sources)
+    source_queues_.push_back({source, comm_set_.MapIonJ(source, my_rank)});
 
   // Create one Treiber stack per destination MPI rank.
+  outgoing_queues_.reserve(destinations.size());
   int queue_idx = 0;
   for (int dest : destinations)
   {
     NeighborQueue nq;
     nq.dest_location = dest;
+    nq.dest_rank = comm_set_.MapIonJ(dest, dest);
     nq.queue = std::make_unique<LockFreeTreiberStack<ByteArray>>();
     outgoing_queues_.push_back(std::move(nq));
     dest_to_queue_index_[dest] = queue_idx++;
@@ -66,7 +71,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
     nq.queue->Preallocate(num_angle_sets_);
 
   // Incoming: at most one section per source rank may arrive before the worker thread drains.
-  const size_t num_sources = source_ranks_.size();
+  const size_t num_sources = source_queues_.size();
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);
 
@@ -74,6 +79,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   // recycler drains.  Pre-allocate conservatively for all angle sets × sources.
   incoming_recycler_.Preallocate(num_angle_sets_ * num_sources);
   incoming_reuse_cache_.reserve(num_angle_sets_ * num_sources);
+  in_flight_sends_.reserve(outgoing_queues_.size());
 }
 
 CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
@@ -190,7 +196,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     // Each section was packed by CopyOutgoingPsiBackToHost on a worker thread:
     //   [angle_set_id : size_t][num_entries : size_t][entries...]
     bool has_data = nq.queue->DrainAndProcess(
-      [&](ByteArray section)
+      [&](ByteArray&& section)
       {
         send_buf.Append(section);
         ++num_sections;
@@ -210,8 +216,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     InFlightSend ifs;
     ifs.data = std::move(send_buf);
     const auto& comm = comm_set_.LocICommunicator(nq.dest_location);
-    auto dest_rank = comm_set_.MapIonJ(nq.dest_location, nq.dest_location);
-    ifs.request = comm.isend(dest_rank, mpi_tag_, ifs.data.Data());
+    ifs.request = comm.isend(nq.dest_rank, mpi_tag_, ifs.data.Data());
     in_flight_sends_.push_back(std::move(ifs));
   }
 
@@ -229,20 +234,18 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 
   bool received_any = false;
   const int my_rank = opensn::mpi_comm.rank();
+  const auto& recv_comm = comm_set_.LocICommunicator(my_rank);
 
-  for (int source_loc : source_ranks_)
+  for (const auto& source_queue : source_queues_)
   {
-    const auto& comm = comm_set_.LocICommunicator(my_rank);
-    auto mapped_source = comm_set_.MapIonJ(source_loc, my_rank);
-
     mpi::Status status;
-    while (comm.iprobe(mapped_source, mpi_tag_, status))
+    while (recv_comm.iprobe(source_queue.mapped_rank, mpi_tag_, status))
     {
       received_any = true;
       int num_bytes = status.count<std::byte>();
       recv_buffer_.Data().resize(num_bytes);
 
-      comm.recv(mapped_source, status.tag(), recv_buffer_.Data().data(), num_bytes);
+      recv_comm.recv(source_queue.mapped_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
 
       // Parse just enough of the wire format to route each section to the correct
       // angle set mailbox as a raw ByteArray.  Deserialization is deferred to the

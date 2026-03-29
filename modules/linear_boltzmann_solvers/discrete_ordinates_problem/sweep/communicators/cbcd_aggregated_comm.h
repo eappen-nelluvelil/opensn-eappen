@@ -6,6 +6,7 @@
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -265,7 +266,14 @@ private:
   struct NeighborQueue
   {
     int dest_location;
+    int dest_rank;
     std::unique_ptr<LockFreeTreiberStack<ByteArray>> queue;
+  };
+
+  struct SourceQueue
+  {
+    int source_location;
+    int mapped_rank;
   };
 
   /// An in-flight MPI_Isend and its serialized message data.
@@ -292,8 +300,8 @@ private:
   /// collisions with per-angle-set tags used by other communicator types).
   int mpi_tag_;
 
-  /// MPI ranks from which this rank receives face data (union over all angle sets).
-  std::vector<int> source_ranks_;
+  /// Source locations and communicator-local ranks from which this rank receives face data.
+  std::vector<SourceQueue> source_queues_;
 
   // -- Outgoing path (worker threads → comm thread) --------------------------
 

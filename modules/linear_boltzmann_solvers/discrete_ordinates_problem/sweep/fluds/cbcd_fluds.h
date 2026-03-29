@@ -98,8 +98,8 @@ public:
     return common_data_.GetOutgoingBoundaryNodeMap();
   }
 
-  size_t GetNumOutgoingFaces() const { return num_outgoing_faces_; }
-  size_t GetNumIncomingFaces() const { return num_incoming_faces_; }
+  size_t GetNumOutgoingFaces() const { return common_data_.GetNumOutgoingNonlocalFaces(); }
+  size_t GetNumIncomingFaces() const { return common_data_.GetNumIncomingNonlocalFaces(); }
 
 private:
   const CBCD_FLUDSCommonData& common_data_;
@@ -122,32 +122,6 @@ private:
   crb::HostVector<double> host_saved_psi_;
 
   CBCD_FLUDSPointerSet pointer_set_;
-
-  /// Face-grouped outgoing non-local node metadata (indexed by cell_local_id).
-  struct FaceOutgoingInfo
-  {
-    unsigned int face_id;
-    std::vector<const NonlocalNodeInfo*> nodes;
-    size_t face_data_size;        ///< num_face_nodes * stride_size
-    size_t dest_index;            ///< Pre-resolved index into outgoing_destinations_ / scratch arrays.
-    uint64_t neighbor_global_id;  ///< Neighbor cell global ID (packed into wire format).
-    unsigned int associated_face; ///< Face index on the neighbor cell.
-  };
-  std::vector<std::vector<FaceOutgoingInfo>> cell_to_face_grouped_outgoing_;
-
-  /// Face-grouped incoming non-local node metadata (indexed by cell_local_id).
-  struct FaceIncomingInfo
-  {
-    unsigned int face_id;
-    std::vector<const NonlocalNodeInfo*> nodes;
-  };
-  std::vector<std::vector<FaceIncomingInfo>> cell_to_face_grouped_incoming_;
-
-  size_t num_outgoing_faces_ = 0;
-  size_t num_incoming_faces_ = 0;
-
-  /// O(1) global→local lookup for cells receiving non-local face data.
-  std::unordered_map<uint64_t, uint64_t> incoming_global_to_local_;
 
   /// Pre-resolved per-destination info for batched outgoing enqueue.
   struct OutgoingDestination

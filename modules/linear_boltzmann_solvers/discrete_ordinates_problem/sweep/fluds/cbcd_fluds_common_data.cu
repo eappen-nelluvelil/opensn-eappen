@@ -7,6 +7,7 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caribou/main.hpp"
 #include <cinttypes>
+#include <map>
 
 namespace crb = caribou;
 
@@ -18,6 +19,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
 {
   const MeshContinuum& grid = *(spds_.GetGrid());
   const size_t num_local_cells = grid.local_cells.size();
+  const auto& face_orientations = spds_.GetCellFaceOrientations();
   std::uint64_t total_face_nodes = 0;
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
@@ -36,15 +38,20 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::uint64_t* indices_ptr = local_map.data() + offsets_size;
   std::uint64_t current_index_offset = offsets_size;
   std::uint64_t local_indices_filled = 0;
+  std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
   // Iterate over cells to fill the map and populate metadata structures
   for (const auto& cell : grid.local_cells)
   {
+    incoming_nonlocal_face_lookup_[cell.local_id].assign(cell.faces.size(), -1);
+
     cell_offsets_ptr[2 * cell.local_id] = current_index_offset;
     std::uint64_t num_cell_nodes = 0;
+    std::map<unsigned int, size_t> incoming_face_to_grouped_index;
+    std::map<unsigned int, size_t> outgoing_face_to_grouped_index;
     for (size_t f = 0; f < cell.faces.size(); ++f)
     {
       const CellFace& face = cell.faces[f];
-      const FaceOrientation& orientation = spds_.GetCellFaceOrientations()[cell.local_id][f];
+      const FaceOrientation& orientation = face_orientations[cell.local_id][f];
       const FaceNodalMapping& face_nodal_mapping = grid_nodal_mappings_[cell.local_id][f];
       const size_t num_face_nodes = sdm.GetCellMapping(cell).GetNumFaceNodes(f);
       const bool is_outgoing_face = (orientation == FaceOrientation::OUTGOING);
@@ -68,12 +75,23 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             node_index =
               CBCD_NodeIndex(num_incoming_nonlocal_nodes_, is_outgoing_face, is_local_face);
-            cell_to_incoming_nonlocal_nodes_[cell.local_id].emplace_back(
-              NonlocalNodeInfo{cell.global_id,
-                               static_cast<unsigned int>(f),
-                               static_cast<std::uint32_t>(num_incoming_nonlocal_nodes_),
-                               static_cast<std::uint16_t>(fn),
-                               face_nodal_mapping.face_node_mapping_[fn]});
+            auto [it, inserted] = incoming_face_to_grouped_index.try_emplace(
+              static_cast<unsigned int>(f), cell_to_incoming_nonlocal_faces_[cell.local_id].size());
+            if (inserted)
+            {
+              cell_to_incoming_nonlocal_faces_[cell.local_id].push_back(GroupedIncomingNonlocalFace{});
+              incoming_nonlocal_face_lookup_[cell.local_id][f] = static_cast<int>(it->second);
+              ++num_incoming_nonlocal_faces_;
+              incoming_global_to_local_[cell.global_id] = cell.local_id;
+            }
+
+            auto& grouped_face = cell_to_incoming_nonlocal_faces_[cell.local_id][it->second];
+            grouped_face.nodes.emplace_back(NonlocalNodeInfo{cell.global_id,
+                                                             static_cast<unsigned int>(f),
+                                                             static_cast<std::uint32_t>(
+                                                               num_incoming_nonlocal_nodes_),
+                                                             static_cast<std::uint16_t>(fn),
+                                                             face_nodal_mapping.face_node_mapping_[fn]});
             ++num_incoming_nonlocal_nodes_;
           }
           else
@@ -100,12 +118,39 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             node_index =
               CBCD_NodeIndex(num_outgoing_nonlocal_nodes_, is_outgoing_face, is_local_face);
-            cell_to_outgoing_nonlocal_nodes_[cell.local_id].emplace_back(
-              NonlocalNodeInfo{cell.global_id,
-                               static_cast<unsigned int>(f),
-                               static_cast<std::uint32_t>(num_outgoing_nonlocal_nodes_),
-                               static_cast<std::uint16_t>(fn),
-                               face_nodal_mapping.face_node_mapping_[fn]});
+            auto [it, inserted] = outgoing_face_to_grouped_index.try_emplace(
+              static_cast<unsigned int>(f), cell_to_outgoing_nonlocal_faces_[cell.local_id].size());
+            if (inserted)
+            {
+              const int locality = grid.cells[face.neighbor_id].partition_id;
+              auto dest_slot_it = locality_to_dest_slot.find(locality);
+              std::uint32_t dest_slot = 0;
+              if (dest_slot_it == locality_to_dest_slot.end())
+              {
+                dest_slot = static_cast<std::uint32_t>(outgoing_localities_.size());
+                locality_to_dest_slot.emplace(locality, dest_slot);
+                outgoing_localities_.push_back(locality);
+              }
+              else
+                dest_slot = dest_slot_it->second;
+
+              cell_to_outgoing_nonlocal_faces_[cell.local_id].push_back(GroupedOutgoingNonlocalFace{
+                {},
+                face.neighbor_id,
+                locality,
+                dest_slot,
+                static_cast<unsigned int>(face_nodal_mapping.associated_face_),
+                static_cast<std::uint16_t>(num_face_nodes)});
+              ++num_outgoing_nonlocal_faces_;
+            }
+
+            auto& grouped_face = cell_to_outgoing_nonlocal_faces_[cell.local_id][it->second];
+            grouped_face.nodes.emplace_back(NonlocalNodeInfo{cell.global_id,
+                                                             static_cast<unsigned int>(f),
+                                                             static_cast<std::uint32_t>(
+                                                               num_outgoing_nonlocal_nodes_),
+                                                             static_cast<std::uint16_t>(fn),
+                                                             face_nodal_mapping.face_node_mapping_[fn]});
             ++num_outgoing_nonlocal_nodes_;
           }
           else

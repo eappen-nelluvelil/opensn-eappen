@@ -9,6 +9,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -59,35 +60,21 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   {
     auto& fluds = *fluds_list_[as_idx];
     const auto stride = fluds.GetStrideSize();
-    const auto& incoming_map = fluds.GetCommonData().GetIncomingNonlocalNodeMap();
-
-    // Group incoming nodes by (source_partition, cell_global_id, face_id) to get
-    // the face node count for each distinct face entry.
-    // face_key: (cell_global_id, face_id) -> node count
-    std::unordered_map<int, std::map<std::pair<std::uint64_t, unsigned int>, size_t>>
-      source_face_node_counts;
-
-    for (size_t cell_local_id = 0; cell_local_id < incoming_map.size(); ++cell_local_id)
+    const auto& incoming_faces = fluds.GetCommonData().GetIncomingNonlocalFaces();
+    for (size_t cell_local_id = 0; cell_local_id < incoming_faces.size(); ++cell_local_id)
     {
-      const auto& nodes = incoming_map[cell_local_id];
-      for (const auto& node : nodes)
+      const auto& grouped_faces = incoming_faces[cell_local_id];
+      for (const auto& face_info : grouped_faces)
       {
-        // Resolve source partition from cell_global_id
-        int source_partition = grid.cells[node.cell_global_id].partition_id;
-        source_face_node_counts[source_partition][{node.cell_global_id, node.face_id}]++;
-      }
-    }
+        if (face_info.nodes.empty())
+          continue;
 
-    // Convert per-face counts to per-source per-angleset totals
-    for (const auto& [source_partition, face_counts] : source_face_node_counts)
-    {
-      auto& info = source_as_info[source_partition][as_idx];
-      for (const auto& [face_key, num_nodes] : face_counts)
-      {
-        info.num_entries += 1; // Each face corresponds to one entry in the message
-        // Per entry: cell_global_id + face_id + data_size + psi_data
-        info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + 
-                          sizeof(size_t) + num_nodes * stride * sizeof(double);
+        const auto& first_node = face_info.nodes.front();
+        const int source_partition = grid.cells[first_node.cell_global_id].partition_id;
+        auto& info = source_as_info[source_partition][as_idx];
+        info.num_entries += 1;
+        info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
+                          face_info.nodes.size() * stride * sizeof(double);
       }
     }
   }
