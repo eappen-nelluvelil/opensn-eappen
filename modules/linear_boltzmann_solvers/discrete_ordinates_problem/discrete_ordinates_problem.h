@@ -215,8 +215,7 @@ private:
                       const SPDS& spds,
                       std::shared_ptr<FLUDS>& fluds,
                       std::vector<size_t>& angle_indices,
-                      std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-                      const MPICommunicatorSet& in_comm_set);
+                      std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries);
   std::shared_ptr<SweepChunk> CreateCBCDSweepChunk(LBSGroupset& groupset);
 
   /**

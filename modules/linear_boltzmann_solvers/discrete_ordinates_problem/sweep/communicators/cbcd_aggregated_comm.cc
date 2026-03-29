@@ -15,10 +15,6 @@
 namespace opensn
 {
 
-// ---------------------------------------------------------------------------
-// Constructor / Destructor
-// ---------------------------------------------------------------------------
-
 CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<AngleSet*>& angle_sets,
                                                          const MPICommunicatorSet& comm_set,
                                                          size_t max_message_bytes)
@@ -81,6 +77,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   incoming_recycler_.Preallocate(num_angle_sets_ * num_sources);
   incoming_reuse_cache_.reserve(num_angle_sets_ * num_sources);
   in_flight_sends_.reserve(outgoing_queues_.size());
+  send_buffer_pool_.reserve(outgoing_queues_.size());
 }
 
 CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
@@ -88,10 +85,6 @@ CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
   if (comm_thread_.joinable())
     Stop();
 }
-
-// ---------------------------------------------------------------------------
-// Worker thread interface
-// ---------------------------------------------------------------------------
 
 int
 CBCD_AggregatedCommunicator::GetQueueIndex(int dest_location) const
@@ -116,10 +109,6 @@ CBCD_AggregatedCommunicator::SignalAngleSetComplete(size_t angle_set_id)
   angle_set_done_[angle_set_id].store(true, std::memory_order_release);
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-
 void
 CBCD_AggregatedCommunicator::Start()
 {
@@ -137,10 +126,6 @@ CBCD_AggregatedCommunicator::Stop()
   if (comm_thread_.joinable())
     comm_thread_.join();
 }
-
-// ---------------------------------------------------------------------------
-// Communication thread
-// ---------------------------------------------------------------------------
 
 void
 CBCD_AggregatedCommunicator::CommThreadLoop()
@@ -180,22 +165,14 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
   for (auto& nq : outgoing_queues_)
   {
-    // Fast-path: skip destinations with no queued data (avoids send buffer
-    // pool acquire/release and the DrainAndProcess overhead for empty queues).
+    // Skip empty queues to avoid touching the send-buffer pool.
     if (nq.queue->Empty())
       continue;
 
-    // Acquire a send buffer from the pool (retains capacity from previous sweeps).
     ByteArray send_buf = AcquireSendBuffer();
     size_t num_sections = 0;
-
-    // Reserve space for the num_sections header.
     send_buf.Data().resize(sizeof(size_t));
 
-    // Drain and append pre-packed wire-format sections directly into the send
-    // buffer via DrainAndProcess, avoiding an intermediate std::vector<ByteArray>.
-    // Each section was packed by CopyOutgoingPsiBackToHost on a worker thread:
-    //   [angle_set_id : size_t][num_entries : size_t][entries...]
     bool has_data = nq.queue->DrainAndProcess(
       [&](ByteArray&& section)
       {
@@ -210,10 +187,8 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     }
     any_sent = true;
 
-    // Write the num_sections count at the header position.
     std::memcpy(send_buf.Data().data(), &num_sections, sizeof(size_t));
 
-    // Dispatch the MPI Isend.
     InFlightSend ifs;
     ifs.data = std::move(send_buf);
     const auto& comm = comm_set_.LocICommunicator(nq.dest_location);
@@ -229,7 +204,6 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::ProbeAndReceive");
 
-  // Reclaim recycled incoming ByteArrays from worker threads (retains heap capacity).
   incoming_recycler_.DrainAndProcess(
     [this](ByteArray&& buf) { incoming_reuse_cache_.push_back(std::move(buf)); });
 
@@ -248,9 +222,6 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 
       recv_comm.recv(source_queue.mapped_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
 
-      // Parse just enough of the wire format to route each section to the correct
-      // angle set mailbox as a raw ByteArray.  Deserialization is deferred to the
-      // worker thread, eliminating per-face std::vector<double> heap allocations.
       const auto* raw = recv_buffer_.Data().data();
       size_t offset = 0;
 
@@ -260,32 +231,25 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 
       for (size_t s = 0; s < num_sections; ++s)
       {
-        // Read angle_set_id for routing.
         size_t as_id;
         std::memcpy(&as_id, raw + offset, sizeof(size_t));
         offset += sizeof(size_t);
         assert(as_id < num_angle_sets_);
 
-        // Record section payload start (beginning at num_entries).
         const size_t section_start = offset;
-
-        // Walk entries to compute section size without deserializing.
         size_t num_entries;
         std::memcpy(&num_entries, raw + offset, sizeof(size_t));
         offset += sizeof(size_t);
 
         for (size_t e = 0; e < num_entries; ++e)
         {
-          // Skip entry header: cell_global_id + face_id
           offset += sizeof(uint64_t) + sizeof(unsigned int);
-          // Read data_size to skip psi payload
           size_t data_size;
           std::memcpy(&data_size, raw + offset, sizeof(size_t));
           offset += sizeof(size_t);
           offset += data_size * sizeof(double);
         }
 
-        // Reuse a recycled ByteArray (retains heap capacity) or create a new one.
         const size_t section_size = offset - section_start;
         ByteArray section;
         if (not incoming_reuse_cache_.empty())

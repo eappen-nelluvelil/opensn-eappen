@@ -20,37 +20,32 @@ class CBCDSweepChunk;
 class CBCD_AggregatedCommunicator;
 
 /**
- * Cell-by-cell device (CBCD) angle set.
+ * Cooperative CBCD angle-set driver.
  *
- * Drives a single sweep direction (or small group of directions) through the
- * SPDS task DAG on the GPU.  Supports two execution modes:
- *
- *  1. **Blocking** — AngleSetAdvance() spins until all tasks complete.
- *  2. **Cooperative** — a bounded worker pool calls TryInitialize() and
- *     TryAdvanceOneStep() in a round-robin loop across many angle sets,
- *     overlapping GPU compute with MPI communication.
- *
- * Each call to TryAdvanceOneStep() performs up to five non-blocking steps:
- *   A. Poll the GPU stream for kernel completion → update task dependencies.
- *   B. Drain received MPI data from the aggregated communicator.
- *   C. Launch the next GPU kernel for newly-ready tasks.
- *   D. Pack and enqueue outgoing face data (overlapped with the GPU kernel).
- *   E. Check sweep completion and finalize.
- *
- * For reflecting-boundary problems, an early dependency countdown notifies
- * following angle sets as soon as all reflecting-boundary cells complete,
- * rather than waiting for the full sweep to finish.
+ * The class advances one sweep ordering on the GPU using the CBCD task DAG.
+ * It supports both the legacy blocking `AngleSetAdvance()` path and the
+ * cooperative `TryInitialize()` / `TryAdvanceOneStep()` path used by the
+ * multithreaded CBCD scheduler. In cooperative mode, each step polls kernel
+ * completion, drains incoming communication, launches newly ready work, packs
+ * completed outgoing data, and finalizes when all tasks are done.
  */
 class CBCD_AngleSet : public AngleSet
 {
 public:
+  /// Construct one CBCD angle set.
+  ///
+  /// \param id Angle-set identifier.
+  /// \param num_groups Number of energy groups.
+  /// \param spds Sweep ordering.
+  /// \param fluds Angle-set FLUDS storage.
+  /// \param angle_indices Angle indices in this set.
+  /// \param boundaries Sweep-boundary map.
   CBCD_AngleSet(size_t id,
                 size_t num_groups,
                 const SPDS& spds,
                 std::shared_ptr<FLUDS>& fluds,
                 const std::vector<size_t>& angle_indices,
-                std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-                const MPICommunicatorSet& comm_set);
+                std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries);
 
   ~CBCD_AngleSet();
 
@@ -61,10 +56,20 @@ public:
   void SetAggregatedCommunicator(CBCD_AggregatedCommunicator* agg_comm) { agg_comm_ = agg_comm; }
   CBCD_AggregatedCommunicator* GetAggregatedCommunicator() const { return agg_comm_; }
 
+  /// Reset the inter-angle-set dependency counter for a new sweep.
   void ResetDependencyCounter();
+  /// Register following angle sets for reflecting-boundary dependencies.
+  ///
+  /// \param following_angle_sets Following angle sets.
   void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
+  /// Perform one-time sweep initialization when dependencies are satisfied.
+  ///
+  /// \return `true` if initialization completed.
   bool TryInitialize();
+  /// Advance the sweep by one cooperative step.
+  ///
+  /// \return `true` if any work was performed.
   bool TryAdvanceOneStep();
 
   bool IsFinished() const { return executed_; }
@@ -75,6 +80,7 @@ public:
   int GetMaxBufferMessages() const override { return 0; }
   void SetMaxBufferMessages(int new_max) override {}
 
+  /// Run the angle set to completion in blocking mode.
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus exec_status) override;
   AngleSetStatus FlushSendBuffers() override { return AngleSetStatus::MESSAGES_SENT; }
   void ResetSweepBuffers() override;
@@ -95,60 +101,68 @@ public:
                        unsigned int fi) override;
 
 private:
+  /// Finalize the sweep after all tasks complete.
   void FinalizeSweep();
 
-  /// Notify following angle sets that reflecting boundary data is ready.
-  /// No-op if already notified or if the reflecting boundary count has not
-  /// been reached.  Called from TryInitialize (zero-boundary fast path),
-  /// TryAdvanceOneStep step D, and FinalizeSweep.
+  /// Notify following angle sets once reflecting data is ready.
   void TryNotifyFollowers();
 
+  /// CUDA/HIP stream for this angle set.
   crb::Stream stream_;
+  /// Device copy of the angle indices.
   crb::DeviceMemory<std::uint32_t> device_angle_indices_;
+  /// Per-angle-set FLUDS storage.
   CBCD_FLUDS& cbcd_fluds_;
+  /// Owning sweep chunk.
   CBCDSweepChunk* cbcd_sweep_chunk_;
+  /// CBC task graph.
   const CBC_SPDS& cbc_spds_;
 
-  // -- CSR task DAG (built once, reused across sweeps) ----------------------
+  /// Cell local ID per task.
+  std::vector<uint64_t> reference_ids_;
+  /// CSR successor offsets.
+  std::vector<uint32_t> successor_offsets_;
+  /// Flat successor task indices.
+  std::vector<uint32_t> successor_data_;
+  /// Initial dependency counts per task.
+  std::vector<int> initial_deps_;
+  /// Per-sweep dependency counts.
+  std::vector<int> remaining_deps_;
+  /// Task indices with zero initial dependencies.
+  std::vector<uint32_t> initial_ready_tasks_;
 
-  std::vector<uint64_t> reference_ids_;      ///< Cell local ID per task.
-  std::vector<uint32_t> successor_offsets_;   ///< CSR offset array (size N+1).
-  std::vector<uint32_t> successor_data_;      ///< Flat successor task indices.
-  std::vector<int> initial_deps_;             ///< Initial dependency counts per task.
-  std::vector<int> remaining_deps_;           ///< Working copy, reset each sweep.
-  std::vector<uint32_t> initial_ready_tasks_; ///< Zero-dependency tasks (constant).
-
-  // -- Inter-angle-set synchronization --------------------------------------
-
+  /// Aggregated communicator used by this angle set.
   CBCD_AggregatedCommunicator* agg_comm_ = nullptr;
+  /// Number of predecessor angle sets.
   std::size_t num_dependencies_ = 0;
+  /// Remaining predecessor dependency count.
   std::atomic<std::size_t> dependency_counter_{0};
+  /// Following angle sets for reflecting-boundary handoff.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
 
-  // -- Per-sweep working state ----------------------------------------------
-
+  /// Initialization flag for the current sweep.
   bool initialized_ = false;
+  /// Ready task queue for the next kernel launch.
   std::vector<uint32_t> ready_queue_;
+  /// Kernel-in-flight flag.
   bool kernel_in_flight_ = false;
+  /// Tasks currently represented by the in-flight kernel.
   std::vector<uint32_t> in_flight_task_indices_;
+  /// Completed cell IDs awaiting outgoing-data handling.
   std::vector<uint64_t> deferred_cell_ids_;
+  /// Number of completed tasks in the current sweep.
   size_t completed_count_ = 0;
+  /// Total number of tasks in the sweep DAG.
   size_t total_tasks_ = 0;
 
-  // -- Early dependency countdown for reflecting boundaries -----------------
-  //
-  // When this angle set has following angle sets (reflecting BCs), we track
-  // how many reflecting-boundary tasks have completed.  Once all are done,
-  // TryNotifyFollowers() fires the countdown so followers can begin init
-  // before the full sweep finishes.
-  //
-  // is_reflecting_task_ is indexed by TASK index (not cell_local_id) and uses
-  // vector<char> instead of vector<bool> to avoid bit-packing overhead.
-
-  std::vector<char> is_reflecting_task_;        ///< 1 if task touches a reflecting boundary.
-  size_t reflecting_tasks_completed_ = 0;       ///< Running count of completed reflecting tasks.
-  size_t total_reflecting_tasks_ = 0;           ///< Total reflecting-boundary tasks (constant).
-  bool followers_notified_ = false;             ///< True once TryNotifyFollowers() has fired.
+  /// Per-task reflecting-boundary flag.
+  std::vector<char> is_reflecting_task_;
+  /// Number of completed reflecting tasks.
+  size_t reflecting_tasks_completed_ = 0;
+  /// Total number of reflecting tasks.
+  size_t total_reflecting_tasks_ = 0;
+  /// Reflecting-boundary notification flag.
+  bool followers_notified_ = false;
 };
 
 } // namespace opensn

@@ -38,23 +38,14 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     fluds_list_.push_back(static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS())));
   }
 
-  // Compute exact per-source worst-case message size for the receive buffer
-  // For each dependency location J, sum the wire-format size of all incoming
-  // non-local face data from J across all angle sets.
-  // The maximum over all J gives the tightest possible reservation for
-  // persistent_recv_buffer_.
   const auto& grid = *problem_.GetGrid();
 
-  // Per-source, per-angle-set: accumulate (num_entries, total_psi_bytes).
-  // Key: source partition ID
-  // Value: per-angle-set entry counts and data sizes
   struct PerSourceAngleSetInfo
   {
     size_t num_entries = 0;
     size_t psi_bytes = 0;
   };
 
-  // Source partition -> (angle_set_id -> per-angle-set info)
   std::unordered_map<int, std::unordered_map<size_t, PerSourceAngleSetInfo>> source_as_info;
   for (size_t as_idx = 0; as_idx < angle_sets_.size(); ++as_idx)
   {
@@ -79,23 +70,18 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     }
   }
 
-  // Compute the worst-case message size: max over all sources
   size_t max_message_bytes = 0;
   for (const auto& [source_partition, as_map] : source_as_info)
   {
-    // num_active_angle_sets header
     size_t msg_size_in_bytes = sizeof(size_t);
     for (const auto& [as_idx, info] : as_map)
     {
-      // Per active angle set: as_id + num_entries
       msg_size_in_bytes += sizeof(size_t) + sizeof(size_t);
-      // Data for all entries in this angle set
       msg_size_in_bytes += info.psi_bytes;
     }
     max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
   }
 
-  // Create aggregated communicator and set it on all angle sets
   std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
   agg_comm_ = std::make_unique<CBCD_AggregatedCommunicator>(base_angle_sets,
                                                             problem_.GetMPICommunicatorSet(),
@@ -108,12 +94,11 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   for (auto* fluds : fluds_list_)
     fluds->InitializeQueueIndices(*agg_comm_);
 
-  // Pre-compute and cache kernel arguments and launch dimensions per angle set.
-  // These are constant across all kernel launches for a given angle set.
   cached_kernel_params_.reserve(angle_sets_.size());
   for (size_t i = 0; i < angle_sets_.size(); ++i)
   {
-    gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(problem_, groupset_, *angle_sets_[i], *fluds_list_[i]);
+    gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(
+      problem_, groupset_, *angle_sets_[i], *fluds_list_[i]);
     unsigned int stride_size =
       gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
     unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);

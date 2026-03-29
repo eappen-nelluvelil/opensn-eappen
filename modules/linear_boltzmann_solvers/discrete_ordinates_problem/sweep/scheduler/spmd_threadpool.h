@@ -77,7 +77,7 @@ public:
   template <class F>
   void AssignTask(F&& task)
   {
-    std::scoped_lock<std::mutex> lock(mutex_);
+    // std::scoped_lock<std::mutex> lock(mutex_);
     task_ = std::function<void(std::size_t)>(std::forward<F>(task));
   }
   /// Run the currently assigned task for the worker with the given index.

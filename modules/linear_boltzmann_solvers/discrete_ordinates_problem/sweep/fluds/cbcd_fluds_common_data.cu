@@ -6,7 +6,6 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caribou/main.hpp"
-#include <cinttypes>
 
 namespace crb = caribou;
 
@@ -40,7 +39,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
   incoming_global_to_local_.reserve(num_local_cells);
   outgoing_localities_.reserve(num_local_cells);
-  // Iterate over cells to fill the map and populate metadata structures
+
   for (const auto& cell : grid.local_cells)
   {
     incoming_nonlocal_face_lookup_[cell.local_id].assign(cell.faces.size(), -1);
@@ -201,4 +200,5 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
     device_cell_face_node_map_ = nullptr;
   }
 }
+
 } // namespace opensn

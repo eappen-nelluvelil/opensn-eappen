@@ -19,8 +19,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
                              const SPDS& spds,
                              std::shared_ptr<FLUDS>& fluds,
                              const std::vector<size_t>& angle_indices,
-                             std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-                             const MPICommunicatorSet& comm_set)
+                             std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     stream_(crb::Stream::create()),
     device_angle_indices_(angles_.size(), stream_),

@@ -10,12 +10,9 @@
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
-#include "framework/logging/log.h"
-#include "framework/runtime.h"
 #include "framework/utils/error.h"
 #include <algorithm>
 #include <cstring>
-#include <utility>
 
 namespace opensn
 {
@@ -42,16 +39,11 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
 
-  // Group outgoing nodes by face, pre-resolve dest_index per face, and build
-  // the outgoing_destinations_ table. Destination slots are already baked
-  // into the shared common-data topology, so the hot packing loop needs no
-  // lookup beyond `face_info.dest_slot`.
   const auto& outgoing_localities = common_data_.GetOutgoingLocalities();
   outgoing_destinations_.reserve(outgoing_localities.size());
   for (const int locality : outgoing_localities)
     outgoing_destinations_.push_back({locality, -1});
 
-  // Pre-allocate scratch and destination buffers for CopyOutgoingPsiBackToHost.
   const size_t num_dests = outgoing_destinations_.size();
   scratch_dest_face_counts_.resize(num_dests, 0);
   scratch_dest_psi_bytes_.resize(num_dests, 0);
@@ -104,6 +96,7 @@ CBCD_FLUDS::InitializeReflectingBoundaryNodes(
   {
     const auto& boundary_nodes = outgoing_boundary_map[cell_local_id];
     auto& reflecting_nodes = reflecting_outgoing_boundary_nodes_[cell_local_id];
+    reflecting_nodes.reserve(boundary_nodes.size());
 
     for (const auto& node : boundary_nodes)
     {
@@ -203,13 +196,11 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   const auto& reflecting_boundary_map = reflecting_outgoing_boundary_nodes_;
   const auto& grouped_outgoing_faces = common_data_.GetOutgoingNonlocalFaces();
 
-  // Per-destination: count faces and total psi bytes in a first pass (using scratch buffers).
   std::fill(scratch_dest_face_counts_.begin(), scratch_dest_face_counts_.end(), 0);
   std::fill(scratch_dest_psi_bytes_.begin(), scratch_dest_psi_bytes_.end(), 0);
 
   for (const auto& cell_local_id : cell_local_ids)
   {
-    // Handle outgoing reflecting boundary faces — no wire format needed.
     const auto& boundary_nodes = reflecting_boundary_map[cell_local_id];
     if (not boundary_nodes.empty())
     {
@@ -228,7 +219,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
       }
     }
 
-    // Count outgoing non-local faces per destination (pre-resolved dest_index).
     const auto& grouped_faces = grouped_outgoing_faces[cell_local_id];
     for (const auto& face_info : grouped_faces)
     {
@@ -240,9 +230,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     }
   }
 
-  // Pack wire-format sections into reusable ByteArrays (one per destination).
-  // Section: [angle_set_id : size_t][num_entries : size_t][entries...]
-  // Entry:   [cell_global_id : uint64_t][face_id : uint][data_size : size_t][psi doubles]
   constexpr size_t entry_header_size =
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
   constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
@@ -266,10 +253,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     scratch_dest_offsets_[d] = section_header_size;
   }
 
-  // Second pass: pack entry data from outgoing_nonlocal_psi_ into the ByteArrays.
-  // The zero-fill is omitted: every face-node position [0, num_face_nodes) is
-  // written by the inner loop (CBCD_FLUDSCommonData adds ALL face nodes of each
-  // outgoing non-local face), so no position is left uninitialized.
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto& grouped_faces = grouped_outgoing_faces[cell_local_id];
@@ -300,9 +283,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     }
   }
 
-  // Enqueue one pre-packed section per destination. The ByteArray content is
-  // moved to the Treiber stack; the dest_buffers_ slot retains its capacity
-  // for reuse on the next call.
   for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
   {
     if (scratch_dest_face_counts_[d] == 0)
@@ -311,15 +291,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
                                       std::move(dest_buffers_[d]));
   }
 }
-
-// void
-// CBCD_FLUDS::CopySavedPsiFromDevice()
-// {
-//   if (not save_angular_flux_)
-//     return;
-//   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
-//   stream_.synchronize();
-// }
 
 void
 CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)

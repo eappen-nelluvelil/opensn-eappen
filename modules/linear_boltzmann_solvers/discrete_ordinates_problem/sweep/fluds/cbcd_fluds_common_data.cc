@@ -8,8 +8,6 @@
 namespace opensn
 {
 
-class SpatialDiscretization;
-
 CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
   const SPDS& spds,
   const std::vector<CellFaceNodalMapping>& grid_nodal_mappings,
@@ -42,6 +40,7 @@ CBCD_FLUDSCommonData::~CBCD_FLUDSCommonData()
 void
 CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization& sdm)
 {
+  (void)sdm;
 }
 
 void

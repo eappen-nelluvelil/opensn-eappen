@@ -98,11 +98,9 @@ DiscreteOrdinatesProblem::CreateCBCD_AngleSet(
   const SPDS& spds,
   std::shared_ptr<FLUDS>& fluds,
   std::vector<size_t>& angle_indices,
-  std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-  const MPICommunicatorSet& in_comm_set)
+  std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
 {
-  return std::make_shared<CBCD_AngleSet>(
-    id, num_groups, spds, fluds, angle_indices, boundaries, in_comm_set);
+  return std::make_shared<CBCD_AngleSet>(id, num_groups, spds, fluds, angle_indices, boundaries);
 }
 
 std::shared_ptr<SweepChunk>

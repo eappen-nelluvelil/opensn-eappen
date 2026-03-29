@@ -1550,8 +1550,7 @@ DiscreteOrdinatesProblem::CreateCBCD_AngleSet(
   const SPDS& spds,
   std::shared_ptr<FLUDS>& fluds,
   std::vector<size_t>& angle_indices,
-  std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-  const MPICommunicatorSet& in_comm_set)
+  std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
 {
   throw std::runtime_error(
     "DiscreteOrdinatesProblem::CreateCBCD_AngleSet : OPENSN_WITH_CUDA not enabled.");
@@ -1860,8 +1859,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                           *sweep_ordering,
                                           fluds,
                                           angle_indices,
-                                          sweep_boundaries_,
-                                          *grid_local_comm_set_);
+                                          sweep_boundaries_);
         }
         else
         {
