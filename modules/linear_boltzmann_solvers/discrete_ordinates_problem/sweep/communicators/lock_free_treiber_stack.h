@@ -28,6 +28,29 @@ constexpr std::size_t LOCK_FREE_TREIBER_STACK_INTERFERENCE_SIZE =
  * free list recycles nodes so the hot path avoids repeated heap traffic after
  * the initial preallocation.
  *
+ * ## ABA vulnerability analysis
+ *
+ * Classic Treiber stacks are susceptible to the ABA problem during CAS-based
+ * pop: thread T1 reads head=A→B, gets preempted, another thread pops A then B,
+ * recycles A back to head, and T1's CAS succeeds with a stale `next` pointer.
+ *
+ * In CBCD's usage pattern this scenario is **theoretically possible but
+ * practically unreachable** for two reasons:
+ *
+ * 1. **Timing**: The full recycle cycle (alloc → push → drain → return to free
+ *    list) takes hundreds of nanoseconds across two distinct atomic lists, while
+ *    the CAS-vulnerable window in `AllocNode` is 1-3 CPU cycles. A node would
+ *    have to complete the entire round-trip and reappear at `free_head_` within
+ *    that window.
+ *
+ * 2. **HPC thread pinning**: Worker and communicator threads are pinned to
+ *    dedicated cores, eliminating OS preemption — the primary enabler of
+ *    ABA in general-purpose environments.
+ *
+ * If either assumption changes (e.g., unpinned threads under heavy
+ * oversubscription), a tagged pointer or hazard-pointer scheme should be
+ * adopted.
+ *
  * \tparam T Movable payload type.
  * \note Intended for the CBCD mailbox pattern: many producers, one drain site.
  */

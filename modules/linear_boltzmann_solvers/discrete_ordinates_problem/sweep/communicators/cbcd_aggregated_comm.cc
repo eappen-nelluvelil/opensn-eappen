@@ -20,6 +20,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
                                                          size_t max_message_bytes)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
+    max_message_bytes_(max_message_bytes),
     mpi_tag_(static_cast<int>(num_angle_sets_)),
     incoming_mailboxes_(num_angle_sets_),
     angle_set_done_(num_angle_sets_)
@@ -59,9 +60,6 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
 
-  if (max_message_bytes > 0)
-    recv_buffer_.Data().reserve(max_message_bytes);
-
   // Pre-allocate Treiber stack nodes to eliminate heap allocations during sweeps.
   // Outgoing: at most one section per angle set may be queued before the comm thread drains.
   for (auto& nq : outgoing_queues_)
@@ -72,10 +70,8 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);
 
-  // Recycler: workers may return up to one ByteArray per mailbox drain between comm thread
-  // recycler drains.  Pre-allocate conservatively for all angle sets × sources.
-  incoming_recycler_.Preallocate(num_angle_sets_ * num_sources);
-  incoming_reuse_cache_.reserve(num_angle_sets_ * num_sources);
+  recv_buffer_recycler_.Preallocate(num_sources);
+  recv_buffer_reuse_cache_.reserve(num_sources);
   in_flight_sends_.reserve(outgoing_queues_.size());
   send_buffer_pool_.reserve(outgoing_queues_.size());
 }
@@ -204,8 +200,8 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::ProbeAndReceive");
 
-  incoming_recycler_.DrainAndProcess(
-    [this](ByteArray&& buf) { incoming_reuse_cache_.push_back(std::move(buf)); });
+  recv_buffer_recycler_.DrainAndProcess(
+    [this](ByteArray&& buf) { recv_buffer_reuse_cache_.push_back(std::move(buf)); });
 
   bool received_any = false;
   const int my_rank = opensn::mpi_comm.rank();
@@ -218,11 +214,22 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
     {
       received_any = true;
       int num_bytes = status.count<std::byte>();
-      recv_buffer_.Data().resize(num_bytes);
 
-      recv_comm.recv(source_queue.mapped_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
+      auto recv_buffer = std::make_shared<IncomingSection::IncomingBuffer>();
+      recv_buffer->recycler = &recv_buffer_recycler_;
+      if (not recv_buffer_reuse_cache_.empty())
+      {
+        recv_buffer->data = std::move(recv_buffer_reuse_cache_.back());
+        recv_buffer_reuse_cache_.pop_back();
+      }
+      else if (max_message_bytes_ > 0)
+        recv_buffer->data.Data().reserve(max_message_bytes_);
+      recv_buffer->data.Data().resize(num_bytes);
 
-      const auto* raw = recv_buffer_.Data().data();
+      recv_comm.recv(
+        source_queue.mapped_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
+
+      const auto* raw = recv_buffer->data.Data().data();
       size_t offset = 0;
 
       size_t num_sections;
@@ -250,17 +257,8 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
           offset += data_size * sizeof(double);
         }
 
-        const size_t section_size = offset - section_start;
-        ByteArray section;
-        if (not incoming_reuse_cache_.empty())
-        {
-          section = std::move(incoming_reuse_cache_.back());
-          incoming_reuse_cache_.pop_back();
-        }
-        section.Data().resize(section_size);
-        std::memcpy(section.Data().data(), raw + section_start, section_size);
-
-        incoming_mailboxes_[as_id].Push(std::move(section));
+        incoming_mailboxes_[as_id].Push(
+          IncomingSection{recv_buffer, section_start, offset - section_start});
       }
     }
   }

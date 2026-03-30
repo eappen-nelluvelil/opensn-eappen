@@ -189,12 +189,12 @@ CBCD_AngleSet::TryAdvanceOneStep()
   }
 
   // B: Drain received MPI data from the aggregated communicator (lock-free).
-  //    Psi is read directly from the wire-format buffer — zero per-face heap allocations.
-  //    The ByteArray is automatically recycled after the callback returns.
+  //    Psi is read directly from the aggregate receive buffer; section bytes are
+  //    not recopied into per-angle-set ByteArrays.
   any_work_done |= agg_comm_->DrainIncoming(id_,
-    [this](const ByteArray& section)
+    [this](const CBCD_AggregatedCommunicator::IncomingSection& section)
     {
-      const auto* raw = section.Data().data();
+      const auto* raw = section.Data();
       size_t offset = 0;
 
       size_t num_entries;

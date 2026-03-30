@@ -35,6 +35,37 @@ class MPICommunicatorSet;
 class CBCD_AggregatedCommunicator
 {
 public:
+  /// Incoming section view backed by one received aggregate message.
+  struct IncomingSection
+  {
+    /// Shared storage for the received aggregate message.
+    struct IncomingBuffer
+    {
+      /// Aggregate message bytes.
+      ByteArray data;
+      /// Recycler for the aggregate message buffer.
+      LockFreeTreiberStack<ByteArray>* recycler = nullptr;
+
+      ~IncomingBuffer()
+      {
+        if (recycler == nullptr)
+          return;
+        data.Data().clear();
+        recycler->Push(std::move(data));
+      }
+    };
+
+    /// Shared aggregate-message storage.
+    std::shared_ptr<IncomingBuffer> buffer;
+    /// Section start offset within `buffer`.
+    size_t offset = 0;
+    /// Section size in bytes.
+    size_t size = 0;
+
+    /// Return the first byte of the section payload.
+    const std::byte* Data() const { return buffer->data.Data().data() + offset; }
+  };
+
   /// Create a communicator for one CBCD groupset.
   ///
   /// \param angle_sets Angle sets served by this communicator.
@@ -67,12 +98,7 @@ public:
   {
     assert(angle_set_id < num_angle_sets_);
     return incoming_mailboxes_[angle_set_id].DrainAndProcess(
-      [this, &callback](ByteArray&& section)
-      {
-        callback(section);
-        section.Data().clear(); // retain capacity
-        incoming_recycler_.Push(std::move(section));
-      });
+      [&callback](IncomingSection&& section) { callback(section); });
   }
 
   /// Mark one angle set as fully drained on the outgoing side.
@@ -131,6 +157,8 @@ private:
   const MPICommunicatorSet& comm_set_;
   /// Number of angle sets served by this communicator.
   size_t num_angle_sets_;
+  /// Worst-case aggregate receive message size in bytes.
+  size_t max_message_bytes_;
   /// MPI tag reserved for aggregated CBCD messages.
   int mpi_tag_;
   /// Source-rank metadata for location dependencies.
@@ -139,14 +167,12 @@ private:
   std::vector<NeighborQueue> outgoing_queues_;
   /// Destination-location to outgoing-queue index map.
   std::unordered_map<int, int> dest_to_queue_index_;
+  /// Recycler for aggregate receive buffers.
+  LockFreeTreiberStack<ByteArray> recv_buffer_recycler_;
   /// Incoming mailboxes indexed by angle-set identifier.
-  std::vector<LockFreeTreiberStack<ByteArray>> incoming_mailboxes_;
-  /// Recycler for consumed incoming section buffers.
-  LockFreeTreiberStack<ByteArray> incoming_recycler_;
-  /// Scratch receive buffer reused by the communication thread.
-  ByteArray recv_buffer_;
-  /// Recycled incoming section buffers cached on the communication thread.
-  std::vector<ByteArray> incoming_reuse_cache_;
+  std::vector<LockFreeTreiberStack<IncomingSection>> incoming_mailboxes_;
+  /// Recycled aggregate receive buffers cached on the communication thread.
+  std::vector<ByteArray> recv_buffer_reuse_cache_;
   /// Outstanding nonblocking sends.
   std::vector<InFlightSend> in_flight_sends_;
   /// Recycled outgoing aggregate buffers.

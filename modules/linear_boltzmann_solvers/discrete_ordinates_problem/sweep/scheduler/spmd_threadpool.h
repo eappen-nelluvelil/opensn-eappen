@@ -27,9 +27,9 @@ constexpr std::size_t HardwareInterferenceSize =
 struct alignas(HardwareInterferenceSize) EpochState
 {
   /// Number of epochs requested for this worker.
-  std::size_t request = 0;
+  std::size_t request;
   /// Number of epochs completed by this worker.
-  std::size_t done = 0;
+  std::size_t done;
 
   bool IsIncomplete() const noexcept { return request > done; }
 };
@@ -77,7 +77,6 @@ public:
   template <class F>
   void AssignTask(F&& task)
   {
-    // std::scoped_lock<std::mutex> lock(mutex_);
     task_ = std::function<void(std::size_t)>(std::forward<F>(task));
   }
   /// Run the currently assigned task for the worker with the given index.
@@ -86,14 +85,21 @@ public:
   void WaitAll();
 
   /// Execute the currently assigned task in a new epoch.
+  ///
+  /// All shared state mutations (task_, outstanding_, epoch_states_) are performed
+  /// under the mutex so that they are fully visible to worker threads when
+  /// cv_start_ wakes them.  This eliminates a technical data race on outstanding_
+  /// that existed when it was incremented outside the lock.
   template <class F>
   void ExecuteBatch(F&& task)
   {
+    task_ = std::function<void(std::size_t)>(std::forward<F>(task));
     const std::size_t n = worker_threads_.size();
+    outstanding_ += n;
     {
       std::scoped_lock<std::mutex> lock(mutex_);
-      task_ = std::function<void(std::size_t)>(std::forward<F>(task));
-      outstanding_ += n;
+      // task_ = std::function<void(std::size_t)>(std::forward<F>(task));
+      // outstanding_ += n;
       for (std::size_t i = 0; i < n; ++i)
         ++epoch_states_[i].request;
     }
