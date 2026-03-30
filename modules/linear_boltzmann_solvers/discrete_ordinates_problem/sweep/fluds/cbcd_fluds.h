@@ -39,6 +39,23 @@ class CBCDSweepChunk;
 class CBCD_FLUDS : public FLUDS
 {
 public:
+  /// Reflecting-boundary face copy plan for one cell face.
+  struct ReflectingBoundaryFacePlan
+  {
+    /// Boundary identifier.
+    std::uint64_t boundary_id = 0;
+    /// Local cell identifier.
+    std::uint32_t cell_local_id = 0;
+    /// Face identifier on the local cell.
+    unsigned int face_id = 0;
+    /// First face-node index on the reflecting face.
+    std::uint16_t first_face_node = 0;
+    /// Base source offset in doubles from `outgoing_boundary_psi_`.
+    size_t src_base_offset = 0;
+    /// Number of nodes on the reflecting face.
+    std::uint16_t num_nodes = 0;
+  };
+
   /// Construct per-angle-set CBCD FLUDS storage.
   ///
   /// \param num_groups Number of energy groups.
@@ -72,8 +89,10 @@ public:
   /// Precompute reflecting outgoing-boundary nodes for this angle set.
   ///
   /// \param boundaries Sweep-boundary map.
+  /// \param angle_indices Angle indices owned by this angle set.
   void InitializeReflectingBoundaryNodes(
-    const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries);
+    const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
+    const std::vector<std::uint32_t>& angle_indices);
 
   /// Return the per-node angular-flux stride.
   std::size_t GetStrideSize() const { return num_groups_and_angles_; }
@@ -127,12 +146,13 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
-  /// Return reflecting outgoing-boundary nodes for one cell.
-  std::span<const BoundaryNodeInfo> GetReflectingOutgoingBoundaryNodes(std::uint64_t cell_local_id) const
+  /// Return reflecting outgoing-boundary faces for one cell.
+  std::span<const ReflectingBoundaryFacePlan>
+  GetReflectingOutgoingBoundaryFaces(std::uint64_t cell_local_id) const
   {
-    const auto begin = reflecting_outgoing_boundary_node_offsets_[cell_local_id];
-    const auto end = reflecting_outgoing_boundary_node_offsets_[cell_local_id + 1];
-    return {reflecting_outgoing_boundary_nodes_.data() + begin, end - begin};
+    const auto begin = reflecting_outgoing_boundary_face_offsets_[cell_local_id];
+    const auto end = reflecting_outgoing_boundary_face_offsets_[cell_local_id + 1];
+    return {reflecting_boundary_face_plans_.data() + begin, end - begin};
   }
 
   size_t GetNumOutgoingFaces() const { return common_data_.GetNumOutgoingNonlocalFaces(); }
@@ -211,10 +231,10 @@ private:
   /// Reusable destination buffers for outgoing wire-format sections.
   std::vector<ByteArray> dest_buffers_;
 
-  /// Cell-to-reflecting-outgoing-boundary-node offset table.
-  std::vector<std::uint32_t> reflecting_outgoing_boundary_node_offsets_;
-  /// Flat reflecting outgoing-boundary node list.
-  std::vector<BoundaryNodeInfo> reflecting_outgoing_boundary_nodes_;
+  /// Cell-to-reflecting-face offset table.
+  std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
+  /// Flat reflecting-boundary face plans.
+  std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Flat byte-level memcpy descriptors referenced by outgoing faces.
   std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
   /// One pack plan per grouped outgoing nonlocal face.

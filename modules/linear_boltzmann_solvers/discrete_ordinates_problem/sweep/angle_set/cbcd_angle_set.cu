@@ -31,7 +31,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
   cbcd_fluds_.GetStream() = stream_;
   cbcd_fluds_.AllocateLocalAndSavedPsi();
-  cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_);
+  cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_, angles_);
 }
 
 CBCD_AngleSet::~CBCD_AngleSet()
@@ -117,7 +117,7 @@ CBCD_AngleSet::TryInitialize()
       for (size_t i = 0; i < N; ++i)
       {
         uint64_t cell_id = reference_ids_[i];
-        if (not cbcd_fluds_.GetReflectingOutgoingBoundaryNodes(cell_id).empty())
+        if (not cbcd_fluds_.GetReflectingOutgoingBoundaryFaces(cell_id).empty())
         {
           is_reflecting_task_[i] = 1;
           ++total_reflecting_tasks_;
