@@ -24,8 +24,8 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
 {
   const size_t num_local_cells = spds_.GetGrid()->local_cells.size();
   cell_to_outgoing_boundary_nodes_.resize(num_local_cells);
-  cell_to_incoming_nonlocal_faces_.resize(num_local_cells);
-  cell_to_outgoing_nonlocal_faces_.resize(num_local_cells);
+  cell_to_incoming_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
+  cell_to_outgoing_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
   incoming_nonlocal_face_lookup_.resize(num_local_cells);
 
   CopyFlattenedNodeIndexToDevice(sdm);
@@ -57,7 +57,8 @@ CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_local_id, unsi
   const int grouped_face_index = face_lookup[face_id];
   assert(grouped_face_index >= 0);
 
-  return &cell_to_incoming_nonlocal_faces_[cell_local_id][grouped_face_index];
+  return &incoming_nonlocal_faces_[cell_to_incoming_nonlocal_face_offsets_[cell_local_id] +
+                                   grouped_face_index];
 }
 
 } // namespace opensn

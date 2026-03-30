@@ -192,7 +192,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   const size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
 
   const auto& reflecting_boundary_map = reflecting_outgoing_boundary_nodes_;
-  const auto& grouped_outgoing_faces = common_data_.GetOutgoingNonlocalFaces();
   constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
   constexpr size_t entry_header_size =
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
@@ -232,7 +231,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
       }
     }
 
-    const auto& grouped_faces = grouped_outgoing_faces[cell_local_id];
+    const auto grouped_faces = common_data_.GetOutgoingNonlocalFaces(cell_local_id);
     for (const auto& face_info : grouped_faces)
     {
       const size_t dest_index = face_info.dest_slot;

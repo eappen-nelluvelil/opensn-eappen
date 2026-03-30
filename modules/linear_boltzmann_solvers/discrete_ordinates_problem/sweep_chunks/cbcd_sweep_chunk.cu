@@ -51,13 +51,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   {
     auto& fluds = *fluds_list_[as_idx];
     const auto stride = fluds.GetStrideSize();
-    const auto& incoming_faces = fluds.GetCommonData().GetIncomingNonlocalFaces();
-    for (size_t cell_local_id = 0; cell_local_id < incoming_faces.size(); ++cell_local_id)
+    const auto& common_data = fluds.GetCommonData();
+    for (size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells(); ++cell_local_id)
     {
-      const auto& grouped_faces = incoming_faces[cell_local_id];
+      const auto grouped_faces = common_data.GetIncomingNonlocalFaces(cell_local_id);
       for (const auto& face_info : grouped_faces)
       {
-        const auto nodes = fluds.GetCommonData().GetIncomingFaceNodes(face_info);
+        const auto nodes = common_data.GetIncomingFaceNodes(face_info);
         if (nodes.empty())
           continue;
 

@@ -91,17 +91,32 @@ public:
     return cell_to_outgoing_boundary_nodes_;
   }
 
-  /// Return per-cell grouped outgoing nonlocal faces.
-  const std::vector<std::vector<GroupedOutgoingNonlocalFace>>& GetOutgoingNonlocalFaces() const
+  /// Return grouped outgoing nonlocal faces for one cell.
+  ///
+  /// \param cell_local_id Local cell identifier.
+  /// \return Span of grouped outgoing faces for the cell.
+  std::span<const GroupedOutgoingNonlocalFace>
+  GetOutgoingNonlocalFaces(std::uint64_t cell_local_id) const
   {
-    return cell_to_outgoing_nonlocal_faces_;
+    const auto begin = cell_to_outgoing_nonlocal_face_offsets_[cell_local_id];
+    const auto end = cell_to_outgoing_nonlocal_face_offsets_[cell_local_id + 1];
+    return {outgoing_nonlocal_faces_.data() + begin, end - begin};
   }
 
-  /// Return per-cell grouped incoming nonlocal faces.
-  const std::vector<std::vector<GroupedIncomingNonlocalFace>>& GetIncomingNonlocalFaces() const
+  /// Return grouped incoming nonlocal faces for one cell.
+  ///
+  /// \param cell_local_id Local cell identifier.
+  /// \return Span of grouped incoming faces for the cell.
+  std::span<const GroupedIncomingNonlocalFace>
+  GetIncomingNonlocalFaces(std::uint64_t cell_local_id) const
   {
-    return cell_to_incoming_nonlocal_faces_;
+    const auto begin = cell_to_incoming_nonlocal_face_offsets_[cell_local_id];
+    const auto end = cell_to_incoming_nonlocal_face_offsets_[cell_local_id + 1];
+    return {incoming_nonlocal_faces_.data() + begin, end - begin};
   }
+
+  /// Return the number of local cells represented in the grouped-face tables.
+  std::size_t GetNumLocalCells() const { return cell_to_incoming_nonlocal_face_offsets_.size() - 1; }
 
   /// Return the ordered outgoing locality table.
   const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
@@ -170,10 +185,14 @@ private:
 
   /// Per-cell outgoing-boundary nodes.
   std::vector<std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
-  /// Per-cell grouped incoming nonlocal faces.
-  std::vector<std::vector<GroupedIncomingNonlocalFace>> cell_to_incoming_nonlocal_faces_;
-  /// Per-cell grouped outgoing nonlocal faces.
-  std::vector<std::vector<GroupedOutgoingNonlocalFace>> cell_to_outgoing_nonlocal_faces_;
+  /// Cell-to-incoming-face offset table.
+  std::vector<std::uint32_t> cell_to_incoming_nonlocal_face_offsets_;
+  /// Cell-to-outgoing-face offset table.
+  std::vector<std::uint32_t> cell_to_outgoing_nonlocal_face_offsets_;
+  /// Flat grouped incoming nonlocal faces.
+  std::vector<GroupedIncomingNonlocalFace> incoming_nonlocal_faces_;
+  /// Flat grouped outgoing nonlocal faces.
+  std::vector<GroupedOutgoingNonlocalFace> outgoing_nonlocal_faces_;
   /// Flat incoming-node metadata referenced by grouped incoming faces.
   std::vector<NonlocalNodeInfo> incoming_nonlocal_face_nodes_;
   /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
