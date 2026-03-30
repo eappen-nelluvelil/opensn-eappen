@@ -46,6 +46,8 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
 
   const size_t num_dests = outgoing_destinations_.size();
   scratch_dest_face_counts_.resize(num_dests, 0);
+  scratch_dest_touched_.resize(num_dests, 0);
+  active_dest_indices_.reserve(num_dests);
   dest_buffers_.resize(num_dests);
 }
 
@@ -196,19 +198,18 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   constexpr size_t entry_header_size =
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
 
-  std::fill(scratch_dest_face_counts_.begin(), scratch_dest_face_counts_.end(), 0);
-  for (auto& buffer : dest_buffers_)
-    buffer.Data().clear();
+  active_dest_indices_.clear();
 
-  const auto ensure_dest_buffer =
+  const auto initialize_dest_buffer =
     [this, angle_set_id](const size_t dest_index)
   {
+    scratch_dest_touched_[dest_index] = 1;
+    active_dest_indices_.push_back(static_cast<std::uint32_t>(dest_index));
+    scratch_dest_face_counts_[dest_index] = 0;
     auto& data = dest_buffers_[dest_index].Data();
-    if (data.empty())
-    {
-      data.resize(section_header_size);
-      std::memcpy(data.data(), &angle_set_id, sizeof(size_t));
-    }
+    data.clear();
+    data.resize(section_header_size);
+    std::memcpy(data.data(), &angle_set_id, sizeof(size_t));
   };
 
   for (const auto& cell_local_id : cell_local_ids)
@@ -236,8 +237,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     {
       const size_t dest_index = face_info.dest_slot;
       const size_t face_data_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      if (not scratch_dest_touched_[dest_index])
+        initialize_dest_buffer(dest_index);
       scratch_dest_face_counts_[dest_index]++;
-      ensure_dest_buffer(dest_index);
       auto& data = dest_buffers_[dest_index].Data();
       const size_t offset = data.size();
       data.resize(offset + entry_header_size + face_data_size * sizeof(double));
@@ -261,15 +263,15 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     }
   }
 
-  for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
+  for (const auto dest_index_u32 : active_dest_indices_)
   {
-    if (scratch_dest_face_counts_[d] == 0)
-      continue;
-    std::memcpy(dest_buffers_[d].Data().data() + sizeof(size_t),
-                &scratch_dest_face_counts_[d],
+    const size_t dest_index = dest_index_u32;
+    std::memcpy(dest_buffers_[dest_index].Data().data() + sizeof(size_t),
+                &scratch_dest_face_counts_[dest_index],
                 sizeof(size_t));
-    agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[d].queue_index,
-                                      std::move(dest_buffers_[d]));
+    agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[dest_index].queue_index,
+                                      std::move(dest_buffers_[dest_index]));
+    scratch_dest_touched_[dest_index] = 0;
   }
 }
 

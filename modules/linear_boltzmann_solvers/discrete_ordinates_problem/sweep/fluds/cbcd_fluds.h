@@ -187,6 +187,10 @@ private:
 
   /// Per-destination face counts for the current pack pass.
   std::vector<size_t> scratch_dest_face_counts_;
+  /// Per-destination touched flags for the current pack pass.
+  std::vector<std::uint8_t> scratch_dest_touched_;
+  /// Destinations touched during the current pack pass.
+  std::vector<std::uint32_t> active_dest_indices_;
 
   /// Reusable destination buffers for outgoing wire-format sections.
   std::vector<ByteArray> dest_buffers_;
