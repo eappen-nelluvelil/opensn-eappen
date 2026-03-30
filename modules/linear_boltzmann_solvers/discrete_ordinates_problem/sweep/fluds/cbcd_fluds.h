@@ -28,18 +28,16 @@ class MeshContinuum;
 class CBCDSweepChunk;
 
 /**
- * Per-angle-set CBCD FLUDS storage and host/device transfer helper.
+ * Per-angle-set CBCD FLUDS storage and transfer helper.
  *
- * Each instance owns the zero-copy host buffers and device buffers needed by
- * one `CBCD_AngleSet`. Shared, angle-set-independent topology is stored in
- * `CBCD_FLUDSCommonData`; this class adds the mutable per-angle-set state used
- * for GPU launches, MPI packing, boundary exchange, and optional saved angular
- * flux storage.
+ * Shared topology lives in `CBCD_FLUDSCommonData`. This class owns the
+ * angle-set-local host and device buffers used for kernel launches, boundary
+ * exchange, nonlocal message packing, and optional saved angular flux.
  */
 class CBCD_FLUDS : public FLUDS
 {
 public:
-  /// Reflecting-boundary face copy plan for one cell face.
+  /// Reflecting-boundary face copy plan.
   struct ReflectingBoundaryFacePlan
   {
     /// Boundary identifier.
@@ -56,7 +54,7 @@ public:
     std::uint16_t num_nodes = 0;
   };
 
-  /// Construct per-angle-set CBCD FLUDS storage.
+  /// Construct the angle-set-local CBCD FLUDS storage.
   ///
   /// \param num_groups Number of energy groups.
   /// \param num_angles Number of angles in the angle set.
@@ -86,7 +84,7 @@ public:
   /// \param agg_comm Aggregated communicator.
   void InitializeQueueIndices(const CBCD_AggregatedCommunicator& agg_comm);
 
-  /// Precompute reflecting outgoing-boundary nodes for this angle set.
+  /// Build reflecting-boundary copy plans for this angle set.
   ///
   /// \param boundaries Sweep-boundary map.
   /// \param angle_indices Angle indices owned by this angle set.
@@ -94,7 +92,7 @@ public:
     const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
     const std::vector<std::uint32_t>& angle_indices);
 
-  /// Return the per-node angular-flux stride.
+  /// Return the angular-flux stride.
   std::size_t GetStrideSize() const { return num_groups_and_angles_; }
 
   /// Return the mapped local-cell work list for the next kernel launch.
@@ -103,7 +101,7 @@ public:
   /// Return the saved-angular-flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
 
-  /// Copy saved angular flux back into the destination psi storage.
+  /// Copy saved angular flux into the destination psi storage.
   ///
   /// \param sweep_chunk Owning sweep chunk.
   /// \param angle_set Owning angle set.
@@ -128,10 +126,7 @@ public:
                                    unsigned int face_id,
                                    const double* psi_data);
 
-  /// Pack completed outgoing psi and enqueue it for communication.
-  ///
-  /// The method also copies reflecting-boundary values directly into the
-  /// associated sweep boundary storage.
+  /// Pack completed outgoing psi and publish completed boundary data.
   ///
   /// \param angle_set Owning angle set.
   /// \param cell_local_ids Completed local-cell identifiers.
@@ -194,7 +189,7 @@ private:
   /// Device pointer bundle passed to the sweep kernel.
   CBCD_FLUDSPointerSet pointer_set_;
 
-  /// Outgoing destination metadata for one locality.
+  /// Outgoing destination metadata.
   struct OutgoingDestination
   {
     /// Destination partition ID.
@@ -205,7 +200,7 @@ private:
   /// Ordered outgoing destination table.
   std::vector<OutgoingDestination> outgoing_destinations_;
 
-  /// Byte-level memcpy descriptor for one outgoing face-node payload copy.
+  /// Outgoing node-copy plan.
   struct OutgoingNodeMemcpy
   {
     /// Source offset in doubles from `outgoing_nonlocal_psi_`.

@@ -44,7 +44,6 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   for (int source : sources)
     source_queues_.push_back({comm_set_.MapIonJ(source, my_rank)});
 
-  // Create one Treiber stack per destination MPI rank.
   outgoing_queues_.reserve(destinations.size());
   dest_to_queue_index_.reserve(destinations.size());
   int queue_idx = 0;
@@ -63,13 +62,11 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
 
-  // Pre-allocate Treiber stack nodes to eliminate heap allocations during sweeps.
-  // Outgoing: at most one section per angle set may be queued before the comm thread drains.
+  // Preallocate queue nodes so steady-state sweeps avoid Treiber node allocation.
   for (auto& nq : outgoing_queues_)
     for (auto& shard : nq.shards)
       shard->Preallocate(1);
 
-  // Incoming: at most one section per source rank may arrive before the worker thread drains.
   const size_t num_sources = source_queues_.size();
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);

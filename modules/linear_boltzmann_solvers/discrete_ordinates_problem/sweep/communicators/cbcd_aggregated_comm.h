@@ -25,21 +25,21 @@ namespace opensn
 namespace cbcd_wire
 {
 
-/// Aggregate-message header written once per MPI receive buffer.
+/// Aggregate-message header.
 #pragma pack(push, 1)
 struct AggregateHeader
 {
   size_t num_sections = 0;
 };
 
-/// Section header written once per angle-set section inside an aggregate.
+/// Angle-set section header.
 struct SectionHeader
 {
   size_t angle_set_id = 0;
   size_t num_entries = 0;
 };
 
-/// Entry header written once per packed outgoing face payload.
+/// Face-payload header.
 struct EntryHeader
 {
   std::uint64_t cell_global_id = 0;
@@ -78,21 +78,21 @@ class AngleSet;
 class MPICommunicatorSet;
 
 /**
- * Aggregated MPI communicator for the threaded CBCD sweep.
+ * Dedicated MPI progress engine for the threaded CBCD sweep.
  *
- * A dedicated communication thread owns all MPI progress for the CBCD sweep.
- * Worker threads push pre-packed outgoing sections into lock-free mailboxes,
- * and the communication thread aggregates those sections into one MPI message
- * per destination rank. Incoming MPI messages are split back into per-angle-set
- * sections and forwarded to worker threads through lock-free mailboxes.
+ * The communicator owns one progress thread for the sweep. Worker threads
+ * publish pre-packed outgoing sections into sharded mailboxes, and the
+ * progress thread aggregates those sections into one MPI message per
+ * destination. Incoming aggregate messages are split into angle-set sections
+ * and forwarded through per-angle-set mailboxes.
  */
 class CBCD_AggregatedCommunicator
 {
 public:
-  /// Incoming section view backed by one received aggregate message.
+  /// Incoming section view into one aggregate receive buffer.
   struct IncomingSection
   {
-    /// Shared storage for the received aggregate message.
+    /// Shared aggregate receive buffer.
     struct IncomingBuffer
     {
       /// Aggregate message bytes.
@@ -120,7 +120,7 @@ public:
     const std::byte* Data() const { return buffer->data.Data().data() + offset; }
   };
 
-  /// Create a communicator for one CBCD groupset.
+  /// Construct the communicator for one CBCD groupset.
   ///
   /// \param angle_sets Angle sets served by this communicator.
   /// \param comm_set Communicator mapping between mesh locations.
@@ -135,7 +135,7 @@ public:
   /// \return Queue index, or `-1` if the destination is not present.
   int GetQueueIndex(int dest_location) const;
 
-  /// Enqueue one pre-packed outgoing wire-format section.
+  /// Publish one pre-packed outgoing section.
   ///
   /// \param queue_index Destination queue index returned by GetQueueIndex().
   /// \param producer_id Stable producer identifier used to select a shard.
@@ -156,21 +156,21 @@ public:
       [&callback](IncomingSection&& section) { callback(section); });
   }
 
-  /// Mark one angle set as fully drained on the outgoing side.
+  /// Mark one angle set as complete on the outgoing side.
   ///
   /// \param angle_set_id Angle-set identifier.
   void SignalAngleSetComplete(size_t angle_set_id);
 
-  /// Launch the dedicated communication thread.
+  /// Start the communication thread for one sweep.
   void Start();
 
-  /// Stop the communication thread after all queued work completes.
+  /// Stop the communication thread after queued work drains.
   void Stop();
 
   ~CBCD_AggregatedCommunicator();
 
 private:
-  /// Outgoing mailbox for one destination location.
+  /// Outgoing mailbox set for one destination location.
   struct NeighborQueue
   {
     /// Destination mesh location.
@@ -181,14 +181,14 @@ private:
     std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> shards;
   };
 
-  /// Incoming source metadata for one location dependency.
+  /// Incoming source metadata.
   struct SourceQueue
   {
     /// Communicator-local source rank.
     int mapped_rank;
   };
 
-  /// In-flight send request and its backing storage.
+  /// In-flight send and its backing storage.
   struct InFlightSend
   {
     /// MPI request handle.
@@ -203,7 +203,7 @@ private:
   bool FlushOutgoing();
   /// Probe for incoming MPI messages and route them to angle-set mailboxes.
   bool ProbeAndReceive();
-  /// Test outstanding sends and recycle completed buffers.
+  /// Recycle completed sends.
   bool PollInFlightSends();
   /// Check whether all angle sets are complete and no outgoing work remains.
   bool AllWorkComplete() const;

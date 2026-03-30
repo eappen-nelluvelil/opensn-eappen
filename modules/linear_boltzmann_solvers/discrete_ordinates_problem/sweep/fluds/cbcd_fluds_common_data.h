@@ -20,15 +20,15 @@ class SpatialDiscretization;
 /**
  * Shared CBCD FLUDS topology and indexing data.
  *
- * The object is built once per groupset and shared by every `CBCD_FLUDS`
- * instance for that sweep ordering. It owns the device-resident face-node
- * index map consumed by the GPU kernel and the host-side grouped-face metadata
- * consumed by the host communication path.
+ * The object is built once per sweep ordering and shared by all `CBCD_FLUDS`
+ * instances in the groupset. It owns the packed face-node table consumed by
+ * the GPU kernel and the flat host metadata consumed by the CBCD host
+ * communication path.
  */
 class CBCD_FLUDSCommonData : public CBC_FLUDSCommonData
 {
 public:
-  /// Key identifying one incoming nonlocal face in the receive wire format.
+  /// Receive-side key for one incoming nonlocal face.
   struct IncomingFaceKey
   {
     std::uint64_t cell_global_id = 0;
@@ -48,7 +48,7 @@ public:
     }
   };
 
-  /// Incoming nonlocal face grouped by face ID.
+  /// Grouped incoming nonlocal face.
   struct GroupedIncomingNonlocalFace
   {
     /// Base offset in the incoming nonlocal psi buffer.
@@ -59,7 +59,7 @@ public:
     std::uint16_t num_nodes = 0;
   };
 
-  /// Outgoing node-copy descriptor for one face node.
+  /// Outgoing node-copy descriptor.
   struct OutgoingNodeCopy
   {
     /// Source offset in the outgoing nonlocal psi buffer.
@@ -68,7 +68,7 @@ public:
     std::uint16_t face_node = 0;
   };
 
-  /// Outgoing nonlocal face grouped by face ID and destination.
+  /// Grouped outgoing nonlocal face.
   struct GroupedOutgoingNonlocalFace
   {
     /// Fixed wire-format prefix `[neighbor_global_id][associated_face]`.
@@ -85,7 +85,7 @@ public:
     std::uint16_t num_node_copies = 0;
   };
 
-  /// Build shared CBCD topology for one sweep ordering.
+  /// Construct shared CBCD topology for one sweep ordering.
   ///
   /// \param spds Sweep ordering.
   /// \param grid_nodal_mappings Face-node mappings for local cells.
@@ -103,7 +103,7 @@ public:
   std::size_t GetNumIncomingNonlocalFaces() const { return num_incoming_nonlocal_faces_; }
   std::size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
 
-  /// Return the flat incoming-boundary node list.
+  /// Return the flat incoming-boundary node table.
   const std::vector<BoundaryNodeInfo>& GetIncomingBoundaryNodeMap() const
   {
     return incoming_boundary_node_map_;
@@ -144,10 +144,10 @@ public:
   /// Return the number of local cells represented in the grouped-face tables.
   std::size_t GetNumLocalCells() const { return cell_to_incoming_nonlocal_face_offsets_.size() - 1; }
 
-  /// Return the ordered outgoing locality table.
+  /// Return the ordered outgoing-locality table.
   const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
 
-  /// Resolve one grouped incoming nonlocal face from wire-format identifiers.
+  /// Resolve one grouped incoming nonlocal face from wire identifiers.
   ///
   /// \param cell_global_id Receiving cell global identifier.
   /// \param face_id Receiving face index.
@@ -165,7 +165,7 @@ public:
     return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset, face.num_node_copies};
   }
 
-  /// Return the device pointer to the packed face-node index table.
+  /// Return the device pointer to the packed face-node table.
   const std::uint64_t* GetDeviceIndex() const { return device_cell_face_node_map_; }
 
 private:
@@ -212,7 +212,7 @@ private:
   /// Ordered table of distinct outgoing localities.
   std::vector<int> outgoing_localities_;
 
-  /// Build the device table and grouped host-side metadata.
+  /// Build the device table and flat host metadata.
   void CopyFlattenedNodeIndexToDevice(const SpatialDiscretization& sdm);
 
   /// Release the packed device table.

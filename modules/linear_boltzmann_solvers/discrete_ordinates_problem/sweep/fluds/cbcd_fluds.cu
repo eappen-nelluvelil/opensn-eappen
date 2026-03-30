@@ -44,6 +44,8 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   for (const int locality : outgoing_localities)
     outgoing_destinations_.push_back({locality, -1});
 
+  // Build angle-set-local send plans once; shared common data supplies the
+  // topology, while the stride depends on this angle subset.
   outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
   outgoing_face_pack_plans_.resize(common_data_.GetNumOutgoingNonlocalFaces());
   for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
@@ -107,6 +109,7 @@ CBCD_FLUDS::InitializeReflectingBoundaryNodes(
   const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
   const std::vector<std::uint32_t>& angle_indices)
 {
+  (void)angle_indices;
   const auto num_local_cells = common_data_.GetNumLocalCells();
   reflecting_outgoing_boundary_face_offsets_.assign(num_local_cells + 1, 0);
   reflecting_boundary_face_plans_.clear();
@@ -298,11 +301,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
       std::memcpy(base + offset,
                   face_info.entry_header_prefix.data(),
                   face_info.entry_header_prefix.size());
-      cbcd_wire::StoreUnaligned(base + offset,
-                                cbcd_wire::EntryHeader{0, 0, face_data_size});
-      std::memcpy(base + offset,
-                  face_info.entry_header_prefix.data(),
-                  face_info.entry_header_prefix.size());
+      std::memcpy(base + offset + face_info.entry_header_prefix.size(),
+                  &face_data_size,
+                  sizeof(size_t));
 
       auto* psi_dst = reinterpret_cast<double*>(base + offset + entry_header_size);
       const auto* node_plan = outgoing_node_memcpy_plan_.data() + face_info.node_copy_offset;

@@ -22,12 +22,10 @@ class CBCD_AggregatedCommunicator;
 /**
  * Cooperative CBCD angle-set driver.
  *
- * The class advances one sweep ordering on the GPU using the CBCD task DAG.
- * It supports both the legacy blocking `AngleSetAdvance()` path and the
- * cooperative `TryInitialize()` / `TryAdvanceOneStep()` path used by the
- * multithreaded CBCD scheduler. In cooperative mode, each step polls kernel
- * completion, drains incoming communication, launches newly ready work, packs
- * completed outgoing data, and finalizes when all tasks are done.
+ * The class advances one CBCD task graph on the GPU. It supports both the
+ * legacy blocking `AngleSetAdvance()` path and the cooperative
+ * `TryInitialize()` / `TryAdvanceOneStep()` path used by the threaded CBCD
+ * scheduler.
  */
 class CBCD_AngleSet : public AngleSet
 {
@@ -59,17 +57,11 @@ public:
   /// Reset the inter-angle-set dependency counter for a new sweep.
   void ResetDependencyCounter();
   /// Register following angle sets for reflecting-boundary dependencies.
-  ///
-  /// \param following_angle_sets Following angle sets.
   void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
-  /// Perform one-time sweep initialization when dependencies are satisfied.
-  ///
-  /// \return `true` if initialization completed.
+  /// Perform sweep initialization when dependencies are satisfied.
   bool TryInitialize();
   /// Advance the sweep by one cooperative step.
-  ///
-  /// \return `true` if any work was performed.
   bool TryAdvanceOneStep();
 
   bool IsFinished() const { return executed_; }
