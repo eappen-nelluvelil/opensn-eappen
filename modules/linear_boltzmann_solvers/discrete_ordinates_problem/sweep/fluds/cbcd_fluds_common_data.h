@@ -117,6 +117,17 @@ public:
     return {incoming_nonlocal_faces_.data() + begin, end - begin};
   }
 
+  /// Return the incoming-face lookup table for one cell.
+  ///
+  /// \param cell_local_id Local cell identifier.
+  /// \return Span mapping cell face index to grouped incoming-face index.
+  std::span<const int> GetIncomingFaceLookup(std::uint64_t cell_local_id) const
+  {
+    const auto begin = cell_to_incoming_face_lookup_offsets_[cell_local_id];
+    const auto end = cell_to_incoming_face_lookup_offsets_[cell_local_id + 1];
+    return {incoming_face_lookup_.data() + begin, end - begin};
+  }
+
   /// Return the number of local cells represented in the grouped-face tables.
   std::size_t GetNumLocalCells() const { return cell_to_incoming_nonlocal_face_offsets_.size() - 1; }
 
@@ -201,8 +212,10 @@ private:
   std::vector<NonlocalNodeInfo> incoming_nonlocal_face_nodes_;
   /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
   std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
-  /// Face-ID to grouped-face index lookup for incoming nonlocal faces.
-  std::vector<std::vector<int>> incoming_nonlocal_face_lookup_;
+  /// Cell-to-incoming-face-lookup offset table.
+  std::vector<std::uint32_t> cell_to_incoming_face_lookup_offsets_;
+  /// Flat face-ID to grouped-face index lookup for incoming nonlocal faces.
+  std::vector<int> incoming_face_lookup_;
   /// Receiving-cell global-to-local map for incoming nonlocal traffic.
   std::unordered_map<std::uint64_t, std::uint64_t> incoming_global_to_local_;
   /// Ordered table of distinct outgoing localities.

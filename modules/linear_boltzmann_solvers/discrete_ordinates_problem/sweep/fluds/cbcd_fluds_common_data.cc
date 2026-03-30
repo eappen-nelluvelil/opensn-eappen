@@ -26,7 +26,7 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
   cell_to_outgoing_boundary_node_offsets_.resize(num_local_cells + 1, 0);
   cell_to_incoming_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
   cell_to_outgoing_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
-  incoming_nonlocal_face_lookup_.resize(num_local_cells);
+  cell_to_incoming_face_lookup_offsets_.resize(num_local_cells + 1, 0);
 
   CopyFlattenedNodeIndexToDevice(sdm);
 }
@@ -52,7 +52,7 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
 const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace*
 CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_local_id, unsigned int face_id) const
 {
-  const auto& face_lookup = incoming_nonlocal_face_lookup_[cell_local_id];
+  const auto face_lookup = GetIncomingFaceLookup(cell_local_id);
   assert(face_id < face_lookup.size());
   const int grouped_face_index = face_lookup[face_id];
   assert(grouped_face_index >= 0);
