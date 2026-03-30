@@ -28,6 +28,26 @@ class SpatialDiscretization;
 class CBCD_FLUDSCommonData : public CBC_FLUDSCommonData
 {
 public:
+  /// Key identifying one incoming nonlocal face in the receive wire format.
+  struct IncomingFaceKey
+  {
+    std::uint64_t cell_global_id = 0;
+    unsigned int face_id = 0;
+
+    bool operator==(const IncomingFaceKey&) const = default;
+  };
+
+  /// Hash for `IncomingFaceKey`.
+  struct IncomingFaceKeyHash
+  {
+    std::size_t operator()(const IncomingFaceKey& key) const noexcept
+    {
+      const auto h0 = std::hash<std::uint64_t>{}(key.cell_global_id);
+      const auto h1 = std::hash<unsigned int>{}(key.face_id);
+      return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2));
+    }
+  };
+
   /// Incoming nonlocal face grouped by face ID.
   struct GroupedIncomingNonlocalFace
   {
@@ -117,30 +137,19 @@ public:
     return {incoming_nonlocal_faces_.data() + begin, end - begin};
   }
 
-  /// Return the incoming-face lookup table for one cell.
-  ///
-  /// \param cell_local_id Local cell identifier.
-  /// \return Span mapping cell face index to grouped incoming-face index.
-  std::span<const int> GetIncomingFaceLookup(std::uint64_t cell_local_id) const
-  {
-    const auto begin = cell_to_incoming_face_lookup_offsets_[cell_local_id];
-    const auto end = cell_to_incoming_face_lookup_offsets_[cell_local_id + 1];
-    return {incoming_face_lookup_.data() + begin, end - begin};
-  }
-
   /// Return the number of local cells represented in the grouped-face tables.
   std::size_t GetNumLocalCells() const { return cell_to_incoming_nonlocal_face_offsets_.size() - 1; }
 
   /// Return the ordered outgoing locality table.
   const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
 
-  /// Resolve one grouped incoming nonlocal face.
+  /// Resolve one grouped incoming nonlocal face from wire-format identifiers.
   ///
-  /// \param cell_local_id Local cell identifier.
-  /// \param face_id Face index on that cell.
-  /// \return Metadata for the requested grouped face.
-  const GroupedIncomingNonlocalFace* FindIncomingNonlocalFace(std::uint64_t cell_local_id,
-                                                              unsigned int face_id) const;
+  /// \param cell_global_id Receiving cell global identifier.
+  /// \param face_id Receiving face index.
+  /// \return Pair of local cell identifier and grouped-face metadata.
+  std::pair<std::uint64_t, const GroupedIncomingNonlocalFace*>
+  FindIncomingNonlocalFace(std::uint64_t cell_global_id, unsigned int face_id) const;
 
   /// Return the incoming-node descriptors for one grouped incoming face.
   ///
@@ -160,17 +169,6 @@ public:
   GetOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
   {
     return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset, face.num_node_copies};
-  }
-
-  /// Map a receiving cell global ID to its local ID.
-  ///
-  /// \param cell_global_id Global cell identifier.
-  /// \return Local cell identifier.
-  std::uint64_t MapIncomingGlobalToLocal(std::uint64_t cell_global_id) const
-  {
-    const auto it = incoming_global_to_local_.find(cell_global_id);
-    assert(it != incoming_global_to_local_.end());
-    return it->second;
   }
 
   /// Return the device pointer to the packed face-node index table.
@@ -212,12 +210,13 @@ private:
   std::vector<NonlocalNodeInfo> incoming_nonlocal_face_nodes_;
   /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
   std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
-  /// Cell-to-incoming-face-lookup offset table.
-  std::vector<std::uint32_t> cell_to_incoming_face_lookup_offsets_;
-  /// Flat face-ID to grouped-face index lookup for incoming nonlocal faces.
-  std::vector<int> incoming_face_lookup_;
-  /// Receiving-cell global-to-local map for incoming nonlocal traffic.
-  std::unordered_map<std::uint64_t, std::uint64_t> incoming_global_to_local_;
+  /// Incoming wire-format face key to grouped-face descriptor lookup.
+  struct IncomingFaceRef
+  {
+    std::uint32_t cell_local_id = 0;
+    std::uint32_t grouped_face_index = 0;
+  };
+  std::unordered_map<IncomingFaceKey, IncomingFaceRef, IncomingFaceKeyHash> incoming_face_map_;
   /// Ordered table of distinct outgoing localities.
   std::vector<int> outgoing_localities_;
 

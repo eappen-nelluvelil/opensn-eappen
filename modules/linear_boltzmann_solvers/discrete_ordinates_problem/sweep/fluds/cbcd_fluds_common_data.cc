@@ -26,7 +26,6 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
   cell_to_outgoing_boundary_node_offsets_.resize(num_local_cells + 1, 0);
   cell_to_incoming_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
   cell_to_outgoing_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
-  cell_to_incoming_face_lookup_offsets_.resize(num_local_cells + 1, 0);
 
   CopyFlattenedNodeIndexToDevice(sdm);
 }
@@ -49,16 +48,14 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
 }
 #endif
 
-const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace*
-CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_local_id, unsigned int face_id) const
+std::pair<std::uint64_t, const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace*>
+CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_global_id,
+                                               unsigned int face_id) const
 {
-  const auto face_lookup = GetIncomingFaceLookup(cell_local_id);
-  assert(face_id < face_lookup.size());
-  const int grouped_face_index = face_lookup[face_id];
-  assert(grouped_face_index >= 0);
-
-  return &incoming_nonlocal_faces_[cell_to_incoming_nonlocal_face_offsets_[cell_local_id] +
-                                   grouped_face_index];
+  const auto it = incoming_face_map_.find({cell_global_id, face_id});
+  assert(it != incoming_face_map_.end());
+  const auto& face_ref = it->second;
+  return {face_ref.cell_local_id, &incoming_nonlocal_faces_[face_ref.grouped_face_index]};
 }
 
 } // namespace opensn

@@ -165,8 +165,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
                                     unsigned int face_id,
                                     const double* psi_data)
 {
-  const uint64_t cell_local_id = common_data_.MapIncomingGlobalToLocal(cell_global_id);
-  const auto* face_info = common_data_.FindIncomingNonlocalFace(cell_local_id, face_id);
+  const auto [cell_local_id, face_info] = common_data_.FindIncomingNonlocalFace(cell_global_id, face_id);
   OpenSnLogicalErrorIf(face_info == nullptr,
                        "CBCD_FLUDS::ScatterReceivedFaceData: incoming face metadata not found.");
 

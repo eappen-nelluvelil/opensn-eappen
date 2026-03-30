@@ -38,20 +38,14 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::uint64_t current_index_offset = offsets_size;
   std::uint64_t local_indices_filled = 0;
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
-  incoming_global_to_local_.reserve(num_local_cells);
+  incoming_face_map_.reserve(num_local_cells);
   outgoing_localities_.reserve(num_local_cells);
   outgoing_boundary_nodes_.reserve(total_face_nodes);
-  incoming_face_lookup_.reserve(total_face_nodes);
   incoming_nonlocal_face_nodes_.reserve(total_face_nodes);
   outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
 
   for (const auto& cell : grid.local_cells)
   {
-    cell_to_incoming_face_lookup_offsets_[cell.local_id] =
-      static_cast<std::uint32_t>(incoming_face_lookup_.size());
-    incoming_face_lookup_.insert(incoming_face_lookup_.end(), cell.faces.size(), -1);
-    auto* const incoming_face_lookup = incoming_face_lookup_.data() +
-                                       cell_to_incoming_face_lookup_offsets_[cell.local_id];
     cell_to_outgoing_boundary_node_offsets_[cell.local_id] =
       static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
     cell_to_incoming_nonlocal_face_offsets_[cell.local_id] =
@@ -97,9 +91,12 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
                                                     cell_to_incoming_nonlocal_face_offsets_[cell.local_id]);
               auto& grouped_face = incoming_nonlocal_faces_.emplace_back();
               grouped_face.node_offset = static_cast<std::uint32_t>(incoming_nonlocal_face_nodes_.size());
-              incoming_face_lookup[f] = grouped_face_index;
+              incoming_face_map_.emplace(IncomingFaceKey{cell.global_id, static_cast<unsigned int>(f)},
+                                         IncomingFaceRef{static_cast<std::uint32_t>(cell.local_id),
+                                                         static_cast<std::uint32_t>(
+                                                           cell_to_incoming_nonlocal_face_offsets_[cell.local_id] +
+                                                           grouped_face_index)});
               ++num_incoming_nonlocal_faces_;
-              incoming_global_to_local_[cell.global_id] = cell.local_id;
             }
 
             auto& grouped_face =
@@ -200,8 +197,6 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       }
       num_cell_nodes += num_face_nodes;
     }
-    cell_to_incoming_face_lookup_offsets_[cell.local_id + 1] =
-      static_cast<std::uint32_t>(incoming_face_lookup_.size());
     cell_to_outgoing_boundary_node_offsets_[cell.local_id + 1] =
       static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
     cell_to_incoming_nonlocal_face_offsets_[cell.local_id + 1] =
