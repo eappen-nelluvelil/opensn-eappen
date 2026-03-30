@@ -106,10 +106,8 @@ CBCD_FLUDS::InitializeQueueIndices(const CBCD_AggregatedCommunicator& agg_comm)
 
 void
 CBCD_FLUDS::InitializeReflectingBoundaryNodes(
-  const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-  const std::vector<std::uint32_t>& angle_indices)
+  const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
 {
-  (void)angle_indices;
   const auto num_local_cells = common_data_.GetNumLocalCells();
   reflecting_outgoing_boundary_face_offsets_.assign(num_local_cells + 1, 0);
   reflecting_boundary_face_plans_.clear();
@@ -215,15 +213,12 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
                                     unsigned int face_id,
                                     const double* psi_data)
 {
-  const auto [cell_local_id, face_info] = common_data_.FindIncomingNonlocalFace(cell_global_id, face_id);
-  OpenSnLogicalErrorIf(face_info == nullptr,
-                       "CBCD_FLUDS::ScatterReceivedFaceData: incoming face metadata not found.");
-
-  double* dst = incoming_nonlocal_psi_.data() + face_info->base_storage_index * num_groups_and_angles_;
+  const auto& face_info = common_data_.FindIncomingNonlocalFace(cell_global_id, face_id);
+  double* dst = incoming_nonlocal_psi_.data() + face_info.base_storage_index * num_groups_and_angles_;
   const size_t face_bytes =
-    static_cast<size_t>(face_info->num_nodes) * num_groups_and_angles_ * sizeof(double);
+    static_cast<size_t>(face_info.num_nodes) * num_groups_and_angles_ * sizeof(double);
   std::memcpy(dst, psi_data, face_bytes);
-  return cell_local_id;
+  return face_info.cell_local_id;
 }
 
 void

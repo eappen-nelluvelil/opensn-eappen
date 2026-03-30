@@ -38,19 +38,24 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::uint64_t current_index_offset = offsets_size;
   std::uint64_t local_indices_filled = 0;
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
-  incoming_face_map_.reserve(num_local_cells);
+  incoming_face_map_.reserve(total_face_nodes);
   outgoing_localities_.reserve(num_local_cells);
   outgoing_boundary_nodes_.reserve(total_face_nodes);
   outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
 
+  const auto update_cell_offsets = [this](const std::uint64_t cell_local_id)
+  {
+    cell_to_outgoing_boundary_node_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
+    cell_to_incoming_nonlocal_face_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(incoming_nonlocal_faces_.size());
+    cell_to_outgoing_nonlocal_face_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(outgoing_nonlocal_faces_.size());
+  };
+
   for (const auto& cell : grid.local_cells)
   {
-    cell_to_outgoing_boundary_node_offsets_[cell.local_id] =
-      static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
-    cell_to_incoming_nonlocal_face_offsets_[cell.local_id] =
-      static_cast<std::uint32_t>(incoming_nonlocal_faces_.size());
-    cell_to_outgoing_nonlocal_face_offsets_[cell.local_id] =
-      static_cast<std::uint32_t>(outgoing_nonlocal_faces_.size());
+    update_cell_offsets(cell.local_id);
 
     cell_offsets_ptr[2 * cell.local_id] = current_index_offset;
     std::uint64_t num_cell_nodes = 0;
@@ -89,15 +94,14 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               grouped_face_index = static_cast<int>(incoming_nonlocal_faces_.size() -
                                                     cell_to_incoming_nonlocal_face_offsets_[cell.local_id]);
               auto& grouped_face = incoming_nonlocal_faces_.emplace_back();
+              grouped_face.cell_local_id = static_cast<std::uint32_t>(cell.local_id);
               grouped_face.base_storage_index =
                 static_cast<std::uint32_t>(num_incoming_nonlocal_nodes_);
               grouped_face.source_partition = grid.cells[face.neighbor_id].partition_id;
               incoming_face_map_.emplace(IncomingFaceKey{cell.global_id, static_cast<unsigned int>(f)},
-                                         IncomingFaceRef{static_cast<std::uint32_t>(cell.local_id),
-                                                         static_cast<std::uint32_t>(
-                                                           cell_to_incoming_nonlocal_face_offsets_[cell.local_id] +
-                                                           grouped_face_index)});
-              ++num_incoming_nonlocal_faces_;
+                                         static_cast<std::uint32_t>(
+                                           cell_to_incoming_nonlocal_face_offsets_[cell.local_id] +
+                                           grouped_face_index));
             }
 
             auto& grouped_face =
@@ -162,7 +166,6 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               std::memcpy(grouped_face.entry_header_prefix.data() + sizeof(std::uint64_t),
                           &associated_face,
                           sizeof(unsigned int));
-              ++num_outgoing_nonlocal_faces_;
             }
 
             auto& grouped_face =
@@ -194,12 +197,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       }
       num_cell_nodes += num_face_nodes;
     }
-    cell_to_outgoing_boundary_node_offsets_[cell.local_id + 1] =
-      static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
-    cell_to_incoming_nonlocal_face_offsets_[cell.local_id + 1] =
-      static_cast<std::uint32_t>(incoming_nonlocal_faces_.size());
-    cell_to_outgoing_nonlocal_face_offsets_[cell.local_id + 1] =
-      static_cast<std::uint32_t>(outgoing_nonlocal_faces_.size());
+    update_cell_offsets(cell.local_id + 1);
     cell_offsets_ptr[2 * cell.local_id + 1] = num_cell_nodes;
     current_index_offset += num_cell_nodes;
   }

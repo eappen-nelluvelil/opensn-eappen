@@ -51,6 +51,8 @@ public:
   /// Grouped incoming nonlocal face.
   struct GroupedIncomingNonlocalFace
   {
+    /// Receiving local cell identifier.
+    std::uint32_t cell_local_id = 0;
     /// Base offset in the incoming nonlocal psi buffer.
     std::uint32_t base_storage_index = 0;
     /// Source partition for this incoming face.
@@ -100,8 +102,8 @@ public:
   std::size_t GetNumOutgoingBoundaryNodes() const { return num_outgoing_boundary_nodes_; }
   std::size_t GetNumIncomingNonlocalNodes() const { return num_incoming_nonlocal_nodes_; }
   std::size_t GetNumOutgoingNonlocalNodes() const { return num_outgoing_nonlocal_nodes_; }
-  std::size_t GetNumIncomingNonlocalFaces() const { return num_incoming_nonlocal_faces_; }
-  std::size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
+  std::size_t GetNumIncomingNonlocalFaces() const { return incoming_nonlocal_faces_.size(); }
+  std::size_t GetNumOutgoingNonlocalFaces() const { return outgoing_nonlocal_faces_.size(); }
 
   /// Return the flat incoming-boundary node table.
   const std::vector<BoundaryNodeInfo>& GetIncomingBoundaryNodeMap() const
@@ -151,8 +153,8 @@ public:
   ///
   /// \param cell_global_id Receiving cell global identifier.
   /// \param face_id Receiving face index.
-  /// \return Pair of local cell identifier and grouped-face metadata.
-  std::pair<std::uint64_t, const GroupedIncomingNonlocalFace*>
+  /// \return Grouped-face metadata.
+  const GroupedIncomingNonlocalFace&
   FindIncomingNonlocalFace(std::uint64_t cell_global_id, unsigned int face_id) const;
 
   /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
@@ -177,11 +179,6 @@ private:
   size_t num_incoming_nonlocal_nodes_;
   /// Number of outgoing nonlocal nodes.
   size_t num_outgoing_nonlocal_nodes_;
-  /// Number of grouped incoming nonlocal faces.
-  size_t num_incoming_nonlocal_faces_;
-  /// Number of grouped outgoing nonlocal faces.
-  size_t num_outgoing_nonlocal_faces_;
-
   /// Device-resident packed face-node index table.
   std::uint64_t* device_cell_face_node_map_;
 
@@ -203,12 +200,7 @@ private:
   /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
   std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
   /// Incoming wire-format face key to grouped-face descriptor lookup.
-  struct IncomingFaceRef
-  {
-    std::uint32_t cell_local_id = 0;
-    std::uint32_t grouped_face_index = 0;
-  };
-  std::unordered_map<IncomingFaceKey, IncomingFaceRef, IncomingFaceKeyHash> incoming_face_map_;
+  std::unordered_map<IncomingFaceKey, std::uint32_t, IncomingFaceKeyHash> incoming_face_map_;
   /// Ordered table of distinct outgoing localities.
   std::vector<int> outgoing_localities_;
 

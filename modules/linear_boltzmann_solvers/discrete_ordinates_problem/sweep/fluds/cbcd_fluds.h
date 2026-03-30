@@ -87,10 +87,8 @@ public:
   /// Build reflecting-boundary copy plans for this angle set.
   ///
   /// \param boundaries Sweep-boundary map.
-  /// \param angle_indices Angle indices owned by this angle set.
   void InitializeReflectingBoundaryNodes(
-    const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
-    const std::vector<std::uint32_t>& angle_indices);
+    const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries);
 
   /// Return the angular-flux stride.
   std::size_t GetStrideSize() const { return num_groups_and_angles_; }

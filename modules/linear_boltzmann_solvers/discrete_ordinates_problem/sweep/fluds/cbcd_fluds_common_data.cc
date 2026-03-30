@@ -17,8 +17,6 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
     num_outgoing_boundary_nodes_(0),
     num_incoming_nonlocal_nodes_(0),
     num_outgoing_nonlocal_nodes_(0),
-    num_incoming_nonlocal_faces_(0),
-    num_outgoing_nonlocal_faces_(0),
     device_cell_face_node_map_(nullptr),
     incoming_boundary_node_map_()
 {
@@ -48,14 +46,13 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
 }
 #endif
 
-std::pair<std::uint64_t, const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace*>
+const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace&
 CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_global_id,
                                                unsigned int face_id) const
 {
   const auto it = incoming_face_map_.find({cell_global_id, face_id});
   assert(it != incoming_face_map_.end());
-  const auto& face_ref = it->second;
-  return {face_ref.cell_local_id, &incoming_nonlocal_faces_[face_ref.grouped_face_index]};
+  return incoming_nonlocal_faces_[it->second];
 }
 
 } // namespace opensn

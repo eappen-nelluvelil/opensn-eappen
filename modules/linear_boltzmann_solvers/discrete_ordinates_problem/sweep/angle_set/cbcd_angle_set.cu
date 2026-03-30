@@ -31,7 +31,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
   cbcd_fluds_.GetStream() = stream_;
   cbcd_fluds_.AllocateLocalAndSavedPsi();
-  cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_, angles_);
+  cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_);
 }
 
 CBCD_AngleSet::~CBCD_AngleSet()
