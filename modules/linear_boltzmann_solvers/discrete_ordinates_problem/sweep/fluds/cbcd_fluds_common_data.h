@@ -85,10 +85,12 @@ public:
     return incoming_boundary_node_map_;
   }
 
-  /// Return per-cell outgoing-boundary nodes.
-  const std::vector<std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
+  /// Return outgoing-boundary nodes for one cell.
+  std::span<const BoundaryNodeInfo> GetOutgoingBoundaryNodes(std::uint64_t cell_local_id) const
   {
-    return cell_to_outgoing_boundary_nodes_;
+    const auto begin = cell_to_outgoing_boundary_node_offsets_[cell_local_id];
+    const auto end = cell_to_outgoing_boundary_node_offsets_[cell_local_id + 1];
+    return {outgoing_boundary_nodes_.data() + begin, end - begin};
   }
 
   /// Return grouped outgoing nonlocal faces for one cell.
@@ -183,8 +185,10 @@ private:
   /// Flat incoming-boundary node list.
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
 
-  /// Per-cell outgoing-boundary nodes.
-  std::vector<std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
+  /// Cell-to-outgoing-boundary-node offset table.
+  std::vector<std::uint32_t> cell_to_outgoing_boundary_node_offsets_;
+  /// Flat outgoing-boundary node list.
+  std::vector<BoundaryNodeInfo> outgoing_boundary_nodes_;
   /// Cell-to-incoming-face offset table.
   std::vector<std::uint32_t> cell_to_incoming_nonlocal_face_offsets_;
   /// Cell-to-outgoing-face offset table.

@@ -118,8 +118,8 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
  * Used by CBCD_FLUDS to copy angular flux between host boundary buffers and
  * the sweep boundary conditions (reflecting or surface-source).
  *
- * Stored in flat vectors (incoming) and per-cell vectors (outgoing) inside
- * CBCD_FLUDSCommonData.  Sized to 24 bytes (down from 40) by narrowing fields
+ * Stored in flat vectors with per-cell span tables inside
+ * CBCD_FLUDSCommonData. Sized to 24 bytes (down from 40) by narrowing fields
  * that never exceed 32- or 16-bit range.
  */
 struct BoundaryNodeInfo

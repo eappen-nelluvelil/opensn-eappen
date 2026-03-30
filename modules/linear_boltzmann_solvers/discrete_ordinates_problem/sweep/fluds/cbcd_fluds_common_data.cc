@@ -23,7 +23,7 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
     incoming_boundary_node_map_()
 {
   const size_t num_local_cells = spds_.GetGrid()->local_cells.size();
-  cell_to_outgoing_boundary_nodes_.resize(num_local_cells);
+  cell_to_outgoing_boundary_node_offsets_.resize(num_local_cells + 1, 0);
   cell_to_incoming_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
   cell_to_outgoing_nonlocal_face_offsets_.resize(num_local_cells + 1, 0);
   incoming_nonlocal_face_lookup_.resize(num_local_cells);

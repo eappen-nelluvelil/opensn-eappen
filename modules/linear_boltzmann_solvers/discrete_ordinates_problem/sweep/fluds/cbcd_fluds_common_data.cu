@@ -40,12 +40,15 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
   incoming_global_to_local_.reserve(num_local_cells);
   outgoing_localities_.reserve(num_local_cells);
+  outgoing_boundary_nodes_.reserve(total_face_nodes);
   incoming_nonlocal_face_nodes_.reserve(total_face_nodes);
   outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
 
   for (const auto& cell : grid.local_cells)
   {
     incoming_nonlocal_face_lookup_[cell.local_id].assign(cell.faces.size(), -1);
+    cell_to_outgoing_boundary_node_offsets_[cell.local_id] =
+      static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
     cell_to_incoming_nonlocal_face_offsets_[cell.local_id] =
       static_cast<std::uint32_t>(incoming_nonlocal_faces_.size());
     cell_to_outgoing_nonlocal_face_offsets_[cell.local_id] =
@@ -175,7 +178,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           else
           {
             node_index = CBCD_NodeIndex(num_outgoing_boundary_nodes_, is_outgoing_face);
-            cell_to_outgoing_boundary_nodes_[cell.local_id].emplace_back(
+            outgoing_boundary_nodes_.emplace_back(
               BoundaryNodeInfo{face.neighbor_id,
                                static_cast<std::uint32_t>(cell.local_id),
                                static_cast<unsigned int>(f),
@@ -192,6 +195,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       }
       num_cell_nodes += num_face_nodes;
     }
+    cell_to_outgoing_boundary_node_offsets_[cell.local_id + 1] =
+      static_cast<std::uint32_t>(outgoing_boundary_nodes_.size());
     cell_to_incoming_nonlocal_face_offsets_[cell.local_id + 1] =
       static_cast<std::uint32_t>(incoming_nonlocal_faces_.size());
     cell_to_outgoing_nonlocal_face_offsets_[cell.local_id + 1] =

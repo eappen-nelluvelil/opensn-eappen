@@ -87,21 +87,23 @@ void
 CBCD_FLUDS::InitializeReflectingBoundaryNodes(
   const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
 {
-  const auto& outgoing_boundary_map = common_data_.GetOutgoingBoundaryNodeMap();
-  reflecting_outgoing_boundary_nodes_.assign(outgoing_boundary_map.size(), {});
+  const auto num_local_cells = common_data_.GetNumLocalCells();
+  reflecting_outgoing_boundary_node_offsets_.assign(num_local_cells + 1, 0);
+  reflecting_outgoing_boundary_nodes_.clear();
+  reflecting_outgoing_boundary_nodes_.reserve(common_data_.GetNumOutgoingBoundaryNodes());
 
-  for (size_t cell_local_id = 0; cell_local_id < outgoing_boundary_map.size(); ++cell_local_id)
+  for (size_t cell_local_id = 0; cell_local_id < num_local_cells; ++cell_local_id)
   {
-    const auto& boundary_nodes = outgoing_boundary_map[cell_local_id];
-    auto& reflecting_nodes = reflecting_outgoing_boundary_nodes_[cell_local_id];
-    reflecting_nodes.reserve(boundary_nodes.size());
-
-    for (const auto& node : boundary_nodes)
+    reflecting_outgoing_boundary_node_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(reflecting_outgoing_boundary_nodes_.size());
+    for (const auto& node : common_data_.GetOutgoingBoundaryNodes(cell_local_id))
     {
       const auto boundary_it = boundaries.find(node.boundary_id);
       if (boundary_it != boundaries.end() and boundary_it->second->IsReflecting())
-        reflecting_nodes.push_back(node);
+        reflecting_outgoing_boundary_nodes_.push_back(node);
     }
+    reflecting_outgoing_boundary_node_offsets_[cell_local_id + 1] =
+      static_cast<std::uint32_t>(reflecting_outgoing_boundary_nodes_.size());
   }
 }
 
@@ -191,7 +193,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   const size_t groups_bytes = num_groups_ * sizeof(double);
   const size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
 
-  const auto& reflecting_boundary_map = reflecting_outgoing_boundary_nodes_;
   constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
   constexpr size_t entry_header_size =
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
@@ -213,7 +214,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
 
   for (const auto& cell_local_id : cell_local_ids)
   {
-    const auto& boundary_nodes = reflecting_boundary_map[cell_local_id];
+    const auto boundary_nodes = GetReflectingOutgoingBoundaryNodes(cell_local_id);
     if (not boundary_nodes.empty())
     {
       for (const auto& node : boundary_nodes)

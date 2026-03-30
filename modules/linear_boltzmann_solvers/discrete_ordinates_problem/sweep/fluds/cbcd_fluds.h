@@ -127,10 +127,12 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
-  /// Return per-cell reflecting outgoing-boundary nodes for this angle set.
-  const std::vector<std::vector<BoundaryNodeInfo>>& GetReflectingOutgoingBoundaryNodeMap() const
+  /// Return reflecting outgoing-boundary nodes for one cell.
+  std::span<const BoundaryNodeInfo> GetReflectingOutgoingBoundaryNodes(std::uint64_t cell_local_id) const
   {
-    return reflecting_outgoing_boundary_nodes_;
+    const auto begin = reflecting_outgoing_boundary_node_offsets_[cell_local_id];
+    const auto end = reflecting_outgoing_boundary_node_offsets_[cell_local_id + 1];
+    return {reflecting_outgoing_boundary_nodes_.data() + begin, end - begin};
   }
 
   size_t GetNumOutgoingFaces() const { return common_data_.GetNumOutgoingNonlocalFaces(); }
@@ -189,8 +191,10 @@ private:
   /// Reusable destination buffers for outgoing wire-format sections.
   std::vector<ByteArray> dest_buffers_;
 
-  /// Per-cell reflecting outgoing-boundary nodes.
-  std::vector<std::vector<BoundaryNodeInfo>> reflecting_outgoing_boundary_nodes_;
+  /// Cell-to-reflecting-outgoing-boundary-node offset table.
+  std::vector<std::uint32_t> reflecting_outgoing_boundary_node_offsets_;
+  /// Flat reflecting outgoing-boundary node list.
+  std::vector<BoundaryNodeInfo> reflecting_outgoing_boundary_nodes_;
 
   /// Populate the device pointer bundle after allocation.
   void CreatePointerSet();
