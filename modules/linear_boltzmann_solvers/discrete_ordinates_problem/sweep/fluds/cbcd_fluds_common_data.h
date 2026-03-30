@@ -51,8 +51,10 @@ public:
   /// Incoming nonlocal face grouped by face ID.
   struct GroupedIncomingNonlocalFace
   {
-    /// Offset into the flat incoming-node array.
-    std::uint32_t node_offset = 0;
+    /// Base offset in the incoming nonlocal psi buffer.
+    std::uint32_t base_storage_index = 0;
+    /// Source partition for this incoming face.
+    int source_partition = 0;
     /// Number of nodes on this face.
     std::uint16_t num_nodes = 0;
   };
@@ -62,7 +64,7 @@ public:
   {
     /// Source offset in the outgoing nonlocal psi buffer.
     std::uint32_t storage_index = 0;
-    /// Destination face-node index inside the packed face payload.
+    /// Destination face-node index in the receiver-local payload layout.
     std::uint16_t face_node = 0;
   };
 
@@ -153,16 +155,6 @@ public:
   std::pair<std::uint64_t, const GroupedIncomingNonlocalFace*>
   FindIncomingNonlocalFace(std::uint64_t cell_global_id, unsigned int face_id) const;
 
-  /// Return the incoming-node descriptors for one grouped incoming face.
-  ///
-  /// \param face Grouped incoming face descriptor.
-  /// \return Span of incoming-node descriptors.
-  std::span<const NonlocalNodeInfo>
-  GetIncomingFaceNodes(const GroupedIncomingNonlocalFace& face) const
-  {
-    return {incoming_nonlocal_face_nodes_.data() + face.node_offset, face.num_nodes};
-  }
-
   /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
   ///
   /// \param face Grouped outgoing face descriptor.
@@ -208,8 +200,6 @@ private:
   std::vector<GroupedIncomingNonlocalFace> incoming_nonlocal_faces_;
   /// Flat grouped outgoing nonlocal faces.
   std::vector<GroupedOutgoingNonlocalFace> outgoing_nonlocal_faces_;
-  /// Flat incoming-node metadata referenced by grouped incoming faces.
-  std::vector<NonlocalNodeInfo> incoming_nonlocal_face_nodes_;
   /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
   std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
   /// Incoming wire-format face key to grouped-face descriptor lookup.

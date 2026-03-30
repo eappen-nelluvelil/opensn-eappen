@@ -131,23 +131,4 @@ struct BoundaryNodeInfo
   std::uint16_t face_node;     ///< Face-node index within the face.
 };
 
-/**
- * Host-side metadata for a single non-local (inter-partition) face node.
- *
- * Used by CBCD_FLUDS to scatter received MPI data into the incoming non-local
- * psi buffer and to pack outgoing data into the wire format.
- *
- * Stored per-cell in CBCD_FLUDSCommonData.  The cell_local_id is omitted
- * because it is always recoverable from the outer per-cell vector index.
- * Sized to 24 bytes (down from 48).
- */
-struct NonlocalNodeInfo
-{
-  std::uint64_t cell_global_id; ///< Global cell ID (used for MPI message routing / sizing).
-  unsigned int face_id;         ///< Face index within the cell.
-  std::uint32_t storage_index;  ///< Offset into the nonlocal psi MappedHostVector.
-  std::uint16_t face_node;      ///< Face-node index within the face (outgoing pack source).
-  short face_node_mapped;       ///< Mapped face-node index on the neighbor (incoming scatter dest).
-};
-
 } // namespace opensn
