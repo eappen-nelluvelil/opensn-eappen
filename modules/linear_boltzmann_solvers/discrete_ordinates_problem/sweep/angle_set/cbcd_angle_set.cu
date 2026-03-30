@@ -175,11 +175,11 @@ CBCD_AngleSet::TryAdvanceOneStep()
     [this](const CBCD_AggregatedCommunicator::IncomingSection& section)
     {
       const auto* ptr = section.Data();
-      const size_t num_entries = cbcd_wire::LoadUnalignedAndAdvance<size_t>(ptr);
+      const size_t num_entries = CBCD_AggregatedCommunicator::Wire::LoadSize(ptr);
 
       for (size_t e = 0; e < num_entries; ++e)
       {
-        const auto entry_header = cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::EntryHeader>(ptr);
+        const auto entry_header = CBCD_AggregatedCommunicator::Wire::LoadEntryHeader(ptr);
         const auto* psi_data = reinterpret_cast<const double*>(ptr);
         ptr += entry_header.data_size * sizeof(double);
 

@@ -13,7 +13,6 @@
 #include <cstring>
 #include <memory>
 #include <thread>
-#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -21,58 +20,6 @@ namespace mpi = mpicpp_lite;
 
 namespace opensn
 {
-
-namespace cbcd_wire
-{
-
-/// Aggregate-message header.
-#pragma pack(push, 1)
-struct AggregateHeader
-{
-  size_t num_sections = 0;
-};
-
-/// Angle-set section header.
-struct SectionHeader
-{
-  size_t angle_set_id = 0;
-  size_t num_entries = 0;
-};
-
-/// Face-payload header.
-struct EntryHeader
-{
-  std::uint64_t cell_global_id = 0;
-  unsigned int face_id = 0;
-  size_t data_size = 0;
-};
-#pragma pack(pop)
-
-static_assert(sizeof(AggregateHeader) == sizeof(size_t));
-static_assert(sizeof(SectionHeader) == 2 * sizeof(size_t));
-static_assert(sizeof(EntryHeader) ==
-              sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t));
-
-template <class T>
-T
-LoadUnalignedAndAdvance(const std::byte*& ptr)
-{
-  static_assert(std::is_trivially_copyable_v<T>);
-  T value;
-  std::memcpy(&value, ptr, sizeof(T));
-  ptr += sizeof(T);
-  return value;
-}
-
-template <class T>
-void
-StoreUnaligned(std::byte* ptr, const T& value)
-{
-  static_assert(std::is_trivially_copyable_v<T>);
-  std::memcpy(ptr, &value, sizeof(T));
-}
-
-} // namespace cbcd_wire
 
 class AngleSet;
 class MPICommunicatorSet;
@@ -89,6 +36,64 @@ class MPICommunicatorSet;
 class CBCD_AggregatedCommunicator
 {
 public:
+  /// CBCD aggregate-message wire helpers.
+  struct Wire
+  {
+    /// Parsed face-payload header.
+    struct EntryHeader
+    {
+      /// Receiving cell global identifier.
+      std::uint64_t cell_global_id = 0;
+      /// Receiving face identifier.
+      unsigned int face_id = 0;
+      /// Payload size in doubles.
+      size_t data_size = 0;
+    };
+
+    /// Aggregate-header size in bytes.
+    static constexpr size_t AGGREGATE_HEADER_BYTES = sizeof(size_t);
+    /// Section-header size in bytes.
+    static constexpr size_t SECTION_HEADER_BYTES = 2 * sizeof(size_t);
+    /// Entry-header size in bytes.
+    static constexpr size_t ENTRY_HEADER_BYTES =
+      sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
+
+    /// Load one `size_t` field and advance the cursor.
+    static size_t LoadSize(const std::byte*& ptr)
+    {
+      size_t value;
+      std::memcpy(&value, ptr, sizeof(size_t));
+      ptr += sizeof(size_t);
+      return value;
+    }
+
+    /// Store one `size_t` field.
+    static void StoreSize(std::byte* ptr, size_t value)
+    {
+      std::memcpy(ptr, &value, sizeof(size_t));
+    }
+
+    /// Load one face-payload header and advance the cursor.
+    static EntryHeader LoadEntryHeader(const std::byte*& ptr)
+    {
+      EntryHeader header;
+      std::memcpy(&header.cell_global_id, ptr, sizeof(std::uint64_t));
+      ptr += sizeof(std::uint64_t);
+      std::memcpy(&header.face_id, ptr, sizeof(unsigned int));
+      ptr += sizeof(unsigned int);
+      std::memcpy(&header.data_size, ptr, sizeof(size_t));
+      ptr += sizeof(size_t);
+      return header;
+    }
+
+    /// Store one section header.
+    static void StoreSectionHeader(std::byte* ptr, size_t angle_set_id, size_t num_entries)
+    {
+      StoreSize(ptr, angle_set_id);
+      StoreSize(ptr + sizeof(size_t), num_entries);
+    }
+  };
+
   /// Incoming section view into one aggregate receive buffer.
   struct IncomingSection
   {
@@ -181,13 +186,6 @@ private:
     std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> shards;
   };
 
-  /// Incoming source metadata.
-  struct SourceQueue
-  {
-    /// Communicator-local source rank.
-    int mapped_rank;
-  };
-
   /// In-flight send and its backing storage.
   struct InFlightSend
   {
@@ -216,8 +214,8 @@ private:
   size_t max_message_bytes_;
   /// MPI tag reserved for aggregated CBCD messages.
   int mpi_tag_;
-  /// Source-rank metadata for location dependencies.
-  std::vector<SourceQueue> source_queues_;
+  /// Communicator-local source ranks.
+  std::vector<int> source_ranks_;
   /// Outgoing queues indexed by destination slot.
   std::vector<NeighborQueue> outgoing_queues_;
   /// Destination-location to outgoing-queue index map.

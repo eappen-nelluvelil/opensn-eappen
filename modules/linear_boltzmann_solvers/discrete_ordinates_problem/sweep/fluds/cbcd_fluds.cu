@@ -240,8 +240,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   const size_t groups_bytes = num_groups_ * sizeof(double);
   const size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
 
-  constexpr size_t section_header_size = sizeof(cbcd_wire::SectionHeader);
-  constexpr size_t entry_header_size = sizeof(cbcd_wire::EntryHeader);
+  constexpr size_t section_header_size = CBCD_AggregatedCommunicator::Wire::SECTION_HEADER_BYTES;
+  constexpr size_t entry_header_size = CBCD_AggregatedCommunicator::Wire::ENTRY_HEADER_BYTES;
 
   active_dest_indices_.clear();
 
@@ -254,7 +254,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     auto& data = dest_buffers_[dest_index].Data();
     data.clear();
     data.resize(section_header_size);
-    cbcd_wire::StoreUnaligned(data.data(), cbcd_wire::SectionHeader{angle_set_id, 0});
+    CBCD_AggregatedCommunicator::Wire::StoreSectionHeader(data.data(), angle_set_id, 0);
   };
 
   for (const auto& cell_local_id : cell_local_ids)
@@ -320,8 +320,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   for (const auto dest_index_u32 : active_dest_indices_)
   {
     const size_t dest_index = dest_index_u32;
-    auto section_header = cbcd_wire::SectionHeader{angle_set_id, scratch_dest_face_counts_[dest_index]};
-    cbcd_wire::StoreUnaligned(dest_buffers_[dest_index].Data().data(), section_header);
+    CBCD_AggregatedCommunicator::Wire::StoreSectionHeader(dest_buffers_[dest_index].Data().data(),
+                                                          angle_set_id,
+                                                          scratch_dest_face_counts_[dest_index]);
     agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[dest_index].queue_index,
                                       angle_set_id,
                                       std::move(dest_buffers_[dest_index]));

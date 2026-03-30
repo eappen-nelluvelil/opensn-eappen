@@ -40,9 +40,9 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
       destinations.insert(succ);
   }
 
-  source_queues_.reserve(sources.size());
+  source_ranks_.reserve(sources.size());
   for (int source : sources)
-    source_queues_.push_back({comm_set_.MapIonJ(source, my_rank)});
+    source_ranks_.push_back(comm_set_.MapIonJ(source, my_rank));
 
   outgoing_queues_.reserve(destinations.size());
   dest_to_queue_index_.reserve(destinations.size());
@@ -67,7 +67,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
     for (auto& shard : nq.shards)
       shard->Preallocate(1);
 
-  const size_t num_sources = source_queues_.size();
+  const size_t num_sources = source_ranks_.size();
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);
 
@@ -179,7 +179,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
       continue;
 
     size_t num_sections = 0;
-    size_t total_bytes = sizeof(cbcd_wire::AggregateHeader);
+    size_t total_bytes = Wire::AGGREGATE_HEADER_BYTES;
     drained_sections_.clear();
     bool has_data = false;
     for (auto& shard : nq.shards)
@@ -198,10 +198,9 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     ByteArray send_buf = AcquireSendBuffer();
     auto& send_data = send_buf.Data();
     send_data.resize(total_bytes);
-    cbcd_wire::StoreUnaligned(
-      send_data.data(), cbcd_wire::AggregateHeader{num_sections});
+    Wire::StoreSize(send_data.data(), num_sections);
 
-    auto* dst = send_data.data() + sizeof(cbcd_wire::AggregateHeader);
+    auto* dst = send_data.data() + Wire::AGGREGATE_HEADER_BYTES;
     for (auto& section : drained_sections_)
     {
       const auto& section_data = section.Data();
@@ -232,10 +231,10 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
   const int my_rank = opensn::mpi_comm.rank();
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank);
 
-  for (const auto& source_queue : source_queues_)
+  for (const int source_rank : source_ranks_)
   {
     mpi::Status status;
-    while (recv_comm.iprobe(source_queue.mapped_rank, mpi_tag_, status))
+    while (recv_comm.iprobe(source_rank, mpi_tag_, status))
     {
       received_any = true;
       int num_bytes = status.count<std::byte>();
@@ -251,30 +250,27 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
         recv_buffer->data.Data().reserve(max_message_bytes_);
       recv_buffer->data.Data().resize(num_bytes);
 
-      recv_comm.recv(
-        source_queue.mapped_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
+      recv_comm.recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
 
       const auto* ptr = recv_buffer->data.Data().data();
-      const auto aggregate_header =
-        cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::AggregateHeader>(ptr);
+      const size_t num_sections = Wire::LoadSize(ptr);
 
-      for (size_t s = 0; s < aggregate_header.num_sections; ++s)
+      for (size_t s = 0; s < num_sections; ++s)
       {
-        const auto section_header =
-          cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::SectionHeader>(ptr);
-        assert(section_header.angle_set_id < num_angle_sets_);
+        const size_t angle_set_id = Wire::LoadSize(ptr);
+        const size_t num_entries = Wire::LoadSize(ptr);
+        assert(angle_set_id < num_angle_sets_);
 
         const size_t section_start =
           static_cast<size_t>(ptr - recv_buffer->data.Data().data()) - sizeof(size_t);
-        for (size_t e = 0; e < section_header.num_entries; ++e)
+        for (size_t e = 0; e < num_entries; ++e)
         {
-          const auto entry_header =
-            cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::EntryHeader>(ptr);
+          const auto entry_header = Wire::LoadEntryHeader(ptr);
           ptr += entry_header.data_size * sizeof(double);
         }
 
         const size_t section_end = static_cast<size_t>(ptr - recv_buffer->data.Data().data());
-        incoming_mailboxes_[section_header.angle_set_id].Push(
+        incoming_mailboxes_[angle_set_id].Push(
           IncomingSection{recv_buffer, section_start, section_end - section_start});
       }
     }
