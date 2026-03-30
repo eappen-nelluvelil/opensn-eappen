@@ -123,6 +123,16 @@ CBCDSweepChunk::StopCommunicator()
   agg_comm_->Stop();
 }
 
+void
+CBCDSweepChunk::CopySavedPsiToDestinationPsi()
+{
+  for (auto* fluds : fluds_list_)
+    fluds->CopySavedPsiToHost();
+
+  for (size_t i = 0; i < angle_sets_.size(); ++i)
+    fluds_list_[i]->CopySavedPsiToDestinationPsi(*this, *angle_sets_[i]);
+}
+
 CBCD_AggregatedCommunicator&
 CBCDSweepChunk::GetAggregatedCommunicator()
 {

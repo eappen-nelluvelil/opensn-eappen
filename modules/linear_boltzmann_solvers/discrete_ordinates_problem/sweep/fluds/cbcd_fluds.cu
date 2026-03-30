@@ -325,11 +325,18 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
 }
 
 void
-CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
+CBCD_FLUDS::CopySavedPsiToHost()
+{
+  if (save_angular_flux_)
+    crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
+}
+
+void
+CBCD_FLUDS::CopySavedPsiToDestinationPsi(const CBCDSweepChunk& sweep_chunk,
+                                         const CBCD_AngleSet& angle_set)
 {
   if (not save_angular_flux_)
     return;
-  crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
   stream_.synchronize();
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();
@@ -338,8 +345,8 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
   const auto& discretization = problem.GetSpatialDiscretization();
   const std::size_t groupset_angle_group_stride =
     groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
-  const auto& angle_indices = angle_set->GetAngleIndices();
-  const auto& num_angles = angle_set->GetNumAngles();
+  const auto& angle_indices = angle_set.GetAngleIndices();
+  const auto& num_angles = angle_set.GetNumAngles();
   const size_t groups_bytes = num_groups_ * sizeof(double);
   for (const auto& cell : grid_ptr_->local_cells)
   {

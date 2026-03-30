@@ -134,7 +134,6 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           any_work |= as->TryAdvanceOneStep();
         }
 
-        // Yield when idle to avoid starving the comm thread.
         if (not any_work and not all_done)
           std::this_thread::yield();
       }
@@ -142,6 +141,10 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
   // Flush MPI sends and join communication thread
   cbcd_chunk.StopCommunicator();
+
+  // Download saved angular flux after all angle sets finish so stream completion
+  // work stays out of the worker epoch.
+  cbcd_chunk.CopySavedPsiToDestinationPsi();
 
   // Copy phi and outflow data back to host
   cbcd_chunk.GetProblem().CopyPhiAndOutflowBackToHost();

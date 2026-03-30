@@ -258,8 +258,6 @@ CBCD_AngleSet::FinalizeSweep()
   agg_comm_->SignalAngleSetComplete(id_);
 
   TryNotifyFollowers();
-  cbcd_fluds_.CopySavedPsiToDestinationPsi(*cbcd_sweep_chunk_, this);
-
   executed_ = true;
 }
 

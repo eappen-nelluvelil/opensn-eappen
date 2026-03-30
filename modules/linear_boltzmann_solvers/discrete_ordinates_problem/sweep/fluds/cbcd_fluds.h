@@ -82,11 +82,14 @@ public:
   /// Return the saved-angular-flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
 
+  /// Queue the saved-angular-flux download to host on this angle set's stream.
+  void CopySavedPsiToHost();
+
   /// Copy saved angular flux into the destination psi storage.
   ///
   /// \param sweep_chunk Owning sweep chunk.
   /// \param angle_set Owning angle set.
-  void CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
+  void CopySavedPsiToDestinationPsi(const CBCDSweepChunk& sweep_chunk, const CBCD_AngleSet& angle_set);
 
   /// Return the device pointer bundle used by the GPU kernel.
   CBCD_FLUDSPointerSet& GetDevicePointerSet() { return pointer_set_; }

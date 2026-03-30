@@ -51,6 +51,8 @@ public:
   void StartCommunicator();
   /// Stop the aggregated communicator thread.
   void StopCommunicator();
+  /// Queue saved-angular-flux downloads and scatter them into destination psi.
+  void CopySavedPsiToDestinationPsi();
   /// Return the aggregated communicator.
   CBCD_AggregatedCommunicator& GetAggregatedCommunicator();
 
