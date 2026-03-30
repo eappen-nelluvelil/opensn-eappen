@@ -182,7 +182,7 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
     ByteArray send_buf = AcquireSendBuffer();
     size_t num_sections = 0;
-    send_buf.Data().resize(sizeof(size_t));
+    send_buf.Data().resize(sizeof(cbcd_wire::AggregateHeader));
 
     bool has_data = false;
     for (auto& shard : nq.shards)
@@ -200,7 +200,8 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     }
     any_sent = true;
 
-    std::memcpy(send_buf.Data().data(), &num_sections, sizeof(size_t));
+    cbcd_wire::StoreUnaligned(
+      send_buf.Data().data(), cbcd_wire::AggregateHeader{num_sections});
 
     InFlightSend ifs;
     ifs.data = std::move(send_buf);
@@ -246,36 +247,28 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
       recv_comm.recv(
         source_queue.mapped_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
 
-      const auto* raw = recv_buffer->data.Data().data();
-      size_t offset = 0;
+      const auto* ptr = recv_buffer->data.Data().data();
+      const auto aggregate_header =
+        cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::AggregateHeader>(ptr);
 
-      size_t num_sections;
-      std::memcpy(&num_sections, raw + offset, sizeof(size_t));
-      offset += sizeof(size_t);
-
-      for (size_t s = 0; s < num_sections; ++s)
+      for (size_t s = 0; s < aggregate_header.num_sections; ++s)
       {
-        size_t as_id;
-        std::memcpy(&as_id, raw + offset, sizeof(size_t));
-        offset += sizeof(size_t);
-        assert(as_id < num_angle_sets_);
+        const auto section_header =
+          cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::SectionHeader>(ptr);
+        assert(section_header.angle_set_id < num_angle_sets_);
 
-        const size_t section_start = offset;
-        size_t num_entries;
-        std::memcpy(&num_entries, raw + offset, sizeof(size_t));
-        offset += sizeof(size_t);
-
-        for (size_t e = 0; e < num_entries; ++e)
+        const size_t section_start =
+          static_cast<size_t>(ptr - recv_buffer->data.Data().data()) - sizeof(size_t);
+        for (size_t e = 0; e < section_header.num_entries; ++e)
         {
-          offset += sizeof(uint64_t) + sizeof(unsigned int);
-          size_t data_size;
-          std::memcpy(&data_size, raw + offset, sizeof(size_t));
-          offset += sizeof(size_t);
-          offset += data_size * sizeof(double);
+          const auto entry_header =
+            cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::EntryHeader>(ptr);
+          ptr += entry_header.data_size * sizeof(double);
         }
 
-        incoming_mailboxes_[as_id].Push(
-          IncomingSection{recv_buffer, section_start, offset - section_start});
+        const size_t section_end = static_cast<size_t>(ptr - recv_buffer->data.Data().data());
+        incoming_mailboxes_[section_header.angle_set_id].Push(
+          IncomingSection{recv_buffer, section_start, section_end - section_start});
       }
     }
   }

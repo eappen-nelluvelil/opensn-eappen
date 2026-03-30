@@ -192,31 +192,17 @@ CBCD_AngleSet::TryAdvanceOneStep()
   any_work_done |= agg_comm_->DrainIncoming(id_,
     [this](const CBCD_AggregatedCommunicator::IncomingSection& section)
     {
-      const auto* raw = section.Data();
-      size_t offset = 0;
-
-      size_t num_entries;
-      std::memcpy(&num_entries, raw + offset, sizeof(size_t));
-      offset += sizeof(size_t);
+      const auto* ptr = section.Data();
+      const size_t num_entries = cbcd_wire::LoadUnalignedAndAdvance<size_t>(ptr);
 
       for (size_t e = 0; e < num_entries; ++e)
       {
-        uint64_t cell_global_id;
-        std::memcpy(&cell_global_id, raw + offset, sizeof(uint64_t));
-        offset += sizeof(uint64_t);
+        const auto entry_header = cbcd_wire::LoadUnalignedAndAdvance<cbcd_wire::EntryHeader>(ptr);
+        const auto* psi_data = reinterpret_cast<const double*>(ptr);
+        ptr += entry_header.data_size * sizeof(double);
 
-        unsigned int face_id;
-        std::memcpy(&face_id, raw + offset, sizeof(unsigned int));
-        offset += sizeof(unsigned int);
-
-        size_t data_size;
-        std::memcpy(&data_size, raw + offset, sizeof(size_t));
-        offset += sizeof(size_t);
-
-        const auto* psi_data = reinterpret_cast<const double*>(raw + offset);
-        offset += data_size * sizeof(double);
-
-        auto local_id = cbcd_fluds_.ScatterReceivedFaceData(cell_global_id, face_id, psi_data);
+        auto local_id =
+          cbcd_fluds_.ScatterReceivedFaceData(entry_header.cell_global_id, entry_header.face_id, psi_data);
         if (--remaining_deps_[local_id] == 0)
           ready_queue_.push_back(static_cast<uint32_t>(local_id));
       }

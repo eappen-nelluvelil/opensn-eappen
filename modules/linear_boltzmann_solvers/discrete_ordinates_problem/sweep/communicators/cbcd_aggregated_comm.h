@@ -10,8 +10,10 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -19,6 +21,58 @@ namespace mpi = mpicpp_lite;
 
 namespace opensn
 {
+
+namespace cbcd_wire
+{
+
+/// Aggregate-message header written once per MPI receive buffer.
+#pragma pack(push, 1)
+struct AggregateHeader
+{
+  size_t num_sections = 0;
+};
+
+/// Section header written once per angle-set section inside an aggregate.
+struct SectionHeader
+{
+  size_t angle_set_id = 0;
+  size_t num_entries = 0;
+};
+
+/// Entry header written once per packed outgoing face payload.
+struct EntryHeader
+{
+  std::uint64_t cell_global_id = 0;
+  unsigned int face_id = 0;
+  size_t data_size = 0;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(AggregateHeader) == sizeof(size_t));
+static_assert(sizeof(SectionHeader) == 2 * sizeof(size_t));
+static_assert(sizeof(EntryHeader) ==
+              sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t));
+
+template <class T>
+T
+LoadUnalignedAndAdvance(const std::byte*& ptr)
+{
+  static_assert(std::is_trivially_copyable_v<T>);
+  T value;
+  std::memcpy(&value, ptr, sizeof(T));
+  ptr += sizeof(T);
+  return value;
+}
+
+template <class T>
+void
+StoreUnaligned(std::byte* ptr, const T& value)
+{
+  static_assert(std::is_trivially_copyable_v<T>);
+  std::memcpy(ptr, &value, sizeof(T));
+}
+
+} // namespace cbcd_wire
 
 class AngleSet;
 class MPICommunicatorSet;
