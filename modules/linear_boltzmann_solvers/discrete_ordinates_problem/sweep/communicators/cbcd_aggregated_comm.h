@@ -205,6 +205,12 @@ private:
   bool PollInFlightSends();
   /// Check whether all angle sets are complete and no outgoing work remains.
   bool AllWorkComplete() const;
+  /// Check whether one destination queue has pending sections.
+  bool HasQueuedSections(const NeighborQueue& queue) const;
+  /// Drain one destination queue into the communicator scratch buffer.
+  bool DrainSections(NeighborQueue& queue, size_t& num_sections, size_t& total_bytes);
+  /// Acquire one receive buffer.
+  std::shared_ptr<IncomingSection::IncomingBuffer> AcquireReceiveBuffer(size_t num_bytes);
 
   /// Communicator mapping between mesh locations.
   const MPICommunicatorSet& comm_set_;

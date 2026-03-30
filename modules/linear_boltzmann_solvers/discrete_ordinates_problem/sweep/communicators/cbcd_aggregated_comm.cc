@@ -158,6 +158,49 @@ CBCD_AggregatedCommunicator::CommThreadLoop()
 }
 
 bool
+CBCD_AggregatedCommunicator::HasQueuedSections(const NeighborQueue& queue) const
+{
+  for (const auto& shard : queue.shards)
+    if (not shard->Empty())
+      return true;
+  return false;
+}
+
+bool
+CBCD_AggregatedCommunicator::DrainSections(NeighborQueue& queue,
+                                          size_t& num_sections,
+                                          size_t& total_bytes)
+{
+  drained_sections_.clear();
+  bool has_data = false;
+  for (auto& shard : queue.shards)
+    has_data |= shard->DrainAndProcess(
+      [&](ByteArray&& section)
+      {
+        total_bytes += section.Size();
+        ++num_sections;
+        drained_sections_.push_back(std::move(section));
+      });
+  return has_data;
+}
+
+std::shared_ptr<CBCD_AggregatedCommunicator::IncomingSection::IncomingBuffer>
+CBCD_AggregatedCommunicator::AcquireReceiveBuffer(size_t num_bytes)
+{
+  auto recv_buffer = std::make_shared<IncomingSection::IncomingBuffer>();
+  recv_buffer->recycler = &recv_buffer_recycler_;
+  if (not recv_buffer_reuse_cache_.empty())
+  {
+    recv_buffer->data = std::move(recv_buffer_reuse_cache_.back());
+    recv_buffer_reuse_cache_.pop_back();
+  }
+  else if (max_message_bytes_ > 0)
+    recv_buffer->data.Data().reserve(max_message_bytes_);
+  recv_buffer->data.Data().resize(num_bytes);
+  return recv_buffer;
+}
+
+bool
 CBCD_AggregatedCommunicator::FlushOutgoing()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AggregatedCommunicator::FlushOutgoing");
@@ -166,32 +209,12 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
   for (auto& nq : outgoing_queues_)
   {
-    bool has_queued_data = false;
-    for (const auto& shard : nq.shards)
-    {
-      if (not shard->Empty())
-      {
-        has_queued_data = true;
-        break;
-      }
-    }
-    if (not has_queued_data)
+    if (not HasQueuedSections(nq))
       continue;
 
     size_t num_sections = 0;
     size_t total_bytes = Wire::AGGREGATE_HEADER_BYTES;
-    drained_sections_.clear();
-    bool has_data = false;
-    for (auto& shard : nq.shards)
-      has_data |= shard->DrainAndProcess(
-        [&](ByteArray&& section)
-        {
-          total_bytes += section.Size();
-          ++num_sections;
-          drained_sections_.push_back(std::move(section));
-        });
-
-    if (not has_data)
+    if (not DrainSections(nq, num_sections, total_bytes))
       continue;
     any_sent = true;
 
@@ -239,17 +262,7 @@ CBCD_AggregatedCommunicator::ProbeAndReceive()
       received_any = true;
       int num_bytes = status.count<std::byte>();
 
-      auto recv_buffer = std::make_shared<IncomingSection::IncomingBuffer>();
-      recv_buffer->recycler = &recv_buffer_recycler_;
-      if (not recv_buffer_reuse_cache_.empty())
-      {
-        recv_buffer->data = std::move(recv_buffer_reuse_cache_.back());
-        recv_buffer_reuse_cache_.pop_back();
-      }
-      else if (max_message_bytes_ > 0)
-        recv_buffer->data.Data().reserve(max_message_bytes_);
-      recv_buffer->data.Data().resize(num_bytes);
-
+      auto recv_buffer = AcquireReceiveBuffer(num_bytes);
       recv_comm.recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
 
       const auto* ptr = recv_buffer->data.Data().data();
