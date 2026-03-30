@@ -78,6 +78,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   recv_buffer_reuse_cache_.reserve(num_sources);
   in_flight_sends_.reserve(outgoing_queues_.size());
   send_buffer_pool_.reserve(outgoing_queues_.size());
+  drained_sections_.reserve(num_angle_sets_);
 }
 
 CBCD_AggregatedCommunicator::~CBCD_AggregatedCommunicator()
@@ -180,28 +181,37 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
     if (not has_queued_data)
       continue;
 
-    ByteArray send_buf = AcquireSendBuffer();
     size_t num_sections = 0;
-    send_buf.Data().resize(sizeof(cbcd_wire::AggregateHeader));
-
+    size_t total_bytes = sizeof(cbcd_wire::AggregateHeader);
+    drained_sections_.clear();
     bool has_data = false;
     for (auto& shard : nq.shards)
       has_data |= shard->DrainAndProcess(
         [&](ByteArray&& section)
         {
-          send_buf.Append(section);
+          total_bytes += section.Size();
           ++num_sections;
+          drained_sections_.push_back(std::move(section));
         });
 
     if (not has_data)
-    {
-      ReleaseSendBuffer(std::move(send_buf));
       continue;
-    }
     any_sent = true;
 
+    ByteArray send_buf = AcquireSendBuffer();
+    auto& send_data = send_buf.Data();
+    send_data.resize(total_bytes);
     cbcd_wire::StoreUnaligned(
-      send_buf.Data().data(), cbcd_wire::AggregateHeader{num_sections});
+      send_data.data(), cbcd_wire::AggregateHeader{num_sections});
+
+    auto* dst = send_data.data() + sizeof(cbcd_wire::AggregateHeader);
+    for (auto& section : drained_sections_)
+    {
+      const auto& section_data = section.Data();
+      std::memcpy(dst, section_data.data(), section_data.size());
+      dst += section_data.size();
+    }
+    drained_sections_.clear();
 
     InFlightSend ifs;
     ifs.data = std::move(send_buf);

@@ -232,6 +232,8 @@ private:
   std::vector<InFlightSend> in_flight_sends_;
   /// Recycled outgoing aggregate buffers.
   std::vector<ByteArray> send_buffer_pool_;
+  /// Scratch storage for drained outgoing sections on the communication thread.
+  std::vector<ByteArray> drained_sections_;
   /// Number of outgoing shards per destination queue.
   size_t num_outgoing_shards_;
 
