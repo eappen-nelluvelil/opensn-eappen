@@ -8,6 +8,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -30,8 +31,10 @@ public:
   /// Incoming nonlocal face grouped by face ID.
   struct GroupedIncomingNonlocalFace
   {
-    /// Face-node metadata in face-node order.
-    std::vector<NonlocalNodeInfo> nodes;
+    /// Offset into the flat incoming-node array.
+    std::uint32_t node_offset = 0;
+    /// Number of nodes on this face.
+    std::uint16_t num_nodes = 0;
   };
 
   /// Outgoing node-copy descriptor for one face node.
@@ -52,8 +55,10 @@ public:
     std::uint32_t dest_slot = 0;
     /// Number of nodes on this face.
     std::uint16_t num_face_nodes = 0;
-    /// Face-node copy descriptors in face-node order.
-    std::vector<OutgoingNodeCopy> node_copies;
+    /// Offset into the flat outgoing-node-copy array.
+    std::uint32_t node_copy_offset = 0;
+    /// Number of node-copy descriptors.
+    std::uint16_t num_node_copies = 0;
   };
 
   /// Build shared CBCD topology for one sweep ordering.
@@ -109,6 +114,26 @@ public:
   const GroupedIncomingNonlocalFace* FindIncomingNonlocalFace(std::uint64_t cell_local_id,
                                                               unsigned int face_id) const;
 
+  /// Return the incoming-node descriptors for one grouped incoming face.
+  ///
+  /// \param face Grouped incoming face descriptor.
+  /// \return Span of incoming-node descriptors.
+  std::span<const NonlocalNodeInfo>
+  GetIncomingFaceNodes(const GroupedIncomingNonlocalFace& face) const
+  {
+    return {incoming_nonlocal_face_nodes_.data() + face.node_offset, face.num_nodes};
+  }
+
+  /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
+  ///
+  /// \param face Grouped outgoing face descriptor.
+  /// \return Span of outgoing-node-copy descriptors.
+  std::span<const OutgoingNodeCopy>
+  GetOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
+  {
+    return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset, face.num_node_copies};
+  }
+
   /// Map a receiving cell global ID to its local ID.
   ///
   /// \param cell_global_id Global cell identifier.
@@ -149,6 +174,10 @@ private:
   std::vector<std::vector<GroupedIncomingNonlocalFace>> cell_to_incoming_nonlocal_faces_;
   /// Per-cell grouped outgoing nonlocal faces.
   std::vector<std::vector<GroupedOutgoingNonlocalFace>> cell_to_outgoing_nonlocal_faces_;
+  /// Flat incoming-node metadata referenced by grouped incoming faces.
+  std::vector<NonlocalNodeInfo> incoming_nonlocal_face_nodes_;
+  /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
+  std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
   /// Face-ID to grouped-face index lookup for incoming nonlocal faces.
   std::vector<std::vector<int>> incoming_nonlocal_face_lookup_;
   /// Receiving-cell global-to-local map for incoming nonlocal traffic.

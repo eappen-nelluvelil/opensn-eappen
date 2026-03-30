@@ -57,15 +57,16 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       const auto& grouped_faces = incoming_faces[cell_local_id];
       for (const auto& face_info : grouped_faces)
       {
-        if (face_info.nodes.empty())
+        const auto nodes = fluds.GetCommonData().GetIncomingFaceNodes(face_info);
+        if (nodes.empty())
           continue;
 
-        const auto& first_node = face_info.nodes.front();
+        const auto& first_node = nodes.front();
         const int source_partition = grid.cells[first_node.cell_global_id].partition_id;
         auto& info = source_as_info[source_partition][as_idx];
         info.num_entries += 1;
         info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
-                          face_info.nodes.size() * stride * sizeof(double);
+                          nodes.size() * stride * sizeof(double);
       }
     }
   }

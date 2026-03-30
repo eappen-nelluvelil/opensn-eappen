@@ -40,6 +40,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
   incoming_global_to_local_.reserve(num_local_cells);
   outgoing_localities_.reserve(num_local_cells);
+  incoming_nonlocal_face_nodes_.reserve(total_face_nodes);
+  outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
 
   for (const auto& cell : grid.local_cells)
   {
@@ -82,7 +84,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               grouped_face_index = cell_to_incoming_nonlocal_faces_[cell.local_id].size();
               auto& grouped_face =
                 cell_to_incoming_nonlocal_faces_[cell.local_id].emplace_back();
-              grouped_face.nodes.reserve(num_face_nodes);
+              grouped_face.node_offset = static_cast<std::uint32_t>(incoming_nonlocal_face_nodes_.size());
               incoming_nonlocal_face_lookup_[cell.local_id][f] = grouped_face_index;
               ++num_incoming_nonlocal_faces_;
               incoming_global_to_local_[cell.global_id] = cell.local_id;
@@ -90,12 +92,13 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
 
             auto& grouped_face =
               cell_to_incoming_nonlocal_faces_[cell.local_id][grouped_face_index];
-            grouped_face.nodes.emplace_back(NonlocalNodeInfo{cell.global_id,
-                                                             static_cast<unsigned int>(f),
-                                                             static_cast<std::uint32_t>(
-                                                               num_incoming_nonlocal_nodes_),
-                                                             static_cast<std::uint16_t>(fn),
-                                                             face_nodal_mapping.face_node_mapping_[fn]});
+            incoming_nonlocal_face_nodes_.emplace_back(NonlocalNodeInfo{cell.global_id,
+                                                                        static_cast<unsigned int>(f),
+                                                                        static_cast<std::uint32_t>(
+                                                                          num_incoming_nonlocal_nodes_),
+                                                                        static_cast<std::uint16_t>(fn),
+                                                                        face_nodal_mapping.face_node_mapping_[fn]});
+            ++grouped_face.num_nodes;
             ++num_incoming_nonlocal_nodes_;
           }
           else
@@ -140,9 +143,10 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               grouped_face_index = cell_to_outgoing_nonlocal_faces_[cell.local_id].size();
               auto& grouped_face =
                 cell_to_outgoing_nonlocal_faces_[cell.local_id].emplace_back();
-              grouped_face.node_copies.reserve(num_face_nodes);
               grouped_face.dest_slot = dest_slot;
               grouped_face.num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
+              grouped_face.node_copy_offset =
+                static_cast<std::uint32_t>(outgoing_nonlocal_face_node_copies_.size());
               std::memcpy(grouped_face.entry_header_prefix.data(),
                           &face.neighbor_id,
                           sizeof(std::uint64_t));
@@ -156,9 +160,10 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
 
             auto& grouped_face =
               cell_to_outgoing_nonlocal_faces_[cell.local_id][grouped_face_index];
-            grouped_face.node_copies.push_back(
+            outgoing_nonlocal_face_node_copies_.push_back(
               {static_cast<std::uint32_t>(num_outgoing_nonlocal_nodes_),
                static_cast<std::uint16_t>(fn)});
+            ++grouped_face.num_node_copies;
             ++num_outgoing_nonlocal_nodes_;
           }
           else

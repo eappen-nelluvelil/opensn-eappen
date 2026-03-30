@@ -168,7 +168,7 @@ CBCD_FLUDS::ScatterReceivedFaceData(uint64_t cell_global_id,
   OpenSnLogicalErrorIf(face_info == nullptr,
                        "CBCD_FLUDS::ScatterReceivedFaceData: incoming face metadata not found.");
 
-  for (const auto& node : face_info->nodes)
+  for (const auto& node : common_data_.GetIncomingFaceNodes(*face_info))
   {
     double* dst = incoming_nonlocal_psi_.data() + node.storage_index * num_groups_and_angles_;
     const double* src = psi_data + node.face_node_mapped * num_groups_and_angles_;
@@ -252,7 +252,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
                   sizeof(size_t));
 
       auto* psi_dst = reinterpret_cast<double*>(base + offset + entry_header_size);
-      for (const auto& node : face_info.node_copies)
+      for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
       {
         double* dst = psi_dst + node.face_node * num_groups_and_angles_;
         const double* src =
