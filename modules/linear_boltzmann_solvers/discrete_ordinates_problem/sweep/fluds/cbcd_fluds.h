@@ -185,6 +185,22 @@ private:
   /// Ordered outgoing destination table.
   std::vector<OutgoingDestination> outgoing_destinations_;
 
+  /// Byte-level memcpy descriptor for one outgoing face-node payload copy.
+  struct OutgoingNodeMemcpy
+  {
+    /// Source offset in doubles from `outgoing_nonlocal_psi_`.
+    size_t src_offset = 0;
+    /// Destination offset in doubles from the packed face payload base.
+    size_t dst_offset = 0;
+  };
+
+  /// Angle-set-local outgoing face pack plan.
+  struct OutgoingFacePackPlan
+  {
+    /// Number of doubles in the packed face payload.
+    size_t payload_doubles = 0;
+  };
+
   /// Per-destination face counts for the current pack pass.
   std::vector<size_t> scratch_dest_face_counts_;
   /// Per-destination touched flags for the current pack pass.
@@ -199,6 +215,10 @@ private:
   std::vector<std::uint32_t> reflecting_outgoing_boundary_node_offsets_;
   /// Flat reflecting outgoing-boundary node list.
   std::vector<BoundaryNodeInfo> reflecting_outgoing_boundary_nodes_;
+  /// Flat byte-level memcpy descriptors referenced by outgoing faces.
+  std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
+  /// One pack plan per grouped outgoing nonlocal face.
+  std::vector<OutgoingFacePackPlan> outgoing_face_pack_plans_;
 
   /// Populate the device pointer bundle after allocation.
   void CreatePointerSet();

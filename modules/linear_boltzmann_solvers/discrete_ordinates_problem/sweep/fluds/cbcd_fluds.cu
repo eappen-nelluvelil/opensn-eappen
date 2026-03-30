@@ -44,6 +44,23 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   for (const int locality : outgoing_localities)
     outgoing_destinations_.push_back({locality, -1});
 
+  outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
+  outgoing_face_pack_plans_.resize(common_data_.GetNumOutgoingNonlocalFaces());
+  for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
+  {
+    for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
+    {
+      outgoing_face_pack_plans_[face_info.pack_plan_index].payload_doubles =
+        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
+      {
+        outgoing_node_memcpy_plan_.push_back(
+          {static_cast<size_t>(node.storage_index) * num_groups_and_angles_,
+           static_cast<size_t>(node.face_node) * num_groups_and_angles_});
+      }
+    }
+  }
+
   const size_t num_dests = outgoing_destinations_.size();
   scratch_dest_face_counts_.resize(num_dests, 0);
   scratch_dest_touched_.resize(num_dests, 0);
@@ -236,7 +253,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     for (const auto& face_info : grouped_faces)
     {
       const size_t dest_index = face_info.dest_slot;
-      const size_t face_data_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      const auto& pack_plan = outgoing_face_pack_plans_[face_info.pack_plan_index];
+      const size_t face_data_size = pack_plan.payload_doubles;
       if (not scratch_dest_touched_[dest_index])
         initialize_dest_buffer(dest_index);
       scratch_dest_face_counts_[dest_index]++;
@@ -253,11 +271,12 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
                   sizeof(size_t));
 
       auto* psi_dst = reinterpret_cast<double*>(base + offset + entry_header_size);
-      for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
+      const auto* node_plan = outgoing_node_memcpy_plan_.data() + face_info.node_copy_offset;
+      const auto* node_plan_end = node_plan + face_info.num_node_copies;
+      for (; node_plan != node_plan_end; ++node_plan)
       {
-        double* dst = psi_dst + node.face_node * num_groups_and_angles_;
-        const double* src =
-          outgoing_nonlocal_psi_.data() + node.storage_index * num_groups_and_angles_;
+        double* dst = psi_dst + node_plan->dst_offset;
+        const double* src = outgoing_nonlocal_psi_.data() + node_plan->src_offset;
         std::memcpy(dst, src, stride_bytes);
       }
     }

@@ -71,6 +71,8 @@ public:
   {
     /// Fixed wire-format prefix `[neighbor_global_id][associated_face]`.
     std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
+    /// Stable index into angle-set-local outgoing pack plans.
+    std::uint32_t pack_plan_index = 0;
     /// Destination slot in the outgoing locality table.
     std::uint32_t dest_slot = 0;
     /// Number of nodes on this face.
