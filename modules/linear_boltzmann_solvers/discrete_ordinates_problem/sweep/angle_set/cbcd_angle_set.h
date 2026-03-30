@@ -4,7 +4,6 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "caribou/main.hpp"
 #include <atomic>
 #include <cstdint>
@@ -18,6 +17,7 @@ namespace opensn
 class CBC_SPDS;
 class CBCDSweepChunk;
 class CBCD_AggregatedCommunicator;
+class CBCD_FLUDS;
 
 /**
  * Cooperative CBCD angle-set driver.

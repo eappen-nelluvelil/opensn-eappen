@@ -37,23 +37,6 @@ class CBCDSweepChunk;
 class CBCD_FLUDS : public FLUDS
 {
 public:
-  /// Reflecting-boundary face copy plan.
-  struct ReflectingBoundaryFacePlan
-  {
-    /// Boundary identifier.
-    std::uint64_t boundary_id = 0;
-    /// Local cell identifier.
-    std::uint32_t cell_local_id = 0;
-    /// Face identifier on the local cell.
-    unsigned int face_id = 0;
-    /// First face-node index on the reflecting face.
-    std::uint16_t first_face_node = 0;
-    /// Base source offset in doubles from `outgoing_boundary_psi_`.
-    size_t src_base_offset = 0;
-    /// Number of nodes on the reflecting face.
-    std::uint16_t num_nodes = 0;
-  };
-
   /// Construct the angle-set-local CBCD FLUDS storage.
   ///
   /// \param num_groups Number of energy groups.
@@ -190,29 +173,11 @@ private:
   /// Outgoing destination metadata.
   struct OutgoingDestination
   {
-    /// Destination partition ID.
     int locality;
-    /// Resolved aggregated-communicator queue index.
     int queue_index = -1;
   };
   /// Ordered outgoing destination table.
   std::vector<OutgoingDestination> outgoing_destinations_;
-
-  /// Outgoing node-copy plan.
-  struct OutgoingNodeMemcpy
-  {
-    /// Source offset in doubles from `outgoing_nonlocal_psi_`.
-    size_t src_offset = 0;
-    /// Destination offset in doubles from the packed face payload base.
-    size_t dst_offset = 0;
-  };
-
-  /// Angle-set-local outgoing face pack plan.
-  struct OutgoingFacePackPlan
-  {
-    /// Number of doubles in the packed face payload.
-    size_t payload_doubles = 0;
-  };
 
   /// Per-destination face counts for the current pack pass.
   std::vector<size_t> scratch_dest_face_counts_;
@@ -230,8 +195,8 @@ private:
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Flat byte-level memcpy descriptors referenced by outgoing faces.
   std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
-  /// One pack plan per grouped outgoing nonlocal face.
-  std::vector<OutgoingFacePackPlan> outgoing_face_pack_plans_;
+  /// Packed payload size, in doubles, for each grouped outgoing nonlocal face.
+  std::vector<std::size_t> outgoing_face_payload_sizes_;
 
   /// Populate the device pointer bundle after allocation.
   void CreatePointerSet();

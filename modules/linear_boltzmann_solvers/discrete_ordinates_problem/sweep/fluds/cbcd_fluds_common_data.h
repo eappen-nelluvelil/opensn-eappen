@@ -5,7 +5,6 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
-#include <array>
 #include <cassert>
 #include <cstdint>
 #include <span>
@@ -28,65 +27,6 @@ class SpatialDiscretization;
 class CBCD_FLUDSCommonData : public CBC_FLUDSCommonData
 {
 public:
-  /// Receive-side key for one incoming nonlocal face.
-  struct IncomingFaceKey
-  {
-    std::uint64_t cell_global_id = 0;
-    unsigned int face_id = 0;
-
-    bool operator==(const IncomingFaceKey&) const = default;
-  };
-
-  /// Hash for `IncomingFaceKey`.
-  struct IncomingFaceKeyHash
-  {
-    std::size_t operator()(const IncomingFaceKey& key) const noexcept
-    {
-      const auto h0 = std::hash<std::uint64_t>{}(key.cell_global_id);
-      const auto h1 = std::hash<unsigned int>{}(key.face_id);
-      return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2));
-    }
-  };
-
-  /// Grouped incoming nonlocal face.
-  struct GroupedIncomingNonlocalFace
-  {
-    /// Receiving local cell identifier.
-    std::uint32_t cell_local_id = 0;
-    /// Base offset in the incoming nonlocal psi buffer.
-    std::uint32_t base_storage_index = 0;
-    /// Source partition for this incoming face.
-    int source_partition = 0;
-    /// Number of nodes on this face.
-    std::uint16_t num_nodes = 0;
-  };
-
-  /// Outgoing node-copy descriptor.
-  struct OutgoingNodeCopy
-  {
-    /// Source offset in the outgoing nonlocal psi buffer.
-    std::uint32_t storage_index = 0;
-    /// Destination face-node index in the receiver-local payload layout.
-    std::uint16_t face_node = 0;
-  };
-
-  /// Grouped outgoing nonlocal face.
-  struct GroupedOutgoingNonlocalFace
-  {
-    /// Fixed wire-format prefix `[neighbor_global_id][associated_face]`.
-    std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
-    /// Stable index into angle-set-local outgoing pack plans.
-    std::uint32_t pack_plan_index = 0;
-    /// Destination slot in the outgoing locality table.
-    std::uint32_t dest_slot = 0;
-    /// Number of nodes on this face.
-    std::uint16_t num_face_nodes = 0;
-    /// Offset into the flat outgoing-node-copy array.
-    std::uint32_t node_copy_offset = 0;
-    /// Number of node-copy descriptors.
-    std::uint16_t num_node_copies = 0;
-  };
-
   /// Construct shared CBCD topology for one sweep ordering.
   ///
   /// \param spds Sweep ordering.

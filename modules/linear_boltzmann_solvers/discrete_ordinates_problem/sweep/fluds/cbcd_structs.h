@@ -4,6 +4,10 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_structs.h"
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 
 namespace opensn
 {
@@ -129,6 +133,71 @@ struct BoundaryNodeInfo
   unsigned int face_id;        ///< Face index within the cell.
   std::uint32_t storage_index; ///< Offset into the boundary psi MappedHostVector.
   std::uint16_t face_node;     ///< Face-node index within the face.
+};
+
+/// Receive-side key for one incoming nonlocal face.
+struct IncomingFaceKey
+{
+  std::uint64_t cell_global_id = 0;
+  unsigned int face_id = 0;
+
+  bool operator==(const IncomingFaceKey&) const = default;
+};
+
+/// Hash for `IncomingFaceKey`.
+struct IncomingFaceKeyHash
+{
+  std::size_t operator()(const IncomingFaceKey& key) const noexcept
+  {
+    const auto h0 = std::hash<std::uint64_t>{}(key.cell_global_id);
+    const auto h1 = std::hash<unsigned int>{}(key.face_id);
+    return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2));
+  }
+};
+
+/// Grouped incoming nonlocal face.
+struct GroupedIncomingNonlocalFace
+{
+  std::uint32_t cell_local_id = 0;      ///< Receiving local cell identifier.
+  std::uint32_t base_storage_index = 0; ///< Base offset in the incoming nonlocal psi buffer.
+  int source_partition = 0;             ///< Source partition for this incoming face.
+  std::uint16_t num_nodes = 0;          ///< Number of nodes on this face.
+};
+
+/// Outgoing node-copy descriptor.
+struct OutgoingNodeCopy
+{
+  std::uint32_t storage_index = 0; ///< Source offset in the outgoing nonlocal psi buffer.
+  std::uint16_t face_node = 0;     ///< Destination face-node in the receiver-local payload layout.
+};
+
+/// Grouped outgoing nonlocal face.
+struct GroupedOutgoingNonlocalFace
+{
+  std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
+  std::uint32_t pack_plan_index = 0;  ///< Stable index into angle-set-local outgoing pack plans.
+  std::uint32_t dest_slot = 0;        ///< Destination slot in the outgoing locality table.
+  std::uint16_t num_face_nodes = 0;   ///< Number of nodes on this face.
+  std::uint32_t node_copy_offset = 0; ///< Offset into the flat outgoing-node-copy array.
+  std::uint16_t num_node_copies = 0;  ///< Number of node-copy descriptors.
+};
+
+/// Reflecting-boundary face copy plan.
+struct ReflectingBoundaryFacePlan
+{
+  std::uint64_t boundary_id = 0;     ///< Boundary identifier.
+  std::uint32_t cell_local_id = 0;   ///< Local cell identifier.
+  unsigned int face_id = 0;          ///< Face identifier on the local cell.
+  std::uint16_t first_face_node = 0; ///< First face-node index on the reflecting face.
+  std::size_t src_base_offset = 0;   ///< Base source offset in doubles from `outgoing_boundary_psi_`.
+  std::uint16_t num_nodes = 0;       ///< Number of nodes on the reflecting face.
+};
+
+/// Outgoing node-copy plan entry.
+struct OutgoingNodeMemcpy
+{
+  std::size_t src_offset = 0; ///< Source offset in doubles from `outgoing_nonlocal_psi_`.
+  std::size_t dst_offset = 0; ///< Destination offset in doubles from the packed face payload base.
 };
 
 } // namespace opensn

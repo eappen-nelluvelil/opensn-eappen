@@ -46,7 +46,7 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
 }
 #endif
 
-const CBCD_FLUDSCommonData::GroupedIncomingNonlocalFace&
+const GroupedIncomingNonlocalFace&
 CBCD_FLUDSCommonData::FindIncomingNonlocalFace(std::uint64_t cell_global_id,
                                                unsigned int face_id) const
 {

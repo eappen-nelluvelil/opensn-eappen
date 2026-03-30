@@ -47,12 +47,12 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   // Build angle-set-local send plans once; shared common data supplies the
   // topology, while the stride depends on this angle subset.
   outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
-  outgoing_face_pack_plans_.resize(common_data_.GetNumOutgoingNonlocalFaces());
+  outgoing_face_payload_sizes_.resize(common_data_.GetNumOutgoingNonlocalFaces());
   for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
   {
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
-      outgoing_face_pack_plans_[face_info.pack_plan_index].payload_doubles =
+      outgoing_face_payload_sizes_[face_info.pack_plan_index] =
         static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
       {
@@ -283,8 +283,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     for (const auto& face_info : grouped_faces)
     {
       const size_t dest_index = face_info.dest_slot;
-      const auto& pack_plan = outgoing_face_pack_plans_[face_info.pack_plan_index];
-      const size_t face_data_size = pack_plan.payload_doubles;
+      const size_t face_data_size = outgoing_face_payload_sizes_[face_info.pack_plan_index];
       if (not scratch_dest_touched_[dest_index])
         initialize_dest_buffer(dest_index);
       scratch_dest_face_counts_[dest_index]++;
