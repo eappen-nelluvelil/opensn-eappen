@@ -93,6 +93,12 @@ public:
                        unsigned int fi) override;
 
 private:
+  /// Build the reusable CBC task graph and cached per-task metadata.
+  void BuildTaskGraph();
+  /// Retire the completed kernel launch and enqueue newly ready tasks.
+  bool CompleteFinishedKernelLaunch();
+  /// Drain one batch of received incoming sections.
+  bool DrainIncomingSections();
   /// Finalize the sweep after all tasks complete.
   void FinalizeSweep();
 
@@ -144,8 +150,6 @@ private:
   std::vector<uint64_t> deferred_cell_ids_;
   /// Number of completed tasks in the current sweep.
   size_t completed_count_ = 0;
-  /// Total number of tasks in the sweep DAG.
-  size_t total_tasks_ = 0;
 
   /// Per-task reflecting-boundary flag.
   std::vector<char> is_reflecting_task_;

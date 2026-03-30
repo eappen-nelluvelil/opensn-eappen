@@ -57,6 +57,107 @@ CBCD_AngleSet::UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets
   }
 }
 
+void
+CBCD_AngleSet::BuildTaskGraph()
+{
+  if (not reference_ids_.empty())
+    return;
+
+  const auto& tasks = cbc_spds_.GetTaskList();
+  const size_t num_tasks = tasks.size();
+  reference_ids_.resize(num_tasks);
+  initial_deps_.resize(num_tasks);
+  successor_offsets_.resize(num_tasks + 1, 0);
+
+  for (size_t i = 0; i < num_tasks; ++i)
+  {
+    reference_ids_[i] = tasks[i].reference_id;
+    initial_deps_[i] = static_cast<int>(tasks[i].num_dependencies);
+    successor_offsets_[i + 1] = static_cast<uint32_t>(tasks[i].successors.size());
+  }
+
+  for (size_t i = 1; i <= num_tasks; ++i)
+    successor_offsets_[i] += successor_offsets_[i - 1];
+
+  successor_data_.resize(successor_offsets_[num_tasks]);
+  for (size_t i = 0; i < num_tasks; ++i)
+  {
+    const uint32_t offset = successor_offsets_[i];
+    for (size_t j = 0; j < tasks[i].successors.size(); ++j)
+      successor_data_[offset + j] = tasks[i].successors[j];
+
+    if (initial_deps_[i] == 0)
+      initial_ready_tasks_.push_back(static_cast<uint32_t>(i));
+  }
+
+  ready_queue_.reserve(num_tasks);
+  in_flight_task_indices_.reserve(num_tasks);
+  deferred_cell_ids_.reserve(num_tasks);
+
+  if (following_angle_sets_.empty())
+    return;
+
+  is_reflecting_task_.assign(num_tasks, 0);
+  for (size_t i = 0; i < num_tasks; ++i)
+  {
+    if (not cbcd_fluds_.GetReflectingOutgoingBoundaryFaces(reference_ids_[i]).empty())
+    {
+      is_reflecting_task_[i] = 1;
+      ++total_reflecting_tasks_;
+    }
+  }
+}
+
+bool
+CBCD_AngleSet::CompleteFinishedKernelLaunch()
+{
+  if (not kernel_in_flight_ or not stream_.is_completed())
+    return false;
+
+  deferred_cell_ids_.clear();
+  for (const uint32_t task_idx : in_flight_task_indices_)
+  {
+    deferred_cell_ids_.push_back(reference_ids_[task_idx]);
+
+    for (uint32_t j = successor_offsets_[task_idx]; j < successor_offsets_[task_idx + 1]; ++j)
+    {
+      if (--remaining_deps_[successor_data_[j]] == 0)
+        ready_queue_.push_back(successor_data_[j]);
+    }
+    ++completed_count_;
+
+    if (not followers_notified_ and is_reflecting_task_[task_idx])
+      ++reflecting_tasks_completed_;
+  }
+
+  in_flight_task_indices_.clear();
+  kernel_in_flight_ = false;
+  return true;
+}
+
+bool
+CBCD_AngleSet::DrainIncomingSections()
+{
+  return agg_comm_->DrainIncoming(id_,
+    [this](const CBCD_AggregatedCommunicator::IncomingSection& section)
+    {
+      const auto* ptr = section.Data();
+      const size_t num_entries = CBCD_AggregatedCommunicator::Wire::LoadSize(ptr);
+
+      for (size_t e = 0; e < num_entries; ++e)
+      {
+        const auto entry_header = CBCD_AggregatedCommunicator::Wire::LoadEntryHeader(ptr);
+        const auto* psi_data = reinterpret_cast<const double*>(ptr);
+        ptr += entry_header.data_size * sizeof(double);
+
+        const auto local_id = cbcd_fluds_.ScatterReceivedFaceData(
+          entry_header.cell_global_id, entry_header.face_id, psi_data);
+        if (--remaining_deps_[local_id] == 0)
+          ready_queue_.push_back(static_cast<uint32_t>(local_id));
+      }
+    });
+}
+
 bool
 CBCD_AngleSet::TryInitialize()
 {
@@ -69,54 +170,7 @@ CBCD_AngleSet::TryInitialize()
   if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
-  if (reference_ids_.empty())
-  {
-    const auto& tasks = cbc_spds_.GetTaskList();
-    const size_t N = tasks.size();
-    reference_ids_.resize(N);
-    initial_deps_.resize(N);
-    successor_offsets_.resize(N + 1, 0);
-
-    for (size_t i = 0; i < N; ++i)
-    {
-      reference_ids_[i] = tasks[i].reference_id;
-      initial_deps_[i] = static_cast<int>(tasks[i].num_dependencies);
-      successor_offsets_[i + 1] = static_cast<uint32_t>(tasks[i].successors.size());
-    }
-
-    for (size_t i = 0; i < N; ++i)
-      successor_offsets_[i + 1] += successor_offsets_[i];
-
-    successor_data_.resize(successor_offsets_[N]);
-    for (size_t i = 0; i < N; ++i)
-    {
-      uint32_t off = successor_offsets_[i];
-      for (size_t j = 0; j < tasks[i].successors.size(); ++j)
-        successor_data_[off + j] = tasks[i].successors[j];
-    }
-
-    for (size_t i = 0; i < N; ++i)
-      if (initial_deps_[i] == 0)
-        initial_ready_tasks_.push_back(static_cast<uint32_t>(i));
-
-    ready_queue_.reserve(N);
-    in_flight_task_indices_.reserve(N);
-    deferred_cell_ids_.reserve(N);
-
-    if (not following_angle_sets_.empty())
-    {
-      is_reflecting_task_.assign(N, 0);
-      for (size_t i = 0; i < N; ++i)
-      {
-        uint64_t cell_id = reference_ids_[i];
-        if (not cbcd_fluds_.GetReflectingOutgoingBoundaryFaces(cell_id).empty())
-        {
-          is_reflecting_task_[i] = 1;
-          ++total_reflecting_tasks_;
-        }
-      }
-    }
-  }
+  BuildTaskGraph();
 
   remaining_deps_.resize(initial_deps_.size());
   std::memcpy(remaining_deps_.data(), initial_deps_.data(), initial_deps_.size() * sizeof(int));
@@ -125,7 +179,6 @@ CBCD_AngleSet::TryInitialize()
 
   ready_queue_.assign(initial_ready_tasks_.begin(), initial_ready_tasks_.end());
 
-  total_tasks_ = reference_ids_.size();
   completed_count_ = 0;
   kernel_in_flight_ = false;
   reflecting_tasks_completed_ = 0;
@@ -143,53 +196,9 @@ CBCD_AngleSet::TryAdvanceOneStep()
   if (not initialized_ or executed_)
     return false;
 
-  bool any_work_done = false;
-  bool has_deferred_outgoing = false;
-
-  if (kernel_in_flight_ and stream_.is_completed())
-  {
-    deferred_cell_ids_.clear();
-    for (uint32_t task_idx : in_flight_task_indices_)
-    {
-      deferred_cell_ids_.push_back(reference_ids_[task_idx]);
-
-      const uint32_t succ_begin = successor_offsets_[task_idx];
-      const uint32_t succ_end = successor_offsets_[task_idx + 1];
-      for (uint32_t j = succ_begin; j < succ_end; ++j)
-      {
-        if (--remaining_deps_[successor_data_[j]] == 0)
-          ready_queue_.push_back(successor_data_[j]);
-      }
-      ++completed_count_;
-
-      if (not followers_notified_ and is_reflecting_task_[task_idx])
-        ++reflecting_tasks_completed_;
-    }
-
-    in_flight_task_indices_.clear();
-    kernel_in_flight_ = false;
-    has_deferred_outgoing = true;
-    any_work_done = true;
-  }
-
-  any_work_done |= agg_comm_->DrainIncoming(id_,
-    [this](const CBCD_AggregatedCommunicator::IncomingSection& section)
-    {
-      const auto* ptr = section.Data();
-      const size_t num_entries = CBCD_AggregatedCommunicator::Wire::LoadSize(ptr);
-
-      for (size_t e = 0; e < num_entries; ++e)
-      {
-        const auto entry_header = CBCD_AggregatedCommunicator::Wire::LoadEntryHeader(ptr);
-        const auto* psi_data = reinterpret_cast<const double*>(ptr);
-        ptr += entry_header.data_size * sizeof(double);
-
-        auto local_id =
-          cbcd_fluds_.ScatterReceivedFaceData(entry_header.cell_global_id, entry_header.face_id, psi_data);
-        if (--remaining_deps_[local_id] == 0)
-          ready_queue_.push_back(static_cast<uint32_t>(local_id));
-      }
-    });
+  const bool has_deferred_outgoing = CompleteFinishedKernelLaunch();
+  bool any_work_done = has_deferred_outgoing;
+  any_work_done |= DrainIncomingSections();
 
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
@@ -215,7 +224,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
     TryNotifyFollowers();
   }
 
-  if (completed_count_ >= total_tasks_)
+  if (completed_count_ >= reference_ids_.size())
     FinalizeSweep();
 
   return any_work_done;
@@ -285,7 +294,6 @@ CBCD_AngleSet::ResetSweepBuffers()
   in_flight_task_indices_.clear();
   deferred_cell_ids_.clear();
   completed_count_ = 0;
-  total_tasks_ = 0;
   reflecting_tasks_completed_ = 0;
   followers_notified_ = false;
 }
