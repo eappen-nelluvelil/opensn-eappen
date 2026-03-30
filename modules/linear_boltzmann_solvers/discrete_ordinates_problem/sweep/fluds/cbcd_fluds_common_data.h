@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <unordered_map>
@@ -33,21 +34,26 @@ public:
     std::vector<NonlocalNodeInfo> nodes;
   };
 
+  /// Outgoing node-copy descriptor for one face node.
+  struct OutgoingNodeCopy
+  {
+    /// Source offset in the outgoing nonlocal psi buffer.
+    std::uint32_t storage_index = 0;
+    /// Destination face-node index inside the packed face payload.
+    std::uint16_t face_node = 0;
+  };
+
   /// Outgoing nonlocal face grouped by face ID and destination.
   struct GroupedOutgoingNonlocalFace
   {
-    /// Face-node metadata in face-node order.
-    std::vector<NonlocalNodeInfo> nodes;
-    /// Neighbor cell global identifier.
-    std::uint64_t neighbor_global_id = 0;
-    /// Neighbor partition ID.
-    int locality = -1;
+    /// Fixed wire-format prefix `[neighbor_global_id][associated_face]`.
+    std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
     /// Destination slot in the outgoing locality table.
     std::uint32_t dest_slot = 0;
-    /// Neighbor face index associated with this face.
-    unsigned int associated_face = 0;
     /// Number of nodes on this face.
     std::uint16_t num_face_nodes = 0;
+    /// Face-node copy descriptors in face-node order.
+    std::vector<OutgoingNodeCopy> node_copies;
   };
 
   /// Build shared CBCD topology for one sweep ordering.

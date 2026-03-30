@@ -223,8 +223,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     for (const auto& face_info : grouped_faces)
     {
       const size_t dest_index = face_info.dest_slot;
-      const size_t face_data_size =
-        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      const size_t face_data_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       scratch_dest_face_counts_[dest_index]++;
       scratch_dest_psi_bytes_[dest_index] += face_data_size * sizeof(double);
     }
@@ -259,20 +258,19 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
     for (const auto& face_info : grouped_faces)
     {
       const size_t dest_index = face_info.dest_slot;
-      const size_t face_data_size =
-        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      const size_t face_data_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       auto* base = dest_buffers_[dest_index].Data().data();
       size_t& offset = scratch_dest_offsets_[dest_index];
 
-      std::memcpy(base + offset, &face_info.neighbor_global_id, sizeof(std::uint64_t));
-      offset += sizeof(std::uint64_t);
-      std::memcpy(base + offset, &face_info.associated_face, sizeof(unsigned int));
-      offset += sizeof(unsigned int);
+      std::memcpy(base + offset,
+                  face_info.entry_header_prefix.data(),
+                  face_info.entry_header_prefix.size());
+      offset += face_info.entry_header_prefix.size();
       std::memcpy(base + offset, &face_data_size, sizeof(size_t));
       offset += sizeof(size_t);
 
       auto* psi_dst = reinterpret_cast<double*>(base + offset);
-      for (const auto& node : face_info.nodes)
+      for (const auto& node : face_info.node_copies)
       {
         double* dst = psi_dst + node.face_node * num_groups_and_angles_;
         const double* src =

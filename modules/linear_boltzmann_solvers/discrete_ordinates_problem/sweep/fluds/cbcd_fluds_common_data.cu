@@ -6,6 +6,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caribou/main.hpp"
+#include <cstring>
 
 namespace crb = caribou;
 
@@ -139,24 +140,25 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               grouped_face_index = cell_to_outgoing_nonlocal_faces_[cell.local_id].size();
               auto& grouped_face =
                 cell_to_outgoing_nonlocal_faces_[cell.local_id].emplace_back();
-              grouped_face.nodes.reserve(num_face_nodes);
-              grouped_face.neighbor_global_id = face.neighbor_id;
-              grouped_face.locality = locality;
+              grouped_face.node_copies.reserve(num_face_nodes);
               grouped_face.dest_slot = dest_slot;
-              grouped_face.associated_face =
-                static_cast<unsigned int>(face_nodal_mapping.associated_face_);
               grouped_face.num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
+              std::memcpy(grouped_face.entry_header_prefix.data(),
+                          &face.neighbor_id,
+                          sizeof(std::uint64_t));
+              const auto associated_face =
+                static_cast<unsigned int>(face_nodal_mapping.associated_face_);
+              std::memcpy(grouped_face.entry_header_prefix.data() + sizeof(std::uint64_t),
+                          &associated_face,
+                          sizeof(unsigned int));
               ++num_outgoing_nonlocal_faces_;
             }
 
             auto& grouped_face =
               cell_to_outgoing_nonlocal_faces_[cell.local_id][grouped_face_index];
-            grouped_face.nodes.emplace_back(NonlocalNodeInfo{cell.global_id,
-                                                             static_cast<unsigned int>(f),
-                                                             static_cast<std::uint32_t>(
-                                                               num_outgoing_nonlocal_nodes_),
-                                                             static_cast<std::uint16_t>(fn),
-                                                             face_nodal_mapping.face_node_mapping_[fn]});
+            grouped_face.node_copies.push_back(
+              {static_cast<std::uint32_t>(num_outgoing_nonlocal_nodes_),
+               static_cast<std::uint16_t>(fn)});
             ++num_outgoing_nonlocal_nodes_;
           }
           else
