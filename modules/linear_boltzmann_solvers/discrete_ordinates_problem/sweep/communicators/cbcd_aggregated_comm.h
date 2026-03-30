@@ -84,8 +84,9 @@ public:
   /// Enqueue one pre-packed outgoing wire-format section.
   ///
   /// \param queue_index Destination queue index returned by GetQueueIndex().
+  /// \param producer_id Stable producer identifier used to select a shard.
   /// \param data Packed section buffer.
-  void EnqueuePrepackedByIndex(int queue_index, ByteArray&& data);
+  void EnqueuePrepackedByIndex(int queue_index, size_t producer_id, ByteArray&& data);
 
   /// Drain all received sections for one angle set.
   ///
@@ -122,8 +123,8 @@ private:
     int dest_location;
     /// Communicator-local destination rank.
     int dest_rank;
-    /// Queue of pre-packed outgoing sections.
-    std::unique_ptr<LockFreeTreiberStack<ByteArray>> queue;
+    /// Sharded queues of pre-packed outgoing sections.
+    std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> shards;
   };
 
   /// Incoming source metadata for one location dependency.
@@ -177,6 +178,8 @@ private:
   std::vector<InFlightSend> in_flight_sends_;
   /// Recycled outgoing aggregate buffers.
   std::vector<ByteArray> send_buffer_pool_;
+  /// Number of outgoing shards per destination queue.
+  size_t num_outgoing_shards_;
 
   /// Acquire one outgoing aggregate buffer.
   ByteArray AcquireSendBuffer()

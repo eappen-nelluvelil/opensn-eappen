@@ -23,6 +23,7 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
     max_message_bytes_(max_message_bytes),
     mpi_tag_(static_cast<int>(num_angle_sets_)),
     incoming_mailboxes_(num_angle_sets_),
+    num_outgoing_shards_(std::max<size_t>(1, num_angle_sets_)),
     angle_set_done_(num_angle_sets_)
 {
   std::set<int> sources;
@@ -52,7 +53,9 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
     NeighborQueue nq;
     nq.dest_location = dest;
     nq.dest_rank = comm_set_.MapIonJ(dest, dest);
-    nq.queue = std::make_unique<LockFreeTreiberStack<ByteArray>>();
+    nq.shards.reserve(num_outgoing_shards_);
+    for (size_t shard = 0; shard < num_outgoing_shards_; ++shard)
+      nq.shards.push_back(std::make_unique<LockFreeTreiberStack<ByteArray>>());
     outgoing_queues_.push_back(std::move(nq));
     dest_to_queue_index_[dest] = queue_idx++;
   }
@@ -63,7 +66,8 @@ CBCD_AggregatedCommunicator::CBCD_AggregatedCommunicator(const std::vector<Angle
   // Pre-allocate Treiber stack nodes to eliminate heap allocations during sweeps.
   // Outgoing: at most one section per angle set may be queued before the comm thread drains.
   for (auto& nq : outgoing_queues_)
-    nq.queue->Preallocate(num_angle_sets_);
+    for (auto& shard : nq.shards)
+      shard->Preallocate(1);
 
   // Incoming: at most one section per source rank may arrive before the worker thread drains.
   const size_t num_sources = source_queues_.size();
@@ -92,10 +96,13 @@ CBCD_AggregatedCommunicator::GetQueueIndex(int dest_location) const
 }
 
 void
-CBCD_AggregatedCommunicator::EnqueuePrepackedByIndex(int queue_index, ByteArray&& data)
+CBCD_AggregatedCommunicator::EnqueuePrepackedByIndex(int queue_index,
+                                                     size_t producer_id,
+                                                     ByteArray&& data)
 {
   assert(queue_index >= 0 and queue_index < static_cast<int>(outgoing_queues_.size()));
-  outgoing_queues_[queue_index].queue->Push(std::move(data));
+  const size_t shard_index = producer_id % num_outgoing_shards_;
+  outgoing_queues_[queue_index].shards[shard_index]->Push(std::move(data));
 }
 
 void
@@ -161,20 +168,30 @@ CBCD_AggregatedCommunicator::FlushOutgoing()
 
   for (auto& nq : outgoing_queues_)
   {
-    // Skip empty queues to avoid touching the send-buffer pool.
-    if (nq.queue->Empty())
+    bool has_queued_data = false;
+    for (const auto& shard : nq.shards)
+    {
+      if (not shard->Empty())
+      {
+        has_queued_data = true;
+        break;
+      }
+    }
+    if (not has_queued_data)
       continue;
 
     ByteArray send_buf = AcquireSendBuffer();
     size_t num_sections = 0;
     send_buf.Data().resize(sizeof(size_t));
 
-    bool has_data = nq.queue->DrainAndProcess(
-      [&](ByteArray&& section)
-      {
-        send_buf.Append(section);
-        ++num_sections;
-      });
+    bool has_data = false;
+    for (auto& shard : nq.shards)
+      has_data |= shard->DrainAndProcess(
+        [&](ByteArray&& section)
+        {
+          send_buf.Append(section);
+          ++num_sections;
+        });
 
     if (not has_data)
     {
@@ -294,8 +311,9 @@ CBCD_AggregatedCommunicator::AllWorkComplete() const
       return false;
 
   for (const auto& nq : outgoing_queues_)
-    if (not nq.queue->Empty())
-      return false;
+    for (const auto& shard : nq.shards)
+      if (not shard->Empty())
+        return false;
 
   return true;
 }

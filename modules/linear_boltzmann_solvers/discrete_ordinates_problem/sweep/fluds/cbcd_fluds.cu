@@ -287,6 +287,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
                 &scratch_dest_face_counts_[dest_index],
                 sizeof(size_t));
     agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[dest_index].queue_index,
+                                      angle_set_id,
                                       std::move(dest_buffers_[dest_index]));
     scratch_dest_touched_[dest_index] = 0;
   }
