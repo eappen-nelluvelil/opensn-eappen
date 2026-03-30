@@ -46,8 +46,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
 
   const size_t num_dests = outgoing_destinations_.size();
   scratch_dest_face_counts_.resize(num_dests, 0);
-  scratch_dest_psi_bytes_.resize(num_dests, 0);
-  scratch_dest_offsets_.resize(num_dests, 0);
   dest_buffers_.resize(num_dests);
 }
 
@@ -195,9 +193,24 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
 
   const auto& reflecting_boundary_map = reflecting_outgoing_boundary_nodes_;
   const auto& grouped_outgoing_faces = common_data_.GetOutgoingNonlocalFaces();
+  constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
+  constexpr size_t entry_header_size =
+    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
 
   std::fill(scratch_dest_face_counts_.begin(), scratch_dest_face_counts_.end(), 0);
-  std::fill(scratch_dest_psi_bytes_.begin(), scratch_dest_psi_bytes_.end(), 0);
+  for (auto& buffer : dest_buffers_)
+    buffer.Data().clear();
+
+  const auto ensure_dest_buffer =
+    [this, angle_set_id](const size_t dest_index)
+  {
+    auto& data = dest_buffers_[dest_index].Data();
+    if (data.empty())
+    {
+      data.resize(section_header_size);
+      std::memcpy(data.data(), &angle_set_id, sizeof(size_t));
+    }
+  };
 
   for (const auto& cell_local_id : cell_local_ids)
   {
@@ -225,51 +238,20 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
       const size_t dest_index = face_info.dest_slot;
       const size_t face_data_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       scratch_dest_face_counts_[dest_index]++;
-      scratch_dest_psi_bytes_[dest_index] += face_data_size * sizeof(double);
-    }
-  }
-
-  constexpr size_t entry_header_size =
-    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
-  constexpr size_t section_header_size = sizeof(size_t) + sizeof(size_t);
-
-  std::fill(scratch_dest_offsets_.begin(), scratch_dest_offsets_.end(), 0);
-
-  for (size_t d = 0; d < outgoing_destinations_.size(); ++d)
-  {
-    if (scratch_dest_face_counts_[d] == 0)
-    {
-      dest_buffers_[d].Data().clear();
-      continue;
-    }
-    size_t buf_size = section_header_size + scratch_dest_face_counts_[d] * entry_header_size +
-                      scratch_dest_psi_bytes_[d];
-    dest_buffers_[d].Data().resize(buf_size);
-
-    auto* base = dest_buffers_[d].Data().data();
-    std::memcpy(base, &angle_set_id, sizeof(size_t));
-    std::memcpy(base + sizeof(size_t), &scratch_dest_face_counts_[d], sizeof(size_t));
-    scratch_dest_offsets_[d] = section_header_size;
-  }
-
-  for (const auto& cell_local_id : cell_local_ids)
-  {
-    const auto& grouped_faces = grouped_outgoing_faces[cell_local_id];
-    for (const auto& face_info : grouped_faces)
-    {
-      const size_t dest_index = face_info.dest_slot;
-      const size_t face_data_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
-      auto* base = dest_buffers_[dest_index].Data().data();
-      size_t& offset = scratch_dest_offsets_[dest_index];
+      ensure_dest_buffer(dest_index);
+      auto& data = dest_buffers_[dest_index].Data();
+      const size_t offset = data.size();
+      data.resize(offset + entry_header_size + face_data_size * sizeof(double));
+      auto* base = data.data();
 
       std::memcpy(base + offset,
                   face_info.entry_header_prefix.data(),
                   face_info.entry_header_prefix.size());
-      offset += face_info.entry_header_prefix.size();
-      std::memcpy(base + offset, &face_data_size, sizeof(size_t));
-      offset += sizeof(size_t);
+      std::memcpy(base + offset + face_info.entry_header_prefix.size(),
+                  &face_data_size,
+                  sizeof(size_t));
 
-      auto* psi_dst = reinterpret_cast<double*>(base + offset);
+      auto* psi_dst = reinterpret_cast<double*>(base + offset + entry_header_size);
       for (const auto& node : face_info.node_copies)
       {
         double* dst = psi_dst + node.face_node * num_groups_and_angles_;
@@ -277,7 +259,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
           outgoing_nonlocal_psi_.data() + node.storage_index * num_groups_and_angles_;
         std::memcpy(dst, src, stride_bytes);
       }
-      offset += face_data_size * sizeof(double);
     }
   }
 
@@ -285,6 +266,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCD_AngleSet* angle_set,
   {
     if (scratch_dest_face_counts_[d] == 0)
       continue;
+    std::memcpy(dest_buffers_[d].Data().data() + sizeof(size_t),
+                &scratch_dest_face_counts_[d],
+                sizeof(size_t));
     agg_comm->EnqueuePrepackedByIndex(outgoing_destinations_[d].queue_index,
                                       std::move(dest_buffers_[d]));
   }

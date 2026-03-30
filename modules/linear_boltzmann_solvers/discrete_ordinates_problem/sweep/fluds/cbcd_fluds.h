@@ -185,10 +185,6 @@ private:
 
   /// Per-destination face counts for the current pack pass.
   std::vector<size_t> scratch_dest_face_counts_;
-  /// Per-destination psi payload sizes in bytes for the current pack pass.
-  std::vector<size_t> scratch_dest_psi_bytes_;
-  /// Per-destination write offsets for the current pack pass.
-  std::vector<size_t> scratch_dest_offsets_;
 
   /// Reusable destination buffers for outgoing wire-format sections.
   std::vector<ByteArray> dest_buffers_;
