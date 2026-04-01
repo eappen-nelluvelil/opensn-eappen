@@ -98,7 +98,7 @@ CBCD_AsynchronousCommunicator::ReceiveData()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ReceiveData");
 
-  std::unordered_map<FLUDS::CellFaceKey, std::vector<double>, FLUDS::CellFaceKeyHash>
+  std::unordered_map<FLUDSCommonData::CellFaceKey, std::vector<double>, FLUDSCommonData::CellFaceKeyHash>
     received_messages;
   std::vector<uint64_t> cells_who_received_data;
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();

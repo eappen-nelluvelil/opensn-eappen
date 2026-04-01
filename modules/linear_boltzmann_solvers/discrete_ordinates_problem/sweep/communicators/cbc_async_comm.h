@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
+#include <limits>
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
@@ -36,23 +37,29 @@ public:
                                                   size_t angle_set_id,
                                                   size_t data_size);
 
+  void InitializeDelayedUpstreamData();
   bool SendData();
-
+  bool FlushSendBuffers();
   std::vector<uint64_t> ReceiveData();
+  bool ReceiveDelayedData();
 
   void Reset()
   {
     outgoing_message_queue_.clear();
+    delayed_outgoing_message_queue_.clear();
     send_buffer_.clear();
+    std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), false);
+    delayed_completion_markers_queued_ = false;
   }
 
 protected:
+  static constexpr std::uint64_t delayed_done_cell_id_ = std::numeric_limits<std::uint64_t>::max();
+  static constexpr unsigned int delayed_done_face_id_ = std::numeric_limits<unsigned int>::max();
+
   const size_t angle_set_id_;
 
-  /// location_id, cell_global_id, face_id
   using MessageKey = std::tuple<int, std::uint64_t, unsigned int>;
 
-  /// boost::hash_combine hash function for MessageKey.
   struct MessageKeyHash
   {
     std::size_t operator()(const MessageKey& key) const noexcept
@@ -64,8 +71,6 @@ protected:
     }
   };
 
-  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
-
   struct BufferItem
   {
     int destination = 0;
@@ -74,7 +79,19 @@ protected:
     bool completed = false;
     ByteArray data_array;
   };
+
+  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
+  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>
+    delayed_outgoing_message_queue_;
   std::vector<BufferItem> send_buffer_;
+  std::vector<bool> delayed_recv_done_;
+  bool delayed_completion_markers_queued_ = false;
+
+private:
+  void QueueMessagesForSend(
+    std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>& message_queue);
+  bool AllBufferedSendsCompleted();
+  void QueueDelayedCompletionMarkers();
 };
 
 } // namespace opensn

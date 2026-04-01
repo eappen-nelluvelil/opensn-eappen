@@ -94,11 +94,15 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   const bool all_tasks_completed = (num_completed_tasks == current_task_list_.size());
   const bool all_messages_sent = async_comm_.SendData();
 
-  if (all_tasks_completed and all_messages_sent)
+  if (all_tasks_completed and not boundary_readiness_updated_)
   {
-    // Update boundary readiness
     for (auto& [bid, boundary] : boundaries_)
       boundary->UpdateAnglesReadyStatus(angles_);
+    boundary_readiness_updated_ = true;
+  }
+
+  if (all_tasks_completed and all_messages_sent)
+  {
     executed_ = true;
     return AngleSetStatus::FINISHED;
   }
@@ -112,6 +116,7 @@ CBC_AngleSet::ResetSweepBuffers()
   current_task_list_.clear();
   ready_tasks_.clear();
   num_completed_tasks = 0;
+  boundary_readiness_updated_ = false;
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;

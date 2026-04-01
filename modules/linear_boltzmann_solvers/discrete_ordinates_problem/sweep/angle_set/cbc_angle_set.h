@@ -24,7 +24,7 @@ public:
 
   AsynchronousCommunicator* GetCommunicator() override;
 
-  void InitializeDelayedUpstreamData() override {}
+  void InitializeDelayedUpstreamData() override { async_comm_.InitializeDelayedUpstreamData(); }
 
   int GetMaxBufferMessages() const override { return 0; }
 
@@ -34,13 +34,13 @@ public:
 
   AngleSetStatus FlushSendBuffers() override
   {
-    const bool all_messages_sent = async_comm_.SendData();
+    const bool all_messages_sent = async_comm_.FlushSendBuffers();
     return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
   }
 
   void ResetSweepBuffers() override;
 
-  bool ReceiveDelayedData() override { return true; }
+  bool ReceiveDelayedData() override { return async_comm_.ReceiveDelayedData(); }
 
   const double* PsiBoundary(uint64_t boundary_id,
                             unsigned int angle_num,
@@ -61,6 +61,7 @@ protected:
   std::vector<Task> current_task_list_;
   std::vector<std::uint64_t> ready_tasks_;
   size_t num_completed_tasks = 0;
+  bool boundary_readiness_updated_ = false;
   CBC_AsynchronousCommunicator async_comm_;
 };
 
