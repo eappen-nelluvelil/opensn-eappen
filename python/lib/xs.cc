@@ -227,45 +227,38 @@ WrapMultiGroupXS(py::module& xs)
   );
   multigroup_xs.def_property_readonly(
     "sigma_t",
-    XS_GETTER(GetSigmaTotal),
-    "Get total cross section.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetSigmaTotal), py::keep_alive<0, 1>()),
+    "Get total cross section."
   );
   multigroup_xs.def_property_readonly(
     "sigma_a",
-    XS_GETTER(GetSigmaAbsorption),
-    "Get absorption cross section.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetSigmaAbsorption), py::keep_alive<0, 1>()),
+    "Get absorption cross section."
   );
   multigroup_xs.def_property_readonly(
     "sigma_f",
-    XS_GETTER(GetSigmaFission),
-    "Get fission cross section.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetSigmaFission), py::keep_alive<0, 1>()),
+    "Get fission cross section."
   );
   multigroup_xs.def_property_readonly(
     "chi",
-    XS_GETTER(GetChi),
-    "Get neutron fission spectrum.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetChi), py::keep_alive<0, 1>()),
+    "Get neutron fission spectrum."
   );
   multigroup_xs.def_property_readonly(
     "nu_sigma_f",
-    XS_GETTER(GetNuSigmaF),
-    "Get neutron production due to fission.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetNuSigmaF), py::keep_alive<0, 1>()),
+    "Get neutron production due to fission."
   );
   multigroup_xs.def_property_readonly(
     "nu_prompt_sigma_f",
-    XS_GETTER(GetNuPromptSigmaF),
-    "Get prompt neutron production due to fission.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetNuPromptSigmaF), py::keep_alive<0, 1>()),
+    "Get prompt neutron production due to fission."
   );
   multigroup_xs.def_property_readonly(
     "nu_delayed_sigma_f",
-    XS_GETTER(GetNuDelayedSigmaF),
-    "Get delayed neutron production due to fission.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetNuDelayedSigmaF), py::keep_alive<0, 1>()),
+    "Get delayed neutron production due to fission."
   );
   multigroup_xs.def(
     "has_custom_xs",
@@ -287,9 +280,8 @@ WrapMultiGroupXS(py::module& xs)
   );
   multigroup_xs.def_property_readonly(
     "inv_velocity",
-    XS_GETTER(GetInverseVelocity),
-    "Get inverse velocity.",
-    py::keep_alive<0, 1>()
+    py::cpp_function(XS_GETTER(GetInverseVelocity), py::keep_alive<0, 1>()),
+    "Get inverse velocity."
   );
   // clang-format on
 }
