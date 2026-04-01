@@ -372,11 +372,20 @@ AngleAggregation::SetOldDelayedAngularDOFsFromSTLVector(const std::vector<double
 
   auto psi_size = GetNumDelayedAngularDOFs();
   size_t stl_size = stl_vector.size();
-  if (stl_size != psi_size.first)
+  if (stl_size > psi_size.first)
     throw std::logic_error(std::string(__FUNCTION__) +
                            ": STL-vector size "
                            "is incompatible with number angular unknowns stored "
                            "in the angle-aggregation object.");
+
+  if (stl_size < psi_size.first)
+  {
+    log.Log0Warning()
+      << __FUNCTION__ << ": Restart delayed-angular-flux data is smaller than the current "
+      << "angle-aggregation layout. This can happen when restart data was written with a "
+      << "different sweep type or an older delayed-flux layout. Missing lagged angular DOFs "
+      << "will be initialized to zero.";
+  }
 
   size_t index = 0;
   for (auto& [bid, bndry] : boundaries_)
@@ -385,13 +394,13 @@ AngleAggregation::SetOldDelayedAngularDOFsFromSTLVector(const std::vector<double
   // Intra-cell cycles
   for (auto& angle_set : angle_set_groups_)
     for (auto& val : angle_set->GetFLUDS().DelayedLocalPsiOld())
-      val = stl_vector[index++];
+      val = (index < stl_size) ? stl_vector[index++] : 0.0;
 
   // Inter location cycles
   for (auto& angle_set : angle_set_groups_)
     for (auto& loc_vector : angle_set->GetFLUDS().DelayedPrelocIOutgoingPsiOld())
       for (auto& val : loc_vector)
-        val = stl_vector[index++];
+        val = (index < stl_size) ? stl_vector[index++] : 0.0;
 }
 
 void
