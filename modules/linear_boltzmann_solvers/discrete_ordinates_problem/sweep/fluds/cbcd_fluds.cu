@@ -3,7 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
@@ -12,6 +12,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include <sstream>
 #include <utility>
 
 namespace opensn
@@ -146,6 +147,16 @@ CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
                           node.storage_index * num_groups_and_angles_ + as_ss_idx * num_groups_;
         const double* src_psi =
           NLUpwindPsi(node.cell_global_id, node.face_id, node.face_node_mapped, as_ss_idx);
+        if (src_psi == nullptr)
+        {
+          std::ostringstream out;
+          out << "CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice: Missing nonlocal angular flux for "
+              << "cell_global_id=" << node.cell_global_id << " face_id=" << node.face_id
+              << " face_node_mapped=" << node.face_node_mapped
+              << " angle_set_subsweep_index=" << as_ss_idx
+              << ". The cell was marked ready before all incoming nonlocal face data arrived.";
+          throw std::runtime_error(out.str());
+        }
         std::copy(src_psi, src_psi + num_groups_, dst_psi);
       }
     }
@@ -197,7 +208,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         const int locality =
           sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
         auto& async_comm =
-          static_cast<CBC_AsynchronousCommunicator&>(*angle_set->GetCommunicator());
+          static_cast<CBCD_AsynchronousCommunicator&>(*angle_set->GetCommunicator());
         std::vector<double>* psi_nonlocal_outgoing =
           &async_comm.InitGetDownwindMessageData(locality,
                                                  face.neighbor_id,
