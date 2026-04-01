@@ -61,22 +61,7 @@ public:
 
   virtual ~FLUDS() = default;
 
-  /// cell_global_id, face_id
-  using CellFaceKey = std::pair<std::uint64_t, unsigned int>;
-
-  /// boost::hash_combine hash function for CellFaceKey.
-  struct CellFaceKeyHash
-  {
-    size_t operator()(const CellFaceKey& key) const noexcept
-    {
-      size_t h = std::hash<std::uint64_t>{}(key.first);
-      h ^=
-        std::hash<unsigned int>{}(key.second) + 0x9e3779b9 + (h << 6) + (h >> 2); // Combine hashes
-      return h;
-    }
-  };
-
-  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash>&
+  std::unordered_map<FLUDSCommonData::CellFaceKey, std::vector<double>, FLUDSCommonData::CellFaceKeyHash>&
   GetDeplocsOutgoingMessages()
   {
     return deplocs_outgoing_messages_;
@@ -95,7 +80,7 @@ protected:
   std::vector<std::span<double>> delayed_prelocI_outgoing_psi_view_;
   std::vector<std::span<double>> delayed_prelocI_outgoing_psi_old_view_;
 
-  std::unordered_map<CellFaceKey, std::vector<double>, CellFaceKeyHash> deplocs_outgoing_messages_;
+  std::unordered_map<FLUDSCommonData::CellFaceKey, std::vector<double>, FLUDSCommonData::CellFaceKeyHash> deplocs_outgoing_messages_;
 };
 
 } // namespace opensn

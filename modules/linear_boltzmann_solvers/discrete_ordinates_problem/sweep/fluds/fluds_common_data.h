@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <cstdint>
 
@@ -55,6 +57,21 @@ public:
 
   const SPDS& GetSPDS() const;
   const FaceNodalMapping& GetFaceNodalMapping(uint64_t cell_local_id, unsigned int face_id) const;
+
+  /// cell_global_id, face_id
+  using CellFaceKey = std::pair<std::uint64_t, unsigned int>;
+
+  /// boost::hash_combine hash function for CellFaceKey.
+  struct CellFaceKeyHash
+  {
+    size_t operator()(const CellFaceKey& key) const noexcept
+    {
+      size_t h = std::hash<std::uint64_t>{}(key.first);
+      h ^=
+        std::hash<unsigned int>{}(key.second) + 0x9e3779b9 + (h << 6) + (h >> 2); // Combine hashes
+      return h;
+    }
+  };
 
 protected:
   const SPDS& spds_;
