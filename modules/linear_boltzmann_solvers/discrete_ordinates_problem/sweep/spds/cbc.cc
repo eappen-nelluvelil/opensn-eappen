@@ -48,6 +48,7 @@ struct SlotCalcScratch
   std::vector<std::size_t> component_edge_write_offsets;
   std::vector<std::pair<std::uint32_t, std::uint32_t>> component_edges;
   std::vector<std::size_t> component_matching_mate;
+  std::vector<std::uint8_t> is_active_vertex;
 
   void ResizeMatchingState(const std::uint32_t num_tasks)
   {
@@ -392,9 +393,32 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch
   if (scratch.reuse_edges.empty())
     return 0;
 
-  ReuseGraph reuse_graph(scratch.reuse_edges.begin(),
-                         scratch.reuse_edges.end(),
-                         static_cast<std::size_t>(num_tasks) * 2);
+  const auto num_graph_vertices = static_cast<std::size_t>(num_tasks) * 2;
+  scratch.is_active_vertex.assign(num_graph_vertices, 0);
+  for (const auto& [u, v] : scratch.reuse_edges)
+  {
+    scratch.is_active_vertex[u] = 1;
+    scratch.is_active_vertex[v] = 1;
+  }
+
+  scratch.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
+  std::uint32_t active_vertex_count = 0;
+  for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
+    if (scratch.is_active_vertex[vertex])
+      scratch.local_vertex_ids[vertex] = active_vertex_count++;
+
+  scratch.component_edges.resize(scratch.reuse_edges.size());
+  std::transform(scratch.reuse_edges.begin(),
+                 scratch.reuse_edges.end(),
+                 scratch.component_edges.begin(),
+                 [&](const auto& edge)
+                 {
+                   return std::pair<std::uint32_t, std::uint32_t>{
+                     scratch.local_vertex_ids[edge.first], scratch.local_vertex_ids[edge.second]};
+                 });
+
+  ReuseGraph reuse_graph(
+    scratch.component_edges.begin(), scratch.component_edges.end(), active_vertex_count);
 
   using Vertex = boost::graph_traits<ReuseGraph>::vertex_descriptor;
   const auto null_vertex = boost::graph_traits<ReuseGraph>::null_vertex();
@@ -434,7 +458,6 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch
       scratch.component_edge_offsets[component_id] + scratch.component_edge_counts[component_id];
   }
 
-  scratch.local_vertex_ids.assign(num_vertices(reuse_graph), INVALID_INDEX);
   auto next_component_vertex = scratch.component_vertex_offsets;
   for (Vertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
   {
