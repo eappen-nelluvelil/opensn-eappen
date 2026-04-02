@@ -62,6 +62,7 @@ private:
   using SweepFunc = void (CBCSweepChunk::*)(AngleSet&);
   SweepFunc sweep_impl_ = nullptr;
 
+  CBCSweepData MakeSweepData(const std::vector<double>* psi_old);
   void Sweep_Generic(AngleSet& angle_set);
   template <unsigned int NumNodes>
   void Sweep_FixedN(AngleSet& angle_set);
