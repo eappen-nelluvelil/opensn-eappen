@@ -18,6 +18,8 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 {
   const auto& grid = *spds.GetGrid();
   const auto& face_orientations = spds.GetCellFaceOrientations();
+  outgoing_nonlocal_face_counts_.assign(spds.GetLocationSuccessors().size(), 0);
+  outgoing_nonlocal_face_node_counts_.assign(spds.GetLocationSuccessors().size(), 0);
   cell_face_offsets_.resize(grid.local_cells.size() + 1, 0);
   size_t total_num_faces = 0;
   for (const auto& cell : grid.local_cells)
@@ -59,6 +61,11 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       else if (orientation == FaceOrientation::OUTGOING)
       {
         ++num_outgoing_nonlocal_faces_;
+        const auto deplocI =
+          static_cast<std::size_t>(spds.MapLocJToDeplocI(face.GetNeighborPartitionID(&grid)));
+        ++outgoing_nonlocal_face_counts_[deplocI];
+        outgoing_nonlocal_face_node_counts_[deplocI] +=
+          grid_nodal_mappings[cell.local_id][f].face_node_mapping_.size();
         outgoing_nonlocal_face_info_[face_storage_index] = OutgoingNonlocalFaceInfo{
           face.GetNeighborPartitionID(&grid),
           face.neighbor_id,

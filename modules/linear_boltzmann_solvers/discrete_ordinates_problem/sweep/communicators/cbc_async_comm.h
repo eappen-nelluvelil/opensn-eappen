@@ -73,6 +73,8 @@ protected:
   };
   std::vector<BufferItem> send_buffer_;
   CBC_FLUDS& cbc_fluds_;
+  std::vector<size_t> destination_buffer_bytes_;
+  std::vector<size_t> destination_buffer_indices_;
 
 private:
   void QueueOutgoingMessages();

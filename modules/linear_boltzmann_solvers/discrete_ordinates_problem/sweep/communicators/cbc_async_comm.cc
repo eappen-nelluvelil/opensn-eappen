@@ -10,6 +10,7 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace opensn
@@ -22,6 +23,21 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
     angle_set_id_(angle_set_id),
     cbc_fluds_(dynamic_cast<CBC_FLUDS&>(fluds))
 {
+  const auto& cbc_common = static_cast<const CBC_FLUDSCommonData&>(cbc_fluds_.GetCommonData());
+  const auto num_deplocs = fluds_.GetSPDS().GetLocationSuccessors().size();
+
+  outgoing_message_queue_.reserve(cbc_common.GetNumOutgoingNonlocalFaces());
+  send_buffer_.reserve(num_deplocs);
+  destination_buffer_bytes_.assign(num_deplocs, 0);
+  destination_buffer_indices_.assign(num_deplocs, std::numeric_limits<size_t>::max());
+
+  constexpr size_t header_bytes = sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
+  for (size_t deplocI = 0; deplocI < num_deplocs; ++deplocI)
+  {
+    destination_buffer_bytes_[deplocI] =
+      cbc_common.GetDeplocIFaceNodeCount(deplocI) * cbc_fluds_.GetStrideSize() * sizeof(double) +
+      cbc_common.GetDeplocIFaceCount(deplocI) * header_bytes;
+  }
 }
 
 std::vector<double>&
@@ -43,9 +59,9 @@ CBC_AsynchronousCommunicator::QueueOutgoingMessages()
 {
   if (outgoing_message_queue_.empty())
     return;
-
-  std::unordered_map<int, size_t> buffer_indices;
-  buffer_indices.reserve(outgoing_message_queue_.size());
+  std::fill(destination_buffer_indices_.begin(),
+            destination_buffer_indices_.end(),
+            std::numeric_limits<size_t>::max());
 
   for (const auto& [msg_key, data] : outgoing_message_queue_)
   {
@@ -53,15 +69,19 @@ CBC_AsynchronousCommunicator::QueueOutgoingMessages()
     const uint64_t cell_global_id = std::get<1>(msg_key);
     const unsigned int face_id = std::get<2>(msg_key);
     const size_t data_size = data.size();
+    const auto deplocI = static_cast<size_t>(fluds_.GetSPDS().MapLocJToDeplocI(locI));
 
-    const auto [it, inserted] = buffer_indices.try_emplace(locI, send_buffer_.size());
-    if (inserted)
+    auto buffer_index = destination_buffer_indices_[deplocI];
+    if (buffer_index == std::numeric_limits<size_t>::max())
     {
+      buffer_index = send_buffer_.size();
+      destination_buffer_indices_[deplocI] = buffer_index;
       send_buffer_.emplace_back();
       send_buffer_.back().destination = locI;
+      send_buffer_.back().data_array.Data().reserve(destination_buffer_bytes_[deplocI]);
     }
 
-    auto& buffer_item = send_buffer_[it->second];
+    auto& buffer_item = send_buffer_[buffer_index];
     auto& buffer_array = buffer_item.data_array;
     buffer_array.Write(cell_global_id);
     buffer_array.Write(face_id);
@@ -85,8 +105,10 @@ CBC_AsynchronousCommunicator::SendData()
   QueueOutgoingMessages();
 
   bool all_messages_sent = true;
-  for (auto& buffer_item : send_buffer_)
+  size_t next_open_buffer = 0;
+  for (size_t buffer_idx = 0; buffer_idx < send_buffer_.size(); ++buffer_idx)
   {
+    auto& buffer_item = send_buffer_[buffer_idx];
     if (not buffer_item.send_initiated)
     {
       const int locJ = buffer_item.destination;
@@ -104,10 +126,14 @@ CBC_AsynchronousCommunicator::SendData()
       else
         all_messages_sent = false;
     }
-  } // for item in buffer
-
-  if (all_messages_sent)
-    send_buffer_.clear();
+    if (not buffer_item.completed)
+    {
+      if (next_open_buffer != buffer_idx)
+        send_buffer_[next_open_buffer] = std::move(buffer_item);
+      ++next_open_buffer;
+    }
+  }
+  send_buffer_.resize(next_open_buffer);
 
   return all_messages_sent;
 }
