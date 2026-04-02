@@ -56,6 +56,7 @@ protected:
   DiscreteOrdinatesProblem& problem_;
   CBCSweepChunkContext ctx_;
   unsigned int group_block_size_ = 0;
+  CBCGenericSweepScratch generic_scratch_;
 
 private:
   using SweepFunc = void (CBCSweepChunk::*)(AngleSet&);

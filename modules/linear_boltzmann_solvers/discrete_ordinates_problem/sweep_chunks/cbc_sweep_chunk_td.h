@@ -31,6 +31,7 @@ protected:
   const std::vector<double>& psi_old_;
   unsigned int group_block_size_ = 0;
   CBCSweepChunkContext ctx_;
+  CBCGenericSweepScratch generic_scratch_;
 
 private:
   SweepFunc sweep_impl_td_ = nullptr;
