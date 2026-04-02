@@ -60,12 +60,12 @@ public:
 
   const IncomingNonlocalFaceInfo& GetIncomingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
+  const IncomingNonlocalFaceInfo&
+  GetIncomingNonlocalFaceInfoByKey(std::uint64_t cell_global_id,
+                                   unsigned int face_id) const noexcept;
 
   const OutgoingNonlocalFaceInfo& GetOutgoingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
-
-  const IncomingNonlocalFaceInfo* FindIncomingNonlocalFaceInfo(std::uint64_t cell_global_id,
-                                                               unsigned int face_id) const noexcept;
 
   size_t GetCellFaceOffset(std::uint32_t cell_local_id) const noexcept
   {
@@ -81,8 +81,7 @@ private:
   std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
   std::vector<size_t> outgoing_nonlocal_face_counts_;
   std::vector<size_t> outgoing_nonlocal_face_node_counts_;
-  std::unordered_map<CellFaceKey, IncomingNonlocalFaceInfo, CellFaceKeyHash>
-    incoming_nonlocal_face_info_by_key_;
+  std::unordered_map<CellFaceKey, std::size_t, CellFaceKeyHash> incoming_nonlocal_face_info_by_key_;
 };
 
 } // namespace opensn
