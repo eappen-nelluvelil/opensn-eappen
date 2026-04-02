@@ -20,6 +20,8 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMinNumLocalPsiSlots()),
     slot_size_(max_cell_dof_count * num_groups_and_angles_),
     cell_slot_indices_(common_data.GetSPDS().GetGrid()->local_cells.size(), INVALID_SLOT),
+    cell_slot_base_offsets_(common_data.GetSPDS().GetGrid()->local_cells.size(),
+                            std::numeric_limits<size_t>::max()),
     free_slot_stack_(num_slots_),
     local_psi_buffer_(num_slots_ * slot_size_)
 {
@@ -43,8 +45,10 @@ CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
   OpenSnLogicalErrorIf(free_slot_stack_.empty(),
                        "CBC_FLUDS pool allocator exhausted during a local sweep.");
 
-  cell_slot_indices_[cell_local_id] = free_slot_stack_.back();
+  const auto slot = free_slot_stack_.back();
   free_slot_stack_.pop_back();
+  cell_slot_indices_[cell_local_id] = slot;
+  cell_slot_base_offsets_[cell_local_id] = static_cast<size_t>(slot) * slot_size_;
 }
 
 void
@@ -56,6 +60,7 @@ CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
 
   free_slot_stack_.push_back(slot);
   cell_slot_indices_[cell_local_id] = INVALID_SLOT;
+  cell_slot_base_offsets_[cell_local_id] = std::numeric_limits<size_t>::max();
 }
 
 double*
@@ -65,7 +70,7 @@ CBC_FLUDS::UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size
   OpenSnLogicalErrorIf(slot == INVALID_SLOT,
                        "CBC_FLUDS missing local upwind storage for a swept neighbor cell.");
 
-  const size_t base = static_cast<size_t>(slot) * slot_size_;
+  const size_t base = cell_slot_base_offsets_[face_neighbor.local_id];
   const size_t offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return local_psi_buffer_.data() + base + offset;
 }
@@ -77,7 +82,7 @@ CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_id
   OpenSnLogicalErrorIf(slot == INVALID_SLOT,
                        "CBC_FLUDS missing local output storage for the current cell.");
 
-  const size_t base = static_cast<size_t>(slot) * slot_size_;
+  const size_t base = cell_slot_base_offsets_[cell.local_id];
   const size_t offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return local_psi_buffer_.data() + base + offset;
 }
@@ -114,6 +119,9 @@ CBC_FLUDS::ClearLocalAndReceivePsi()
 {
   deplocs_outgoing_messages_.clear();
   std::fill(cell_slot_indices_.begin(), cell_slot_indices_.end(), INVALID_SLOT);
+  std::fill(cell_slot_base_offsets_.begin(),
+            cell_slot_base_offsets_.end(),
+            std::numeric_limits<size_t>::max());
   free_slot_stack_.resize(num_slots_);
   for (std::uint32_t slot = 0; slot < num_slots_; ++slot)
     free_slot_stack_[slot] = slot;
