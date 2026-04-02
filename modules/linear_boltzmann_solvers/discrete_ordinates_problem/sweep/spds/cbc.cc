@@ -39,6 +39,15 @@ struct SlotCalcScratch
   std::vector<std::uint32_t> reuse_start;
   std::vector<std::uint8_t> is_immediate_successor;
   std::vector<std::pair<std::uint32_t, std::uint32_t>> reuse_edges;
+  std::vector<int> component_ids;
+  std::vector<std::uint32_t> local_vertex_ids;
+  std::vector<std::size_t> component_vertex_counts;
+  std::vector<std::size_t> component_edge_counts;
+  std::vector<std::size_t> component_vertex_offsets;
+  std::vector<std::size_t> component_edge_offsets;
+  std::vector<std::size_t> component_edge_write_offsets;
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> component_edges;
+  std::vector<std::size_t> component_matching_mate;
 
   void ResizeMatchingState(const std::uint32_t num_tasks)
   {
@@ -378,24 +387,27 @@ BuildReuseEdges(const std::vector<std::uint32_t>& successor_offsets,
 }
 
 std::size_t
-ComputeReuseMatchingSize(const std::uint32_t num_tasks, const SlotCalcScratch& scratch)
+ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch)
 {
+  if (scratch.reuse_edges.empty())
+    return 0;
+
   ReuseGraph reuse_graph(scratch.reuse_edges.begin(),
                          scratch.reuse_edges.end(),
                          static_cast<std::size_t>(num_tasks) * 2);
 
   using Vertex = boost::graph_traits<ReuseGraph>::vertex_descriptor;
   const auto null_vertex = boost::graph_traits<ReuseGraph>::null_vertex();
-  std::vector<int> component_ids(num_vertices(reuse_graph), -1);
-  const auto component_map =
-    boost::make_iterator_property_map(component_ids.begin(), get(boost::vertex_index, reuse_graph));
+  scratch.component_ids.assign(num_vertices(reuse_graph), -1);
+  const auto component_map = boost::make_iterator_property_map(
+    scratch.component_ids.begin(), get(boost::vertex_index, reuse_graph));
   const int num_components = boost::connected_components(reuse_graph, component_map);
 
   if (num_components <= 1)
   {
-    std::vector<Vertex> mate(num_vertices(reuse_graph), null_vertex);
-    const auto mate_map =
-      boost::make_iterator_property_map(mate.begin(), get(boost::vertex_index, reuse_graph));
+    scratch.component_matching_mate.assign(num_vertices(reuse_graph), null_vertex);
+    const auto mate_map = boost::make_iterator_property_map(scratch.component_matching_mate.begin(),
+                                                            get(boost::vertex_index, reuse_graph));
     const bool is_maximum_matching =
       boost::checked_edmonds_maximum_cardinality_matching(reuse_graph, mate_map);
     if (not is_maximum_matching)
@@ -404,44 +416,57 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, const SlotCalcScratch& s
     return boost::matching_size(reuse_graph, mate_map);
   }
 
-  std::vector<std::size_t> component_vertex_counts(num_components, 0);
-  std::vector<std::size_t> component_edge_counts(num_components, 0);
-  for (const auto component_id : component_ids)
-    ++component_vertex_counts[component_id];
+  scratch.component_vertex_counts.assign(num_components, 0);
+  scratch.component_edge_counts.assign(num_components, 0);
+  for (const auto component_id : scratch.component_ids)
+    ++scratch.component_vertex_counts[component_id];
   for (const auto& [u, _] : scratch.reuse_edges)
-    ++component_edge_counts[component_ids[u]];
+    ++scratch.component_edge_counts[scratch.component_ids[u]];
 
-  std::vector<std::vector<Vertex>> component_vertices(num_components);
-  std::vector<std::vector<std::pair<std::uint32_t, std::uint32_t>>> component_edges(num_components);
+  scratch.component_vertex_offsets.resize(num_components + 1, 0);
+  scratch.component_edge_offsets.resize(num_components + 1, 0);
   for (int component_id = 0; component_id < num_components; ++component_id)
   {
-    component_vertices[component_id].reserve(component_vertex_counts[component_id]);
-    component_edges[component_id].reserve(component_edge_counts[component_id]);
+    scratch.component_vertex_offsets[component_id + 1] =
+      scratch.component_vertex_offsets[component_id] +
+      scratch.component_vertex_counts[component_id];
+    scratch.component_edge_offsets[component_id + 1] =
+      scratch.component_edge_offsets[component_id] + scratch.component_edge_counts[component_id];
   }
 
-  std::vector<std::uint32_t> local_vertex_ids(num_vertices(reuse_graph), INVALID_INDEX);
+  scratch.local_vertex_ids.assign(num_vertices(reuse_graph), INVALID_INDEX);
+  auto next_component_vertex = scratch.component_vertex_offsets;
   for (Vertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
   {
-    const auto component_id = component_ids[vertex];
-    local_vertex_ids[vertex] = static_cast<std::uint32_t>(component_vertices[component_id].size());
-    component_vertices[component_id].push_back(vertex);
+    const auto component_id = scratch.component_ids[vertex];
+    scratch.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
+      next_component_vertex[component_id] - scratch.component_vertex_offsets[component_id]);
+    ++next_component_vertex[component_id];
   }
 
+  scratch.component_edges.resize(scratch.reuse_edges.size());
+  scratch.component_edge_write_offsets = scratch.component_edge_offsets;
   for (const auto& [u, v] : scratch.reuse_edges)
   {
-    const auto component_id = component_ids[u];
-    component_edges[component_id].emplace_back(local_vertex_ids[u], local_vertex_ids[v]);
+    const auto component_id = scratch.component_ids[u];
+    scratch.component_edges[scratch.component_edge_write_offsets[component_id]++] = {
+      scratch.local_vertex_ids[u], scratch.local_vertex_ids[v]};
   }
 
   std::size_t matching_size = 0;
   for (int component_id = 0; component_id < num_components; ++component_id)
   {
-    ReuseGraph component_graph(component_edges[component_id].begin(),
-                               component_edges[component_id].end(),
-                               component_vertices[component_id].size());
-    std::vector<Vertex> mate(num_vertices(component_graph), null_vertex);
-    const auto mate_map =
-      boost::make_iterator_property_map(mate.begin(), get(boost::vertex_index, component_graph));
+    const auto vertex_count = scratch.component_vertex_counts[component_id];
+    const auto edge_begin =
+      scratch.component_edges.begin() +
+      static_cast<std::ptrdiff_t>(scratch.component_edge_offsets[component_id]);
+    const auto edge_end =
+      scratch.component_edges.begin() +
+      static_cast<std::ptrdiff_t>(scratch.component_edge_offsets[component_id + 1]);
+    ReuseGraph component_graph(edge_begin, edge_end, vertex_count);
+    scratch.component_matching_mate.assign(num_vertices(component_graph), null_vertex);
+    const auto mate_map = boost::make_iterator_property_map(
+      scratch.component_matching_mate.begin(), get(boost::vertex_index, component_graph));
     const bool is_maximum_matching =
       boost::checked_edmonds_maximum_cardinality_matching(component_graph, mate_map);
     if (not is_maximum_matching)
