@@ -19,6 +19,8 @@ namespace
 {
 
 constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
+using MatchingGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
+using MatchingVertex = boost::graph_traits<MatchingGraph>::vertex_descriptor;
 
 struct ChainCoverData
 {
@@ -59,6 +61,22 @@ struct SlotCalcScratch
     is_immediate_successor.assign(num_tasks, 0);
   }
 };
+
+std::size_t
+ComputeCheckedMatchingSize(const MatchingGraph& graph,
+                           std::vector<MatchingVertex>& mate_storage,
+                           const char* failure_message)
+{
+  const auto null_vertex = boost::graph_traits<MatchingGraph>::null_vertex();
+  mate_storage.assign(num_vertices(graph), null_vertex);
+  const auto mate_map =
+    boost::make_iterator_property_map(mate_storage.begin(), get(boost::vertex_index, graph));
+  const bool is_maximum_matching =
+    boost::checked_edmonds_maximum_cardinality_matching(graph, mate_map);
+  if (not is_maximum_matching)
+    throw std::logic_error(failure_message);
+  return boost::matching_size(graph, mate_map);
+}
 
 class CSRBipartiteMatcher
 {
@@ -274,8 +292,6 @@ BuildFirstReachable(const std::vector<std::uint32_t>& successor_offsets,
   }
 }
 
-using ReuseGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
-
 template <class F>
 void
 ForEachReuseNeighbor(const std::uint32_t u,
@@ -397,11 +413,9 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch
                      scratch.local_vertex_ids[edge.first], scratch.local_vertex_ids[edge.second]};
                  });
 
-  ReuseGraph reuse_graph(
+  MatchingGraph reuse_graph(
     scratch.component_edges.begin(), scratch.component_edges.end(), active_vertex_count);
 
-  using Vertex = boost::graph_traits<ReuseGraph>::vertex_descriptor;
-  const auto null_vertex = boost::graph_traits<ReuseGraph>::null_vertex();
   scratch.component_ids.assign(num_vertices(reuse_graph), -1);
   const auto component_map = boost::make_iterator_property_map(
     scratch.component_ids.begin(), get(boost::vertex_index, reuse_graph));
@@ -409,15 +423,10 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch
 
   if (num_components <= 1)
   {
-    scratch.component_matching_mate.assign(num_vertices(reuse_graph), null_vertex);
-    const auto mate_map = boost::make_iterator_property_map(scratch.component_matching_mate.begin(),
-                                                            get(boost::vertex_index, reuse_graph));
-    const bool is_maximum_matching =
-      boost::checked_edmonds_maximum_cardinality_matching(reuse_graph, mate_map);
-    if (not is_maximum_matching)
-      throw std::logic_error(
-        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-    return boost::matching_size(reuse_graph, mate_map);
+    return ComputeCheckedMatchingSize(
+      reuse_graph,
+      scratch.component_matching_mate,
+      "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
   }
 
   scratch.component_vertex_counts.assign(num_components, 0);
@@ -439,7 +448,7 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch
   }
 
   auto next_component_vertex = scratch.component_vertex_offsets;
-  for (Vertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
+  for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
   {
     const auto component_id = scratch.component_ids[vertex];
     scratch.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
@@ -466,16 +475,11 @@ ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch
     const auto edge_end =
       scratch.component_edges.begin() +
       static_cast<std::ptrdiff_t>(scratch.component_edge_offsets[component_id + 1]);
-    ReuseGraph component_graph(edge_begin, edge_end, vertex_count);
-    scratch.component_matching_mate.assign(num_vertices(component_graph), null_vertex);
-    const auto mate_map = boost::make_iterator_property_map(
-      scratch.component_matching_mate.begin(), get(boost::vertex_index, component_graph));
-    const bool is_maximum_matching =
-      boost::checked_edmonds_maximum_cardinality_matching(component_graph, mate_map);
-    if (not is_maximum_matching)
-      throw std::logic_error(
-        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-    matching_size += boost::matching_size(component_graph, mate_map);
+    MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
+    matching_size += ComputeCheckedMatchingSize(
+      component_graph,
+      scratch.component_matching_mate,
+      "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
   }
 
   return matching_size;
