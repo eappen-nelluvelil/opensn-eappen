@@ -22,11 +22,19 @@ public:
   CBC_SPDS(const Vector3& omega, const std::shared_ptr<MeshContinuum>& grid, bool allow_cycles);
 
   /// Returns the cell-by-cell task list.
-  const std::vector<Task>& GetTaskList() const;
+  const std::vector<Task>& GetTaskList() const noexcept;
+
+  /// Compute the exact minimum number of pool slots required for local CBC angular flux storage.
+  void ComputeMinNumLocalPsiSlots();
+
+  /// Return the exact minimum number of pool slots required for local CBC angular flux storage.
+  std::size_t GetMinNumLocalPsiSlots() const noexcept { return min_num_local_psi_slots_; }
 
 protected:
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+  /// Exact minimum number of local CBC pool allocator slots.
+  std::size_t min_num_local_psi_slots_ = 0;
 };
 
 } // namespace opensn

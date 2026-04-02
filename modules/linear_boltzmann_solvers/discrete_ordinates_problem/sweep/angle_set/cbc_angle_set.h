@@ -10,6 +10,7 @@ namespace opensn
 {
 
 class CBC_SPDS;
+class CBC_FLUDS;
 
 class CBC_AngleSet : public AngleSet
 {
@@ -62,6 +63,7 @@ protected:
   std::vector<std::uint64_t> ready_tasks_;
   size_t num_completed_tasks = 0;
   CBC_AsynchronousCommunicator async_comm_;
+  CBC_FLUDS& cbc_fluds_;
 };
 
 } // namespace opensn

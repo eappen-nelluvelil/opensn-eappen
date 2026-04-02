@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
@@ -24,7 +25,8 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
     ready_tasks_(),
-    async_comm_(id, *fluds, comm_set)
+    async_comm_(id, *fluds, comm_set),
+    cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds_))
 {
 }
 
@@ -76,6 +78,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     ready_tasks_.pop_back();
     auto& cell_task = current_task_list_[task_idx];
 
+    cbc_fluds_.AllocateSlot(cell_task.cell_ptr->local_id);
     sweep_chunk.SetCell(cell_task.cell_ptr, *this);
     sweep_chunk.Sweep(*this);
 
@@ -89,6 +92,18 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     cell_task.completed = true;
     ++num_completed_tasks;
     async_comm_.SendData();
+
+    for (const auto predecessor : cell_task.predecessors)
+    {
+      auto& predecessor_task = current_task_list_[predecessor];
+      ++predecessor_task.num_satisfied_successors;
+
+      if (predecessor_task.num_satisfied_successors >= predecessor_task.successors.size())
+        cbc_fluds_.DeallocateSlot(predecessor_task.cell_ptr->local_id);
+    }
+
+    if (cell_task.successors.empty())
+      cbc_fluds_.DeallocateSlot(cell_task.cell_ptr->local_id);
   }
 
   const bool all_tasks_completed = (num_completed_tasks == current_task_list_.size());

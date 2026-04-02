@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
-#include "framework/math/spatial_discretization/spatial_discretization.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+#include "framework/mesh/cell/cell.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
-#include "caliper/cali.h"
+#include "framework/utils/error.h"
+#include <algorithm>
 
 namespace opensn
 {
@@ -13,27 +14,17 @@ namespace opensn
 CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      size_t num_angles,
                      const CBC_FLUDSCommonData& common_data,
-                     const UnknownManager& psi_uk_man,
-                     const SpatialDiscretization& sdm)
+                     size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    psi_uk_man_(psi_uk_man),
-    sdm_(sdm),
-    num_angles_in_gs_quadrature_(psi_uk_man_.GetNumberOfUnknowns()),
-    num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
-    num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
-                            num_groups_),
-    local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    local_psi_data_(local_psi_data_size_)
+    num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMinNumLocalPsiSlots()),
+    slot_size_(max_cell_dof_count * num_groups_and_angles_),
+    cell_slot_indices_(common_data.GetSPDS().GetGrid()->local_cells.size(), INVALID_SLOT),
+    free_slot_stack_(num_slots_),
+    local_psi_buffer_(num_slots_ * slot_size_)
 {
-  const auto& grid = *spds_.GetGrid();
-  cell_psi_start_.resize(grid.local_cells.size());
-  for (const auto& cell : grid.local_cells)
-  {
-    cell_psi_start_[cell.local_id] =
-      (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_) *
-      num_groups_and_angles_;
-  }
+  for (std::uint32_t slot = 0; slot < num_slots_; ++slot)
+    free_slot_stack_[slot] = slot;
 
   deplocs_outgoing_messages_.reserve(common_data.GetNumIncomingNonlocalFaces());
 }
@@ -44,22 +35,51 @@ CBC_FLUDS::GetCommonData() const
   return common_data_;
 }
 
+void
+CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
+{
+  OpenSnLogicalErrorIf(cell_slot_indices_[cell_local_id] != INVALID_SLOT,
+                       "CBC_FLUDS attempted to allocate an already assigned slot.");
+  OpenSnLogicalErrorIf(free_slot_stack_.empty(),
+                       "CBC_FLUDS pool allocator exhausted during a local sweep.");
+
+  cell_slot_indices_[cell_local_id] = free_slot_stack_.back();
+  free_slot_stack_.pop_back();
+}
+
+void
+CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
+{
+  const auto slot = cell_slot_indices_[cell_local_id];
+  OpenSnLogicalErrorIf(slot == INVALID_SLOT,
+                       "CBC_FLUDS attempted to release a slot that is not assigned.");
+
+  free_slot_stack_.push_back(slot);
+  cell_slot_indices_[cell_local_id] = INVALID_SLOT;
+}
+
 double*
 CBC_FLUDS::UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx)
 {
-  const size_t index = cell_psi_start_[face_neighbor.local_id] +
-                       adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  assert(index < local_psi_data_.size());
-  return &local_psi_data_[index];
+  const auto slot = cell_slot_indices_[face_neighbor.local_id];
+  OpenSnLogicalErrorIf(slot == INVALID_SLOT,
+                       "CBC_FLUDS missing local upwind storage for a swept neighbor cell.");
+
+  const size_t base = static_cast<size_t>(slot) * slot_size_;
+  const size_t offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  return local_psi_buffer_.data() + base + offset;
 }
 
 double*
 CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx)
 {
-  const size_t index =
-    cell_psi_start_[cell.local_id] + cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  assert(index < local_psi_data_.size());
-  return &local_psi_data_[index];
+  const auto slot = cell_slot_indices_[cell.local_id];
+  OpenSnLogicalErrorIf(slot == INVALID_SLOT,
+                       "CBC_FLUDS missing local output storage for the current cell.");
+
+  const size_t base = static_cast<size_t>(slot) * slot_size_;
+  const size_t offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  return local_psi_buffer_.data() + base + offset;
 }
 
 double*
@@ -71,12 +91,9 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
   auto it = deplocs_outgoing_messages_.find({cell_global_id, face_id});
   if (it == deplocs_outgoing_messages_.end())
     return nullptr;
-  auto& psi = it->second;
-  const size_t dof_map =
-    face_node_mapped * num_groups_and_angles_ + //  Offset to start of data for face_node_mapped
-    as_ss_idx * num_groups_;                    // Offset to start of data for angle_set_index
 
-  assert(dof_map < psi.size());
+  auto& psi = it->second;
+  const size_t dof_map = face_node_mapped * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return &psi[dof_map];
 }
 
@@ -85,9 +102,21 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
                          size_t face_node,
                          size_t as_ss_idx)
 {
-  assert(psi_nonlocal_outgoing != nullptr);
+  OpenSnLogicalErrorIf(psi_nonlocal_outgoing == nullptr,
+                       "CBC_FLUDS received a null nonlocal outgoing psi buffer.");
+
   const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return &(*psi_nonlocal_outgoing)[addr_offset];
+}
+
+void
+CBC_FLUDS::ClearLocalAndReceivePsi()
+{
+  deplocs_outgoing_messages_.clear();
+  std::fill(cell_slot_indices_.begin(), cell_slot_indices_.end(), INVALID_SLOT);
+  free_slot_stack_.resize(num_slots_);
+  for (std::uint32_t slot = 0; slot < num_slots_; ++slot)
+    free_slot_stack_[slot] = slot;
 }
 
 } // namespace opensn
