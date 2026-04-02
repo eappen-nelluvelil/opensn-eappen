@@ -5,8 +5,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "framework/mesh/cell/cell.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
-#include "framework/utils/error.h"
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 
 namespace opensn
@@ -55,37 +55,18 @@ CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
   cell_slot_bases_[cell_local_id] = nullptr;
 }
 
-double*
-CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
-                       unsigned int face_id,
-                       unsigned int face_node_mapped,
-                       size_t as_ss_idx)
-{
-  const auto* face_info = common_data_.FindIncomingNonlocalFaceInfo(cell_global_id, face_id);
-  if (face_info == nullptr)
-    return nullptr;
-
-  return NLUpwindPsi(*face_info, face_node_mapped, as_ss_idx);
-}
-
 void
 CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
                                  unsigned int face_id,
                                  const double* psi_data,
                                  size_t data_size)
 {
-  const auto* face_info = common_data_.FindIncomingNonlocalFaceInfo(cell_global_id, face_id);
-  OpenSnLogicalErrorIf(
-    face_info == nullptr,
-    "CBC_FLUDS received incoming nonlocal angular flux for an unknown cell-face pair.");
+  const auto& face_info = common_data_.GetIncomingNonlocalFaceInfoByKey(cell_global_id, face_id);
 
-  const auto expected_size =
-    static_cast<size_t>(face_info->num_face_nodes) * num_groups_and_angles_;
-  OpenSnLogicalErrorIf(
-    data_size != expected_size,
-    "CBC_FLUDS received incoming nonlocal angular flux with an unexpected size.");
+  const auto expected_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+  assert(data_size == expected_size);
 
-  const size_t base = static_cast<size_t>(face_info->face_node_offset) * num_groups_and_angles_;
+  const size_t base = static_cast<size_t>(face_info.face_node_offset) * num_groups_and_angles_;
   std::memcpy(incoming_nonlocal_psi_data_.data() + base, psi_data, data_size * sizeof(double));
 }
 

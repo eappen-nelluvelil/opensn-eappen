@@ -5,6 +5,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mesh/cell/cell.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+#include <cassert>
 
 namespace opensn
 {
@@ -55,7 +56,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 
         incoming_nonlocal_face_info_[face_storage_index] = info;
         incoming_nonlocal_face_info_by_key_.emplace(
-          CellFaceKey{cell.global_id, static_cast<unsigned int>(f)}, info);
+          CellFaceKey{cell.global_id, static_cast<unsigned int>(f)}, face_storage_index);
         num_incoming_nonlocal_face_nodes_ += num_face_nodes;
       }
       else if (orientation == FaceOrientation::OUTGOING)
@@ -84,19 +85,20 @@ CBC_FLUDSCommonData::GetIncomingNonlocalFaceInfo(const std::uint32_t cell_local_
   return incoming_nonlocal_face_info_[cell_face_offsets_[cell_local_id] + face_id];
 }
 
+const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo&
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceInfoByKey(const std::uint64_t cell_global_id,
+                                                      const unsigned int face_id) const noexcept
+{
+  const auto it = incoming_nonlocal_face_info_by_key_.find({cell_global_id, face_id});
+  assert(it != incoming_nonlocal_face_info_by_key_.end());
+  return incoming_nonlocal_face_info_[it->second];
+}
+
 const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo&
 CBC_FLUDSCommonData::GetOutgoingNonlocalFaceInfo(const std::uint32_t cell_local_id,
                                                  const unsigned int face_id) const noexcept
 {
   return outgoing_nonlocal_face_info_[cell_face_offsets_[cell_local_id] + face_id];
-}
-
-const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo*
-CBC_FLUDSCommonData::FindIncomingNonlocalFaceInfo(const std::uint64_t cell_global_id,
-                                                  const unsigned int face_id) const noexcept
-{
-  const auto it = incoming_nonlocal_face_info_by_key_.find({cell_global_id, face_id});
-  return it == incoming_nonlocal_face_info_by_key_.end() ? nullptr : &it->second;
 }
 
 } // namespace opensn
