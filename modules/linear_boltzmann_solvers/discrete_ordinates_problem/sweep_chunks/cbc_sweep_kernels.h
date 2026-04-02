@@ -54,32 +54,69 @@ struct CBCSweepData
   const std::vector<Vector<double>>& IntS_shapeI;
 };
 
+struct CBCIncomingFaceData
+{
+  bool is_local_face = false;
+  bool is_boundary_face = false;
+  const FaceNodalMapping* face_nodal_mapping = nullptr;
+  const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo* incoming_nonlocal_face_info = nullptr;
+};
+
+struct CBCGenericSweepScratch
+{
+  DenseMatrix<double> Amat;
+  DenseMatrix<double> Atemp;
+  std::vector<Vector<double>> b;
+  std::vector<double> source;
+  std::vector<double> face_mu_values;
+  std::vector<double> tau_gsg;
+  std::vector<CBCIncomingFaceData> incoming_face_data;
+
+  void
+  EnsureCapacity(const size_t max_num_cell_dofs, const size_t gs_size, const size_t cell_num_faces)
+  {
+    if (Amat.Rows() != max_num_cell_dofs or Amat.Columns() != max_num_cell_dofs)
+    {
+      Amat = DenseMatrix<double>(max_num_cell_dofs, max_num_cell_dofs);
+      Atemp = DenseMatrix<double>(max_num_cell_dofs, max_num_cell_dofs);
+    }
+
+    if (b.size() != gs_size)
+      b.assign(gs_size, Vector<double>(max_num_cell_dofs));
+    else
+      for (auto& vec : b)
+        if (vec.Rows() != max_num_cell_dofs)
+          vec = Vector<double>(max_num_cell_dofs);
+
+    if (source.size() != max_num_cell_dofs)
+      source.assign(max_num_cell_dofs, 0.0);
+
+    if (face_mu_values.size() != cell_num_faces)
+      face_mu_values.assign(cell_num_faces, 0.0);
+
+    if (incoming_face_data.size() != cell_num_faces)
+      incoming_face_data.assign(cell_num_faces, CBCIncomingFaceData{});
+  }
+};
+
 template <bool time_dependent>
 inline void
-CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
+CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet& angle_set)
 {
-  struct IncomingFaceData
-  {
-    bool is_local_face = false;
-    bool is_boundary_face = false;
-    const FaceNodalMapping* face_nodal_mapping = nullptr;
-    const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo* incoming_nonlocal_face_info = nullptr;
-  };
-
   const auto& groupset = data.groupset;
   const auto& m2d_op = groupset.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset.quadrature->GetDiscreteToMomentOperator();
-
-  DenseMatrix<double> Amat(data.max_num_cell_dofs, data.max_num_cell_dofs);
-  DenseMatrix<double> Atemp(data.max_num_cell_dofs, data.max_num_cell_dofs);
-  std::vector<Vector<double>> b(data.gs_size, Vector<double>(data.max_num_cell_dofs));
-  std::vector<double> source(data.max_num_cell_dofs);
-  std::vector<double> face_mu_values(data.cell_num_faces);
+  scratch.EnsureCapacity(data.max_num_cell_dofs, data.gs_size, data.cell_num_faces);
+  auto& Amat = scratch.Amat;
+  auto& Atemp = scratch.Atemp;
+  auto& b = scratch.b;
+  auto& source = scratch.source;
+  auto& face_mu_values = scratch.face_mu_values;
 
   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[data.cell_local_id];
   const auto& sigma_t = data.xs.at(data.cell.block_id)->GetSigmaTotal();
 
-  std::vector<double> tau_gsg;
+  scratch.tau_gsg.clear();
   if constexpr (time_dependent)
   {
     const auto& inv_velg = data.xs.at(data.cell.block_id)->GetInverseVelocity();
@@ -88,6 +125,7 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
     const double dt = data.problem.GetTimeStep();
     const double inv_dt = 1.0 / dt;
 
+    auto& tau_gsg = scratch.tau_gsg;
     tau_gsg.assign(data.gs_size, 0.0);
     for (size_t gsg = 0; gsg < data.gs_size; ++gsg)
       tau_gsg[gsg] = inv_velg[data.gs_gi + gsg] * inv_theta * inv_dt;
@@ -100,9 +138,10 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
 
   const auto& as_angle_indices = angle_set.GetAngleIndices();
   const auto& cbc_common = static_cast<const CBC_FLUDSCommonData&>(data.fluds.GetCommonData());
-  std::vector<IncomingFaceData> incoming_face_data(data.cell_num_faces);
+  auto& incoming_face_data = scratch.incoming_face_data;
   for (size_t f = 0; f < data.cell_num_faces; ++f)
   {
+    incoming_face_data[f] = CBCIncomingFaceData{};
     if (face_orientations[f] != FaceOrientation::INCOMING)
       continue;
 
@@ -191,7 +230,10 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
     {
       double sigma_tg = sigma_t[data.gs_gi + gsg];
       if constexpr (time_dependent)
+      {
+        const auto& tau_gsg = scratch.tau_gsg;
         sigma_tg += tau_gsg[gsg];
+      }
 
       for (size_t i = 0; i < data.cell_num_nodes; ++i)
       {
@@ -204,6 +246,7 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
 
         if constexpr (time_dependent)
         {
+          const auto& tau_gsg = scratch.tau_gsg;
           const size_t imap =
             i * data.groupset_angle_group_stride + direction_num * data.groupset_group_stride;
           if (data.include_rhs_time_term and psi_old)
