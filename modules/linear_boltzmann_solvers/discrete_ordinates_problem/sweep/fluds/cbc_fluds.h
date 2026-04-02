@@ -81,6 +81,8 @@ public:
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
+  double* NLOutgoingPsi(double* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
+
   void StoreIncomingFaceData(uint64_t cell_global_id,
                              unsigned int face_id,
                              const double* psi_data,

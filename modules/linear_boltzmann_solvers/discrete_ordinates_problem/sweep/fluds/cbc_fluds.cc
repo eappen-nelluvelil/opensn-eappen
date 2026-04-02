@@ -92,11 +92,11 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
                        unsigned int face_node_mapped,
                        size_t as_ss_idx)
 {
-  CBC_FLUDSCommonData::IncomingNonlocalFaceInfo face_info;
-  if (not common_data_.TryGetIncomingNonlocalFaceInfo(cell_global_id, face_id, face_info))
+  const auto* face_info = common_data_.FindIncomingNonlocalFaceInfo(cell_global_id, face_id);
+  if (face_info == nullptr)
     return nullptr;
 
-  return NLUpwindPsi(face_info, face_node_mapped, as_ss_idx);
+  return NLUpwindPsi(*face_info, face_node_mapped, as_ss_idx);
 }
 
 double*
@@ -118,8 +118,17 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
   OpenSnLogicalErrorIf(psi_nonlocal_outgoing == nullptr,
                        "CBC_FLUDS received a null nonlocal outgoing psi buffer.");
 
+  return NLOutgoingPsi(psi_nonlocal_outgoing->data(), face_node, as_ss_idx);
+}
+
+double*
+CBC_FLUDS::NLOutgoingPsi(double* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx)
+{
+  OpenSnLogicalErrorIf(psi_nonlocal_outgoing == nullptr,
+                       "CBC_FLUDS received a null nonlocal outgoing psi buffer.");
+
   const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  return &(*psi_nonlocal_outgoing)[addr_offset];
+  return psi_nonlocal_outgoing + addr_offset;
 }
 
 void
@@ -128,17 +137,18 @@ CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
                                  const double* psi_data,
                                  size_t data_size)
 {
-  CBC_FLUDSCommonData::IncomingNonlocalFaceInfo face_info;
+  const auto* face_info = common_data_.FindIncomingNonlocalFaceInfo(cell_global_id, face_id);
   OpenSnLogicalErrorIf(
-    not common_data_.TryGetIncomingNonlocalFaceInfo(cell_global_id, face_id, face_info),
+    face_info == nullptr,
     "CBC_FLUDS received incoming nonlocal angular flux for an unknown cell-face pair.");
 
-  const auto expected_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+  const auto expected_size =
+    static_cast<size_t>(face_info->num_face_nodes) * num_groups_and_angles_;
   OpenSnLogicalErrorIf(
     data_size != expected_size,
     "CBC_FLUDS received incoming nonlocal angular flux with an unexpected size.");
 
-  const size_t base = static_cast<size_t>(face_info.face_node_offset) * num_groups_and_angles_;
+  const size_t base = static_cast<size_t>(face_info->face_node_offset) * num_groups_and_angles_;
   std::memcpy(incoming_nonlocal_psi_data_.data() + base, psi_data, data_size * sizeof(double));
 }
 
