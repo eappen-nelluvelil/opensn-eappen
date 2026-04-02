@@ -36,7 +36,7 @@ struct SlotCalcScratch
   std::vector<int> dist;
   std::vector<std::uint32_t> bfs_queue;
   std::vector<std::uint32_t> first_reachable;
-  std::vector<std::uint32_t> reuse_start;
+  std::vector<std::uint32_t> reuse_row;
   std::vector<std::uint8_t> is_immediate_successor;
   std::vector<std::pair<std::uint32_t, std::uint32_t>> reuse_edges;
   std::vector<int> component_ids;
@@ -199,6 +199,7 @@ BuildMinimumPathCover(const std::vector<std::uint32_t>& successor_offsets,
   ChainCoverData chain_cover;
   chain_cover.chain_id.assign(num_tasks, INVALID_INDEX);
   chain_cover.pos_in_chain.assign(num_tasks, INVALID_INDEX);
+  chain_cover.chain_offsets.reserve(num_tasks + 1);
   chain_cover.chain_offsets.push_back(0);
   chain_cover.chain_vertices.reserve(num_tasks);
 
@@ -273,47 +274,6 @@ BuildFirstReachable(const std::vector<std::uint32_t>& successor_offsets,
   }
 }
 
-void
-BuildReuseStart(const std::vector<std::uint32_t>& successor_offsets,
-                const std::vector<std::uint32_t>& successors,
-                const std::uint32_t num_chains,
-                SlotCalcScratch& scratch)
-{
-  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
-  scratch.reuse_start.assign(static_cast<std::size_t>(num_tasks) * num_chains, INVALID_INDEX);
-
-  for (std::uint32_t u = 0; u < num_tasks; ++u)
-  {
-    const auto succ_begin = successor_offsets[u];
-    const auto succ_end = successor_offsets[u + 1];
-    if (succ_begin == succ_end)
-      continue;
-
-    auto* const reuse_row = scratch.reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
-    const auto first_succ = successors[succ_begin];
-    const auto* const first_succ_row =
-      scratch.first_reachable.data() + static_cast<std::size_t>(first_succ) * num_chains;
-    std::copy_n(first_succ_row, num_chains, reuse_row);
-
-    for (auto e = succ_begin + 1; e < succ_end; ++e)
-    {
-      const auto succ = successors[e];
-      const auto* const succ_row =
-        scratch.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
-
-      for (std::uint32_t chain = 0; chain < num_chains; ++chain)
-      {
-        auto& candidate_pos = reuse_row[chain];
-        const auto succ_pos = succ_row[chain];
-        if (candidate_pos == INVALID_INDEX or succ_pos == INVALID_INDEX)
-          candidate_pos = INVALID_INDEX;
-        else
-          candidate_pos = std::max(candidate_pos, succ_pos);
-      }
-    }
-  }
-}
-
 using ReuseGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
 
 template <class F>
@@ -325,21 +285,41 @@ ForEachReuseNeighbor(const std::uint32_t u,
                      SlotCalcScratch& scratch,
                      F&& func)
 {
+  const auto num_chains = chain_cover.num_chains;
   const auto succ_begin = successor_offsets[u];
   const auto succ_end = successor_offsets[u + 1];
   if (succ_begin == succ_end)
     return;
 
+  scratch.reuse_row.resize(num_chains);
+  const auto first_succ = successors[succ_begin];
+  const auto* const first_succ_row =
+    scratch.first_reachable.data() + static_cast<std::size_t>(first_succ) * num_chains;
+  std::copy_n(first_succ_row, num_chains, scratch.reuse_row.begin());
+
+  for (auto e = succ_begin + 1; e < succ_end; ++e)
+  {
+    const auto succ = successors[e];
+    const auto* const succ_row =
+      scratch.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
+
+    for (std::uint32_t chain = 0; chain < num_chains; ++chain)
+    {
+      auto& candidate_pos = scratch.reuse_row[chain];
+      const auto succ_pos = succ_row[chain];
+      if (candidate_pos == INVALID_INDEX or succ_pos == INVALID_INDEX)
+        candidate_pos = INVALID_INDEX;
+      else
+        candidate_pos = std::max(candidate_pos, succ_pos);
+    }
+  }
+
   for (auto e = succ_begin; e < succ_end; ++e)
     scratch.is_immediate_successor[successors[e]] = 1;
 
-  const auto num_chains = chain_cover.num_chains;
-  const auto* const reuse_row =
-    scratch.reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
-
   for (std::uint32_t chain = 0; chain < num_chains; ++chain)
   {
-    const auto start_pos = reuse_row[chain];
+    const auto start_pos = scratch.reuse_row[chain];
     if (start_pos == INVALID_INDEX)
       continue;
 
@@ -625,7 +605,6 @@ CBC_SPDS::ComputeMinNumLocalPsiSlots()
     BuildMinimumPathCover(local_successor_offsets_, local_successors_, scratch);
   BuildFirstReachable(
     local_successor_offsets_, local_successors_, topo_order_, chain_cover, scratch);
-  BuildReuseStart(local_successor_offsets_, local_successors_, chain_cover.num_chains, scratch);
   BuildReuseEdges(local_successor_offsets_, local_successors_, chain_cover, scratch);
 
   const auto reuse_matching_size = ComputeReuseMatchingSize(num_tasks, scratch);
