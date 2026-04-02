@@ -215,7 +215,6 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
       const bool is_local_face = face_data.is_local_face;
       const bool is_boundary_face = face_data.is_boundary_face;
       const auto* face_nodal_mapping = face_data.face_nodal_mapping;
-      const auto* incoming_nonlocal_face_info = face_data.incoming_nonlocal_face_info;
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -235,8 +234,10 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
                                        face_nodal_mapping->cell_node_mapping_[fj],
                                        as_ss_idx);
           else if (not is_boundary_face)
-            psi = data.fluds.NLUpwindPsi(
-              *incoming_nonlocal_face_info, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+            psi = data.fluds.NLUpwindPsi(data.cell_local_id,
+                                         static_cast<unsigned int>(f),
+                                         face_nodal_mapping->face_node_mapping_[fj],
+                                         as_ss_idx);
           else
             psi = angle_set.PsiBoundary(face.neighbor_id,
                                         direction_num,

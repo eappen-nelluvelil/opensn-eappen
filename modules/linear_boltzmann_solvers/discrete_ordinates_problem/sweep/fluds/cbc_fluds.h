@@ -50,13 +50,10 @@ public:
    */
   double* UpwindPsi(std::uint32_t face_neighbor_local_id,
                     unsigned int adj_cell_node,
-                    size_t as_ss_idx) noexcept
+                    size_t as_ss_idx) const noexcept
   {
-    auto* const slot_base = cell_slot_bases_[face_neighbor_local_id];
-    assert(slot_base != nullptr);
-
-    const size_t offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-    return slot_base + offset;
+    return LocalPsiBase(face_neighbor_local_id) +
+           static_cast<size_t>(adj_cell_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
   /**
@@ -65,30 +62,24 @@ public:
    * node and angle for writing its just solved angular fluxes.
    */
   double*
-  OutgoingPsi(std::uint32_t cell_local_id, unsigned int cell_node, size_t as_ss_idx) noexcept
+  OutgoingPsi(std::uint32_t cell_local_id, unsigned int cell_node, size_t as_ss_idx) const noexcept
   {
-    auto* const slot_base = cell_slot_bases_[cell_local_id];
-    assert(slot_base != nullptr);
-
-    const size_t offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-    return slot_base + offset;
+    return LocalPsiBase(cell_local_id) + static_cast<size_t>(cell_node) * num_groups_and_angles_ +
+           as_ss_idx * num_groups_;
   }
 
   /**
-   * Given a remote upwind cell's global ID, a face ID on this cell,
+   * Given a local cell id, a face ID on this cell,
    * a node index on this face, and an angleset subset index,
    * this function returns a pointer to the start of the group data for the specified
    * face node and angle.
    */
-  double* NLUpwindPsi(uint64_t cell_global_id,
+  double* NLUpwindPsi(std::uint32_t cell_local_id,
                       unsigned int face_id,
-                      unsigned int face_node_mapped,
-                      size_t as_ss_idx);
-
-  double* NLUpwindPsi(const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo& face_info,
                       unsigned int face_node_mapped,
                       size_t as_ss_idx) noexcept
   {
+    const auto& face_info = common_data_.GetIncomingNonlocalFaceInfo(cell_local_id, face_id);
     const size_t dof_offset = (static_cast<size_t>(face_info.face_node_offset) + face_node_mapped) *
                                 num_groups_and_angles_ +
                               as_ss_idx * num_groups_;
@@ -104,9 +95,7 @@ public:
   double* NLOutgoingPsi(double* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx) noexcept
   {
     assert(psi_nonlocal_outgoing != nullptr);
-
-    const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-    return psi_nonlocal_outgoing + addr_offset;
+    return psi_nonlocal_outgoing + face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
   void StoreIncomingFaceData(uint64_t cell_global_id,
@@ -125,6 +114,13 @@ public:
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
 protected:
+  double* LocalPsiBase(std::uint32_t cell_local_id) const noexcept
+  {
+    auto* const slot_base = cell_slot_bases_[cell_local_id];
+    assert(slot_base != nullptr);
+    return slot_base;
+  }
+
   const CBC_FLUDSCommonData& common_data_;
   size_t num_slots_;
   size_t slot_size_;
