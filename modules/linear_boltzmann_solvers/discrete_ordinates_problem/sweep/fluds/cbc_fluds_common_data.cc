@@ -89,9 +89,24 @@ const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo&
 CBC_FLUDSCommonData::GetIncomingNonlocalFaceInfoByKey(const std::uint64_t cell_global_id,
                                                       const unsigned int face_id) const noexcept
 {
+  return incoming_nonlocal_face_info_[GetIncomingNonlocalFaceStorageIndexByKey(cell_global_id,
+                                                                               face_id)];
+}
+
+const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo&
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceInfoByStorageIndex(
+  const std::size_t storage_index) const noexcept
+{
+  return incoming_nonlocal_face_info_[storage_index];
+}
+
+std::size_t
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceStorageIndexByKey(
+  const std::uint64_t cell_global_id, const unsigned int face_id) const noexcept
+{
   const auto it = incoming_nonlocal_face_info_by_key_.find({cell_global_id, face_id});
   assert(it != incoming_nonlocal_face_info_by_key_.end());
-  return incoming_nonlocal_face_info_[it->second];
+  return it->second;
 }
 
 const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo&
