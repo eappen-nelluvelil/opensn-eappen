@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <boost/graph/max_cardinality_matching.hpp>
 #include <boost/graph/topological_sort.hpp>
 
 namespace opensn
@@ -35,8 +36,6 @@ struct SlotCalcScratch
   std::vector<std::uint32_t> bfs_queue;
   std::vector<std::uint32_t> first_reachable;
   std::vector<std::uint32_t> reuse_start;
-  std::vector<std::uint32_t> successor_stamp;
-  std::uint32_t successor_stamp_value = 0;
 
   void ResizeMatchingState(const std::uint32_t num_tasks)
   {
@@ -44,8 +43,6 @@ struct SlotCalcScratch
     mate_v.assign(num_tasks, INVALID_INDEX);
     dist.assign(num_tasks, -1);
     bfs_queue.resize(num_tasks);
-    successor_stamp.resize(num_tasks, 0);
-    successor_stamp_value = 0;
   }
 };
 
@@ -303,67 +300,31 @@ BuildReuseStart(const std::vector<std::uint32_t>& successor_offsets,
   }
 }
 
-class ReuseGraphMatcher
+using ReuseGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
+
+std::size_t
+ComputeReuseMatchingSize(const std::vector<std::uint32_t>& successor_offsets,
+                         const std::vector<std::uint32_t>& successors,
+                         const ChainCoverData& chain_cover,
+                         const SlotCalcScratch& scratch)
 {
-public:
-  ReuseGraphMatcher(const std::vector<std::uint32_t>& successor_offsets,
-                    const std::vector<std::uint32_t>& successors,
-                    const ChainCoverData& chain_cover,
-                    SlotCalcScratch& scratch)
-    : successor_offsets_(successor_offsets),
-      successors_(successors),
-      chain_cover_(chain_cover),
-      scratch_(scratch)
+  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
+  ReuseGraph reuse_graph(static_cast<std::size_t>(num_tasks) * 2);
+  std::vector<std::uint8_t> is_immediate_successor(num_tasks, 0);
+
+  const auto num_chains = chain_cover.num_chains;
+  for (std::uint32_t u = 0; u < num_tasks; ++u)
   {
-    const auto num_tasks = static_cast<std::uint32_t>(successor_offsets_.size() - 1);
-    scratch_.ResizeMatchingState(num_tasks);
-  }
+    const auto succ_begin = successor_offsets[u];
+    const auto succ_end = successor_offsets[u + 1];
+    if (succ_begin == succ_end)
+      continue;
 
-  std::size_t Solve()
-  {
-    std::size_t matching_size = GreedyInitialize();
-    while (BFS())
-    {
-      for (std::uint32_t u = 0; u + 1 < successor_offsets_.size(); ++u)
-      {
-        if (scratch_.mate_u[u] == INVALID_INDEX and DFS(u))
-          ++matching_size;
-      }
-    }
-    return matching_size;
-  }
+    for (auto e = succ_begin; e < succ_end; ++e)
+      is_immediate_successor[successors[e]] = 1;
 
-private:
-  std::uint32_t MarkImmediateSuccessors(const std::uint32_t u)
-  {
-    ++scratch_.successor_stamp_value;
-    if (scratch_.successor_stamp_value == 0)
-    {
-      std::fill(scratch_.successor_stamp.begin(), scratch_.successor_stamp.end(), 0);
-      scratch_.successor_stamp_value = 1;
-    }
-
-    const auto stamp_value = scratch_.successor_stamp_value;
-
-    for (auto e = successor_offsets_[u]; e < successor_offsets_[u + 1]; ++e)
-      scratch_.successor_stamp[successors_[e]] = stamp_value;
-
-    return stamp_value;
-  }
-
-  bool IsImmediateSuccessor(const std::uint32_t v, const std::uint32_t stamp_value) const noexcept
-  {
-    return scratch_.successor_stamp[v] == stamp_value;
-  }
-
-  template <class F>
-  void ForEachNeighbor(const std::uint32_t u, F&& func)
-  {
-    const auto stamp_value = MarkImmediateSuccessors(u);
-
-    const auto num_chains = chain_cover_.num_chains;
     const auto* const reuse_row =
-      scratch_.reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
+      scratch.reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
 
     for (std::uint32_t chain = 0; chain < num_chains; ++chain)
     {
@@ -371,136 +332,39 @@ private:
       if (start_pos == INVALID_INDEX)
         continue;
 
-      const auto chain_begin = chain_cover_.chain_offsets[chain];
-      const auto chain_end = chain_cover_.chain_offsets[chain + 1];
+      const auto chain_begin = chain_cover.chain_offsets[chain];
+      const auto chain_end = chain_cover.chain_offsets[chain + 1];
       for (std::uint32_t pos = chain_begin + start_pos; pos < chain_end; ++pos)
       {
-        const auto v = chain_cover_.chain_vertices[pos];
-        if (IsImmediateSuccessor(v, stamp_value))
-          continue;
-
-        if (not func(v))
-          return;
-      }
-    }
-  }
-
-  std::size_t GreedyInitialize()
-  {
-    std::size_t matching_size = 0;
-
-    for (std::uint32_t u = 0; u + 1 < successor_offsets_.size(); ++u)
-    {
-      if (scratch_.mate_u[u] != INVALID_INDEX)
-        continue;
-
-      bool matched = false;
-      ForEachNeighbor(u,
-                      [&](const std::uint32_t v)
-                      {
-                        if (scratch_.mate_v[v] != INVALID_INDEX)
-                          return true;
-
-                        scratch_.mate_u[u] = v;
-                        scratch_.mate_v[v] = u;
-                        matched = true;
-                        return false;
-                      });
-
-      if (matched)
-        ++matching_size;
-    }
-
-    return matching_size;
-  }
-
-  bool BFS()
-  {
-    std::fill(scratch_.dist.begin(), scratch_.dist.end(), -1);
-
-    std::size_t queue_head = 0;
-    std::size_t queue_tail = 0;
-
-    for (std::uint32_t u = 0; u + 1 < successor_offsets_.size(); ++u)
-    {
-      if (scratch_.mate_u[u] == INVALID_INDEX)
-      {
-        scratch_.dist[u] = 0;
-        scratch_.bfs_queue[queue_tail++] = u;
+        const auto v = chain_cover.chain_vertices[pos];
+        if (not is_immediate_successor[v])
+          boost::add_edge(u, num_tasks + v, reuse_graph);
       }
     }
 
-    dist_null_ = std::numeric_limits<int>::max();
-
-    while (queue_head < queue_tail)
-    {
-      const auto u = scratch_.bfs_queue[queue_head++];
-      if (scratch_.dist[u] >= dist_null_)
-        continue;
-
-      ForEachNeighbor(u,
-                      [&](const std::uint32_t v)
-                      {
-                        const auto mate_of_v = scratch_.mate_v[v];
-                        if (mate_of_v == INVALID_INDEX)
-                          dist_null_ = std::min(dist_null_, scratch_.dist[u] + 1);
-                        else if (scratch_.dist[mate_of_v] == -1)
-                        {
-                          scratch_.dist[mate_of_v] = scratch_.dist[u] + 1;
-                          scratch_.bfs_queue[queue_tail++] = mate_of_v;
-                        }
-                        return true;
-                      });
-    }
-
-    return dist_null_ != std::numeric_limits<int>::max();
+    for (auto e = succ_begin; e < succ_end; ++e)
+      is_immediate_successor[successors[e]] = 0;
   }
 
-  bool DFS(const std::uint32_t u)
-  {
-    bool augmented = false;
+  using Vertex = boost::graph_traits<ReuseGraph>::vertex_descriptor;
+  std::vector<Vertex> mate(num_vertices(reuse_graph),
+                           boost::graph_traits<ReuseGraph>::null_vertex());
+  const auto mate_map =
+    boost::make_iterator_property_map(mate.begin(), get(boost::vertex_index, reuse_graph));
 
-    ForEachNeighbor(u,
-                    [&](const std::uint32_t v)
-                    {
-                      const auto mate_of_v = scratch_.mate_v[v];
-                      if (mate_of_v == INVALID_INDEX)
-                      {
-                        if (dist_null_ == scratch_.dist[u] + 1)
-                        {
-                          scratch_.mate_u[u] = v;
-                          scratch_.mate_v[v] = u;
-                          scratch_.dist[u] = -1;
-                          augmented = true;
-                          return false;
-                        }
-                        return true;
-                      }
+  const bool is_maximum_matching =
+    boost::checked_edmonds_maximum_cardinality_matching(reuse_graph, mate_map);
+  if (not is_maximum_matching)
+    throw std::logic_error(
+      "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
 
-                      if (scratch_.dist[mate_of_v] == scratch_.dist[u] + 1 and DFS(mate_of_v))
-                      {
-                        scratch_.mate_u[u] = v;
-                        scratch_.mate_v[v] = u;
-                        scratch_.dist[u] = -1;
-                        augmented = true;
-                        return false;
-                      }
+  std::size_t matching_size = 0;
+  for (std::uint32_t u = 0; u < num_tasks; ++u)
+    if (get(mate_map, u) != boost::graph_traits<ReuseGraph>::null_vertex())
+      ++matching_size;
 
-                      return true;
-                    });
-
-    if (not augmented)
-      scratch_.dist[u] = -1;
-
-    return augmented;
-  }
-
-  const std::vector<std::uint32_t>& successor_offsets_;
-  const std::vector<std::uint32_t>& successors_;
-  const ChainCoverData& chain_cover_;
-  SlotCalcScratch& scratch_;
-  int dist_null_ = std::numeric_limits<int>::max();
-};
+  return matching_size;
+}
 
 } // namespace
 
@@ -628,8 +492,8 @@ CBC_SPDS::ComputeMinNumLocalPsiSlots()
     local_successor_offsets_, local_successors_, topo_order_, chain_cover, scratch);
   BuildReuseStart(local_successor_offsets_, local_successors_, chain_cover.num_chains, scratch);
 
-  ReuseGraphMatcher matcher(local_successor_offsets_, local_successors_, chain_cover, scratch);
-  const auto reuse_matching_size = matcher.Solve();
+  const auto reuse_matching_size =
+    ComputeReuseMatchingSize(local_successor_offsets_, local_successors_, chain_cover, scratch);
   min_num_local_psi_slots_ = static_cast<std::size_t>(num_tasks) - reuse_matching_size;
 }
 
