@@ -61,9 +61,10 @@ protected:
   void ResetTaskState();
 
   const CBC_SPDS& cbc_spds_;
+  std::vector<unsigned int> initial_dependencies_;
+  std::vector<std::uint32_t> initial_ready_tasks_;
   std::vector<unsigned int> remaining_dependencies_;
   std::vector<unsigned int> num_satisfied_successors_;
-  std::vector<std::uint8_t> completed_tasks_;
   std::vector<std::uint32_t> ready_tasks_;
   size_t num_completed_tasks = 0;
   CBC_AsynchronousCommunicator async_comm_;
