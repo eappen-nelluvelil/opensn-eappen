@@ -46,7 +46,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMinNumLocalPsiSlots()),
+    num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
     slot_size_(RoundUpToCacheLineMultiple(max_cell_dof_count * num_groups_and_angles_)),
     cell_slot_indices_(common_data.GetSPDS().GetGrid()->local_cells.size(), INVALID_SLOT),
     cell_slot_bases_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr),

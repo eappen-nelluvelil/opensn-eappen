@@ -35,7 +35,7 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
     num_local_psi_slots_(
-      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMinNumLocalPsiSlots()),
+      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
     local_psi_slot_stride_(
       [&]()
       {

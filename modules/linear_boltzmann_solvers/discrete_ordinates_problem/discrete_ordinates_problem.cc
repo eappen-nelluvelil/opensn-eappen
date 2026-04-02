@@ -1460,7 +1460,7 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
     }
 
     if (cbc_spds_list.size() == 1)
-      cbc_spds_list.front()->ComputeMinNumLocalPsiSlots();
+      cbc_spds_list.front()->ComputeMaxNumLocalPsiSlots();
     else if (not cbc_spds_list.empty())
     {
       const auto hardware_threads = std::max<std::size_t>(1, std::thread::hardware_concurrency());
@@ -1468,6 +1468,11 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
 
       SPMD_ThreadPool cbc_spds_thread_pool(num_workers);
       std::atomic_size_t next_index = 0;
+
+      // Print start time and number of SPDS to process, and also calculate elapsed time for this step
+      log.Log() << program_timer.GetTimeString() << " Computing max num local psi slots for " << cbc_spds_list.size() << " CBC SPDS using " << num_workers << " worker threads.\n";
+      // Get time before starting the parallel region
+      auto start_time = std::chrono::steady_clock::now();
       cbc_spds_thread_pool.ExecuteBatch(
         [&](std::size_t)
         {
@@ -1477,9 +1482,23 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
             if (index >= cbc_spds_list.size())
               break;
 
-            cbc_spds_list[index]->ComputeMinNumLocalPsiSlots();
+            cbc_spds_list[index]->ComputeMaxNumLocalPsiSlots();
           }
         });
+      // Compute elapsed time after the parallel region with high precision and in seconds (out to high precision)
+      auto end_time = std::chrono::steady_clock::now();
+      std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+      double elapsed_time = elapsed_seconds.count();
+      // Get the max and min num local psi slots across all SPDS
+      size_t max_local_psi_slots = 0;
+      size_t min_local_psi_slots = std::numeric_limits<size_t>::max();
+      for (const auto& spds : cbc_spds_list)
+      {
+        max_local_psi_slots = std::max(max_local_psi_slots, spds->GetMaxNumLocalPsiSlots());
+        min_local_psi_slots = std::min(min_local_psi_slots, spds->GetMaxNumLocalPsiSlots());
+      }
+      // Print the current time, the elapsed time for the parallel region, and the max num local psi slots
+      log.Log() << program_timer.GetTimeString() << " Finished computing max num local psi slots. Elapsed time: " << elapsed_time << " seconds. Max num local psi slots: " << max_local_psi_slots << ". Min num local psi slots: " << min_local_psi_slots << ".\n";
     }
   }
   else
