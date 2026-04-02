@@ -58,6 +58,8 @@ public:
                        unsigned int fi) override;
 
 protected:
+  void ResetTaskState();
+
   const CBC_SPDS& cbc_spds_;
   std::vector<unsigned int> remaining_dependencies_;
   std::vector<unsigned int> num_satisfied_successors_;

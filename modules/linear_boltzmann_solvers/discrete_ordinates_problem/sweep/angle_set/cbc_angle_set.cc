@@ -28,6 +28,12 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
     async_comm_(id, *fluds, comm_set),
     cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds_))
 {
+  const auto num_tasks = cbc_spds_.GetTaskList().size();
+  remaining_dependencies_.resize(num_tasks);
+  num_satisfied_successors_.resize(num_tasks);
+  completed_tasks_.resize(num_tasks);
+  ready_tasks_.reserve(num_tasks);
+  ResetTaskState();
 }
 
 AsynchronousCommunicator*
@@ -45,23 +51,6 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     return AngleSetStatus::FINISHED;
 
   const auto& task_list = cbc_spds_.GetTaskList();
-
-  if (remaining_dependencies_.empty())
-  {
-    remaining_dependencies_.resize(task_list.size());
-    num_satisfied_successors_.assign(task_list.size(), 0);
-    completed_tasks_.assign(task_list.size(), 0);
-    ready_tasks_.clear();
-    ready_tasks_.reserve(task_list.size());
-
-    for (std::uint32_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
-    {
-      remaining_dependencies_[task_idx] = task_list[task_idx].num_dependencies;
-      if (remaining_dependencies_[task_idx] == 0)
-        ready_tasks_.push_back(task_idx);
-    }
-  }
-
   sweep_chunk.SetAngleSet(*this);
 
   const auto tasks_who_received_data = async_comm_.ReceiveData();
@@ -134,14 +123,28 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
-  remaining_dependencies_.clear();
-  num_satisfied_successors_.clear();
-  completed_tasks_.clear();
-  ready_tasks_.clear();
-  num_completed_tasks = 0;
+  ResetTaskState();
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;
+}
+
+void
+CBC_AngleSet::ResetTaskState()
+{
+  const auto& task_list = cbc_spds_.GetTaskList();
+
+  std::fill(num_satisfied_successors_.begin(), num_satisfied_successors_.end(), 0);
+  std::fill(completed_tasks_.begin(), completed_tasks_.end(), 0);
+  ready_tasks_.clear();
+  num_completed_tasks = 0;
+
+  for (std::uint32_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
+  {
+    remaining_dependencies_[task_idx] = task_list[task_idx].num_dependencies;
+    if (remaining_dependencies_[task_idx] == 0)
+      ready_tasks_.push_back(task_idx);
+  }
 }
 
 const double*
