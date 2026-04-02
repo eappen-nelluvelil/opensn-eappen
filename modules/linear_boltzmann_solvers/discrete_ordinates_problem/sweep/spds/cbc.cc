@@ -63,6 +63,12 @@ struct SlotCalcScratch
   }
 };
 
+struct TaskGraphData
+{
+  Task task;
+  std::size_t successor_count = 0;
+};
+
 std::size_t
 ComputeCheckedMatchingSize(const MatchingGraph& graph,
                            std::vector<MatchingVertex>& mate_storage,
@@ -247,6 +253,112 @@ public:
   }
 
 private:
+  MatchingGraph BuildActiveReuseGraph()
+  {
+    const auto num_graph_vertices = static_cast<std::size_t>(num_tasks_) * 2;
+    scratch_.is_active_vertex.assign(num_graph_vertices, 0);
+    for (const auto& [u, v] : scratch_.reuse_edges)
+    {
+      scratch_.is_active_vertex[u] = 1;
+      scratch_.is_active_vertex[v] = 1;
+    }
+
+    scratch_.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
+    std::uint32_t active_vertex_count = 0;
+    for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
+      if (scratch_.is_active_vertex[vertex])
+        scratch_.local_vertex_ids[vertex] = active_vertex_count++;
+
+    scratch_.component_edges.resize(scratch_.reuse_edges.size());
+    std::transform(scratch_.reuse_edges.begin(),
+                   scratch_.reuse_edges.end(),
+                   scratch_.component_edges.begin(),
+                   [&](const auto& edge)
+                   {
+                     return std::pair<std::uint32_t, std::uint32_t>{
+                       scratch_.local_vertex_ids[edge.first],
+                       scratch_.local_vertex_ids[edge.second]};
+                   });
+
+    return MatchingGraph(
+      scratch_.component_edges.begin(), scratch_.component_edges.end(), active_vertex_count);
+  }
+
+  std::size_t ComputeComponentMatchingSize(const MatchingGraph& reuse_graph)
+  {
+    scratch_.component_ids.assign(num_vertices(reuse_graph), -1);
+    const auto component_map = boost::make_iterator_property_map(
+      scratch_.component_ids.begin(), get(boost::vertex_index, reuse_graph));
+    const int num_components = boost::connected_components(reuse_graph, component_map);
+
+    if (num_components <= 1)
+    {
+      return ComputeCheckedMatchingSize(
+        reuse_graph,
+        scratch_.component_matching_mate,
+        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
+    }
+
+    scratch_.component_vertex_counts.assign(num_components, 0);
+    scratch_.component_edge_counts.assign(num_components, 0);
+    for (const auto component_id : scratch_.component_ids)
+      ++scratch_.component_vertex_counts[component_id];
+    for (const auto& [u, _] : scratch_.reuse_edges)
+      ++scratch_.component_edge_counts[scratch_.component_ids[u]];
+
+    scratch_.component_vertex_offsets.resize(num_components + 1, 0);
+    scratch_.component_edge_offsets.resize(num_components + 1, 0);
+    for (int component_id = 0; component_id < num_components; ++component_id)
+    {
+      scratch_.component_vertex_offsets[component_id + 1] =
+        scratch_.component_vertex_offsets[component_id] +
+        scratch_.component_vertex_counts[component_id];
+      scratch_.component_edge_offsets[component_id + 1] =
+        scratch_.component_edge_offsets[component_id] +
+        scratch_.component_edge_counts[component_id];
+    }
+
+    auto next_component_vertex = scratch_.component_vertex_offsets;
+    for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
+    {
+      const auto component_id = scratch_.component_ids[vertex];
+      scratch_.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
+        next_component_vertex[component_id] - scratch_.component_vertex_offsets[component_id]);
+      ++next_component_vertex[component_id];
+    }
+
+    scratch_.component_edges.resize(scratch_.reuse_edges.size());
+    scratch_.component_edge_write_offsets = scratch_.component_edge_offsets;
+    for (const auto& [u, v] : scratch_.reuse_edges)
+    {
+      const auto component_id = scratch_.component_ids[u];
+      scratch_.component_edges[scratch_.component_edge_write_offsets[component_id]++] = {
+        scratch_.local_vertex_ids[u], scratch_.local_vertex_ids[v]};
+    }
+
+    std::size_t matching_size = 0;
+    for (int component_id = 0; component_id < num_components; ++component_id)
+    {
+      const auto vertex_count = scratch_.component_vertex_counts[component_id];
+      const auto edge_begin =
+        scratch_.component_edges.begin() +
+        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id]);
+      const auto edge_end =
+        scratch_.component_edges.begin() +
+        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id + 1]);
+      MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
+      const auto component_matching_size = ComputeCheckedMatchingSize(
+        component_graph,
+        scratch_.component_matching_mate,
+        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
+      if (component_matching_size == std::numeric_limits<std::size_t>::max())
+        return component_matching_size;
+      matching_size += component_matching_size;
+    }
+
+    return matching_size;
+  }
+
   void BuildMinimumPathCover()
   {
     scratch_.ResizeMatchingState(num_tasks_);
@@ -397,106 +509,7 @@ private:
   {
     if (scratch_.reuse_edges.empty())
       return 0;
-
-    const auto num_graph_vertices = static_cast<std::size_t>(num_tasks_) * 2;
-    scratch_.is_active_vertex.assign(num_graph_vertices, 0);
-    for (const auto& [u, v] : scratch_.reuse_edges)
-    {
-      scratch_.is_active_vertex[u] = 1;
-      scratch_.is_active_vertex[v] = 1;
-    }
-
-    scratch_.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
-    std::uint32_t active_vertex_count = 0;
-    for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
-      if (scratch_.is_active_vertex[vertex])
-        scratch_.local_vertex_ids[vertex] = active_vertex_count++;
-
-    scratch_.component_edges.resize(scratch_.reuse_edges.size());
-    std::transform(scratch_.reuse_edges.begin(),
-                   scratch_.reuse_edges.end(),
-                   scratch_.component_edges.begin(),
-                   [&](const auto& edge)
-                   {
-                     return std::pair<std::uint32_t, std::uint32_t>{
-                       scratch_.local_vertex_ids[edge.first],
-                       scratch_.local_vertex_ids[edge.second]};
-                   });
-
-    MatchingGraph reuse_graph(
-      scratch_.component_edges.begin(), scratch_.component_edges.end(), active_vertex_count);
-
-    scratch_.component_ids.assign(num_vertices(reuse_graph), -1);
-    const auto component_map = boost::make_iterator_property_map(
-      scratch_.component_ids.begin(), get(boost::vertex_index, reuse_graph));
-    const int num_components = boost::connected_components(reuse_graph, component_map);
-
-    if (num_components <= 1)
-    {
-      return ComputeCheckedMatchingSize(
-        reuse_graph,
-        scratch_.component_matching_mate,
-        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-    }
-
-    scratch_.component_vertex_counts.assign(num_components, 0);
-    scratch_.component_edge_counts.assign(num_components, 0);
-    for (const auto component_id : scratch_.component_ids)
-      ++scratch_.component_vertex_counts[component_id];
-    for (const auto& [u, _] : scratch_.reuse_edges)
-      ++scratch_.component_edge_counts[scratch_.component_ids[u]];
-
-    scratch_.component_vertex_offsets.resize(num_components + 1, 0);
-    scratch_.component_edge_offsets.resize(num_components + 1, 0);
-    for (int component_id = 0; component_id < num_components; ++component_id)
-    {
-      scratch_.component_vertex_offsets[component_id + 1] =
-        scratch_.component_vertex_offsets[component_id] +
-        scratch_.component_vertex_counts[component_id];
-      scratch_.component_edge_offsets[component_id + 1] =
-        scratch_.component_edge_offsets[component_id] +
-        scratch_.component_edge_counts[component_id];
-    }
-
-    auto next_component_vertex = scratch_.component_vertex_offsets;
-    for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
-    {
-      const auto component_id = scratch_.component_ids[vertex];
-      scratch_.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
-        next_component_vertex[component_id] - scratch_.component_vertex_offsets[component_id]);
-      ++next_component_vertex[component_id];
-    }
-
-    scratch_.component_edges.resize(scratch_.reuse_edges.size());
-    scratch_.component_edge_write_offsets = scratch_.component_edge_offsets;
-    for (const auto& [u, v] : scratch_.reuse_edges)
-    {
-      const auto component_id = scratch_.component_ids[u];
-      scratch_.component_edges[scratch_.component_edge_write_offsets[component_id]++] = {
-        scratch_.local_vertex_ids[u], scratch_.local_vertex_ids[v]};
-    }
-
-    std::size_t matching_size = 0;
-    for (int component_id = 0; component_id < num_components; ++component_id)
-    {
-      const auto vertex_count = scratch_.component_vertex_counts[component_id];
-      const auto edge_begin =
-        scratch_.component_edges.begin() +
-        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id]);
-      const auto edge_end =
-        scratch_.component_edges.begin() +
-        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id + 1]);
-      MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
-      const auto component_matching_size = ComputeCheckedMatchingSize(
-        component_graph,
-        scratch_.component_matching_mate,
-        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-      if (component_matching_size == std::numeric_limits<std::size_t>::max())
-        return component_matching_size;
-      matching_size += component_matching_size;
-    }
-
-    return matching_size;
+    return ComputeComponentMatchingSize(BuildActiveReuseGraph());
   }
 
 private:
@@ -509,6 +522,53 @@ private:
 };
 
 } // namespace
+
+void
+CBC_SPDS::BuildTaskGraph()
+{
+  constexpr auto INCOMING = FaceOrientation::INCOMING;
+  constexpr auto OUTGOING = FaceOrientation::OUTGOING;
+
+  const auto num_loc_cells = grid_->local_cells.size();
+  task_list_.assign(num_loc_cells, Task{});
+  local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+  std::size_t successor_count = 0;
+  for (const auto& cell : grid_->local_cells)
+  {
+    unsigned int num_dependencies = 0;
+    std::vector<std::uint32_t> predecessors;
+    std::vector<std::uint32_t> successors;
+
+    for (std::size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      const auto orientation = cell_face_orientations_[cell.local_id][f];
+
+      if (orientation == INCOMING and face.has_neighbor)
+      {
+        ++num_dependencies;
+        if (face.IsNeighborLocal(grid_.get()))
+          predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
+      }
+      else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
+        successors.push_back(grid_->cells[face.neighbor_id].local_id);
+    }
+
+    successor_count += successors.size();
+    local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+    task_list_[cell.local_id] = Task{
+      0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+  }
+
+  local_successors_.resize(successor_count);
+  for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+  {
+    std::copy(task_list_[cell_id].successors.begin(),
+              task_list_[cell_id].successors.end(),
+              local_successors_.begin() + local_successor_offsets_[cell_id]);
+  }
+}
 
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
                    const std::shared_ptr<MeshContinuum>& grid,
@@ -561,49 +621,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
 
   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
-
-  constexpr auto INCOMING = FaceOrientation::INCOMING;
-  constexpr auto OUTGOING = FaceOrientation::OUTGOING;
-
-  task_list_.assign(num_loc_cells, Task{});
-  local_successor_offsets_.resize(num_loc_cells + 1, 0);
-
-  std::size_t successor_count = 0;
-  for (const auto& cell : grid_->local_cells)
-  {
-    unsigned int num_dependencies = 0;
-    std::vector<std::uint32_t> predecessors;
-    std::vector<std::uint32_t> successors;
-
-    for (std::size_t f = 0; f < cell.faces.size(); ++f)
-    {
-      const auto& face = cell.faces[f];
-      const auto orientation = cell_face_orientations_[cell.local_id][f];
-
-      if (orientation == INCOMING and face.has_neighbor)
-      {
-        ++num_dependencies;
-        if (face.IsNeighborLocal(grid_.get()))
-          predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
-      }
-      else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
-        successors.push_back(grid_->cells[face.neighbor_id].local_id);
-    }
-
-    successor_count += successors.size();
-    local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
-
-    task_list_[cell.local_id] = Task{
-      0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
-  }
-
-  local_successors_.resize(successor_count);
-  for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
-  {
-    std::copy(task_list_[cell_id].successors.begin(),
-              task_list_[cell_id].successors.end(),
-              local_successors_.begin() + local_successor_offsets_[cell_id]);
-  }
+  BuildTaskGraph();
 
   max_num_local_psi_slots_ = num_loc_cells;
 }
