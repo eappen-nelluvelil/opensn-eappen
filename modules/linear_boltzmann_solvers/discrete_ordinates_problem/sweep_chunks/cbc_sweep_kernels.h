@@ -58,6 +58,14 @@ template <bool time_dependent>
 inline void
 CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
 {
+  struct IncomingFaceData
+  {
+    bool is_local_face = false;
+    bool is_boundary_face = false;
+    const FaceNodalMapping* face_nodal_mapping = nullptr;
+    const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo* incoming_nonlocal_face_info = nullptr;
+  };
+
   const auto& groupset = data.groupset;
   const auto& m2d_op = groupset.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset.quadrature->GetDiscreteToMomentOperator();
@@ -91,6 +99,23 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
       : nullptr;
 
   const auto& as_angle_indices = angle_set.GetAngleIndices();
+  const auto& cbc_common = static_cast<const CBC_FLUDSCommonData&>(data.fluds.GetCommonData());
+  std::vector<IncomingFaceData> incoming_face_data(data.cell_num_faces);
+  for (size_t f = 0; f < data.cell_num_faces; ++f)
+  {
+    if (face_orientations[f] != FaceOrientation::INCOMING)
+      continue;
+
+    const auto& face = data.cell.faces[f];
+    auto& face_data = incoming_face_data[f];
+    face_data.is_local_face = data.cell_transport_view.IsFaceLocal(f);
+    face_data.is_boundary_face = not face.has_neighbor;
+    face_data.face_nodal_mapping =
+      &data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
+    if (not face_data.is_local_face and not face_data.is_boundary_face)
+      face_data.incoming_nonlocal_face_info =
+        &cbc_common.GetIncomingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
+  }
 
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
   {
@@ -115,10 +140,11 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
         continue;
 
       const auto& face = data.cell.faces[f];
-      const bool is_local_face = data.cell_transport_view.IsFaceLocal(f);
-      const bool is_boundary_face = not face.has_neighbor;
-      const auto* face_nodal_mapping =
-        &data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
+      const auto& face_data = incoming_face_data[f];
+      const bool is_local_face = face_data.is_local_face;
+      const bool is_boundary_face = face_data.is_boundary_face;
+      const auto* face_nodal_mapping = face_data.face_nodal_mapping;
+      const auto* incoming_nonlocal_face_info = face_data.incoming_nonlocal_face_info;
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -139,7 +165,7 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
                                        as_ss_idx);
           else if (not is_boundary_face)
             psi = data.fluds.NLUpwindPsi(
-              data.cell.global_id, f, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+              *incoming_nonlocal_face_info, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
           else
             psi = angle_set.PsiBoundary(face.neighbor_id,
                                         direction_num,
