@@ -36,7 +36,9 @@ enum class AngleSetStatus
 
 struct Task
 {
+  unsigned int num_satisfied_successors = 0;
   unsigned int num_dependencies;
+  std::vector<std::uint32_t> predecessors;
   std::vector<std::uint32_t> successors;
   uint64_t reference_id;
   const Cell* cell_ptr;
