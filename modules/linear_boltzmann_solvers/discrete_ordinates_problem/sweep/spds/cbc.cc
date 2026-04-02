@@ -605,7 +605,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
               local_successors_.begin() + local_successor_offsets_[cell_id]);
   }
 
-  min_num_local_psi_slots_ = num_loc_cells;
+  max_num_local_psi_slots_ = num_loc_cells;
 }
 
 const std::vector<Task>&
@@ -615,19 +615,19 @@ CBC_SPDS::GetTaskList() const noexcept
 }
 
 void
-CBC_SPDS::ComputeMinNumLocalPsiSlots()
+CBC_SPDS::ComputeMaxNumLocalPsiSlots()
 {
-  CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMinNumLocalPsiSlots");
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
 
   const auto num_tasks = static_cast<std::uint32_t>(task_list_.size());
   if (num_tasks == 0)
   {
-    min_num_local_psi_slots_ = 0;
+    max_num_local_psi_slots_ = 0;
     return;
   }
 
   thread_local SlotCalcScratch scratch;
-  min_num_local_psi_slots_ =
+  max_num_local_psi_slots_ =
     ExactSlotCounter(local_successor_offsets_, local_successors_, topo_order_, scratch).Solve();
 }
 
