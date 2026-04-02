@@ -62,9 +62,10 @@ protected:
 
   const CBC_SPDS& cbc_spds_;
   std::vector<unsigned int> initial_dependencies_;
+  std::vector<unsigned int> initial_successors_to_retire_;
   std::vector<std::uint32_t> initial_ready_tasks_;
   std::vector<unsigned int> remaining_dependencies_;
-  std::vector<unsigned int> num_satisfied_successors_;
+  std::vector<unsigned int> remaining_successors_to_retire_;
   std::vector<std::uint32_t> ready_tasks_;
   size_t num_completed_tasks = 0;
   CBC_AsynchronousCommunicator async_comm_;
