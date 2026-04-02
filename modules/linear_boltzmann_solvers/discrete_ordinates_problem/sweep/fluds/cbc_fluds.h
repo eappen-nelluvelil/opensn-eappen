@@ -5,14 +5,13 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
 namespace opensn
 {
-
-class Cell;
 
 /**
  * Flux data structures (FLUDS) specific to the cell-by-cell (CBC) sweep algorithm
@@ -35,7 +34,7 @@ public:
             const CBC_FLUDSCommonData& common_data,
             size_t max_cell_dof_count);
 
-  const FLUDSCommonData& GetCommonData() const;
+  const FLUDSCommonData& GetCommonData() const noexcept { return common_data_; }
   size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
 
   /// Assign a pool slot to the specified local cell.
@@ -49,14 +48,31 @@ public:
    * angleset subset index, this function returns a pointer to
    * the start of the group data for the specified node and angle.
    */
-  double* UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
+  double* UpwindPsi(std::uint32_t face_neighbor_local_id,
+                    unsigned int adj_cell_node,
+                    size_t as_ss_idx) noexcept
+  {
+    auto* const slot_base = cell_slot_bases_[face_neighbor_local_id];
+    assert(slot_base != nullptr);
+
+    const size_t offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+    return slot_base + offset;
+  }
 
   /**
    * Given a local cell, a node index on this cell, and an angleset subset index,
    * this function returns a pointer to the start of the group data for the specified
    * node and angle for writing its just solved angular fluxes.
    */
-  double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
+  double*
+  OutgoingPsi(std::uint32_t cell_local_id, unsigned int cell_node, size_t as_ss_idx) noexcept
+  {
+    auto* const slot_base = cell_slot_bases_[cell_local_id];
+    assert(slot_base != nullptr);
+
+    const size_t offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+    return slot_base + offset;
+  }
 
   /**
    * Given a remote upwind cell's global ID, a face ID on this cell,
@@ -71,7 +87,13 @@ public:
 
   double* NLUpwindPsi(const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo& face_info,
                       unsigned int face_node_mapped,
-                      size_t as_ss_idx);
+                      size_t as_ss_idx) noexcept
+  {
+    const size_t dof_offset = (static_cast<size_t>(face_info.face_node_offset) + face_node_mapped) *
+                                num_groups_and_angles_ +
+                              as_ss_idx * num_groups_;
+    return incoming_nonlocal_psi_data_.data() + dof_offset;
+  }
 
   /**
    * Given a pointer to a vector holding the non-local outgoing psi data for a face,
@@ -79,10 +101,13 @@ public:
    * this function returns a pointer to the start of the group data for the specified
    * face node and angle.
    */
-  double*
-  NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
+  double* NLOutgoingPsi(double* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx) noexcept
+  {
+    assert(psi_nonlocal_outgoing != nullptr);
 
-  double* NLOutgoingPsi(double* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
+    const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
+    return psi_nonlocal_outgoing + addr_offset;
+  }
 
   void StoreIncomingFaceData(uint64_t cell_global_id,
                              unsigned int face_id,

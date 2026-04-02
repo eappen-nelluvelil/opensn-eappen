@@ -31,19 +31,11 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     free_slot_stack_[slot] = slot;
 }
 
-const FLUDSCommonData&
-CBC_FLUDS::GetCommonData() const
-{
-  return common_data_;
-}
-
 void
 CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
 {
-  OpenSnLogicalErrorIf(cell_slot_indices_[cell_local_id] != INVALID_SLOT,
-                       "CBC_FLUDS attempted to allocate an already assigned slot.");
-  OpenSnLogicalErrorIf(free_slot_stack_.empty(),
-                       "CBC_FLUDS pool allocator exhausted during a local sweep.");
+  assert(cell_slot_indices_[cell_local_id] == INVALID_SLOT);
+  assert(not free_slot_stack_.empty());
 
   const auto slot = free_slot_stack_.back();
   free_slot_stack_.pop_back();
@@ -56,34 +48,11 @@ void
 CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
 {
   const auto slot = cell_slot_indices_[cell_local_id];
-  OpenSnLogicalErrorIf(slot == INVALID_SLOT,
-                       "CBC_FLUDS attempted to release a slot that is not assigned.");
+  assert(slot != INVALID_SLOT);
 
   free_slot_stack_.push_back(slot);
   cell_slot_indices_[cell_local_id] = INVALID_SLOT;
   cell_slot_bases_[cell_local_id] = nullptr;
-}
-
-double*
-CBC_FLUDS::UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx)
-{
-  auto* const slot_base = cell_slot_bases_[face_neighbor.local_id];
-  OpenSnLogicalErrorIf(slot_base == nullptr,
-                       "CBC_FLUDS missing local upwind storage for a swept neighbor cell.");
-
-  const size_t offset = adj_cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  return slot_base + offset;
-}
-
-double*
-CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx)
-{
-  auto* const slot_base = cell_slot_bases_[cell.local_id];
-  OpenSnLogicalErrorIf(slot_base == nullptr,
-                       "CBC_FLUDS missing local output storage for the current cell.");
-
-  const size_t offset = cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  return slot_base + offset;
 }
 
 double*
@@ -97,38 +66,6 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
     return nullptr;
 
   return NLUpwindPsi(*face_info, face_node_mapped, as_ss_idx);
-}
-
-double*
-CBC_FLUDS::NLUpwindPsi(const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo& face_info,
-                       unsigned int face_node_mapped,
-                       size_t as_ss_idx)
-{
-  const size_t dof_map =
-    (static_cast<size_t>(face_info.face_node_offset) + face_node_mapped) * num_groups_and_angles_ +
-    as_ss_idx * num_groups_;
-  return incoming_nonlocal_psi_data_.data() + dof_map;
-}
-
-double*
-CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
-                         size_t face_node,
-                         size_t as_ss_idx)
-{
-  OpenSnLogicalErrorIf(psi_nonlocal_outgoing == nullptr,
-                       "CBC_FLUDS received a null nonlocal outgoing psi buffer.");
-
-  return NLOutgoingPsi(psi_nonlocal_outgoing->data(), face_node, as_ss_idx);
-}
-
-double*
-CBC_FLUDS::NLOutgoingPsi(double* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx)
-{
-  OpenSnLogicalErrorIf(psi_nonlocal_outgoing == nullptr,
-                       "CBC_FLUDS received a null nonlocal outgoing psi buffer.");
-
-  const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  return psi_nonlocal_outgoing + addr_offset;
 }
 
 void
