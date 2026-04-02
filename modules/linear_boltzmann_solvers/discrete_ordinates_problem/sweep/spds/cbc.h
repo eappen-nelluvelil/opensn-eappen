@@ -30,7 +30,9 @@ public:
   /// Return the exact maximum number of pool slots required for local CBC angular flux storage.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
 
-protected:
+private:
+  void BuildTaskGraph();
+
   /// Topological ordering of the local task graph using local cell ids.
   std::vector<std::uint32_t> topo_order_;
   /// CSR row offsets for the local successor graph used by exact slot counting.
