@@ -68,6 +68,10 @@ public:
                       unsigned int face_node_mapped,
                       size_t as_ss_idx);
 
+  double* NLUpwindPsi(const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo& face_info,
+                      unsigned int face_node_mapped,
+                      size_t as_ss_idx);
+
   /**
    * Given a pointer to a vector holding the non-local outgoing psi data for a face,
    * a node index on this face, and an angleset subset index,
@@ -76,6 +80,11 @@ public:
    */
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
+
+  void StoreIncomingFaceData(uint64_t cell_global_id,
+                             unsigned int face_id,
+                             const double* psi_data,
+                             size_t data_size);
 
   /// Reset local slot assignments and received nonlocal angular fluxes.
   void ClearLocalAndReceivePsi() override;
@@ -92,7 +101,7 @@ protected:
   size_t num_slots_;
   size_t slot_size_;
   std::vector<std::uint32_t> cell_slot_indices_;
-  std::vector<size_t> cell_slot_base_offsets_;
+  std::vector<double*> cell_slot_bases_;
   std::vector<std::uint32_t> free_slot_stack_;
 
   /**
@@ -100,6 +109,7 @@ protected:
    * node major -> angle in angleset major -> group in groupset major.
    */
   std::vector<double> local_psi_buffer_;
+  std::vector<double> incoming_nonlocal_psi_data_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
 };
