@@ -31,16 +31,19 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
 {
   const auto num_tasks = cbc_spds_.GetTaskList().size();
   initial_dependencies_.resize(num_tasks);
+  initial_successors_to_retire_.resize(num_tasks);
   remaining_dependencies_.resize(num_tasks);
-  num_satisfied_successors_.resize(num_tasks);
+  remaining_successors_to_retire_.resize(num_tasks);
   initial_ready_tasks_.reserve(num_tasks);
   ready_tasks_.reserve(num_tasks);
 
   const auto& task_list = cbc_spds_.GetTaskList();
   for (std::uint32_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
   {
-    const auto num_dependencies = task_list[task_idx].num_dependencies;
+    const auto& task = task_list[task_idx];
+    const auto num_dependencies = task.num_dependencies;
     initial_dependencies_[task_idx] = num_dependencies;
+    initial_successors_to_retire_[task_idx] = static_cast<unsigned int>(task.successors.size());
     if (num_dependencies == 0)
       initial_ready_tasks_.push_back(task_idx);
   }
@@ -104,10 +107,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     for (const auto predecessor : cell_task.predecessors)
     {
       const auto& predecessor_task = task_list[predecessor];
-      auto& num_satisfied = num_satisfied_successors_[predecessor];
-      ++num_satisfied;
-
-      if (num_satisfied >= predecessor_task.successors.size())
+      auto& remaining_successors = remaining_successors_to_retire_[predecessor];
+      assert(remaining_successors > 0);
+      if (--remaining_successors == 0)
         cbc_fluds_.DeallocateSlot(predecessor_task.cell_ptr->local_id);
     }
 
@@ -144,7 +146,9 @@ CBC_AngleSet::ResetTaskState()
 {
   std::copy(
     initial_dependencies_.begin(), initial_dependencies_.end(), remaining_dependencies_.begin());
-  std::fill(num_satisfied_successors_.begin(), num_satisfied_successors_.end(), 0);
+  std::copy(initial_successors_to_retire_.begin(),
+            initial_successors_to_retire_.end(),
+            remaining_successors_to_retire_.begin());
   ready_tasks_ = initial_ready_tasks_;
   num_completed_tasks = 0;
 }
