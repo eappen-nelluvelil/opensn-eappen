@@ -128,6 +128,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           cbcd_sweep_chunk, angle_sets[i], in_flight_cell_ids[i]);
         // Update task dependencies
         auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
+        std::vector<std::uint32_t> cells_to_deallocate;
+        cells_to_deallocate.reserve(in_flight_tasks[i].size());
         for (auto* task : in_flight_tasks[i])
         {
           for (uint64_t succ : task->successors)
@@ -136,8 +138,22 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
             if (current_task_list[succ].num_dependencies == 0 and boundary_data_set[i])
               ready_queues[i].push_back(&current_task_list[succ]);
           }
+
+          if (task->successors.empty())
+            cells_to_deallocate.push_back(task->reference_id);
+
+          for (uint64_t pred : task->predecessors)
+          {
+            auto& pred_task = current_task_list[pred];
+            ++pred_task.num_satisfied_successors;
+            if (pred_task.num_satisfied_successors == pred_task.successors.size())
+              cells_to_deallocate.push_back(pred_task.reference_id);
+          }
+
           task->completed = true;
         }
+        if (not cells_to_deallocate.empty())
+          fluds_list[i]->DeallocateSlots(cells_to_deallocate);
         num_completed_tasks[i] += in_flight_tasks[i].size();
         // Send MPI data
         auto* comm = static_cast<CBCD_AsynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
@@ -218,6 +234,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
         for (auto* task : ready_tasks[i])
           ready_cell_ids[i].push_back(task->reference_id);
 
+        fluds_list[i]->AllocateSlots(ready_cell_ids[i]);
         fluds_list[i]->CopyIncomingNonlocalPsiToDevice(angle_sets[i], ready_cell_ids[i]);
         cbcd_sweep_chunk.Sweep(ready_cell_ids[i], i);
         in_flight_tasks[i] = std::move(ready_tasks[i]);
