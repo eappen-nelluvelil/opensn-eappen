@@ -3,7 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
@@ -197,7 +197,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
         const int locality =
           sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
         auto& async_comm =
-          static_cast<CBC_AsynchronousCommunicator&>(*angle_set->GetCommunicator());
+          static_cast<CBCD_AsynchronousCommunicator&>(*angle_set->GetCommunicator());
         std::vector<double>* psi_nonlocal_outgoing =
           &async_comm.InitGetDownwindMessageData(locality,
                                                  face.neighbor_id,

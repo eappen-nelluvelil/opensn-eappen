@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
+// SPDX-FileCopyrightText: 2026 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <cstddef>
@@ -16,16 +17,18 @@ namespace mpi = mpicpp_lite;
 namespace opensn
 {
 
-class CBC_FLUDS;
 class MPICommunicatorSet;
 class ByteArray;
 
-class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
+class CBCD_AsynchronousCommunicator : public AsynchronousCommunicator
 {
 public:
-  explicit CBC_AsynchronousCommunicator(size_t angle_set_id,
-                                        FLUDS& fluds,
-                                        const MPICommunicatorSet& comm_set);
+  explicit CBCD_AsynchronousCommunicator(size_t angle_set_id,
+                                         FLUDS& fluds,
+                                         const MPICommunicatorSet& comm_set)
+    : AsynchronousCommunicator(fluds, comm_set), angle_set_id_(angle_set_id)
+  {
+  }
 
   std::vector<double>& InitGetDownwindMessageData(int location_id,
                                                   uint64_t cell_global_id,
@@ -46,10 +49,8 @@ public:
 protected:
   const size_t angle_set_id_;
 
-  /// location_id, cell_global_id, face_id
   using MessageKey = std::tuple<int, std::uint64_t, unsigned int>;
 
-  /// boost::hash_combine hash function for MessageKey.
   struct MessageKeyHash
   {
     std::size_t operator()(const MessageKey& key) const noexcept
@@ -72,10 +73,6 @@ protected:
     ByteArray data_array;
   };
   std::vector<BufferItem> send_buffer_;
-  CBC_FLUDS& cbc_fluds_;
-
-private:
-  void QueueOutgoingMessages();
 };
 
 } // namespace opensn
