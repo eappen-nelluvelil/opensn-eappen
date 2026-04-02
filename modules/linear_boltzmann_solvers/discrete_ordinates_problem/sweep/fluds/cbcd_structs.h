@@ -138,6 +138,17 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
 
+  constexpr double* GetLocalCellFluxBase(const std::uint32_t cell_local_id) const noexcept
+  {
+    return local_psi + static_cast<std::size_t>(local_slot_offsets[cell_local_id]) * stride_size;
+  }
+
+  constexpr double* GetLocalFluxPointer(double* local_cell_base,
+                                        const std::uint16_t cell_node) const noexcept
+  {
+    return local_cell_base + static_cast<std::size_t>(cell_node) * stride_size;
+  }
+
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
   {
@@ -157,10 +168,8 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Incoming local case
     if (node_index.IsLocal())
     {
-      return local_psi +
-             (static_cast<std::size_t>(local_slot_offsets[node_index.GetCellLocalID()]) +
-              static_cast<std::size_t>(node_index.GetCellNode())) *
-               stride_size;
+      return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
+                                 node_index.GetCellNode());
     }
     // Incoming non-local case
     else
@@ -188,10 +197,8 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Outgoing local case
     if (node_index.IsLocal())
     {
-      return local_psi +
-             (static_cast<std::size_t>(local_slot_offsets[node_index.GetCellLocalID()]) +
-              static_cast<std::size_t>(node_index.GetCellNode())) *
-               stride_size;
+      return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
+                                 node_index.GetCellNode());
     }
     // Outgoing non-local case
     else
