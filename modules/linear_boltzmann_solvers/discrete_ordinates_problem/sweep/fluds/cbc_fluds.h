@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 
 namespace opensn
 {
@@ -114,6 +115,15 @@ public:
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
 protected:
+  struct AlignedDoubleDeleter
+  {
+    void operator()(double* ptr) const noexcept;
+  };
+
+  using AlignedDoubleBuffer = std::unique_ptr<double[], AlignedDoubleDeleter>;
+
+  static AlignedDoubleBuffer AllocateAlignedBuffer(size_t num_values);
+
   double* LocalPsiBase(std::uint32_t cell_local_id) const noexcept
   {
     auto* const slot_base = cell_slot_bases_[cell_local_id];
@@ -132,7 +142,7 @@ protected:
    * Layout for a single slot:
    * node major -> angle in angleset major -> group in groupset major.
    */
-  std::vector<double> local_psi_buffer_;
+  AlignedDoubleBuffer local_psi_buffer_;
   std::vector<double> incoming_nonlocal_psi_data_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
