@@ -52,8 +52,25 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     cell_slot_bases_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr),
     free_slot_stack_(num_slots_),
     local_psi_buffer_(AllocateAlignedBuffer(num_slots_ * slot_size_)),
-    incoming_nonlocal_psi_data_(common_data.GetNumIncomingNonlocalFaceNodes() *
-                                num_groups_and_angles_)
+    incoming_nonlocal_face_dof_offsets_(common_data.GetNumCellFaces(), 0),
+    incoming_nonlocal_psi_buffer_(
+      [&]()
+      {
+        size_t incoming_nonlocal_dof_count = 0;
+        for (size_t face_storage_index = 0; face_storage_index < common_data.GetNumCellFaces();
+             ++face_storage_index)
+        {
+          const auto& face_info =
+            common_data.GetIncomingNonlocalFaceInfoByStorageIndex(face_storage_index);
+          if (face_info.num_face_nodes == 0)
+            continue;
+
+          incoming_nonlocal_face_dof_offsets_[face_storage_index] = incoming_nonlocal_dof_count;
+          incoming_nonlocal_dof_count += RoundUpToCacheLineMultiple(
+            static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_);
+        }
+        return AllocateAlignedBuffer(incoming_nonlocal_dof_count);
+      }())
 {
   for (std::uint32_t slot = 0; slot < num_slots_; ++slot)
     free_slot_stack_[slot] = slot;
@@ -89,13 +106,16 @@ CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
                                  const double* psi_data,
                                  size_t data_size)
 {
-  const auto& face_info = common_data_.GetIncomingNonlocalFaceInfoByKey(cell_global_id, face_id);
+  const auto face_storage_index =
+    common_data_.GetIncomingNonlocalFaceStorageIndexByKey(cell_global_id, face_id);
+  const auto& face_info =
+    common_data_.GetIncomingNonlocalFaceInfoByStorageIndex(face_storage_index);
 
   const auto expected_size = static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
   assert(data_size == expected_size);
 
-  const size_t base = static_cast<size_t>(face_info.face_node_offset) * num_groups_and_angles_;
-  std::memcpy(incoming_nonlocal_psi_data_.data() + base, psi_data, data_size * sizeof(double));
+  const size_t base = incoming_nonlocal_face_dof_offsets_[face_storage_index];
+  std::memcpy(incoming_nonlocal_psi_buffer_.get() + base, psi_data, data_size * sizeof(double));
 }
 
 void

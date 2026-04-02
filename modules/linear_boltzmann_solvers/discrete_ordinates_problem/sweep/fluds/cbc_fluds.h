@@ -80,11 +80,11 @@ public:
                       unsigned int face_node_mapped,
                       size_t as_ss_idx) noexcept
   {
-    const auto& face_info = common_data_.GetIncomingNonlocalFaceInfo(cell_local_id, face_id);
-    const size_t dof_offset = (static_cast<size_t>(face_info.face_node_offset) + face_node_mapped) *
-                                num_groups_and_angles_ +
+    const size_t face_storage_index = common_data_.GetCellFaceOffset(cell_local_id) + face_id;
+    const size_t dof_offset = incoming_nonlocal_face_dof_offsets_[face_storage_index] +
+                              static_cast<size_t>(face_node_mapped) * num_groups_and_angles_ +
                               as_ss_idx * num_groups_;
-    return incoming_nonlocal_psi_data_.data() + dof_offset;
+    return incoming_nonlocal_psi_buffer_.get() + dof_offset;
   }
 
   /**
@@ -143,7 +143,8 @@ protected:
    * node major -> angle in angleset major -> group in groupset major.
    */
   AlignedDoubleBuffer local_psi_buffer_;
-  std::vector<double> incoming_nonlocal_psi_data_;
+  std::vector<size_t> incoming_nonlocal_face_dof_offsets_;
+  AlignedDoubleBuffer incoming_nonlocal_psi_buffer_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
 };
