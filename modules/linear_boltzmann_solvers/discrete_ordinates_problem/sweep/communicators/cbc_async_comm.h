@@ -4,7 +4,6 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/async_comm.h"
-#include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +17,6 @@ namespace opensn
 
 class CBC_FLUDS;
 class MPICommunicatorSet;
-class ByteArray;
 
 class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
 {
@@ -69,10 +67,11 @@ protected:
     mpi::Request mpi_request;
     bool send_initiated = false;
     bool completed = false;
-    ByteArray data_array;
+    std::vector<std::byte> data;
   };
   std::vector<BufferItem> send_buffer_;
   CBC_FLUDS& cbc_fluds_;
+  std::vector<std::byte> receive_buffer_;
   std::vector<size_t> destination_buffer_bytes_;
   std::vector<size_t> destination_buffer_indices_;
 

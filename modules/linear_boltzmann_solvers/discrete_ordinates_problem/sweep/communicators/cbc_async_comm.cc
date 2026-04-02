@@ -11,10 +11,35 @@
 #include "caliper/cali.h"
 #include <cstring>
 #include <limits>
+#include <span>
 #include <utility>
 
 namespace opensn
 {
+
+namespace
+{
+
+template <typename T>
+void
+AppendBytes(std::vector<std::byte>& buffer, const T& value)
+{
+  const size_t old_size = buffer.size();
+  buffer.resize(old_size + sizeof(T));
+  std::memcpy(buffer.data() + old_size, &value, sizeof(T));
+}
+
+template <typename T>
+T
+ReadBytes(std::span<const std::byte> buffer, size_t& offset)
+{
+  T value;
+  std::memcpy(&value, buffer.data() + offset, sizeof(T));
+  offset += sizeof(T);
+  return value;
+}
+
+} // namespace
 
 CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
                                                            FLUDS& fluds,
@@ -48,9 +73,10 @@ CBC_AsynchronousCommunicator::InitGetDownwindMessageData(int location_id,
                                                          size_t data_size)
 {
   MessageKey key{location_id, cell_global_id, face_id};
-  std::vector<double>& data = outgoing_message_queue_[key];
-  if (data.empty())
-    data.assign(data_size, 0.0);
+  auto [it, inserted] = outgoing_message_queue_.try_emplace(key);
+  std::vector<double>& data = it->second;
+  if (inserted)
+    data.resize(data_size);
   return data;
 }
 
@@ -78,20 +104,19 @@ CBC_AsynchronousCommunicator::QueueOutgoingMessages()
       destination_buffer_indices_[deplocI] = buffer_index;
       send_buffer_.emplace_back();
       send_buffer_.back().destination = locI;
-      send_buffer_.back().data_array.Data().reserve(destination_buffer_bytes_[deplocI]);
+      send_buffer_.back().data.reserve(destination_buffer_bytes_[deplocI]);
     }
 
     auto& buffer_item = send_buffer_[buffer_index];
-    auto& buffer_array = buffer_item.data_array;
-    buffer_array.Write(cell_global_id);
-    buffer_array.Write(face_id);
-    buffer_array.Write(data_size);
+    auto& buffer = buffer_item.data;
+    AppendBytes(buffer, cell_global_id);
+    AppendBytes(buffer, face_id);
+    AppendBytes(buffer, data_size);
 
-    auto& raw = buffer_array.Data();
-    const size_t old_size = raw.size();
+    const size_t old_size = buffer.size();
     const size_t num_bytes = data_size * sizeof(double);
-    raw.resize(old_size + num_bytes);
-    std::memcpy(raw.data() + old_size, data.data(), num_bytes);
+    buffer.resize(old_size + num_bytes);
+    std::memcpy(buffer.data() + old_size, data.data(), num_bytes);
   }
 
   outgoing_message_queue_.clear();
@@ -115,7 +140,7 @@ CBC_AsynchronousCommunicator::SendData()
       const auto& comm = comm_set_.LocICommunicator(locJ);
       auto dest = comm_set_.MapIonJ(locJ, locJ);
       auto tag = static_cast<int>(angle_set_id_);
-      buffer_item.mpi_request = comm.isend(dest, tag, buffer_item.data_array.Data());
+      buffer_item.mpi_request = comm.isend(dest, tag, buffer_item.data);
       buffer_item.send_initiated = true;
     }
 
@@ -154,23 +179,24 @@ CBC_AsynchronousCommunicator::ReceiveData()
     while (comm.iprobe(source_rank, tag, status))
     {
       int num_items = status.count<std::byte>();
-      std::vector<std::byte> recv_buffer(num_items);
-      comm.recv(source_rank, status.tag(), recv_buffer.data(), num_items);
-      ByteArray data_array(recv_buffer);
+      receive_buffer_.resize(static_cast<size_t>(num_items));
+      comm.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
+      size_t offset = 0;
+      const std::span<const std::byte> data_array(receive_buffer_);
 
-      while (not data_array.EndOfBuffer())
+      while (offset < data_array.size())
       {
-        const auto cell_global_id = data_array.Read<uint64_t>();
-        const auto face_id = data_array.Read<unsigned int>();
-        const auto data_size = data_array.Read<size_t>();
+        const auto cell_global_id = ReadBytes<uint64_t>(data_array, offset);
+        const auto face_id = ReadBytes<unsigned int>(data_array, offset);
+        const auto data_size = ReadBytes<size_t>(data_array, offset);
 
         const size_t num_bytes = data_size * sizeof(double);
         cbc_fluds_.StoreIncomingFaceData(
           cell_global_id,
           face_id,
-          reinterpret_cast<const double*>(&data_array.Data()[data_array.Offset()]),
+          reinterpret_cast<const double*>(data_array.data() + offset),
           data_size);
-        data_array.Seek(data_array.Offset() + num_bytes);
+        offset += num_bytes;
 
         cells_who_received_data.push_back(
           fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
