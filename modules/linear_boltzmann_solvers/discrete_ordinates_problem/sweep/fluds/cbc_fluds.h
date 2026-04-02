@@ -5,17 +5,13 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
-#include "framework/math/unknown_manager/unknown_manager.h"
-#include "framework/math/spatial_discretization/spatial_discretization.h"
 #include <cstddef>
-#include <unordered_map>
-#include <functional>
+#include <cstdint>
+#include <limits>
 
 namespace opensn
 {
 
-class UnknownManager;
-class SpatialDiscretization;
 class Cell;
 
 /**
@@ -31,13 +27,21 @@ class Cell;
 class CBC_FLUDS : public FLUDS
 {
 public:
+  /// Value used to indicate that a cell currently has no assigned pool slot.
+  static constexpr std::uint32_t INVALID_SLOT = std::numeric_limits<std::uint32_t>::max();
+
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
-            const UnknownManager& psi_uk_man,
-            const SpatialDiscretization& sdm);
+            size_t max_cell_dof_count);
 
-  virtual const FLUDSCommonData& GetCommonData() const;
+  const FLUDSCommonData& GetCommonData() const;
+
+  /// Assign a pool slot to the specified local cell.
+  void AllocateSlot(std::uint64_t cell_local_id);
+
+  /// Release the pool slot currently assigned to the specified local cell.
+  void DeallocateSlot(std::uint64_t cell_local_id);
 
   /**
    * Given a local upwind neighbor cell, a node index on this cell, and an
@@ -73,7 +77,8 @@ public:
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
-  void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
+  /// Reset local slot assignments and received nonlocal angular fluxes.
+  void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
   void AllocateOutgoingPsi() override {}
@@ -84,23 +89,18 @@ public:
 
 protected:
   const CBC_FLUDSCommonData& common_data_;
-  const UnknownManager& psi_uk_man_;
-  const SpatialDiscretization& sdm_;
-  size_t num_angles_in_gs_quadrature_;
-  size_t num_quadrature_local_dofs_;
-  size_t num_local_spatial_dofs_;
-  size_t local_psi_data_size_;
+  size_t num_slots_;
+  size_t slot_size_;
+  std::vector<std::uint32_t> cell_slot_indices_;
+  std::vector<std::uint32_t> free_slot_stack_;
 
   /**
-   * Layout for storage for local angular fluxes:
-   * spatial DOF major -> angle in angleset major -> group in groupset major
+   * Layout for a single slot:
+   * node major -> angle in angleset major -> group in groupset major.
    */
-  std::vector<double> local_psi_data_;
+  std::vector<double> local_psi_buffer_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
-
-  /// Pre-computed start index into local_psi_data_ for each local cell
-  std::vector<size_t> cell_psi_start_;
 };
 
 } // namespace opensn

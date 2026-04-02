@@ -16,6 +16,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aah_sweep_chunk_td.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk_td.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/iterative_methods/sweep_wgs_context.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_vecops.h"
@@ -40,11 +41,13 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace opensn
 {
@@ -1436,6 +1439,8 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
+    std::vector<std::shared_ptr<CBC_SPDS>> cbc_spds_list;
+
     // Build SPDS
     for (const auto& [quadrature, info] : quadrature_unq_so_grouping_map_)
     {
@@ -1450,7 +1455,31 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
         const auto new_swp_order =
           std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]);
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
+        cbc_spds_list.push_back(new_swp_order);
       }
+    }
+
+    if (cbc_spds_list.size() == 1)
+      cbc_spds_list.front()->ComputeMinNumLocalPsiSlots();
+    else if (not cbc_spds_list.empty())
+    {
+      const auto hardware_threads = std::max<std::size_t>(1, std::thread::hardware_concurrency());
+      const auto num_workers = std::min(cbc_spds_list.size(), hardware_threads);
+
+      SPMD_ThreadPool pool(num_workers);
+      std::atomic_size_t next_index = 0;
+      pool.ExecuteBatch(
+        [&](std::size_t)
+        {
+          while (true)
+          {
+            const auto index = next_index.fetch_add(1);
+            if (index >= cbc_spds_list.size())
+              break;
+
+            cbc_spds_list[index]->ComputeMinNumLocalPsiSlots();
+          }
+        });
     }
   }
   else
@@ -1872,8 +1901,7 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
             std::make_shared<CBC_FLUDS>(gs_num_grps,
                                         angle_indices.size(),
                                         dynamic_cast<const CBC_FLUDSCommonData&>(fluds_common_data),
-                                        groupset.psi_uk_man_,
-                                        *discretization_);
+                                        max_cell_dof_count_);
         }
 
         std::shared_ptr<AngleSet> angle_set;
