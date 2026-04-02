@@ -62,6 +62,15 @@ struct CBCIncomingFaceData
   const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo* incoming_nonlocal_face_info = nullptr;
 };
 
+struct CBCOutgoingFaceData
+{
+  bool is_local_face = false;
+  bool is_boundary_face = false;
+  bool is_reflecting_boundary_face = false;
+  const FaceNodalMapping* face_nodal_mapping = nullptr;
+  const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo* outgoing_nonlocal_face_info = nullptr;
+};
+
 struct CBCGenericSweepScratch
 {
   DenseMatrix<double> Amat;
@@ -71,6 +80,7 @@ struct CBCGenericSweepScratch
   std::vector<double> face_mu_values;
   std::vector<double> tau_gsg;
   std::vector<CBCIncomingFaceData> incoming_face_data;
+  std::vector<CBCOutgoingFaceData> outgoing_face_data;
 
   void
   EnsureCapacity(const size_t max_num_cell_dofs, const size_t gs_size, const size_t cell_num_faces)
@@ -96,6 +106,9 @@ struct CBCGenericSweepScratch
 
     if (incoming_face_data.size() != cell_num_faces)
       incoming_face_data.assign(cell_num_faces, CBCIncomingFaceData{});
+
+    if (outgoing_face_data.size() != cell_num_faces)
+      outgoing_face_data.assign(cell_num_faces, CBCOutgoingFaceData{});
   }
 };
 
@@ -138,22 +151,41 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
 
   const auto& as_angle_indices = angle_set.GetAngleIndices();
   const auto& cbc_common = static_cast<const CBC_FLUDSCommonData&>(data.fluds.GetCommonData());
+  auto* const async_comm = static_cast<CBC_AsynchronousCommunicator*>(angle_set.GetCommunicator());
   auto& incoming_face_data = scratch.incoming_face_data;
+  auto& outgoing_face_data = scratch.outgoing_face_data;
   for (size_t f = 0; f < data.cell_num_faces; ++f)
   {
     incoming_face_data[f] = CBCIncomingFaceData{};
-    if (face_orientations[f] != FaceOrientation::INCOMING)
-      continue;
-
     const auto& face = data.cell.faces[f];
-    auto& face_data = incoming_face_data[f];
-    face_data.is_local_face = data.cell_transport_view.IsFaceLocal(f);
-    face_data.is_boundary_face = not face.has_neighbor;
-    face_data.face_nodal_mapping =
+    const bool is_local_face = data.cell_transport_view.IsFaceLocal(f);
+    const bool is_boundary_face = not face.has_neighbor;
+    const auto* face_nodal_mapping =
       &data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
-    if (not face_data.is_local_face and not face_data.is_boundary_face)
-      face_data.incoming_nonlocal_face_info =
-        &cbc_common.GetIncomingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
+
+    if (face_orientations[f] == FaceOrientation::INCOMING)
+    {
+      auto& face_data = incoming_face_data[f];
+      face_data.is_local_face = is_local_face;
+      face_data.is_boundary_face = is_boundary_face;
+      face_data.face_nodal_mapping = face_nodal_mapping;
+      if (not is_local_face and not is_boundary_face)
+        face_data.incoming_nonlocal_face_info =
+          &cbc_common.GetIncomingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
+    }
+
+    if (face_orientations[f] == FaceOrientation::OUTGOING)
+    {
+      auto& face_data = outgoing_face_data[f];
+      face_data.is_local_face = is_local_face;
+      face_data.is_boundary_face = is_boundary_face;
+      face_data.is_reflecting_boundary_face =
+        is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting();
+      face_data.face_nodal_mapping = face_nodal_mapping;
+      if (not is_local_face and not is_boundary_face)
+        face_data.outgoing_nonlocal_face_info =
+          &cbc_common.GetOutgoingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
+    }
   }
 
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
@@ -320,28 +352,28 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
         continue;
 
       const auto& face = data.cell.faces[f];
-      const bool is_local_face = data.cell_transport_view.IsFaceLocal(f);
-      const bool is_boundary_face = not face.has_neighbor;
-      const bool is_reflecting_boundary_face =
-        (is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting());
+      const auto& face_data = outgoing_face_data[f];
+      const bool is_local_face = face_data.is_local_face;
+      const bool is_boundary_face = face_data.is_boundary_face;
+      const bool is_reflecting_boundary_face = face_data.is_reflecting_boundary_face;
       const auto& IntF_shapeI = data.IntS_shapeI[f];
 
-      const int locality = data.cell_transport_view.FaceLocality(f);
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
-      const auto& face_nodal_mapping =
-        data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
-      std::vector<double>* psi_nonlocal_outgoing = nullptr;
+      double* psi_nonlocal_outgoing = nullptr;
 
       if (not is_boundary_face and not is_local_face)
       {
-        auto* async_comm = dynamic_cast<CBC_AsynchronousCommunicator*>(angle_set.GetCommunicator());
-        const size_t data_size_for_msg = num_face_nodes * data.group_angle_stride;
+        const auto& outgoing_nonlocal_face_info = *face_data.outgoing_nonlocal_face_info;
+        const size_t data_size_for_msg =
+          static_cast<size_t>(outgoing_nonlocal_face_info.num_face_nodes) * data.group_angle_stride;
         psi_nonlocal_outgoing =
-          &async_comm->InitGetDownwindMessageData(locality,
-                                                  face.neighbor_id,
-                                                  face_nodal_mapping.associated_face_,
-                                                  angle_set.GetID(),
-                                                  data_size_for_msg);
+          async_comm
+            ->InitGetDownwindMessageData(outgoing_nonlocal_face_info.locality,
+                                         outgoing_nonlocal_face_info.cell_global_id,
+                                         outgoing_nonlocal_face_info.associated_face,
+                                         angle_set.GetID(),
+                                         data_size_for_msg)
+            .data();
       }
 
       for (size_t fi = 0; fi < num_face_nodes; ++fi)

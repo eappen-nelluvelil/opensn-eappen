@@ -32,6 +32,14 @@ public:
     std::uint32_t num_face_nodes = 0;
   };
 
+  struct OutgoingNonlocalFaceInfo
+  {
+    int locality = 0;
+    std::uint64_t cell_global_id = 0;
+    unsigned int associated_face = 0;
+    std::uint32_t num_face_nodes = 0;
+  };
+
   CBC_FLUDSCommonData(const SPDS& spds,
                       const std::vector<CellFaceNodalMapping>& grid_nodal_mappings);
 
@@ -44,17 +52,26 @@ public:
   const IncomingNonlocalFaceInfo& GetIncomingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
 
-  bool TryGetIncomingNonlocalFaceInfo(std::uint64_t cell_global_id,
-                                      unsigned int face_id,
-                                      IncomingNonlocalFaceInfo& info) const noexcept;
+  const OutgoingNonlocalFaceInfo& GetOutgoingNonlocalFaceInfo(std::uint32_t cell_local_id,
+                                                              unsigned int face_id) const noexcept;
+
+  const IncomingNonlocalFaceInfo* FindIncomingNonlocalFaceInfo(std::uint64_t cell_global_id,
+                                                               unsigned int face_id) const noexcept;
+
+  size_t GetCellFaceOffset(std::uint32_t cell_local_id) const noexcept
+  {
+    return cell_face_offsets_[cell_local_id];
+  }
 
 private:
   size_t num_incoming_nonlocal_faces_;
   size_t num_incoming_nonlocal_face_nodes_;
   size_t num_outgoing_nonlocal_faces_;
-  std::vector<std::vector<IncomingNonlocalFaceInfo>> incoming_nonlocal_face_info_by_cell_;
+  std::vector<size_t> cell_face_offsets_;
+  std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
+  std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
   std::unordered_map<CellFaceKey, IncomingNonlocalFaceInfo, CellFaceKeyHash>
-    incoming_nonlocal_face_info_;
+    incoming_nonlocal_face_info_by_key_;
 };
 
 } // namespace opensn
