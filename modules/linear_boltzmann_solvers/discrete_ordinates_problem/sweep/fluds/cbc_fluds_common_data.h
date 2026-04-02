@@ -63,6 +63,11 @@ public:
   const IncomingNonlocalFaceInfo&
   GetIncomingNonlocalFaceInfoByKey(std::uint64_t cell_global_id,
                                    unsigned int face_id) const noexcept;
+  const IncomingNonlocalFaceInfo&
+  GetIncomingNonlocalFaceInfoByStorageIndex(std::size_t storage_index) const noexcept;
+  std::size_t GetIncomingNonlocalFaceStorageIndexByKey(std::uint64_t cell_global_id,
+                                                       unsigned int face_id) const noexcept;
+  std::size_t GetNumCellFaces() const noexcept { return cell_face_offsets_.back(); }
 
   const OutgoingNonlocalFaceInfo& GetOutgoingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
