@@ -8,9 +8,37 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <new>
 
 namespace opensn
 {
+
+namespace
+{
+constexpr std::size_t kLocalPsiAlignment = 64;
+constexpr std::size_t kDoublesPerCacheLine = kLocalPsiAlignment / sizeof(double);
+
+size_t
+RoundUpToCacheLineMultiple(const size_t value)
+{
+  return ((value + kDoublesPerCacheLine - 1) / kDoublesPerCacheLine) * kDoublesPerCacheLine;
+}
+} // namespace
+
+void
+CBC_FLUDS::AlignedDoubleDeleter::operator()(double* ptr) const noexcept
+{
+  ::operator delete[](ptr, std::align_val_t{kLocalPsiAlignment});
+}
+
+CBC_FLUDS::AlignedDoubleBuffer
+CBC_FLUDS::AllocateAlignedBuffer(const size_t num_values)
+{
+  auto* const ptr = static_cast<double*>(
+    ::operator new[](num_values * sizeof(double), std::align_val_t{kLocalPsiAlignment}));
+  std::fill_n(ptr, num_values, 0.0);
+  return AlignedDoubleBuffer(ptr);
+}
 
 CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      size_t num_angles,
@@ -19,11 +47,11 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
     num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMinNumLocalPsiSlots()),
-    slot_size_(max_cell_dof_count * num_groups_and_angles_),
+    slot_size_(RoundUpToCacheLineMultiple(max_cell_dof_count * num_groups_and_angles_)),
     cell_slot_indices_(common_data.GetSPDS().GetGrid()->local_cells.size(), INVALID_SLOT),
     cell_slot_bases_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr),
     free_slot_stack_(num_slots_),
-    local_psi_buffer_(num_slots_ * slot_size_),
+    local_psi_buffer_(AllocateAlignedBuffer(num_slots_ * slot_size_)),
     incoming_nonlocal_psi_data_(common_data.GetNumIncomingNonlocalFaceNodes() *
                                 num_groups_and_angles_)
 {
@@ -41,7 +69,7 @@ CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
   free_slot_stack_.pop_back();
   cell_slot_indices_[cell_local_id] = slot;
   cell_slot_bases_[cell_local_id] =
-    local_psi_buffer_.data() + static_cast<size_t>(slot) * slot_size_;
+    local_psi_buffer_.get() + static_cast<size_t>(slot) * slot_size_;
 }
 
 void
