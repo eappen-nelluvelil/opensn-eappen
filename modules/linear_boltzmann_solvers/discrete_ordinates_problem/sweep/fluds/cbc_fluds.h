@@ -36,6 +36,7 @@ public:
             size_t max_cell_dof_count);
 
   const FLUDSCommonData& GetCommonData() const;
+  size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
 
   /// Assign a pool slot to the specified local cell.
   void AllocateSlot(std::uint64_t cell_local_id);

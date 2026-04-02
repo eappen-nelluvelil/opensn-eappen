@@ -48,6 +48,15 @@ public:
   size_t GetNumIncomingNonlocalFaceNodes() const { return num_incoming_nonlocal_face_nodes_; }
 
   size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
+  size_t GetDeplocIFaceCount(std::size_t deplocI) const noexcept
+  {
+    return outgoing_nonlocal_face_counts_[deplocI];
+  }
+
+  size_t GetDeplocIFaceNodeCount(std::size_t deplocI) const noexcept
+  {
+    return outgoing_nonlocal_face_node_counts_[deplocI];
+  }
 
   const IncomingNonlocalFaceInfo& GetIncomingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
@@ -70,6 +79,8 @@ private:
   std::vector<size_t> cell_face_offsets_;
   std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
   std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
+  std::vector<size_t> outgoing_nonlocal_face_counts_;
+  std::vector<size_t> outgoing_nonlocal_face_node_counts_;
   std::unordered_map<CellFaceKey, IncomingNonlocalFaceInfo, CellFaceKeyHash>
     incoming_nonlocal_face_info_by_key_;
 };
