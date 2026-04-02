@@ -92,6 +92,7 @@ protected:
   size_t num_slots_;
   size_t slot_size_;
   std::vector<std::uint32_t> cell_slot_indices_;
+  std::vector<size_t> cell_slot_base_offsets_;
   std::vector<std::uint32_t> free_slot_stack_;
 
   /**

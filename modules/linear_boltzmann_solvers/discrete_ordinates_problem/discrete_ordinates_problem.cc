@@ -1442,9 +1442,9 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       const auto hardware_threads = std::max<std::size_t>(1, std::thread::hardware_concurrency());
       const auto num_workers = std::min(cbc_spds_list.size(), hardware_threads);
 
-      SPMD_ThreadPool pool(num_workers);
+      SPMD_ThreadPool cbc_spds_thread_pool(num_workers);
       std::atomic_size_t next_index = 0;
-      pool.ExecuteBatch(
+      cbc_spds_thread_pool.ExecuteBatch(
         [&](std::size_t)
         {
           while (true)

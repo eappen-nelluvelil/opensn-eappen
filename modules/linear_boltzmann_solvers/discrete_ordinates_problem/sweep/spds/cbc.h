@@ -31,6 +31,12 @@ public:
   std::size_t GetMinNumLocalPsiSlots() const noexcept { return min_num_local_psi_slots_; }
 
 protected:
+  /// Topological ordering of the local task graph using local cell ids.
+  std::vector<std::uint32_t> topo_order_;
+  /// CSR row offsets for the local successor graph used by exact slot counting.
+  std::vector<std::uint32_t> local_successor_offsets_;
+  /// CSR column indices for the local successor graph used by exact slot counting.
+  std::vector<std::uint32_t> local_successors_;
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
   /// Exact minimum number of local CBC pool allocator slots.
