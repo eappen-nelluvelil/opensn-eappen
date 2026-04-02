@@ -7,7 +7,6 @@
 #include "caliper/cali.h"
 #include <algorithm>
 #include <limits>
-#include <queue>
 #include <stdexcept>
 #include <boost/graph/topological_sort.hpp>
 
@@ -19,133 +18,6 @@ namespace
 
 constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
 
-class ExplicitBipartiteMatcher
-{
-public:
-  explicit ExplicitBipartiteMatcher(const std::vector<std::vector<std::uint32_t>>& adjacency)
-    : adjacency_(adjacency),
-      mate_u_(adjacency.size(), INVALID_INDEX),
-      mate_v_(adjacency.size(), INVALID_INDEX),
-      dist_(adjacency.size(), -1)
-  {
-  }
-
-  std::size_t Solve()
-  {
-    std::size_t matching_size = GreedyInitialize();
-    while (BFS())
-    {
-      for (std::uint32_t u = 0; u < adjacency_.size(); ++u)
-      {
-        if (mate_u_[u] == INVALID_INDEX and DFS(u))
-          ++matching_size;
-      }
-    }
-    return matching_size;
-  }
-
-  const std::vector<std::uint32_t>& MateU() const noexcept { return mate_u_; }
-  const std::vector<std::uint32_t>& MateV() const noexcept { return mate_v_; }
-
-private:
-  std::size_t GreedyInitialize()
-  {
-    std::size_t matching_size = 0;
-    for (std::uint32_t u = 0; u < adjacency_.size(); ++u)
-    {
-      for (const auto v : adjacency_[u])
-      {
-        if (mate_v_[v] != INVALID_INDEX)
-          continue;
-
-        mate_u_[u] = v;
-        mate_v_[v] = u;
-        ++matching_size;
-        break;
-      }
-    }
-    return matching_size;
-  }
-
-  bool BFS()
-  {
-    std::fill(dist_.begin(), dist_.end(), -1);
-    std::queue<std::uint32_t> work_queue;
-
-    for (std::uint32_t u = 0; u < adjacency_.size(); ++u)
-    {
-      if (mate_u_[u] == INVALID_INDEX)
-      {
-        dist_[u] = 0;
-        work_queue.push(u);
-      }
-    }
-
-    dist_null_ = std::numeric_limits<int>::max();
-
-    while (not work_queue.empty())
-    {
-      const auto u = work_queue.front();
-      work_queue.pop();
-
-      if (dist_[u] >= dist_null_)
-        continue;
-
-      for (const auto v : adjacency_[u])
-      {
-        const auto mate_of_v = mate_v_[v];
-        if (mate_of_v == INVALID_INDEX)
-        {
-          dist_null_ = std::min(dist_null_, dist_[u] + 1);
-          continue;
-        }
-
-        if (dist_[mate_of_v] == -1)
-        {
-          dist_[mate_of_v] = dist_[u] + 1;
-          work_queue.push(mate_of_v);
-        }
-      }
-    }
-
-    return dist_null_ != std::numeric_limits<int>::max();
-  }
-
-  bool DFS(std::uint32_t u)
-  {
-    for (const auto v : adjacency_[u])
-    {
-      const auto mate_of_v = mate_v_[v];
-      if (mate_of_v == INVALID_INDEX)
-      {
-        if (dist_null_ == dist_[u] + 1)
-        {
-          mate_u_[u] = v;
-          mate_v_[v] = u;
-          dist_[u] = -1;
-          return true;
-        }
-      }
-      else if (dist_[mate_of_v] == dist_[u] + 1 and DFS(mate_of_v))
-      {
-        mate_u_[u] = v;
-        mate_v_[v] = u;
-        dist_[u] = -1;
-        return true;
-      }
-    }
-
-    dist_[u] = -1;
-    return false;
-  }
-
-  const std::vector<std::vector<std::uint32_t>>& adjacency_;
-  std::vector<std::uint32_t> mate_u_;
-  std::vector<std::uint32_t> mate_v_;
-  std::vector<int> dist_;
-  int dist_null_ = std::numeric_limits<int>::max();
-};
-
 struct ChainCoverData
 {
   std::uint32_t num_chains = 0;
@@ -155,20 +27,163 @@ struct ChainCoverData
   std::vector<std::uint32_t> chain_vertices;
 };
 
-ChainCoverData
-BuildMinimumPathCover(const std::vector<Task>& task_list)
+struct SlotCalcScratch
 {
-  const auto num_tasks = static_cast<std::uint32_t>(task_list.size());
+  std::vector<std::uint32_t> mate_u;
+  std::vector<std::uint32_t> mate_v;
+  std::vector<int> dist;
+  std::vector<std::uint32_t> bfs_queue;
+  std::vector<std::uint32_t> first_reachable;
+  std::vector<std::uint32_t> reuse_start;
+  std::vector<std::uint32_t> successor_stamp;
+  std::uint32_t successor_stamp_value = 0;
 
-  std::vector<std::vector<std::uint32_t>> adjacency(num_tasks);
-  for (std::uint32_t u = 0; u < num_tasks; ++u)
-    adjacency[u] = task_list[u].successors;
+  void ResizeMatchingState(const std::uint32_t num_tasks)
+  {
+    mate_u.assign(num_tasks, INVALID_INDEX);
+    mate_v.assign(num_tasks, INVALID_INDEX);
+    dist.assign(num_tasks, -1);
+    bfs_queue.resize(num_tasks);
+    successor_stamp.resize(num_tasks, 0);
+    successor_stamp_value = 0;
+  }
+};
 
-  ExplicitBipartiteMatcher matcher(adjacency);
+class CSRBipartiteMatcher
+{
+public:
+  CSRBipartiteMatcher(const std::vector<std::uint32_t>& row_offsets,
+                      const std::vector<std::uint32_t>& columns,
+                      SlotCalcScratch& scratch)
+    : row_offsets_(row_offsets), columns_(columns), scratch_(scratch)
+  {
+  }
+
+  std::size_t Solve()
+  {
+    std::size_t matching_size = GreedyInitialize();
+    while (BFS())
+    {
+      for (std::uint32_t u = 0; u + 1 < row_offsets_.size(); ++u)
+      {
+        if (scratch_.mate_u[u] == INVALID_INDEX and DFS(u))
+          ++matching_size;
+      }
+    }
+    return matching_size;
+  }
+
+private:
+  std::size_t GreedyInitialize()
+  {
+    std::size_t matching_size = 0;
+
+    for (std::uint32_t u = 0; u + 1 < row_offsets_.size(); ++u)
+    {
+      for (auto e = row_offsets_[u]; e < row_offsets_[u + 1]; ++e)
+      {
+        const auto v = columns_[e];
+        if (scratch_.mate_v[v] != INVALID_INDEX)
+          continue;
+
+        scratch_.mate_u[u] = v;
+        scratch_.mate_v[v] = u;
+        ++matching_size;
+        break;
+      }
+    }
+
+    return matching_size;
+  }
+
+  bool BFS()
+  {
+    std::fill(scratch_.dist.begin(), scratch_.dist.end(), -1);
+
+    std::size_t queue_head = 0;
+    std::size_t queue_tail = 0;
+
+    for (std::uint32_t u = 0; u + 1 < row_offsets_.size(); ++u)
+    {
+      if (scratch_.mate_u[u] == INVALID_INDEX)
+      {
+        scratch_.dist[u] = 0;
+        scratch_.bfs_queue[queue_tail++] = u;
+      }
+    }
+
+    dist_null_ = std::numeric_limits<int>::max();
+
+    while (queue_head < queue_tail)
+    {
+      const auto u = scratch_.bfs_queue[queue_head++];
+      if (scratch_.dist[u] >= dist_null_)
+        continue;
+
+      for (auto e = row_offsets_[u]; e < row_offsets_[u + 1]; ++e)
+      {
+        const auto v = columns_[e];
+        const auto mate_of_v = scratch_.mate_v[v];
+
+        if (mate_of_v == INVALID_INDEX)
+          dist_null_ = std::min(dist_null_, scratch_.dist[u] + 1);
+        else if (scratch_.dist[mate_of_v] == -1)
+        {
+          scratch_.dist[mate_of_v] = scratch_.dist[u] + 1;
+          scratch_.bfs_queue[queue_tail++] = mate_of_v;
+        }
+      }
+    }
+
+    return dist_null_ != std::numeric_limits<int>::max();
+  }
+
+  bool DFS(const std::uint32_t u)
+  {
+    for (auto e = row_offsets_[u]; e < row_offsets_[u + 1]; ++e)
+    {
+      const auto v = columns_[e];
+      const auto mate_of_v = scratch_.mate_v[v];
+
+      if (mate_of_v == INVALID_INDEX)
+      {
+        if (dist_null_ == scratch_.dist[u] + 1)
+        {
+          scratch_.mate_u[u] = v;
+          scratch_.mate_v[v] = u;
+          scratch_.dist[u] = -1;
+          return true;
+        }
+      }
+      else if (scratch_.dist[mate_of_v] == scratch_.dist[u] + 1 and DFS(mate_of_v))
+      {
+        scratch_.mate_u[u] = v;
+        scratch_.mate_v[v] = u;
+        scratch_.dist[u] = -1;
+        return true;
+      }
+    }
+
+    scratch_.dist[u] = -1;
+    return false;
+  }
+
+  const std::vector<std::uint32_t>& row_offsets_;
+  const std::vector<std::uint32_t>& columns_;
+  SlotCalcScratch& scratch_;
+  int dist_null_ = std::numeric_limits<int>::max();
+};
+
+ChainCoverData
+BuildMinimumPathCover(const std::vector<std::uint32_t>& successor_offsets,
+                      const std::vector<std::uint32_t>& successors,
+                      SlotCalcScratch& scratch)
+{
+  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
+
+  scratch.ResizeMatchingState(num_tasks);
+  CSRBipartiteMatcher matcher(successor_offsets, successors, scratch);
   matcher.Solve();
-
-  const auto& next_in_chain = matcher.MateU();
-  const auto& prev_in_chain = matcher.MateV();
 
   ChainCoverData chain_cover;
   chain_cover.chain_id.assign(num_tasks, INVALID_INDEX);
@@ -180,6 +195,7 @@ BuildMinimumPathCover(const std::vector<Task>& task_list)
   {
     std::uint32_t current = start_vertex;
     std::uint32_t chain_pos = 0;
+
     while (current != INVALID_INDEX)
     {
       if (chain_cover.chain_id[current] != INVALID_INDEX)
@@ -188,7 +204,7 @@ BuildMinimumPathCover(const std::vector<Task>& task_list)
       chain_cover.chain_id[current] = chain_cover.num_chains;
       chain_cover.pos_in_chain[current] = chain_pos++;
       chain_cover.chain_vertices.push_back(current);
-      current = next_in_chain[current];
+      current = scratch.mate_u[current];
     }
 
     ++chain_cover.num_chains;
@@ -197,7 +213,7 @@ BuildMinimumPathCover(const std::vector<Task>& task_list)
   };
 
   for (std::uint32_t v = 0; v < num_tasks; ++v)
-    if (prev_in_chain[v] == INVALID_INDEX)
+    if (scratch.mate_v[v] == INVALID_INDEX)
       append_chain(v);
 
   for (std::uint32_t v = 0; v < num_tasks; ++v)
@@ -207,33 +223,35 @@ BuildMinimumPathCover(const std::vector<Task>& task_list)
   return chain_cover;
 }
 
-std::vector<std::uint32_t>
-BuildFirstReachable(const std::vector<Task>& task_list,
+void
+BuildFirstReachable(const std::vector<std::uint32_t>& successor_offsets,
+                    const std::vector<std::uint32_t>& successors,
                     const std::vector<std::uint32_t>& topo_order,
-                    const ChainCoverData& chain_cover)
+                    const ChainCoverData& chain_cover,
+                    SlotCalcScratch& scratch)
 {
-  const auto num_tasks = static_cast<std::uint32_t>(task_list.size());
+  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
   const auto num_chains = chain_cover.num_chains;
 
-  std::vector<std::uint32_t> first_reachable(static_cast<std::size_t>(num_tasks) * num_chains,
-                                             INVALID_INDEX);
+  scratch.first_reachable.assign(static_cast<std::size_t>(num_tasks) * num_chains, INVALID_INDEX);
 
   for (auto topo_it = topo_order.rbegin(); topo_it != topo_order.rend(); ++topo_it)
   {
     const auto u = *topo_it;
-    auto* const row = first_reachable.data() + static_cast<std::size_t>(u) * num_chains;
+    auto* const row = scratch.first_reachable.data() + static_cast<std::size_t>(u) * num_chains;
 
     row[chain_cover.chain_id[u]] = chain_cover.pos_in_chain[u];
 
-    for (const auto succ : task_list[u].successors)
+    for (auto e = successor_offsets[u]; e < successor_offsets[u + 1]; ++e)
     {
+      const auto succ = successors[e];
       const auto* const succ_row =
-        first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
+        scratch.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
 
-      for (std::uint32_t c = 0; c < num_chains; ++c)
+      for (std::uint32_t chain = 0; chain < num_chains; ++chain)
       {
-        const auto succ_pos = succ_row[c];
-        auto& first_pos = row[c];
+        const auto succ_pos = succ_row[chain];
+        auto& first_pos = row[chain];
         if (succ_pos == INVALID_INDEX)
           continue;
 
@@ -242,39 +260,40 @@ BuildFirstReachable(const std::vector<Task>& task_list,
       }
     }
   }
-
-  return first_reachable;
 }
 
-std::vector<std::uint32_t>
-BuildReuseStart(const std::vector<Task>& task_list,
-                std::uint32_t num_chains,
-                const std::vector<std::uint32_t>& first_reachable)
+void
+BuildReuseStart(const std::vector<std::uint32_t>& successor_offsets,
+                const std::vector<std::uint32_t>& successors,
+                const std::uint32_t num_chains,
+                SlotCalcScratch& scratch)
 {
-  const auto num_tasks = static_cast<std::uint32_t>(task_list.size());
-  std::vector<std::uint32_t> reuse_start(static_cast<std::size_t>(num_tasks) * num_chains,
-                                         INVALID_INDEX);
+  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
+  scratch.reuse_start.assign(static_cast<std::size_t>(num_tasks) * num_chains, INVALID_INDEX);
 
   for (std::uint32_t u = 0; u < num_tasks; ++u)
   {
-    const auto& successors = task_list[u].successors;
-    if (successors.empty())
+    const auto succ_begin = successor_offsets[u];
+    const auto succ_end = successor_offsets[u + 1];
+    if (succ_begin == succ_end)
       continue;
 
-    auto* const reuse_row = reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
+    auto* const reuse_row = scratch.reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
+    const auto first_succ = successors[succ_begin];
     const auto* const first_succ_row =
-      first_reachable.data() + static_cast<std::size_t>(successors.front()) * num_chains;
+      scratch.first_reachable.data() + static_cast<std::size_t>(first_succ) * num_chains;
     std::copy_n(first_succ_row, num_chains, reuse_row);
 
-    for (std::size_t succ_i = 1; succ_i < successors.size(); ++succ_i)
+    for (auto e = succ_begin + 1; e < succ_end; ++e)
     {
+      const auto succ = successors[e];
       const auto* const succ_row =
-        first_reachable.data() + static_cast<std::size_t>(successors[succ_i]) * num_chains;
+        scratch.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
 
-      for (std::uint32_t c = 0; c < num_chains; ++c)
+      for (std::uint32_t chain = 0; chain < num_chains; ++chain)
       {
-        auto& candidate_pos = reuse_row[c];
-        const auto succ_pos = succ_row[c];
+        auto& candidate_pos = reuse_row[chain];
+        const auto succ_pos = succ_row[chain];
         if (candidate_pos == INVALID_INDEX or succ_pos == INVALID_INDEX)
           candidate_pos = INVALID_INDEX;
         else
@@ -282,23 +301,22 @@ BuildReuseStart(const std::vector<Task>& task_list,
       }
     }
   }
-
-  return reuse_start;
 }
 
 class ReuseGraphMatcher
 {
 public:
-  ReuseGraphMatcher(const std::vector<Task>& task_list,
+  ReuseGraphMatcher(const std::vector<std::uint32_t>& successor_offsets,
+                    const std::vector<std::uint32_t>& successors,
                     const ChainCoverData& chain_cover,
-                    const std::vector<std::uint32_t>& reuse_start)
-    : task_list_(task_list),
+                    SlotCalcScratch& scratch)
+    : successor_offsets_(successor_offsets),
+      successors_(successors),
       chain_cover_(chain_cover),
-      reuse_start_(reuse_start),
-      mate_u_(task_list.size(), INVALID_INDEX),
-      mate_v_(task_list.size(), INVALID_INDEX),
-      dist_(task_list.size(), -1)
+      scratch_(scratch)
   {
+    const auto num_tasks = static_cast<std::uint32_t>(successor_offsets_.size() - 1);
+    scratch_.ResizeMatchingState(num_tasks);
   }
 
   std::size_t Solve()
@@ -306,9 +324,9 @@ public:
     std::size_t matching_size = GreedyInitialize();
     while (BFS())
     {
-      for (std::uint32_t u = 0; u < task_list_.size(); ++u)
+      for (std::uint32_t u = 0; u + 1 < successor_offsets_.size(); ++u)
       {
-        if (mate_u_[u] == INVALID_INDEX and DFS(u))
+        if (scratch_.mate_u[u] == INVALID_INDEX and DFS(u))
           ++matching_size;
       }
     }
@@ -316,11 +334,36 @@ public:
   }
 
 private:
-  template <class F>
-  void ForEachNeighbor(std::uint32_t u, F&& func) const
+  std::uint32_t MarkImmediateSuccessors(const std::uint32_t u)
   {
+    ++scratch_.successor_stamp_value;
+    if (scratch_.successor_stamp_value == 0)
+    {
+      std::fill(scratch_.successor_stamp.begin(), scratch_.successor_stamp.end(), 0);
+      scratch_.successor_stamp_value = 1;
+    }
+
+    const auto stamp_value = scratch_.successor_stamp_value;
+
+    for (auto e = successor_offsets_[u]; e < successor_offsets_[u + 1]; ++e)
+      scratch_.successor_stamp[successors_[e]] = stamp_value;
+
+    return stamp_value;
+  }
+
+  bool IsImmediateSuccessor(const std::uint32_t v, const std::uint32_t stamp_value) const noexcept
+  {
+    return scratch_.successor_stamp[v] == stamp_value;
+  }
+
+  template <class F>
+  void ForEachNeighbor(const std::uint32_t u, F&& func)
+  {
+    const auto stamp_value = MarkImmediateSuccessors(u);
+
     const auto num_chains = chain_cover_.num_chains;
-    const auto* const reuse_row = reuse_start_.data() + static_cast<std::size_t>(u) * num_chains;
+    const auto* const reuse_row =
+      scratch_.reuse_start.data() + static_cast<std::size_t>(u) * num_chains;
 
     for (std::uint32_t chain = 0; chain < num_chains; ++chain)
     {
@@ -330,11 +373,10 @@ private:
 
       const auto chain_begin = chain_cover_.chain_offsets[chain];
       const auto chain_end = chain_cover_.chain_offsets[chain + 1];
-      for (auto pos = chain_begin + start_pos; pos < chain_end; ++pos)
+      for (std::uint32_t pos = chain_begin + start_pos; pos < chain_end; ++pos)
       {
         const auto v = chain_cover_.chain_vertices[pos];
-        if (std::find(task_list_[u].successors.begin(), task_list_[u].successors.end(), v) !=
-            task_list_[u].successors.end())
+        if (IsImmediateSuccessor(v, stamp_value))
           continue;
 
         if (not func(v))
@@ -346,20 +388,21 @@ private:
   std::size_t GreedyInitialize()
   {
     std::size_t matching_size = 0;
-    for (std::uint32_t u = 0; u < task_list_.size(); ++u)
+
+    for (std::uint32_t u = 0; u + 1 < successor_offsets_.size(); ++u)
     {
-      if (mate_u_[u] != INVALID_INDEX)
+      if (scratch_.mate_u[u] != INVALID_INDEX)
         continue;
 
       bool matched = false;
       ForEachNeighbor(u,
-                      [&](std::uint32_t v)
+                      [&](const std::uint32_t v)
                       {
-                        if (mate_v_[v] != INVALID_INDEX)
+                        if (scratch_.mate_v[v] != INVALID_INDEX)
                           return true;
 
-                        mate_u_[u] = v;
-                        mate_v_[v] = u;
+                        scratch_.mate_u[u] = v;
+                        scratch_.mate_v[v] = u;
                         matched = true;
                         return false;
                       });
@@ -373,42 +416,38 @@ private:
 
   bool BFS()
   {
-    std::fill(dist_.begin(), dist_.end(), -1);
-    std::queue<std::uint32_t> work_queue;
+    std::fill(scratch_.dist.begin(), scratch_.dist.end(), -1);
 
-    for (std::uint32_t u = 0; u < task_list_.size(); ++u)
+    std::size_t queue_head = 0;
+    std::size_t queue_tail = 0;
+
+    for (std::uint32_t u = 0; u + 1 < successor_offsets_.size(); ++u)
     {
-      if (mate_u_[u] == INVALID_INDEX)
+      if (scratch_.mate_u[u] == INVALID_INDEX)
       {
-        dist_[u] = 0;
-        work_queue.push(u);
+        scratch_.dist[u] = 0;
+        scratch_.bfs_queue[queue_tail++] = u;
       }
     }
 
     dist_null_ = std::numeric_limits<int>::max();
 
-    while (not work_queue.empty())
+    while (queue_head < queue_tail)
     {
-      const auto u = work_queue.front();
-      work_queue.pop();
-
-      if (dist_[u] >= dist_null_)
+      const auto u = scratch_.bfs_queue[queue_head++];
+      if (scratch_.dist[u] >= dist_null_)
         continue;
 
       ForEachNeighbor(u,
-                      [&](std::uint32_t v)
+                      [&](const std::uint32_t v)
                       {
-                        const auto mate_of_v = mate_v_[v];
+                        const auto mate_of_v = scratch_.mate_v[v];
                         if (mate_of_v == INVALID_INDEX)
+                          dist_null_ = std::min(dist_null_, scratch_.dist[u] + 1);
+                        else if (scratch_.dist[mate_of_v] == -1)
                         {
-                          dist_null_ = std::min(dist_null_, dist_[u] + 1);
-                          return true;
-                        }
-
-                        if (dist_[mate_of_v] == -1)
-                        {
-                          dist_[mate_of_v] = dist_[u] + 1;
-                          work_queue.push(mate_of_v);
+                          scratch_.dist[mate_of_v] = scratch_.dist[u] + 1;
+                          scratch_.bfs_queue[queue_tail++] = mate_of_v;
                         }
                         return true;
                       });
@@ -417,32 +456,32 @@ private:
     return dist_null_ != std::numeric_limits<int>::max();
   }
 
-  bool DFS(std::uint32_t u)
+  bool DFS(const std::uint32_t u)
   {
     bool augmented = false;
 
     ForEachNeighbor(u,
-                    [&](std::uint32_t v)
+                    [&](const std::uint32_t v)
                     {
-                      const auto mate_of_v = mate_v_[v];
+                      const auto mate_of_v = scratch_.mate_v[v];
                       if (mate_of_v == INVALID_INDEX)
                       {
-                        if (dist_null_ == dist_[u] + 1)
+                        if (dist_null_ == scratch_.dist[u] + 1)
                         {
-                          mate_u_[u] = v;
-                          mate_v_[v] = u;
-                          dist_[u] = -1;
+                          scratch_.mate_u[u] = v;
+                          scratch_.mate_v[v] = u;
+                          scratch_.dist[u] = -1;
                           augmented = true;
                           return false;
                         }
                         return true;
                       }
 
-                      if (dist_[mate_of_v] == dist_[u] + 1 and DFS(mate_of_v))
+                      if (scratch_.dist[mate_of_v] == scratch_.dist[u] + 1 and DFS(mate_of_v))
                       {
-                        mate_u_[u] = v;
-                        mate_v_[v] = u;
-                        dist_[u] = -1;
+                        scratch_.mate_u[u] = v;
+                        scratch_.mate_v[v] = u;
+                        scratch_.dist[u] = -1;
                         augmented = true;
                         return false;
                       }
@@ -451,17 +490,15 @@ private:
                     });
 
     if (not augmented)
-      dist_[u] = -1;
+      scratch_.dist[u] = -1;
 
     return augmented;
   }
 
-  const std::vector<Task>& task_list_;
+  const std::vector<std::uint32_t>& successor_offsets_;
+  const std::vector<std::uint32_t>& successors_;
   const ChainCoverData& chain_cover_;
-  const std::vector<std::uint32_t>& reuse_start_;
-  std::vector<std::uint32_t> mate_u_;
-  std::vector<std::uint32_t> mate_v_;
-  std::vector<int> dist_;
+  SlotCalcScratch& scratch_;
   int dist_null_ = std::numeric_limits<int>::max();
 };
 
@@ -469,7 +506,7 @@ private:
 
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
                    const std::shared_ptr<MeshContinuum>& grid,
-                   bool allow_cycles)
+                   const bool allow_cycles)
   : SPDS(omega, grid)
 {
   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
@@ -512,6 +549,10 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                            "Cycles need to be allowed by the calling application.");
   }
 
+  topo_order_.reserve(spls_.size());
+  for (const auto v : spls_)
+    topo_order_.push_back(static_cast<std::uint32_t>(v));
+
   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
 
@@ -519,6 +560,9 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
 
   task_list_.assign(num_loc_cells, Task{});
+  local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+  std::size_t successor_count = 0;
   for (const auto& cell : grid_->local_cells)
   {
     unsigned int num_dependencies = 0;
@@ -540,8 +584,19 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
         successors.push_back(grid_->cells[face.neighbor_id].local_id);
     }
 
+    successor_count += successors.size();
+    local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+
     task_list_[cell.local_id] = Task{
       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+  }
+
+  local_successors_.resize(successor_count);
+  for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+  {
+    std::copy(task_list_[cell_id].successors.begin(),
+              task_list_[cell_id].successors.end(),
+              local_successors_.begin() + local_successor_offsets_[cell_id]);
   }
 
   min_num_local_psi_slots_ = num_loc_cells;
@@ -565,16 +620,15 @@ CBC_SPDS::ComputeMinNumLocalPsiSlots()
     return;
   }
 
-  std::vector<std::uint32_t> topo_order;
-  topo_order.reserve(spls_.size());
-  for (const auto v : spls_)
-    topo_order.push_back(static_cast<std::uint32_t>(v));
+  thread_local SlotCalcScratch scratch;
 
-  const auto chain_cover = BuildMinimumPathCover(task_list_);
-  const auto first_reachable = BuildFirstReachable(task_list_, topo_order, chain_cover);
-  const auto reuse_start = BuildReuseStart(task_list_, chain_cover.num_chains, first_reachable);
+  const auto chain_cover =
+    BuildMinimumPathCover(local_successor_offsets_, local_successors_, scratch);
+  BuildFirstReachable(
+    local_successor_offsets_, local_successors_, topo_order_, chain_cover, scratch);
+  BuildReuseStart(local_successor_offsets_, local_successors_, chain_cover.num_chains, scratch);
 
-  ReuseGraphMatcher matcher(task_list_, chain_cover, reuse_start);
+  ReuseGraphMatcher matcher(local_successor_offsets_, local_successors_, chain_cover, scratch);
   const auto reuse_matching_size = matcher.Solve();
   min_num_local_psi_slots_ = static_cast<std::size_t>(num_tasks) - reuse_matching_size;
 }
