@@ -56,6 +56,7 @@ CBCSweepChunk::CBCSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& gro
   }
 
   group_block_size_ = ComputeGroupBlockSize(groupset_.GetNumGroups());
+  generic_scratch_.EnsureCapacity(max_num_cell_dofs_, groupset_.GetNumGroups(), 0);
 }
 
 void
@@ -101,7 +102,7 @@ CBCSweepChunk::Sweep_Generic(AngleSet& angle_set)
                                group_block_size_,
                                ctx_);
 
-  CBC_Sweep_Generic<false>(data, angle_set);
+  CBC_Sweep_Generic<false>(data, generic_scratch_, angle_set);
 }
 
 } // namespace opensn
