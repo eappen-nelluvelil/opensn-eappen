@@ -203,287 +203,290 @@ private:
   int dist_null_ = std::numeric_limits<int>::max();
 };
 
-ChainCoverData
-BuildMinimumPathCover(const std::vector<std::uint32_t>& successor_offsets,
-                      const std::vector<std::uint32_t>& successors,
-                      SlotCalcScratch& scratch)
+class ExactSlotCounter
 {
-  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
-
-  scratch.ResizeMatchingState(num_tasks);
-  CSRBipartiteMatcher matcher(successor_offsets, successors, scratch);
-  matcher.Solve();
-
-  ChainCoverData chain_cover;
-  chain_cover.chain_id.assign(num_tasks, INVALID_INDEX);
-  chain_cover.pos_in_chain.assign(num_tasks, INVALID_INDEX);
-  chain_cover.chain_offsets.reserve(num_tasks + 1);
-  chain_cover.chain_offsets.push_back(0);
-  chain_cover.chain_vertices.reserve(num_tasks);
-
-  auto append_chain = [&](std::uint32_t start_vertex)
+public:
+  ExactSlotCounter(const std::vector<std::uint32_t>& successor_offsets,
+                   const std::vector<std::uint32_t>& successors,
+                   const std::vector<std::uint32_t>& topo_order,
+                   SlotCalcScratch& scratch)
+    : successor_offsets_(successor_offsets),
+      successors_(successors),
+      topo_order_(topo_order),
+      scratch_(scratch),
+      num_tasks_(static_cast<std::uint32_t>(successor_offsets.size() - 1))
   {
-    std::uint32_t current = start_vertex;
-    std::uint32_t chain_pos = 0;
+  }
 
-    while (current != INVALID_INDEX)
-    {
-      if (chain_cover.chain_id[current] != INVALID_INDEX)
-        throw std::logic_error("CBC_SPDS: Invalid minimum path cover construction.");
-
-      chain_cover.chain_id[current] = chain_cover.num_chains;
-      chain_cover.pos_in_chain[current] = chain_pos++;
-      chain_cover.chain_vertices.push_back(current);
-      current = scratch.mate_u[current];
-    }
-
-    ++chain_cover.num_chains;
-    chain_cover.chain_offsets.push_back(
-      static_cast<std::uint32_t>(chain_cover.chain_vertices.size()));
-  };
-
-  for (std::uint32_t v = 0; v < num_tasks; ++v)
-    if (scratch.mate_v[v] == INVALID_INDEX)
-      append_chain(v);
-
-  for (std::uint32_t v = 0; v < num_tasks; ++v)
-    if (chain_cover.chain_id[v] == INVALID_INDEX)
-      append_chain(v);
-
-  return chain_cover;
-}
-
-void
-BuildFirstReachable(const std::vector<std::uint32_t>& successor_offsets,
-                    const std::vector<std::uint32_t>& successors,
-                    const std::vector<std::uint32_t>& topo_order,
-                    const ChainCoverData& chain_cover,
-                    SlotCalcScratch& scratch)
-{
-  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
-  const auto num_chains = chain_cover.num_chains;
-
-  scratch.first_reachable.assign(static_cast<std::size_t>(num_tasks) * num_chains, INVALID_INDEX);
-
-  for (auto topo_it = topo_order.rbegin(); topo_it != topo_order.rend(); ++topo_it)
+  std::size_t Solve()
   {
-    const auto u = *topo_it;
-    auto* const row = scratch.first_reachable.data() + static_cast<std::size_t>(u) * num_chains;
+    if (num_tasks_ == 0)
+      return 0;
 
-    row[chain_cover.chain_id[u]] = chain_cover.pos_in_chain[u];
+    BuildMinimumPathCover();
+    BuildFirstReachable();
+    BuildReuseEdges();
+    return static_cast<std::size_t>(num_tasks_) - ComputeReuseMatchingSize();
+  }
 
-    for (auto e = successor_offsets[u]; e < successor_offsets[u + 1]; ++e)
+private:
+  void BuildMinimumPathCover()
+  {
+    scratch_.ResizeMatchingState(num_tasks_);
+    CSRBipartiteMatcher(successor_offsets_, successors_, scratch_).Solve();
+
+    chain_cover_.chain_id.assign(num_tasks_, INVALID_INDEX);
+    chain_cover_.pos_in_chain.assign(num_tasks_, INVALID_INDEX);
+    chain_cover_.chain_offsets.clear();
+    chain_cover_.chain_offsets.reserve(num_tasks_ + 1);
+    chain_cover_.chain_offsets.push_back(0);
+    chain_cover_.chain_vertices.clear();
+    chain_cover_.chain_vertices.reserve(num_tasks_);
+    chain_cover_.num_chains = 0;
+
+    const auto append_chain = [this](std::uint32_t start_vertex)
     {
-      const auto succ = successors[e];
-      const auto* const succ_row =
-        scratch.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
+      std::uint32_t current = start_vertex;
+      std::uint32_t chain_pos = 0;
 
-      for (std::uint32_t chain = 0; chain < num_chains; ++chain)
+      while (current != INVALID_INDEX)
       {
-        const auto succ_pos = succ_row[chain];
-        auto& first_pos = row[chain];
-        if (succ_pos == INVALID_INDEX)
-          continue;
+        if (chain_cover_.chain_id[current] != INVALID_INDEX)
+          throw std::logic_error("CBC_SPDS: Invalid minimum path cover construction.");
 
-        if (first_pos == INVALID_INDEX or succ_pos < first_pos)
-          first_pos = succ_pos;
+        chain_cover_.chain_id[current] = chain_cover_.num_chains;
+        chain_cover_.pos_in_chain[current] = chain_pos++;
+        chain_cover_.chain_vertices.push_back(current);
+        current = scratch_.mate_u[current];
+      }
+
+      ++chain_cover_.num_chains;
+      chain_cover_.chain_offsets.push_back(
+        static_cast<std::uint32_t>(chain_cover_.chain_vertices.size()));
+    };
+
+    for (std::uint32_t v = 0; v < num_tasks_; ++v)
+      if (scratch_.mate_v[v] == INVALID_INDEX)
+        append_chain(v);
+
+    for (std::uint32_t v = 0; v < num_tasks_; ++v)
+      if (chain_cover_.chain_id[v] == INVALID_INDEX)
+        append_chain(v);
+  }
+
+  void BuildFirstReachable()
+  {
+    const auto num_chains = chain_cover_.num_chains;
+    scratch_.first_reachable.assign(static_cast<std::size_t>(num_tasks_) * num_chains,
+                                    INVALID_INDEX);
+
+    for (auto topo_it = topo_order_.rbegin(); topo_it != topo_order_.rend(); ++topo_it)
+    {
+      const auto u = *topo_it;
+      auto* const row = scratch_.first_reachable.data() + static_cast<std::size_t>(u) * num_chains;
+
+      row[chain_cover_.chain_id[u]] = chain_cover_.pos_in_chain[u];
+
+      for (auto e = successor_offsets_[u]; e < successor_offsets_[u + 1]; ++e)
+      {
+        const auto succ = successors_[e];
+        const auto* const succ_row =
+          scratch_.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
+
+        for (std::uint32_t chain = 0; chain < num_chains; ++chain)
+        {
+          const auto succ_pos = succ_row[chain];
+          auto& first_pos = row[chain];
+          if (succ_pos == INVALID_INDEX)
+            continue;
+
+          if (first_pos == INVALID_INDEX or succ_pos < first_pos)
+            first_pos = succ_pos;
+        }
       }
     }
   }
-}
 
-template <class F>
-void
-ForEachReuseNeighbor(const std::uint32_t u,
-                     const std::vector<std::uint32_t>& successor_offsets,
-                     const std::vector<std::uint32_t>& successors,
-                     const ChainCoverData& chain_cover,
-                     SlotCalcScratch& scratch,
-                     F&& func)
-{
-  const auto num_chains = chain_cover.num_chains;
-  const auto succ_begin = successor_offsets[u];
-  const auto succ_end = successor_offsets[u + 1];
-  if (succ_begin == succ_end)
-    return;
-
-  scratch.reuse_row.resize(num_chains);
-  const auto first_succ = successors[succ_begin];
-  const auto* const first_succ_row =
-    scratch.first_reachable.data() + static_cast<std::size_t>(first_succ) * num_chains;
-  std::copy_n(first_succ_row, num_chains, scratch.reuse_row.begin());
-
-  for (auto e = succ_begin + 1; e < succ_end; ++e)
+  template <class F>
+  void ForEachReuseNeighbor(const std::uint32_t u, F&& func)
   {
-    const auto succ = successors[e];
-    const auto* const succ_row =
-      scratch.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
+    const auto num_chains = chain_cover_.num_chains;
+    const auto succ_begin = successor_offsets_[u];
+    const auto succ_end = successor_offsets_[u + 1];
+    if (succ_begin == succ_end)
+      return;
+
+    scratch_.reuse_row.resize(num_chains);
+    const auto first_succ = successors_[succ_begin];
+    const auto* const first_succ_row =
+      scratch_.first_reachable.data() + static_cast<std::size_t>(first_succ) * num_chains;
+    std::copy_n(first_succ_row, num_chains, scratch_.reuse_row.begin());
+
+    for (auto e = succ_begin + 1; e < succ_end; ++e)
+    {
+      const auto succ = successors_[e];
+      const auto* const succ_row =
+        scratch_.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
+
+      for (std::uint32_t chain = 0; chain < num_chains; ++chain)
+      {
+        auto& candidate_pos = scratch_.reuse_row[chain];
+        const auto succ_pos = succ_row[chain];
+        if (candidate_pos == INVALID_INDEX or succ_pos == INVALID_INDEX)
+          candidate_pos = INVALID_INDEX;
+        else
+          candidate_pos = std::max(candidate_pos, succ_pos);
+      }
+    }
+
+    for (auto e = succ_begin; e < succ_end; ++e)
+      scratch_.is_immediate_successor[successors_[e]] = 1;
 
     for (std::uint32_t chain = 0; chain < num_chains; ++chain)
     {
-      auto& candidate_pos = scratch.reuse_row[chain];
-      const auto succ_pos = succ_row[chain];
-      if (candidate_pos == INVALID_INDEX or succ_pos == INVALID_INDEX)
-        candidate_pos = INVALID_INDEX;
-      else
-        candidate_pos = std::max(candidate_pos, succ_pos);
+      const auto start_pos = scratch_.reuse_row[chain];
+      if (start_pos == INVALID_INDEX)
+        continue;
+
+      const auto chain_begin = chain_cover_.chain_offsets[chain];
+      const auto chain_end = chain_cover_.chain_offsets[chain + 1];
+      for (std::uint32_t pos = chain_begin + start_pos; pos < chain_end; ++pos)
+      {
+        const auto v = chain_cover_.chain_vertices[pos];
+        if (not scratch_.is_immediate_successor[v])
+          func(v);
+      }
     }
+
+    for (auto e = succ_begin; e < succ_end; ++e)
+      scratch_.is_immediate_successor[successors_[e]] = 0;
   }
 
-  for (auto e = succ_begin; e < succ_end; ++e)
-    scratch.is_immediate_successor[successors[e]] = 1;
-
-  for (std::uint32_t chain = 0; chain < num_chains; ++chain)
+  void BuildReuseEdges()
   {
-    const auto start_pos = scratch.reuse_row[chain];
-    if (start_pos == INVALID_INDEX)
-      continue;
+    std::size_t reuse_edge_count = 0;
+    for (std::uint32_t u = 0; u < num_tasks_; ++u)
+      ForEachReuseNeighbor(u, [&](const std::uint32_t) { ++reuse_edge_count; });
 
-    const auto chain_begin = chain_cover.chain_offsets[chain];
-    const auto chain_end = chain_cover.chain_offsets[chain + 1];
-    for (std::uint32_t pos = chain_begin + start_pos; pos < chain_end; ++pos)
+    scratch_.reuse_edges.clear();
+    scratch_.reuse_edges.reserve(reuse_edge_count);
+
+    for (std::uint32_t u = 0; u < num_tasks_; ++u)
+      ForEachReuseNeighbor(
+        u, [&](const std::uint32_t v) { scratch_.reuse_edges.emplace_back(u, num_tasks_ + v); });
+  }
+
+  std::size_t ComputeReuseMatchingSize()
+  {
+    if (scratch_.reuse_edges.empty())
+      return 0;
+
+    const auto num_graph_vertices = static_cast<std::size_t>(num_tasks_) * 2;
+    scratch_.is_active_vertex.assign(num_graph_vertices, 0);
+    for (const auto& [u, v] : scratch_.reuse_edges)
     {
-      const auto v = chain_cover.chain_vertices[pos];
-      if (not scratch.is_immediate_successor[v])
-        func(v);
+      scratch_.is_active_vertex[u] = 1;
+      scratch_.is_active_vertex[v] = 1;
     }
+
+    scratch_.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
+    std::uint32_t active_vertex_count = 0;
+    for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
+      if (scratch_.is_active_vertex[vertex])
+        scratch_.local_vertex_ids[vertex] = active_vertex_count++;
+
+    scratch_.component_edges.resize(scratch_.reuse_edges.size());
+    std::transform(scratch_.reuse_edges.begin(),
+                   scratch_.reuse_edges.end(),
+                   scratch_.component_edges.begin(),
+                   [&](const auto& edge)
+                   {
+                     return std::pair<std::uint32_t, std::uint32_t>{
+                       scratch_.local_vertex_ids[edge.first],
+                       scratch_.local_vertex_ids[edge.second]};
+                   });
+
+    MatchingGraph reuse_graph(
+      scratch_.component_edges.begin(), scratch_.component_edges.end(), active_vertex_count);
+
+    scratch_.component_ids.assign(num_vertices(reuse_graph), -1);
+    const auto component_map = boost::make_iterator_property_map(
+      scratch_.component_ids.begin(), get(boost::vertex_index, reuse_graph));
+    const int num_components = boost::connected_components(reuse_graph, component_map);
+
+    if (num_components <= 1)
+    {
+      return ComputeCheckedMatchingSize(
+        reuse_graph,
+        scratch_.component_matching_mate,
+        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
+    }
+
+    scratch_.component_vertex_counts.assign(num_components, 0);
+    scratch_.component_edge_counts.assign(num_components, 0);
+    for (const auto component_id : scratch_.component_ids)
+      ++scratch_.component_vertex_counts[component_id];
+    for (const auto& [u, _] : scratch_.reuse_edges)
+      ++scratch_.component_edge_counts[scratch_.component_ids[u]];
+
+    scratch_.component_vertex_offsets.resize(num_components + 1, 0);
+    scratch_.component_edge_offsets.resize(num_components + 1, 0);
+    for (int component_id = 0; component_id < num_components; ++component_id)
+    {
+      scratch_.component_vertex_offsets[component_id + 1] =
+        scratch_.component_vertex_offsets[component_id] +
+        scratch_.component_vertex_counts[component_id];
+      scratch_.component_edge_offsets[component_id + 1] =
+        scratch_.component_edge_offsets[component_id] +
+        scratch_.component_edge_counts[component_id];
+    }
+
+    auto next_component_vertex = scratch_.component_vertex_offsets;
+    for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
+    {
+      const auto component_id = scratch_.component_ids[vertex];
+      scratch_.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
+        next_component_vertex[component_id] - scratch_.component_vertex_offsets[component_id]);
+      ++next_component_vertex[component_id];
+    }
+
+    scratch_.component_edges.resize(scratch_.reuse_edges.size());
+    scratch_.component_edge_write_offsets = scratch_.component_edge_offsets;
+    for (const auto& [u, v] : scratch_.reuse_edges)
+    {
+      const auto component_id = scratch_.component_ids[u];
+      scratch_.component_edges[scratch_.component_edge_write_offsets[component_id]++] = {
+        scratch_.local_vertex_ids[u], scratch_.local_vertex_ids[v]};
+    }
+
+    std::size_t matching_size = 0;
+    for (int component_id = 0; component_id < num_components; ++component_id)
+    {
+      const auto vertex_count = scratch_.component_vertex_counts[component_id];
+      const auto edge_begin =
+        scratch_.component_edges.begin() +
+        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id]);
+      const auto edge_end =
+        scratch_.component_edges.begin() +
+        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id + 1]);
+      MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
+      matching_size += ComputeCheckedMatchingSize(
+        component_graph,
+        scratch_.component_matching_mate,
+        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
+    }
+
+    return matching_size;
   }
 
-  for (auto e = succ_begin; e < succ_end; ++e)
-    scratch.is_immediate_successor[successors[e]] = 0;
-}
-
-void
-BuildReuseEdges(const std::vector<std::uint32_t>& successor_offsets,
-                const std::vector<std::uint32_t>& successors,
-                const ChainCoverData& chain_cover,
-                SlotCalcScratch& scratch)
-{
-  const auto num_tasks = static_cast<std::uint32_t>(successor_offsets.size() - 1);
-
-  std::size_t reuse_edge_count = 0;
-  for (std::uint32_t u = 0; u < num_tasks; ++u)
-    ForEachReuseNeighbor(u,
-                         successor_offsets,
-                         successors,
-                         chain_cover,
-                         scratch,
-                         [&](const std::uint32_t) { ++reuse_edge_count; });
-
-  scratch.reuse_edges.clear();
-  scratch.reuse_edges.reserve(reuse_edge_count);
-
-  for (std::uint32_t u = 0; u < num_tasks; ++u)
-    ForEachReuseNeighbor(u,
-                         successor_offsets,
-                         successors,
-                         chain_cover,
-                         scratch,
-                         [&](const std::uint32_t v)
-                         { scratch.reuse_edges.emplace_back(u, num_tasks + v); });
-}
-
-std::size_t
-ComputeReuseMatchingSize(const std::uint32_t num_tasks, SlotCalcScratch& scratch)
-{
-  if (scratch.reuse_edges.empty())
-    return 0;
-
-  const auto num_graph_vertices = static_cast<std::size_t>(num_tasks) * 2;
-  scratch.is_active_vertex.assign(num_graph_vertices, 0);
-  for (const auto& [u, v] : scratch.reuse_edges)
-  {
-    scratch.is_active_vertex[u] = 1;
-    scratch.is_active_vertex[v] = 1;
-  }
-
-  scratch.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
-  std::uint32_t active_vertex_count = 0;
-  for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
-    if (scratch.is_active_vertex[vertex])
-      scratch.local_vertex_ids[vertex] = active_vertex_count++;
-
-  scratch.component_edges.resize(scratch.reuse_edges.size());
-  std::transform(scratch.reuse_edges.begin(),
-                 scratch.reuse_edges.end(),
-                 scratch.component_edges.begin(),
-                 [&](const auto& edge)
-                 {
-                   return std::pair<std::uint32_t, std::uint32_t>{
-                     scratch.local_vertex_ids[edge.first], scratch.local_vertex_ids[edge.second]};
-                 });
-
-  MatchingGraph reuse_graph(
-    scratch.component_edges.begin(), scratch.component_edges.end(), active_vertex_count);
-
-  scratch.component_ids.assign(num_vertices(reuse_graph), -1);
-  const auto component_map = boost::make_iterator_property_map(
-    scratch.component_ids.begin(), get(boost::vertex_index, reuse_graph));
-  const int num_components = boost::connected_components(reuse_graph, component_map);
-
-  if (num_components <= 1)
-  {
-    return ComputeCheckedMatchingSize(
-      reuse_graph,
-      scratch.component_matching_mate,
-      "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-  }
-
-  scratch.component_vertex_counts.assign(num_components, 0);
-  scratch.component_edge_counts.assign(num_components, 0);
-  for (const auto component_id : scratch.component_ids)
-    ++scratch.component_vertex_counts[component_id];
-  for (const auto& [u, _] : scratch.reuse_edges)
-    ++scratch.component_edge_counts[scratch.component_ids[u]];
-
-  scratch.component_vertex_offsets.resize(num_components + 1, 0);
-  scratch.component_edge_offsets.resize(num_components + 1, 0);
-  for (int component_id = 0; component_id < num_components; ++component_id)
-  {
-    scratch.component_vertex_offsets[component_id + 1] =
-      scratch.component_vertex_offsets[component_id] +
-      scratch.component_vertex_counts[component_id];
-    scratch.component_edge_offsets[component_id + 1] =
-      scratch.component_edge_offsets[component_id] + scratch.component_edge_counts[component_id];
-  }
-
-  auto next_component_vertex = scratch.component_vertex_offsets;
-  for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
-  {
-    const auto component_id = scratch.component_ids[vertex];
-    scratch.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
-      next_component_vertex[component_id] - scratch.component_vertex_offsets[component_id]);
-    ++next_component_vertex[component_id];
-  }
-
-  scratch.component_edges.resize(scratch.reuse_edges.size());
-  scratch.component_edge_write_offsets = scratch.component_edge_offsets;
-  for (const auto& [u, v] : scratch.reuse_edges)
-  {
-    const auto component_id = scratch.component_ids[u];
-    scratch.component_edges[scratch.component_edge_write_offsets[component_id]++] = {
-      scratch.local_vertex_ids[u], scratch.local_vertex_ids[v]};
-  }
-
-  std::size_t matching_size = 0;
-  for (int component_id = 0; component_id < num_components; ++component_id)
-  {
-    const auto vertex_count = scratch.component_vertex_counts[component_id];
-    const auto edge_begin =
-      scratch.component_edges.begin() +
-      static_cast<std::ptrdiff_t>(scratch.component_edge_offsets[component_id]);
-    const auto edge_end =
-      scratch.component_edges.begin() +
-      static_cast<std::ptrdiff_t>(scratch.component_edge_offsets[component_id + 1]);
-    MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
-    matching_size += ComputeCheckedMatchingSize(
-      component_graph,
-      scratch.component_matching_mate,
-      "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-  }
-
-  return matching_size;
-}
+private:
+  const std::vector<std::uint32_t>& successor_offsets_;
+  const std::vector<std::uint32_t>& successors_;
+  const std::vector<std::uint32_t>& topo_order_;
+  SlotCalcScratch& scratch_;
+  const std::uint32_t num_tasks_;
+  ChainCoverData chain_cover_;
+};
 
 } // namespace
 
@@ -604,15 +607,8 @@ CBC_SPDS::ComputeMinNumLocalPsiSlots()
   }
 
   thread_local SlotCalcScratch scratch;
-
-  const auto chain_cover =
-    BuildMinimumPathCover(local_successor_offsets_, local_successors_, scratch);
-  BuildFirstReachable(
-    local_successor_offsets_, local_successors_, topo_order_, chain_cover, scratch);
-  BuildReuseEdges(local_successor_offsets_, local_successors_, chain_cover, scratch);
-
-  const auto reuse_matching_size = ComputeReuseMatchingSize(num_tasks, scratch);
-  min_num_local_psi_slots_ = static_cast<std::size_t>(num_tasks) - reuse_matching_size;
+  min_num_local_psi_slots_ =
+    ExactSlotCounter(local_successor_offsets_, local_successors_, topo_order_, scratch).Solve();
 }
 
 } // namespace opensn
