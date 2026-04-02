@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <cinttypes>
 #include <cstddef>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -13,16 +14,47 @@ namespace opensn
 class CBC_FLUDSCommonData : public FLUDSCommonData
 {
 public:
+  using CellFaceKey = std::pair<std::uint64_t, unsigned int>;
+
+  struct CellFaceKeyHash
+  {
+    size_t operator()(const CellFaceKey& key) const noexcept
+    {
+      size_t h = std::hash<std::uint64_t>{}(key.first);
+      h ^= std::hash<unsigned int>{}(key.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+
+  struct IncomingNonlocalFaceInfo
+  {
+    std::uint32_t face_node_offset = 0;
+    std::uint32_t num_face_nodes = 0;
+  };
+
   CBC_FLUDSCommonData(const SPDS& spds,
                       const std::vector<CellFaceNodalMapping>& grid_nodal_mappings);
 
   size_t GetNumIncomingNonlocalFaces() const { return num_incoming_nonlocal_faces_; }
 
+  size_t GetNumIncomingNonlocalFaceNodes() const { return num_incoming_nonlocal_face_nodes_; }
+
   size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
+
+  const IncomingNonlocalFaceInfo& GetIncomingNonlocalFaceInfo(std::uint32_t cell_local_id,
+                                                              unsigned int face_id) const noexcept;
+
+  bool TryGetIncomingNonlocalFaceInfo(std::uint64_t cell_global_id,
+                                      unsigned int face_id,
+                                      IncomingNonlocalFaceInfo& info) const noexcept;
 
 private:
   size_t num_incoming_nonlocal_faces_;
+  size_t num_incoming_nonlocal_face_nodes_;
   size_t num_outgoing_nonlocal_faces_;
+  std::vector<std::vector<IncomingNonlocalFaceInfo>> incoming_nonlocal_face_info_by_cell_;
+  std::unordered_map<CellFaceKey, IncomingNonlocalFaceInfo, CellFaceKeyHash>
+    incoming_nonlocal_face_info_;
 };
 
 } // namespace opensn
