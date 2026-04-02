@@ -406,22 +406,7 @@ CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunk::Sweep_FixedN");
 
-  auto data = MakeCBCSweepData(discretization_,
-                               source_moments_,
-                               groupset_,
-                               xs_,
-                               num_moments_,
-                               max_num_cell_dofs_,
-                               SaveAngularFluxEnabled(),
-                               groupset_angle_group_stride_,
-                               groupset_group_stride_,
-                               destination_phi_,
-                               destination_psi_,
-                               include_rhs_time_term_,
-                               problem_,
-                               nullptr,
-                               group_block_size_,
-                               ctx_);
+  auto data = MakeSweepData(nullptr);
 
   CBC_Sweep_FixedN<NumNodes, false>(data, angle_set);
 }
