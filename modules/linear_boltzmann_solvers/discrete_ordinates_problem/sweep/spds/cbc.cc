@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+#include "framework/logging/log.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
@@ -65,7 +66,7 @@ struct SlotCalcScratch
 std::size_t
 ComputeCheckedMatchingSize(const MatchingGraph& graph,
                            std::vector<MatchingVertex>& mate_storage,
-                           const char* failure_message)
+                           const char* warning_message)
 {
   const auto null_vertex = boost::graph_traits<MatchingGraph>::null_vertex();
   mate_storage.assign(num_vertices(graph), null_vertex);
@@ -74,7 +75,11 @@ ComputeCheckedMatchingSize(const MatchingGraph& graph,
   const bool is_maximum_matching =
     boost::checked_edmonds_maximum_cardinality_matching(graph, mate_map);
   if (not is_maximum_matching)
-    throw std::logic_error(failure_message);
+  {
+    log.Log0Warning() << warning_message
+                      << " Falling back to one local psi slot per task for this CBC_SPDS.";
+    return std::numeric_limits<std::size_t>::max();
+  }
   return boost::matching_size(graph, mate_map);
 }
 
@@ -223,10 +228,22 @@ public:
     if (num_tasks_ == 0)
       return 0;
 
-    BuildMinimumPathCover();
-    BuildFirstReachable();
-    BuildReuseEdges();
-    return static_cast<std::size_t>(num_tasks_) - ComputeReuseMatchingSize();
+    try
+    {
+      BuildMinimumPathCover();
+      BuildFirstReachable();
+      BuildReuseEdges();
+      const auto reuse_matching_size = ComputeReuseMatchingSize();
+      return (reuse_matching_size == std::numeric_limits<std::size_t>::max())
+               ? static_cast<std::size_t>(num_tasks_)
+               : static_cast<std::size_t>(num_tasks_) - reuse_matching_size;
+    }
+    catch (const std::logic_error& error)
+    {
+      log.Log0Warning() << error.what()
+                        << " Falling back to one local psi slot per task for this CBC_SPDS.";
+      return static_cast<std::size_t>(num_tasks_);
+    }
   }
 
 private:
@@ -470,10 +487,13 @@ private:
         scratch_.component_edges.begin() +
         static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id + 1]);
       MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
-      matching_size += ComputeCheckedMatchingSize(
+      const auto component_matching_size = ComputeCheckedMatchingSize(
         component_graph,
         scratch_.component_matching_mate,
         "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
+      if (component_matching_size == std::numeric_limits<std::size_t>::max())
+        return component_matching_size;
+      matching_size += component_matching_size;
     }
 
     return matching_size;
