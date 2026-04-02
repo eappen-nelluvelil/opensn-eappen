@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_comm_set.h"
@@ -98,11 +99,9 @@ CBC_AsynchronousCommunicator::ReceiveData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
 
-  std::unordered_map<FLUDS::CellFaceKey, std::vector<double>, FLUDS::CellFaceKeyHash>
-    received_messages;
   std::vector<uint64_t> cells_who_received_data;
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  auto& deplocs_outgoing_messages = fluds_.GetDeplocsOutgoingMessages();
+  auto& cbc_fluds = dynamic_cast<CBC_FLUDS&>(fluds_);
   for (int locJ : location_dependencies)
   {
     const auto& comm = comm_set_.LocICommunicator(opensn::mpi_comm.rank());
@@ -122,12 +121,14 @@ CBC_AsynchronousCommunicator::ReceiveData()
         const auto face_id = data_array.Read<unsigned int>();
         const auto data_size = data_array.Read<size_t>();
 
-        std::vector<double> psi_data(data_size);
         const size_t num_bytes = data_size * sizeof(double);
-        std::memcpy(psi_data.data(), &data_array.Data()[data_array.Offset()], num_bytes);
+        cbc_fluds.StoreIncomingFaceData(
+          cell_global_id,
+          face_id,
+          reinterpret_cast<const double*>(&data_array.Data()[data_array.Offset()]),
+          data_size);
         data_array.Seek(data_array.Offset() + num_bytes);
 
-        deplocs_outgoing_messages[{cell_global_id, face_id}] = std::move(psi_data);
         cells_who_received_data.push_back(
           fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
       } // while not at end of buffer
