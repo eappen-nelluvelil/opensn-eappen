@@ -4,6 +4,9 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_structs.h"
+#include <array>
+#include <cstddef>
+#include <functional>
 
 namespace opensn
 {
@@ -221,16 +224,70 @@ struct BoundaryNodeInfo
 };
 
 /**
- * Metadata for non-local face nodes.
+ * Receive-side key for one incoming nonlocal face.
  */
-struct NonlocalNodeInfo
+struct IncomingFaceKey
 {
-  std::uint64_t cell_local_id;
-  std::uint64_t cell_global_id;
-  unsigned int face_id;
-  size_t face_node;
-  short face_node_mapped;
-  std::uint64_t storage_index;
+  std::uint64_t cell_global_id = 0;
+  unsigned int face_id = 0;
+
+  bool operator==(const IncomingFaceKey&) const = default;
+};
+
+/// Hash for `IncomingFaceKey`.
+struct IncomingFaceKeyHash
+{
+  std::size_t operator()(const IncomingFaceKey& key) const noexcept
+  {
+    const auto h0 = std::hash<std::uint64_t>{}(key.cell_global_id);
+    const auto h1 = std::hash<unsigned int>{}(key.face_id);
+    return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2));
+  }
+};
+
+/// Grouped incoming nonlocal face.
+struct GroupedIncomingNonlocalFace
+{
+  std::uint32_t cell_local_id = 0;
+  std::uint32_t base_storage_index = 0;
+  int source_partition = 0;
+  std::uint16_t num_nodes = 0;
+};
+
+/// Outgoing node-copy descriptor.
+struct OutgoingNodeCopy
+{
+  std::uint32_t storage_index = 0;
+  std::uint16_t face_node = 0;
+};
+
+/// Grouped outgoing nonlocal face.
+struct GroupedOutgoingNonlocalFace
+{
+  std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
+  std::uint32_t pack_plan_index = 0;
+  std::uint32_t dest_slot = 0;
+  std::uint16_t num_face_nodes = 0;
+  std::uint32_t node_copy_offset = 0;
+  std::uint16_t num_node_copies = 0;
+};
+
+/// Reflecting-boundary face copy plan.
+struct ReflectingBoundaryFacePlan
+{
+  std::uint64_t boundary_id = 0;
+  std::uint32_t cell_local_id = 0;
+  unsigned int face_id = 0;
+  std::uint16_t first_face_node = 0;
+  std::size_t src_base_offset = 0;
+  std::uint16_t num_nodes = 0;
+};
+
+/// Outgoing node-copy plan entry.
+struct OutgoingNodeMemcpy
+{
+  std::size_t src_offset = 0;
+  std::size_t dst_offset = 0;
 };
 
 } // namespace opensn

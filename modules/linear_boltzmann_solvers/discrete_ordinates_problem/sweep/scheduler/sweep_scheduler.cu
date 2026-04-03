@@ -85,6 +85,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
   auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
   cbcd_sweep_chunk.GetProblem().CopyPhiAndSrcToDevice();
+  cbcd_sweep_chunk.StartCommunicator();
 
   auto& angle_sets = cbcd_sweep_chunk.GetAngleSets();
   const size_t num_angle_sets = angle_sets.size();
@@ -126,25 +127,10 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       }
     });
 
+  cbcd_sweep_chunk.StopCommunicator();
+
   /// Copy phi and outflow data back to host
   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
-
-  // Receive delayed data
-  opensn::mpi_comm.barrier();
-  bool received_delayed_data = false;
-  while (not received_delayed_data)
-  {
-    received_delayed_data = true;
-
-    for (auto& angle_set : angle_sets)
-    {
-      if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
-        received_delayed_data = false;
-
-      if (not angle_set->ReceiveDelayedData())
-        received_delayed_data = false;
-    }
-  }
 
   // Reset all
   for (auto& angle_set : angle_sets)

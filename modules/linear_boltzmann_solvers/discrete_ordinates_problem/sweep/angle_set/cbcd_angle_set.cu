@@ -23,7 +23,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
                              const MPICommunicatorSet& comm_set)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds)),
-    async_comm_(id, *fluds, comm_set),
+    comm_set_(comm_set),
     stream_(crb::Stream::create()),
     device_angle_indices_(angles_.size(), stream_)
 {
@@ -44,7 +44,14 @@ CBCD_AngleSet::~CBCD_AngleSet()
 AsynchronousCommunicator*
 CBCD_AngleSet::GetCommunicator()
 {
-  return static_cast<AsynchronousCommunicator*>(&async_comm_);
+  return nullptr;
+}
+
+CBCD_AsynchronousCommunicator&
+CBCD_AngleSet::GetAsyncCommunicator()
+{
+  OpenSnLogicalErrorIf(async_comm_ == nullptr, "CBCD angle set communicator has not been bound");
+  return *async_comm_;
 }
 
 void
@@ -213,7 +220,6 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     if (not cells_to_deallocate.empty())
       cbcd_fluds->DeallocateSlots(cells_to_deallocate);
     num_completed_tasks_ += in_flight_tasks_.size();
-    async_comm_.SendData();
     in_flight_tasks_.clear();
     in_flight_cell_ids_.clear();
     kernel_in_flight_ = false;
@@ -221,21 +227,28 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     TryNotifyFollowingAngleSets();
   }
 
-  auto received = async_comm_.ReceiveData();
-  if (not received.empty())
-  {
-    for (const auto task_id : received)
-    {
-      auto& task = current_task_list_[task_id];
-      --task.num_dependencies;
-      if (task.num_dependencies == 0)
-        ready_queue_.push_back(&task);
-    }
-    work_done = true;
-  }
+  work_done = async_comm_->DrainIncoming(
+                GetID(),
+                [this, cbcd_fluds](const CBCD_AsynchronousCommunicator::IncomingSection& section)
+                {
+                  const auto* ptr = section.Data();
+                  const size_t num_entries = CBCD_AsynchronousCommunicator::Wire::LoadSize(ptr);
+                  for (size_t e = 0; e < num_entries; ++e)
+                  {
+                    const auto entry_header =
+                      CBCD_AsynchronousCommunicator::Wire::LoadEntryHeader(ptr);
+                    const auto* psi_data = reinterpret_cast<const double*>(ptr);
+                    ptr += entry_header.data_size * sizeof(double);
 
-  if (async_comm_.SendData())
-    work_done = true;
+                    const auto task_id = cbcd_fluds->ScatterReceivedFaceData(
+                      entry_header.cell_global_id, entry_header.face_id, psi_data);
+                    auto& task = current_task_list_[task_id];
+                    --task.num_dependencies;
+                    if (task.num_dependencies == 0)
+                      ready_queue_.push_back(&task);
+                  }
+                }) ||
+              work_done;
 
   if ((not kernel_in_flight_) and (not ready_queue_.empty()))
   {
@@ -254,8 +267,9 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
   }
 
   const bool all_done = num_completed_tasks_ == current_task_list_.size();
-  if (all_done and (not kernel_in_flight_) and async_comm_.SendData())
+  if (all_done and (not kernel_in_flight_))
   {
+    async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
     executed_ = true;
     cbcd_fluds->CopySavedPsiFromDevice();
@@ -273,7 +287,6 @@ CBCD_AngleSet::ResetSweepBuffers()
   ready_queue_.clear();
   in_flight_tasks_.clear();
   in_flight_cell_ids_.clear();
-  async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = 0;
