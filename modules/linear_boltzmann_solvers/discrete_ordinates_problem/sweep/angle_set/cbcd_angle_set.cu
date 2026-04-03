@@ -34,6 +34,8 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   cbcd_fluds->GetStream() = stream_;
   cbcd_fluds->AllocateLocalAndSavedPsi();
   cbcd_fluds->InitializeReflectingBoundaryNodes(boundaries_);
+  InitializeTaskGraphData();
+  cbc_spds_.CopyTaskGraphDataOnDevice();
   InitializeReflectingTaskMask();
 }
 
