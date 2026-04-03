@@ -7,7 +7,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "caribou/main.hpp"
 #include <atomic>
-#include <memory>
 #include <set>
 
 namespace crb = caribou;
@@ -62,6 +61,9 @@ public:
   bool TryInitialize(CBCDSweepChunk& sweep_chunk);
 
   /// Advance the angle set by at most one ready-cell batch.
+  bool TryAdvanceOneStep();
+
+  /// Advance the angle set by at most one ready-cell batch.
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
   AngleSetStatus FlushSendBuffers() override
@@ -95,25 +97,43 @@ public:
   /// Get the device angle-index array.
   std::uint32_t* GetDeviceAngleIndices() { return device_angle_indices_.get(); }
 
-  /// Get the mutable task list for the current sweep.
-  std::vector<Task>& GetCurrentTaskList() { return current_task_list_; }
-
   /// Check whether the angle set has completed its sweep.
   bool IsExecuted() const { return executed_; }
+  bool IsInitialized() const { return boundary_data_initialized_; }
 
 protected:
   /// Reference to the immutable CBC task graph.
   const CBC_SPDS& cbc_spds_;
   /// Communicator-set metadata for aggregated communicator construction.
   const MPICommunicatorSet& comm_set_;
-  /// Mutable task state for the current sweep.
-  std::vector<Task> current_task_list_;
   /// Chunk-owned aggregated communicator.
   CBCD_AsynchronousCommunicator* async_comm_ = nullptr;
+  /// Owning sweep chunk for the current sweep.
+  CBCDSweepChunk* sweep_chunk_ = nullptr;
   /// Associated device stream.
   crb::Stream stream_;
   /// Angle indices on the device.
   crb::DeviceMemory<std::uint32_t> device_angle_indices_;
+  /// Cell local ID per task.
+  std::vector<std::uint32_t> reference_ids_;
+  /// Flat successor offsets.
+  std::vector<std::uint32_t> successor_offsets_;
+  /// Flat successor task indices.
+  std::vector<std::uint32_t> successor_data_;
+  /// Flat predecessor offsets.
+  std::vector<std::uint32_t> predecessor_offsets_;
+  /// Flat predecessor task indices.
+  std::vector<std::uint32_t> predecessor_data_;
+  /// Initial dependency counts per task.
+  std::vector<int> initial_deps_;
+  /// Per-sweep dependency counts per task.
+  std::vector<int> remaining_deps_;
+  /// Initial successor-retirement countdown per task.
+  std::vector<std::uint32_t> initial_successors_to_retire_;
+  /// Per-sweep successor-retirement countdown per task.
+  std::vector<std::uint32_t> remaining_successors_to_retire_;
+  /// Task indices with zero initial dependencies.
+  std::vector<std::uint32_t> initial_ready_tasks_;
   /// Number of unresolved angle-set dependencies at startup.
   std::size_t num_dependencies_ = 0;
   /// Atomic counter for unresolved angle-set dependencies.
@@ -121,9 +141,9 @@ protected:
   /// Following angle sets unblocked by this angle set.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
   /// Ready tasks waiting for the next batch launch.
-  std::vector<Task*> ready_queue_;
+  std::vector<std::uint32_t> ready_queue_;
   /// Tasks in the current in-flight kernel batch.
-  std::vector<Task*> in_flight_tasks_;
+  std::vector<std::uint32_t> in_flight_task_indices_;
   /// Cell ids for the current in-flight kernel batch.
   std::vector<std::uint32_t> in_flight_cell_ids_;
   /// Cached reflecting-boundary task mask.
@@ -144,6 +164,8 @@ protected:
 private:
   /// Initialize the immutable reflecting-boundary task mask.
   void InitializeReflectingTaskMask();
+  /// Initialize immutable task-graph lookup tables.
+  void InitializeTaskGraphData();
   /// Check whether a cell face is an outgoing reflecting boundary face.
   bool IsOutgoingReflectingFace(const CellFace& face,
                                 std::uint64_t cell_local_id,

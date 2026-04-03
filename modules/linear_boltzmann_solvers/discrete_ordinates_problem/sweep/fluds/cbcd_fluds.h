@@ -11,6 +11,8 @@
 #include "caribou/main.hpp"
 #include <cstddef>
 #include <limits>
+#include <map>
+#include <span>
 #include <span>
 
 namespace crb = caribou;
@@ -23,6 +25,8 @@ class CBCD_AsynchronousCommunicator;
 class UnknownManager;
 class SpatialDiscretization;
 class CBCDSweepChunk;
+class SweepBoundary;
+class MeshContinuum;
 
 /// CBC FLUDS for device.
 class CBCD_FLUDS : public FLUDS
@@ -51,6 +55,10 @@ public:
 
   /// Resolve outgoing queue indices once the aggregated communicator exists.
   void InitializeQueueIndices(const CBCD_AsynchronousCommunicator& async_comm);
+
+  /// Build reflecting-boundary copy plans for this angle set.
+  void InitializeReflectingBoundaryNodes(
+    const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries);
 
   /// Get the stride size for each face node's angular flux data.
   inline std::size_t GetStrideSize() const { return num_groups_and_angles_; }
@@ -99,6 +107,14 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
+  std::span<const ReflectingBoundaryFacePlan>
+  GetReflectingOutgoingBoundaryFaces(const std::uint64_t cell_local_id) const
+  {
+    const auto begin = reflecting_outgoing_boundary_face_offsets_[cell_local_id];
+    const auto end = reflecting_outgoing_boundary_face_offsets_[cell_local_id + 1];
+    return {reflecting_boundary_face_plans_.data() + begin, end - begin};
+  }
+
 private:
   /// Reference to the common data.
   const CBCD_FLUDSCommonData& common_data_;
@@ -111,6 +127,7 @@ private:
   size_t local_psi_slot_stride_;
   size_t local_psi_data_size_;
   size_t saved_psi_data_size_;
+  const MeshContinuum* grid_ptr_ = nullptr;
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
   /// Mapped host vectors for boundary and non-local angular fluxes.
   crb::MappedHostVector<double> incoming_boundary_psi_;
@@ -145,6 +162,10 @@ private:
   std::vector<std::uint32_t> active_dest_indices_;
   /// Reusable destination buffers for outgoing wire-format sections.
   std::vector<ByteArray> dest_buffers_;
+  /// Cell-to-reflecting-face offset table.
+  std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
+  /// Flat reflecting-boundary face plans.
+  std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Flat byte-level memcpy descriptors referenced by outgoing faces.
   std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
   /// Packed payload size, in doubles, for each grouped outgoing nonlocal face.

@@ -33,6 +33,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   auto* cbcd_fluds = std::static_pointer_cast<CBCD_FLUDS>(fluds_).get();
   cbcd_fluds->GetStream() = stream_;
   cbcd_fluds->AllocateLocalAndSavedPsi();
+  cbcd_fluds->InitializeReflectingBoundaryNodes(boundaries_);
   InitializeReflectingTaskMask();
 }
 
@@ -114,22 +115,64 @@ CBCD_AngleSet::InitializeReflectingTaskMask()
 }
 
 void
+CBCD_AngleSet::InitializeTaskGraphData()
+{
+  if (not reference_ids_.empty())
+    return;
+
+  const auto& task_list = cbc_spds_.GetTaskList();
+  const auto num_tasks = task_list.size();
+
+  reference_ids_.resize(num_tasks);
+  initial_deps_.resize(num_tasks);
+  initial_successors_to_retire_.resize(num_tasks);
+  successor_offsets_.assign(num_tasks + 1, 0);
+  predecessor_offsets_.assign(num_tasks + 1, 0);
+  initial_ready_tasks_.clear();
+  initial_ready_tasks_.reserve(num_tasks);
+
+  for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
+  {
+    const auto& task = task_list[task_idx];
+    reference_ids_[task_idx] = static_cast<std::uint32_t>(task.reference_id);
+    initial_deps_[task_idx] = static_cast<int>(task.num_dependencies);
+    initial_successors_to_retire_[task_idx] = static_cast<std::uint32_t>(task.successors.size());
+    successor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.successors.size());
+    predecessor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.predecessors.size());
+    if (task.num_dependencies == 0)
+      initial_ready_tasks_.push_back(static_cast<std::uint32_t>(task_idx));
+  }
+
+  for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
+  {
+    successor_offsets_[task_idx + 1] += successor_offsets_[task_idx];
+    predecessor_offsets_[task_idx + 1] += predecessor_offsets_[task_idx];
+  }
+
+  successor_data_.resize(successor_offsets_.back());
+  predecessor_data_.resize(predecessor_offsets_.back());
+  for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
+  {
+    const auto& task = task_list[task_idx];
+    std::copy(task.successors.begin(),
+              task.successors.end(),
+              successor_data_.begin() + successor_offsets_[task_idx]);
+    std::copy(task.predecessors.begin(),
+              task.predecessors.end(),
+              predecessor_data_.begin() + predecessor_offsets_[task_idx]);
+  }
+}
+
+void
 CBCD_AngleSet::InitializeTaskState()
 {
-  current_task_list_ = cbc_spds_.GetTaskList();
-  ready_queue_.clear();
-  in_flight_tasks_.clear();
+  remaining_deps_ = initial_deps_;
+  remaining_successors_to_retire_ = initial_successors_to_retire_;
+  ready_queue_ = initial_ready_tasks_;
+  in_flight_task_indices_.clear();
   in_flight_cell_ids_.clear();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = initial_reflecting_task_count_;
-
-  for (auto& task : current_task_list_)
-  {
-    task.completed = false;
-    task.num_satisfied_successors = 0;
-    if (task.num_dependencies == 0)
-      ready_queue_.push_back(&task);
-  }
 }
 
 void
@@ -163,6 +206,8 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
   if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
+  sweep_chunk_ = &sweep_chunk;
+  InitializeTaskGraphData();
   auto* cbcd_fluds = static_cast<CBCD_FLUDS*>(fluds_.get());
   cbcd_fluds->CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
@@ -170,15 +215,15 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
   return true;
 }
 
-AngleSetStatus
-CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+bool
+CBCD_AngleSet::TryAdvanceOneStep()
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::AngleSetAdvance");
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
   if (executed_ or not boundary_data_initialized_)
-    return executed_ ? AngleSetStatus::FINISHED : AngleSetStatus::NOT_FINISHED;
+    return false;
 
-  auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
+  auto& cbcd_sweep_chunk = *sweep_chunk_;
   auto* cbcd_fluds = static_cast<CBCD_FLUDS*>(fluds_.get());
 
   bool work_done = false;
@@ -188,30 +233,32 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     cbcd_fluds->CopyOutgoingPsiBackToHost(cbcd_sweep_chunk, this, in_flight_cell_ids_);
 
     std::vector<std::uint32_t> cells_to_deallocate;
-    cells_to_deallocate.reserve(in_flight_tasks_.size());
-    for (auto* task : in_flight_tasks_)
+    cells_to_deallocate.reserve(2 * in_flight_task_indices_.size());
+    for (const auto task_idx : in_flight_task_indices_)
     {
-      for (const auto succ : task->successors)
+      const auto succ_begin = successor_offsets_[task_idx];
+      const auto succ_end = successor_offsets_[task_idx + 1];
+      for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
       {
-        auto& succ_task = current_task_list_[succ];
-        --succ_task.num_dependencies;
-        if (succ_task.num_dependencies == 0)
-          ready_queue_.push_back(&succ_task);
+        const auto succ = successor_data_[succ_i];
+        if (--remaining_deps_[succ] == 0)
+          ready_queue_.push_back(succ);
       }
 
-      if (task->successors.empty())
-        cells_to_deallocate.push_back(task->reference_id);
+      if (succ_begin == succ_end)
+        cells_to_deallocate.push_back(reference_ids_[task_idx]);
 
-      for (const auto pred : task->predecessors)
+      const auto pred_begin = predecessor_offsets_[task_idx];
+      const auto pred_end = predecessor_offsets_[task_idx + 1];
+      for (auto pred_i = pred_begin; pred_i < pred_end; ++pred_i)
       {
-        auto& pred_task = current_task_list_[pred];
-        ++pred_task.num_satisfied_successors;
-        if (pred_task.num_satisfied_successors == pred_task.successors.size())
-          cells_to_deallocate.push_back(pred_task.reference_id);
+        const auto pred = predecessor_data_[pred_i];
+        assert(remaining_successors_to_retire_[pred] > 0);
+        if (--remaining_successors_to_retire_[pred] == 0)
+          cells_to_deallocate.push_back(reference_ids_[pred]);
       }
 
-      task->completed = true;
-      if (task_has_outgoing_reflecting_boundary_[task - current_task_list_.data()] != 0)
+      if (task_has_outgoing_reflecting_boundary_[task_idx] != 0)
       {
         assert(pending_reflecting_tasks_ > 0);
         --pending_reflecting_tasks_;
@@ -219,8 +266,8 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     }
     if (not cells_to_deallocate.empty())
       cbcd_fluds->DeallocateSlots(cells_to_deallocate);
-    num_completed_tasks_ += in_flight_tasks_.size();
-    in_flight_tasks_.clear();
+    num_completed_tasks_ += in_flight_task_indices_.size();
+    in_flight_task_indices_.clear();
     in_flight_cell_ids_.clear();
     kernel_in_flight_ = false;
     work_done = true;
@@ -242,22 +289,20 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 
                     const auto task_id = cbcd_fluds->ScatterReceivedFaceData(
                       entry_header.cell_global_id, entry_header.face_id, psi_data);
-                    auto& task = current_task_list_[task_id];
-                    --task.num_dependencies;
-                    if (task.num_dependencies == 0)
-                      ready_queue_.push_back(&task);
+                    if (--remaining_deps_[task_id] == 0)
+                      ready_queue_.push_back(static_cast<std::uint32_t>(task_id));
                   }
                 }) ||
               work_done;
 
   if ((not kernel_in_flight_) and (not ready_queue_.empty()))
   {
-    in_flight_tasks_ = std::move(ready_queue_);
+    in_flight_task_indices_ = std::move(ready_queue_);
     ready_queue_.clear();
     in_flight_cell_ids_.clear();
-    in_flight_cell_ids_.reserve(in_flight_tasks_.size());
-    for (auto* task : in_flight_tasks_)
-      in_flight_cell_ids_.push_back(task->reference_id);
+    in_flight_cell_ids_.reserve(in_flight_task_indices_.size());
+    for (const auto task_idx : in_flight_task_indices_)
+      in_flight_cell_ids_.push_back(reference_ids_[task_idx]);
 
     cbcd_fluds->AllocateSlots(in_flight_cell_ids_);
     cbcd_fluds->CopyIncomingNonlocalPsiToDevice(this, in_flight_cell_ids_);
@@ -266,7 +311,7 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     work_done = true;
   }
 
-  const bool all_done = num_completed_tasks_ == current_task_list_.size();
+  const bool all_done = num_completed_tasks_ == reference_ids_.size();
   if (all_done and (not kernel_in_flight_))
   {
     async_comm_->SignalAngleSetComplete(GetID());
@@ -274,18 +319,30 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     executed_ = true;
     cbcd_fluds->CopySavedPsiFromDevice();
     cbcd_fluds->CopySavedPsiToDestinationPsi(cbcd_sweep_chunk, this);
-    return AngleSetStatus::FINISHED;
+    return true;
   }
 
-  return work_done ? AngleSetStatus::READY_TO_EXECUTE : AngleSetStatus::NOT_FINISHED;
+  return work_done;
+}
+
+AngleSetStatus
+CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+{
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::AngleSetAdvance");
+
+  if (executed_)
+    return AngleSetStatus::FINISHED;
+  if (not boundary_data_initialized_)
+    return AngleSetStatus::NOT_FINISHED;
+
+  return TryAdvanceOneStep() ? AngleSetStatus::READY_TO_EXECUTE : AngleSetStatus::NOT_FINISHED;
 }
 
 void
 CBCD_AngleSet::ResetSweepBuffers()
 {
-  current_task_list_.clear();
   ready_queue_.clear();
-  in_flight_tasks_.clear();
+  in_flight_task_indices_.clear();
   in_flight_cell_ids_.clear();
   fluds_->ClearLocalAndReceivePsi();
   num_completed_tasks_ = 0;
