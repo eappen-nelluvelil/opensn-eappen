@@ -7,11 +7,11 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/storage.h"
+#include "framework/data_types/byte_array.h"
 #include "caribou/main.hpp"
 #include <cstddef>
-#include <functional>
 #include <limits>
-#include <unordered_map>
+#include <span>
 
 namespace crb = caribou;
 
@@ -19,9 +19,9 @@ namespace opensn
 {
 
 class CBCD_AngleSet;
+class CBCD_AsynchronousCommunicator;
 class UnknownManager;
 class SpatialDiscretization;
-class Cell;
 class CBCDSweepChunk;
 
 /// CBC FLUDS for device.
@@ -48,6 +48,9 @@ public:
 
   /// Allocate buffers asynchronously on the associated stream.
   void AllocateLocalAndSavedPsi();
+
+  /// Resolve outgoing queue indices once the aggregated communicator exists.
+  void InitializeQueueIndices(const CBCD_AsynchronousCommunicator& async_comm);
 
   /// Get the stride size for each face node's angular flux data.
   inline std::size_t GetStrideSize() const { return num_groups_and_angles_; }
@@ -82,13 +85,10 @@ public:
                                  CBCD_AngleSet* angle_set,
                                  const std::vector<std::uint32_t>& cell_local_ids);
 
-  double* NLUpwindPsi(uint64_t cell_global_id,
-                      unsigned int face_id,
-                      unsigned int face_node_mapped,
-                      size_t as_ss_idx);
-
-  double*
-  NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
+  /// Scatter one received nonlocal face payload directly into the mapped incoming buffer.
+  std::uint64_t ScatterReceivedFaceData(std::uint64_t cell_global_id,
+                                        unsigned int face_id,
+                                        const double* psi_data);
 
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
@@ -111,14 +111,7 @@ private:
   size_t local_psi_slot_stride_;
   size_t local_psi_data_size_;
   size_t saved_psi_data_size_;
-  /// Map from incoming face boundary node to indexing metadata
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
-  /// Map from cell to outgoing boundary node indexing metadata.
-  std::map<std::uint64_t, std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
-  /// Map from cell to incoming nonlocal nodes indexing metadata.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
-  /// Map from cell to outgoing nonlocal node indexing metadata.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
   /// Mapped host vectors for boundary and non-local angular fluxes.
   crb::MappedHostVector<double> incoming_boundary_psi_;
   crb::MappedHostVector<double> outgoing_boundary_psi_;
@@ -137,11 +130,28 @@ private:
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
   std::vector<std::uint32_t> free_slot_stack_;
+  /// Ordered outgoing destination metadata.
+  struct OutgoingDestination
+  {
+    int locality = 0;
+    int queue_index = -1;
+  };
+  std::vector<OutgoingDestination> outgoing_destinations_;
+  /// Per-destination face counts for the current pack pass.
+  std::vector<size_t> scratch_dest_face_counts_;
+  /// Per-destination touched flags for the current pack pass.
+  std::vector<std::uint8_t> scratch_dest_touched_;
+  /// Destinations touched during the current pack pass.
+  std::vector<std::uint32_t> active_dest_indices_;
+  /// Reusable destination buffers for outgoing wire-format sections.
+  std::vector<ByteArray> dest_buffers_;
+  /// Flat byte-level memcpy descriptors referenced by outgoing faces.
+  std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
+  /// Packed payload size, in doubles, for each grouped outgoing nonlocal face.
+  std::vector<std::size_t> outgoing_face_payload_sizes_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();
-
-  std::vector<std::vector<double>> boundaryI_incoming_psi_;
 };
 
 } // namespace opensn

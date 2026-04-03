@@ -4,6 +4,7 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
@@ -20,6 +21,7 @@ class CBCDSweepChunk : public SweepChunk
 {
 public:
   CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset);
+  ~CBCDSweepChunk() override;
 
   DiscreteOrdinatesProblem& GetProblem() const { return problem_; }
 
@@ -38,11 +40,16 @@ public:
 
   const std::vector<crb::Stream>& GetStreams() const { return streams_list_; }
 
+  void StartCommunicator();
+
+  void StopCommunicator();
+
   using SweepChunk::Sweep;
   void Sweep(const std::vector<std::uint32_t>& cell_local_ids, size_t angle_set_id);
 
 private:
   DiscreteOrdinatesProblem& problem_;
+  std::unique_ptr<CBCD_AsynchronousCommunicator> async_comm_;
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<CBCD_FLUDS*> fluds_list_;
   std::vector<crb::Stream> streams_list_;

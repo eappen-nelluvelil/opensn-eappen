@@ -43,6 +43,15 @@ public:
   /// Get the communicator associated with the angle set.
   AsynchronousCommunicator* GetCommunicator() override;
 
+  /// Get the concrete communicator associated with the angle set.
+  CBCD_AsynchronousCommunicator& GetAsyncCommunicator();
+
+  /// Bind the angle set to the chunk-owned aggregated communicator.
+  void SetCommunicator(CBCD_AsynchronousCommunicator& async_comm) { async_comm_ = &async_comm; }
+
+  /// Get the communicator set used to construct the aggregated communicator.
+  const MPICommunicatorSet& GetCommunicatorSet() const { return comm_set_; }
+
   void InitializeDelayedUpstreamData() override {}
 
   int GetMaxBufferMessages() const override { return 0; }
@@ -57,8 +66,7 @@ public:
 
   AngleSetStatus FlushSendBuffers() override
   {
-    const bool all_messages_sent = async_comm_.SendData();
-    return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
+    return AngleSetStatus::MESSAGES_SENT;
   }
 
   void ResetSweepBuffers() override;
@@ -96,10 +104,12 @@ public:
 protected:
   /// Reference to the immutable CBC task graph.
   const CBC_SPDS& cbc_spds_;
+  /// Communicator-set metadata for aggregated communicator construction.
+  const MPICommunicatorSet& comm_set_;
   /// Mutable task state for the current sweep.
   std::vector<Task> current_task_list_;
-  /// Per-angle-set asynchronous communicator.
-  CBCD_AsynchronousCommunicator async_comm_;
+  /// Chunk-owned aggregated communicator.
+  CBCD_AsynchronousCommunicator* async_comm_ = nullptr;
   /// Associated device stream.
   crb::Stream stream_;
   /// Angle indices on the device.
