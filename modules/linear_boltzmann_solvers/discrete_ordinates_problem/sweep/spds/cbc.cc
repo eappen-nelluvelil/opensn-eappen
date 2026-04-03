@@ -562,8 +562,11 @@ CBC_SPDS::BuildTaskGraph()
   }
 
   local_successors_.resize(successor_count);
+  initial_successors_to_retire_.resize(task_list_.size());
   for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
   {
+    initial_successors_to_retire_[cell_id] =
+      static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
     std::copy(task_list_[cell_id].successors.begin(),
               task_list_[cell_id].successors.end(),
               local_successors_.begin() + local_successor_offsets_[cell_id]);
@@ -647,6 +650,23 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   thread_local SlotCalcScratch scratch;
   max_num_local_psi_slots_ =
     ExactSlotCounter(local_successor_offsets_, local_successors_, topo_order_, scratch).Solve();
+}
+
+#ifndef __OPENSN_WITH_GPU__
+void
+CBC_SPDS::CopyTaskGraphDataOnDevice() const
+{
+}
+
+void
+CBC_SPDS::FreeDeviceData() const
+{
+}
+#endif
+
+CBC_SPDS::~CBC_SPDS()
+{
+  FreeDeviceData();
 }
 
 } // namespace opensn
