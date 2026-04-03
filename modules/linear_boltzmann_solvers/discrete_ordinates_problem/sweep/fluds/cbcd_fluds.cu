@@ -14,6 +14,8 @@
 #include "framework/runtime.h"
 #include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <unordered_map>
 #include <utility>
 
 namespace opensn
@@ -47,9 +49,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     local_psi_data_size_(num_local_psi_slots_ * local_psi_slot_stride_ * num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
-    cell_to_outgoing_boundary_nodes_(common_data_.GetOutgoingBoundaryNodeMap()),
-    cell_to_incoming_nonlocal_nodes_(common_data_.GetIncomingNonlocalNodeMap()),
-    cell_to_outgoing_nonlocal_nodes_(common_data_.GetOutgoingNonlocalNodeMap()),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
@@ -62,6 +61,34 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   free_slot_stack_.resize(num_local_psi_slots_);
   for (std::uint32_t slot = 0; slot < num_local_psi_slots_; ++slot)
     free_slot_stack_[slot] = slot;
+
+  const auto& outgoing_localities = common_data_.GetOutgoingLocalities();
+  outgoing_destinations_.reserve(outgoing_localities.size());
+  for (const int locality : outgoing_localities)
+    outgoing_destinations_.push_back({locality, -1});
+
+  outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
+  outgoing_face_payload_sizes_.resize(common_data_.GetNumOutgoingNonlocalFaces());
+  for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
+  {
+    for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
+    {
+      outgoing_face_payload_sizes_[face_info.pack_plan_index] =
+        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
+      {
+        outgoing_node_memcpy_plan_.push_back(
+          {static_cast<size_t>(node.storage_index) * num_groups_and_angles_,
+           static_cast<size_t>(node.face_node) * num_groups_and_angles_});
+      }
+    }
+  }
+
+  const size_t num_dests = outgoing_destinations_.size();
+  scratch_dest_face_counts_.resize(num_dests, 0);
+  scratch_dest_touched_.resize(num_dests, 0);
+  active_dest_indices_.reserve(num_dests);
+  dest_buffers_.resize(num_dests);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -90,6 +117,13 @@ CBCD_FLUDS::AllocateLocalAndSavedPsi()
     device_saved_psi_ = crb::DeviceMemory<double>(saved_psi_data_size_, stream_);
   }
   CreatePointerSet();
+}
+
+void
+CBCD_FLUDS::InitializeQueueIndices(const CBCD_AsynchronousCommunicator& async_comm)
+{
+  for (auto& dest : outgoing_destinations_)
+    dest.queue_index = async_comm.GetQueueIndex(dest.locality);
 }
 
 void
@@ -177,27 +211,8 @@ void
 CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
                                             const std::vector<std::uint32_t>& cell_local_ids)
 {
-  if (cell_to_incoming_nonlocal_nodes_.empty())
-    return;
-  const auto& angle_indices = angle_set->GetAngleIndices();
-  const auto& num_angles = angle_indices.size();
-  for (const auto& cell_local_id : cell_local_ids)
-  {
-    auto incoming_boundary_it = cell_to_incoming_nonlocal_nodes_.find(cell_local_id);
-    if (incoming_boundary_it == cell_to_incoming_nonlocal_nodes_.end())
-      continue;
-    for (const auto& node : incoming_boundary_it->second)
-    {
-      for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
-      {
-        double* dst_psi = incoming_nonlocal_psi_.data() +
-                          node.storage_index * num_groups_and_angles_ + as_ss_idx * num_groups_;
-        const double* src_psi =
-          NLUpwindPsi(node.cell_global_id, node.face_id, node.face_node_mapped, as_ss_idx);
-        std::copy(src_psi, src_psi + num_groups_, dst_psi);
-      }
-    }
-  }
+  (void)angle_set;
+  (void)cell_local_ids;
 }
 
 void
@@ -205,62 +220,98 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AngleSet* angle_set,
                                       const std::vector<std::uint32_t>& cell_local_ids)
 {
-  if (cell_to_outgoing_boundary_nodes_.empty() and cell_to_outgoing_nonlocal_nodes_.empty())
+  (void)sweep_chunk;
+
+  if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and outgoing_destinations_.empty())
     return;
+
   const auto& angle_indices = angle_set->GetAngleIndices();
-  const auto& num_angles = angle_indices.size();
+  const auto num_angles = angle_indices.size();
   const auto& grid = *(GetSPDS().GetGrid());
+  const auto angle_set_id = angle_set->GetID();
+  const size_t groups_bytes = num_groups_ * sizeof(double);
+  const size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
+  constexpr size_t section_header_size = 2 * sizeof(size_t);
+  constexpr size_t entry_header_size =
+    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
+
+  active_dest_indices_.clear();
+  const auto initialize_dest_buffer = [this, angle_set_id](const size_t dest_index)
+  {
+    scratch_dest_touched_[dest_index] = 1;
+    active_dest_indices_.push_back(static_cast<std::uint32_t>(dest_index));
+    scratch_dest_face_counts_[dest_index] = 0;
+    auto& data = dest_buffers_[dest_index].Data();
+    data.clear();
+    data.resize(section_header_size);
+    std::memcpy(data.data(), &angle_set_id, sizeof(size_t));
+    size_t num_entries = 0;
+    std::memcpy(data.data() + sizeof(size_t), &num_entries, sizeof(size_t));
+  };
+
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto& cell = grid.local_cells[cell_local_id];
-    auto outgoing_boundary_it = cell_to_outgoing_boundary_nodes_.find(cell_local_id);
-    if (outgoing_boundary_it != cell_to_outgoing_boundary_nodes_.end())
-      for (const auto& node : outgoing_boundary_it->second)
+    for (const auto& node : common_data_.GetOutgoingBoundaryNodes(cell_local_id))
+    {
+      const auto& face = cell.faces[node.face_id];
+      if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
       {
-        const auto& face = cell.faces[node.face_id];
-        if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
-        {
-          for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
-          {
-            auto direction_num = angle_indices[as_ss_idx];
-            double* dst_psi = angle_set->PsiReflected(
-              face.neighbor_id, direction_num, node.cell_local_id, node.face_id, node.face_node);
-            const double* src_psi = outgoing_boundary_psi_.data() +
-                                    node.storage_index * num_groups_and_angles_ +
-                                    as_ss_idx * num_groups_;
-            std::copy(src_psi, src_psi + num_groups_, dst_psi);
-          }
-        }
-      }
-    auto outgoing_nonlocal_it = cell_to_outgoing_nonlocal_nodes_.find(cell_local_id);
-    if (outgoing_nonlocal_it != cell_to_outgoing_nonlocal_nodes_.end())
-      for (const auto& node : outgoing_nonlocal_it->second)
-      {
-        const auto& face = cell.faces[node.face_id];
-        const auto& cell_mapping = sdm_.GetCellMapping(cell);
-        const auto& face_nodal_mapping =
-          common_data_.GetFaceNodalMapping(node.cell_local_id, node.face_id);
-        const auto& num_face_nodes = cell_mapping.GetNumFaceNodes(node.face_id);
-        const auto& face_data_size = num_face_nodes * num_groups_and_angles_;
-        const int locality =
-          sweep_chunk.GetCellTransportView(node.cell_local_id).FaceLocality(node.face_id);
-        auto& async_comm =
-          static_cast<CBCD_AsynchronousCommunicator&>(*angle_set->GetCommunicator());
-        std::vector<double>* psi_nonlocal_outgoing =
-          &async_comm.InitGetDownwindMessageData(locality,
-                                                 face.neighbor_id,
-                                                 face_nodal_mapping.associated_face_,
-                                                 angle_set->GetID(),
-                                                 face_data_size);
         for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
         {
-          auto* dst_psi = NLOutgoingPsi(psi_nonlocal_outgoing, node.face_node, as_ss_idx);
-          const double* src_psi = outgoing_nonlocal_psi_.data() +
+          auto direction_num = angle_indices[as_ss_idx];
+          double* dst_psi = angle_set->PsiReflected(
+            face.neighbor_id, direction_num, node.cell_local_id, node.face_id, node.face_node);
+          const double* src_psi = outgoing_boundary_psi_.data() +
                                   node.storage_index * num_groups_and_angles_ +
                                   as_ss_idx * num_groups_;
-          std::copy(src_psi, src_psi + num_groups_, dst_psi);
+          std::memcpy(dst_psi, src_psi, groups_bytes);
         }
       }
+    }
+
+    for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
+    {
+      const size_t dest_index = face_info.dest_slot;
+      const size_t face_data_size = outgoing_face_payload_sizes_[face_info.pack_plan_index];
+      if (not scratch_dest_touched_[dest_index])
+        initialize_dest_buffer(dest_index);
+      ++scratch_dest_face_counts_[dest_index];
+
+      auto& data = dest_buffers_[dest_index].Data();
+      const size_t offset = data.size();
+      data.resize(offset + entry_header_size + face_data_size * sizeof(double));
+      auto* base = data.data();
+      std::memcpy(base + offset,
+                  face_info.entry_header_prefix.data(),
+                  face_info.entry_header_prefix.size());
+      std::memcpy(base + offset + face_info.entry_header_prefix.size(),
+                  &face_data_size,
+                  sizeof(size_t));
+
+      auto* psi_dst = reinterpret_cast<double*>(base + offset + entry_header_size);
+      const auto* node_plan = outgoing_node_memcpy_plan_.data() + face_info.node_copy_offset;
+      const auto* node_plan_end = node_plan + face_info.num_node_copies;
+      for (; node_plan != node_plan_end; ++node_plan)
+      {
+        double* dst = psi_dst + node_plan->dst_offset;
+        const double* src = outgoing_nonlocal_psi_.data() + node_plan->src_offset;
+        std::memcpy(dst, src, stride_bytes);
+      }
+    }
+  }
+
+  for (const auto dest_index_u32 : active_dest_indices_)
+  {
+    const size_t dest_index = dest_index_u32;
+    auto& data = dest_buffers_[dest_index].Data();
+    std::memcpy(data.data() + sizeof(size_t),
+                &scratch_dest_face_counts_[dest_index],
+                sizeof(size_t));
+    angle_set->GetAsyncCommunicator().EnqueuePrepackedByIndex(
+      outgoing_destinations_[dest_index].queue_index, angle_set_id, std::move(dest_buffers_[dest_index]));
+    scratch_dest_touched_[dest_index] = 0;
+    scratch_dest_face_counts_[dest_index] = 0;
   }
 }
 
@@ -311,32 +362,18 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
   }
 }
 
-double*
-CBCD_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
-                        unsigned int face_id,
-                        unsigned int face_node_mapped,
-                        size_t as_ss_idx)
+std::uint64_t
+CBCD_FLUDS::ScatterReceivedFaceData(std::uint64_t cell_global_id,
+                                    unsigned int face_id,
+                                    const double* psi_data)
 {
-  auto it = deplocs_outgoing_messages_.find({cell_global_id, face_id});
-  if (it == deplocs_outgoing_messages_.end())
-    return nullptr;
-  auto& psi = it->second;
-  const size_t dof_map =
-    face_node_mapped * num_groups_and_angles_ + //  Offset to start of data for face_node_mapped
-    as_ss_idx * num_groups_;                    // Offset to start of data for angle_set_index
-
-  assert(dof_map < psi.size());
-  return &psi[dof_map];
-}
-
-double*
-CBCD_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
-                          size_t face_node,
-                          size_t as_ss_idx)
-{
-  assert(psi_nonlocal_outgoing != nullptr);
-  const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  return &(*psi_nonlocal_outgoing)[addr_offset];
+  const auto& face_info = common_data_.FindIncomingNonlocalFace(cell_global_id, face_id);
+  double* dst = incoming_nonlocal_psi_.data() +
+                static_cast<size_t>(face_info.base_storage_index) * num_groups_and_angles_;
+  const size_t face_bytes =
+    static_cast<size_t>(face_info.num_nodes) * num_groups_and_angles_ * sizeof(double);
+  std::memcpy(dst, psi_data, face_bytes);
+  return face_info.cell_local_id;
 }
 
 void
