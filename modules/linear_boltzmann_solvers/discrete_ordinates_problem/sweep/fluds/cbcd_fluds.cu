@@ -8,6 +8,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
+#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/logging/log.h"
@@ -57,6 +58,7 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     local_slot_offsets_(num_local_cells, INVALID_SLOT_OFFSET),
     save_angular_flux_(save_angular_flux)
 {
+  grid_ptr_ = GetSPDS().GetGrid().get();
   deplocs_outgoing_messages_.reserve(common_data.GetNumIncomingNonlocalFaces());
   free_slot_stack_.resize(num_local_psi_slots_);
   for (std::uint32_t slot = 0; slot < num_local_psi_slots_; ++slot)
@@ -127,6 +129,58 @@ CBCD_FLUDS::InitializeQueueIndices(const CBCD_AsynchronousCommunicator& async_co
 }
 
 void
+CBCD_FLUDS::InitializeReflectingBoundaryNodes(
+  const std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries)
+{
+  const auto num_local_cells = common_data_.GetNumLocalCells();
+  reflecting_outgoing_boundary_face_offsets_.assign(num_local_cells + 1, 0);
+  reflecting_boundary_face_plans_.clear();
+  reflecting_boundary_face_plans_.reserve(common_data_.GetNumOutgoingBoundaryNodes());
+
+  for (size_t cell_local_id = 0; cell_local_id < num_local_cells; ++cell_local_id)
+  {
+    reflecting_outgoing_boundary_face_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(reflecting_boundary_face_plans_.size());
+
+    const auto boundary_nodes = common_data_.GetOutgoingBoundaryNodes(cell_local_id);
+    for (size_t i = 0; i < boundary_nodes.size();)
+    {
+      const auto& first_node = boundary_nodes[i];
+      const auto boundary_it = boundaries.find(first_node.boundary_id);
+      if (boundary_it == boundaries.end() or not boundary_it->second->IsReflecting())
+      {
+        ++i;
+        continue;
+      }
+
+      size_t num_nodes = 1;
+      while (i + num_nodes < boundary_nodes.size())
+      {
+        const auto& node = boundary_nodes[i + num_nodes];
+        if (node.boundary_id != first_node.boundary_id or node.cell_local_id != first_node.cell_local_id or
+            node.face_id != first_node.face_id or
+            node.storage_index != first_node.storage_index + num_nodes or
+            node.face_node != first_node.face_node + num_nodes)
+          break;
+        ++num_nodes;
+      }
+
+      reflecting_boundary_face_plans_.push_back(
+        {first_node.boundary_id,
+         static_cast<std::uint32_t>(first_node.cell_local_id),
+         first_node.face_id,
+         static_cast<std::uint16_t>(first_node.face_node),
+         static_cast<size_t>(first_node.storage_index) * num_groups_and_angles_,
+         static_cast<std::uint16_t>(num_nodes)});
+      i += num_nodes;
+    }
+
+    reflecting_outgoing_boundary_face_offsets_[cell_local_id + 1] =
+      static_cast<std::uint32_t>(reflecting_boundary_face_plans_.size());
+  }
+}
+
+void
 CBCD_FLUDS::CreatePointerSet()
 {
   pointer_set_.local_psi = local_psi_.get();
@@ -187,6 +241,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 {
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_indices.size();
+  const size_t groups_bytes = num_groups_ * sizeof(double);
 
   for (const auto& node : incoming_boundary_node_map_)
   {
@@ -202,7 +257,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
                                                      node.face_node,
                                                      sweep_chunk.GetGroupsetGroupIndex(),
                                                      sweep_chunk.IsSurfaceSourceActive());
-      std::copy(src_psi, src_psi + num_groups_, dst_psi);
+      std::memcpy(dst_psi, src_psi, groups_bytes);
     }
   }
 }
@@ -251,21 +306,24 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
 
   for (const auto& cell_local_id : cell_local_ids)
   {
-    const auto& cell = grid.local_cells[cell_local_id];
-    for (const auto& node : common_data_.GetOutgoingBoundaryNodes(cell_local_id))
+    const auto reflecting_faces = GetReflectingOutgoingBoundaryFaces(cell_local_id);
+    for (const auto& face_plan : reflecting_faces)
     {
-      const auto& face = cell.faces[node.face_id];
-      if (angle_set->GetBoundaries().at(face.neighbor_id)->IsReflecting())
+      for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
       {
-        for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
+        const auto direction_num = static_cast<unsigned int>(angle_indices[as_ss_idx]);
+        const double* src_face =
+          outgoing_boundary_psi_.data() + face_plan.src_base_offset + as_ss_idx * num_groups_;
+        for (size_t n = 0; n < face_plan.num_nodes; ++n)
         {
-          auto direction_num = angle_indices[as_ss_idx];
-          double* dst_psi = angle_set->PsiReflected(
-            face.neighbor_id, direction_num, node.cell_local_id, node.face_id, node.face_node);
-          const double* src_psi = outgoing_boundary_psi_.data() +
-                                  node.storage_index * num_groups_and_angles_ +
-                                  as_ss_idx * num_groups_;
-          std::memcpy(dst_psi, src_psi, groups_bytes);
+          double* dst = angle_set->PsiReflected(face_plan.boundary_id,
+                                                direction_num,
+                                                face_plan.cell_local_id,
+                                                face_plan.face_id,
+                                                static_cast<unsigned int>(face_plan.first_face_node + n));
+          std::memcpy(dst,
+                      src_face + n * num_groups_and_angles_,
+                      groups_bytes);
         }
       }
     }
@@ -333,7 +391,6 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();
-  auto grid = problem.GetGrid();
   auto& groupset = sweep_chunk.GetGroupset();
   auto& destination_psi = problem.GetPsiNewLocal()[groupset.id];
   const auto& discretization = problem.GetSpatialDiscretization();
@@ -341,7 +398,8 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
     groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto& num_angles = angle_set->GetNumAngles();
-  for (const auto& cell : grid->local_cells)
+  const size_t groups_bytes = num_groups_ * sizeof(double);
+  for (const auto& cell : grid_ptr_->local_cells)
   {
     double* dst_psi = &destination_psi[discretization.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0)];
     double* src_psi =
@@ -354,7 +412,7 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
         auto direction_num = angle_indices[as_ss_idx];
         double* dst = dst_psi + direction_num * num_groups_;
         double* src = src_psi + as_ss_idx * num_groups_;
-        std::copy(src, src + num_groups_, dst);
+        std::memcpy(dst, src, groups_bytes);
       }
       dst_psi += groupset_angle_group_stride;
       src_psi += num_groups_and_angles_;

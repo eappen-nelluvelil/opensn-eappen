@@ -111,15 +111,18 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           if (angle_set->IsExecuted())
             continue;
 
-          any_work_done = angle_set->TryInitialize(cbcd_sweep_chunk) || any_work_done;
-          const auto status = angle_set->AngleSetAdvance(cbcd_sweep_chunk, AngleSetStatus::EXECUTE);
-          if (status == AngleSetStatus::FINISHED)
+          if (not angle_set->IsInitialized())
+          {
+            any_work_done = angle_set->TryInitialize(cbcd_sweep_chunk) || any_work_done;
+            continue;
+          }
+
+          any_work_done = angle_set->TryAdvanceOneStep() || any_work_done;
+          if (angle_set->IsExecuted())
           {
             ++completed;
             any_work_done = true;
           }
-          else if (status != AngleSetStatus::NOT_FINISHED)
-            any_work_done = true;
         }
 
         if (not any_work_done)
