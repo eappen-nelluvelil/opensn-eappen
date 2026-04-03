@@ -48,9 +48,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     common_data_(common_data),
     num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
     slot_size_(RoundUpToCacheLineMultiple(max_cell_dof_count * num_groups_and_angles_)),
-    cell_slot_indices_(common_data.GetSPDS().GetGrid()->local_cells.size(), INVALID_SLOT),
     cell_slot_bases_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr),
-    free_slot_stack_(num_slots_),
     local_psi_buffer_(AllocateAlignedBuffer(num_slots_ * slot_size_)),
     incoming_nonlocal_face_dof_offsets_(common_data.GetNumCellFaces(), 0),
     incoming_nonlocal_psi_buffer_(
@@ -72,32 +70,19 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
         return AllocateAlignedBuffer(incoming_nonlocal_dof_count);
       }())
 {
-  for (std::uint32_t slot = 0; slot < num_slots_; ++slot)
-    free_slot_stack_[slot] = slot;
-}
+  const auto& cbc_spds = static_cast<const CBC_SPDS&>(common_data.GetSPDS());
+  const auto& task_list = cbc_spds.GetTaskList();
+  const auto& task_slot_ids = cbc_spds.GetTaskSlotIDs();
+  assert(task_list.size() == task_slot_ids.size());
 
-void
-CBC_FLUDS::AllocateSlot(std::uint64_t cell_local_id)
-{
-  assert(cell_slot_indices_[cell_local_id] == INVALID_SLOT);
-  assert(not free_slot_stack_.empty());
-
-  const auto slot = free_slot_stack_.back();
-  free_slot_stack_.pop_back();
-  cell_slot_indices_[cell_local_id] = slot;
-  cell_slot_bases_[cell_local_id] =
-    local_psi_buffer_.get() + static_cast<size_t>(slot) * slot_size_;
-}
-
-void
-CBC_FLUDS::DeallocateSlot(std::uint64_t cell_local_id)
-{
-  const auto slot = cell_slot_indices_[cell_local_id];
-  assert(slot != INVALID_SLOT);
-
-  free_slot_stack_.push_back(slot);
-  cell_slot_indices_[cell_local_id] = INVALID_SLOT;
-  cell_slot_bases_[cell_local_id] = nullptr;
+  for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
+  {
+    const auto cell_local_id = task_list[task_idx].reference_id;
+    const auto slot_id = task_slot_ids[task_idx];
+    assert(slot_id < num_slots_);
+    cell_slot_bases_[cell_local_id] =
+      local_psi_buffer_.get() + static_cast<size_t>(slot_id) * slot_size_;
+  }
 }
 
 void
@@ -121,11 +106,6 @@ CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
 void
 CBC_FLUDS::ClearLocalAndReceivePsi()
 {
-  std::fill(cell_slot_indices_.begin(), cell_slot_indices_.end(), INVALID_SLOT);
-  std::fill(cell_slot_bases_.begin(), cell_slot_bases_.end(), nullptr);
-  free_slot_stack_.resize(num_slots_);
-  for (std::uint32_t slot = 0; slot < num_slots_; ++slot)
-    free_slot_stack_[slot] = slot;
 }
 
 } // namespace opensn
