@@ -44,6 +44,9 @@ public:
   /// Return the exact maximum number of pool slots required for local CBC angular flux storage.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
 
+  /// Return the exact static local-psi slot assigned to each task.
+  const std::vector<std::uint32_t>& GetTaskSlotIDs() const noexcept { return task_slot_ids_; }
+
   /// Copy immutable CBC task-graph data to device memory on demand.
   void CopyTaskGraphDataOnDevice() const;
 
@@ -68,6 +71,8 @@ private:
   std::vector<std::uint32_t> initial_successors_to_retire_;
   /// Cell-by-cell task list.
   std::vector<Task> task_list_;
+  /// Exact static slot assignment per task derived from the CBC reuse matching.
+  std::vector<std::uint32_t> task_slot_ids_;
   /// Exact maximum number of local CBC pool allocator slots.
   std::size_t max_num_local_psi_slots_ = 0;
   /// Immutable CBC task-graph data mirrored on device for CBCD-specific kernels.
