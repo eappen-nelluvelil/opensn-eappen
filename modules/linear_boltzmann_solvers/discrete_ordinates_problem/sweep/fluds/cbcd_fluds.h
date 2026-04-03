@@ -162,6 +162,8 @@ private:
   std::vector<std::uint32_t> active_dest_indices_;
   /// Reusable destination buffers for outgoing wire-format sections.
   std::vector<ByteArray> dest_buffers_;
+  /// Exact per-destination section capacities in bytes.
+  std::vector<std::size_t> dest_buffer_capacities_;
   /// Cell-to-reflecting-face offset table.
   std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
   /// Flat reflecting-boundary face plans.
