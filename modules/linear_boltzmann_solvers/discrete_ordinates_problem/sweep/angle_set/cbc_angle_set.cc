@@ -31,9 +31,7 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
 {
   const auto num_tasks = cbc_spds_.GetTaskList().size();
   initial_dependencies_.resize(num_tasks);
-  initial_successors_to_retire_.resize(num_tasks);
   remaining_dependencies_.resize(num_tasks);
-  remaining_successors_to_retire_.resize(num_tasks);
   initial_ready_tasks_.reserve(num_tasks);
   ready_tasks_.reserve(num_tasks);
 
@@ -43,7 +41,6 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
     const auto& task = task_list[task_idx];
     const auto num_dependencies = task.num_dependencies;
     initial_dependencies_[task_idx] = num_dependencies;
-    initial_successors_to_retire_[task_idx] = static_cast<unsigned int>(task.successors.size());
     if (num_dependencies == 0)
       initial_ready_tasks_.push_back(task_idx);
   }
@@ -90,7 +87,6 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     ready_tasks_.pop_back();
     const auto& cell_task = task_list[task_idx];
 
-    cbc_fluds_.AllocateSlot(cell_task.cell_ptr->local_id);
     sweep_chunk.SetCell(cell_task.cell_ptr, *this);
     sweep_chunk.Sweep(*this);
 
@@ -103,18 +99,6 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
     ++num_completed_tasks;
     async_comm_.SendData();
-
-    for (const auto predecessor : cell_task.predecessors)
-    {
-      const auto& predecessor_task = task_list[predecessor];
-      auto& remaining_successors = remaining_successors_to_retire_[predecessor];
-      assert(remaining_successors > 0);
-      if (--remaining_successors == 0)
-        cbc_fluds_.DeallocateSlot(predecessor_task.cell_ptr->local_id);
-    }
-
-    if (cell_task.successors.empty())
-      cbc_fluds_.DeallocateSlot(cell_task.cell_ptr->local_id);
   }
 
   const bool all_tasks_completed = (num_completed_tasks == task_list.size());
@@ -146,9 +130,6 @@ CBC_AngleSet::ResetTaskState()
 {
   std::copy(
     initial_dependencies_.begin(), initial_dependencies_.end(), remaining_dependencies_.begin());
-  std::copy(initial_successors_to_retire_.begin(),
-            initial_successors_to_retire_.end(),
-            remaining_successors_to_retire_.begin());
   ready_tasks_ = initial_ready_tasks_;
   num_completed_tasks = 0;
 }

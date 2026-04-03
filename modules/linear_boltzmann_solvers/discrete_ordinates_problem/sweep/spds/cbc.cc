@@ -8,6 +8,7 @@
 #include "caliper/cali.h"
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <boost/graph/connected_components.hpp>
 #include <boost/graph/max_cardinality_matching.hpp>
@@ -50,8 +51,12 @@ struct SlotCalcScratch
   std::vector<std::size_t> component_edge_offsets;
   std::vector<std::size_t> component_edge_write_offsets;
   std::vector<std::pair<std::uint32_t, std::uint32_t>> component_edges;
+  std::vector<std::uint32_t> compact_to_orig;
+  std::vector<std::uint32_t> component_vertices;
   std::vector<std::size_t> component_matching_mate;
   std::vector<std::uint8_t> is_active_vertex;
+  std::vector<std::uint32_t> matched_next;
+  std::vector<std::uint32_t> matched_prev;
 
   void ResizeMatchingState(const std::uint32_t num_tasks)
   {
@@ -60,6 +65,8 @@ struct SlotCalcScratch
     dist.assign(num_tasks, -1);
     bfs_queue.resize(num_tasks);
     is_immediate_successor.assign(num_tasks, 0);
+    matched_next.assign(num_tasks, INVALID_INDEX);
+    matched_prev.assign(num_tasks, INVALID_INDEX);
   }
 };
 
@@ -220,11 +227,13 @@ public:
   ExactSlotCounter(const std::vector<std::uint32_t>& successor_offsets,
                    const std::vector<std::uint32_t>& successors,
                    const std::vector<std::uint32_t>& topo_order,
-                   SlotCalcScratch& scratch)
+                   SlotCalcScratch& scratch,
+                   std::vector<std::uint32_t>& task_slot_ids)
     : successor_offsets_(successor_offsets),
       successors_(successors),
       topo_order_(topo_order),
       scratch_(scratch),
+      task_slot_ids_(task_slot_ids),
       num_tasks_(static_cast<std::uint32_t>(successor_offsets.size() - 1))
   {
   }
@@ -240,6 +249,7 @@ public:
       BuildFirstReachable();
       BuildReuseEdges();
       const auto reuse_matching_size = ComputeReuseMatchingSize();
+      AssignTaskSlots();
       return (reuse_matching_size == std::numeric_limits<std::size_t>::max())
                ? static_cast<std::size_t>(num_tasks_)
                : static_cast<std::size_t>(num_tasks_) - reuse_matching_size;
@@ -264,10 +274,15 @@ private:
     }
 
     scratch_.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
+    scratch_.compact_to_orig.clear();
+    scratch_.compact_to_orig.reserve(num_graph_vertices);
     std::uint32_t active_vertex_count = 0;
     for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
       if (scratch_.is_active_vertex[vertex])
+      {
         scratch_.local_vertex_ids[vertex] = active_vertex_count++;
+        scratch_.compact_to_orig.push_back(static_cast<std::uint32_t>(vertex));
+      }
 
     scratch_.component_edges.resize(scratch_.reuse_edges.size());
     std::transform(scratch_.reuse_edges.begin(),
@@ -286,6 +301,8 @@ private:
 
   std::size_t ComputeComponentMatchingSize(const MatchingGraph& reuse_graph)
   {
+    std::fill(scratch_.matched_next.begin(), scratch_.matched_next.end(), INVALID_INDEX);
+    std::fill(scratch_.matched_prev.begin(), scratch_.matched_prev.end(), INVALID_INDEX);
     scratch_.component_ids.assign(num_vertices(reuse_graph), -1);
     const auto component_map = boost::make_iterator_property_map(
       scratch_.component_ids.begin(), get(boost::vertex_index, reuse_graph));
@@ -293,10 +310,14 @@ private:
 
     if (num_components <= 1)
     {
-      return ComputeCheckedMatchingSize(
+      const auto matching_size = ComputeCheckedMatchingSize(
         reuse_graph,
         scratch_.component_matching_mate,
         "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
+      if (matching_size == std::numeric_limits<std::size_t>::max())
+        return matching_size;
+      RecordMatchingPairs(scratch_.component_matching_mate, scratch_.compact_to_orig, 0);
+      return matching_size;
     }
 
     scratch_.component_vertex_counts.assign(num_components, 0);
@@ -319,11 +340,14 @@ private:
     }
 
     auto next_component_vertex = scratch_.component_vertex_offsets;
+    scratch_.component_vertices.resize(num_vertices(reuse_graph));
     for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
     {
       const auto component_id = scratch_.component_ids[vertex];
+      const auto local_offset = next_component_vertex[component_id];
       scratch_.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
-        next_component_vertex[component_id] - scratch_.component_vertex_offsets[component_id]);
+        local_offset - scratch_.component_vertex_offsets[component_id]);
+      scratch_.component_vertices[local_offset] = scratch_.compact_to_orig[vertex];
       ++next_component_vertex[component_id];
     }
 
@@ -353,10 +377,39 @@ private:
         "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
       if (component_matching_size == std::numeric_limits<std::size_t>::max())
         return component_matching_size;
+      RecordMatchingPairs(scratch_.component_matching_mate,
+                          scratch_.component_vertices,
+                          scratch_.component_vertex_offsets[component_id]);
       matching_size += component_matching_size;
     }
 
     return matching_size;
+  }
+
+  void RecordMatchingPairs(const std::vector<std::size_t>& mate_storage,
+                           const std::vector<std::uint32_t>& vertices,
+                           const std::size_t base_offset)
+  {
+    const auto null_vertex = boost::graph_traits<MatchingGraph>::null_vertex();
+    for (std::size_t local_u = 0; local_u < mate_storage.size(); ++local_u)
+    {
+      const auto local_v = mate_storage[local_u];
+      if (local_v == static_cast<std::size_t>(null_vertex) or local_u >= local_v)
+        continue;
+
+      auto lhs = vertices[base_offset + local_u];
+      auto rhs = vertices[base_offset + local_v];
+      if (lhs >= num_tasks_)
+        std::swap(lhs, rhs);
+
+      if (lhs >= num_tasks_ or rhs < num_tasks_)
+        throw std::logic_error("CBC_SPDS: Invalid reuse matching edge orientation.");
+
+      const auto predecessor = lhs;
+      const auto successor = rhs - num_tasks_;
+      scratch_.matched_next[predecessor] = successor;
+      scratch_.matched_prev[successor] = predecessor;
+    }
   }
 
   void BuildMinimumPathCover()
@@ -508,8 +561,43 @@ private:
   std::size_t ComputeReuseMatchingSize()
   {
     if (scratch_.reuse_edges.empty())
+    {
+      std::fill(scratch_.matched_next.begin(), scratch_.matched_next.end(), INVALID_INDEX);
+      std::fill(scratch_.matched_prev.begin(), scratch_.matched_prev.end(), INVALID_INDEX);
       return 0;
+    }
     return ComputeComponentMatchingSize(BuildActiveReuseGraph());
+  }
+
+  void AssignTaskSlots()
+  {
+    task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
+    std::uint32_t next_slot_id = 0;
+
+    for (std::uint32_t task_id = 0; task_id < num_tasks_; ++task_id)
+    {
+      if (scratch_.matched_prev[task_id] != INVALID_INDEX)
+        continue;
+
+      std::uint32_t current = task_id;
+      while (current != INVALID_INDEX)
+      {
+        if (task_slot_ids_[current] != INVALID_INDEX)
+          throw std::logic_error("CBC_SPDS: Invalid slot-chain assignment.");
+
+        task_slot_ids_[current] = next_slot_id;
+        current = scratch_.matched_next[current];
+      }
+
+      ++next_slot_id;
+    }
+
+    for (std::uint32_t task_id = 0; task_id < num_tasks_; ++task_id)
+    {
+      if (task_slot_ids_[task_id] != INVALID_INDEX)
+        continue;
+      task_slot_ids_[task_id] = next_slot_id++;
+    }
   }
 
 private:
@@ -517,6 +605,7 @@ private:
   const std::vector<std::uint32_t>& successors_;
   const std::vector<std::uint32_t>& topo_order_;
   SlotCalcScratch& scratch_;
+  std::vector<std::uint32_t>& task_slot_ids_;
   const std::uint32_t num_tasks_;
   ChainCoverData chain_cover_;
 };
@@ -627,6 +716,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   BuildTaskGraph();
 
   max_num_local_psi_slots_ = num_loc_cells;
+  task_slot_ids_.resize(num_loc_cells);
+  std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
 }
 
 const std::vector<Task>&
@@ -649,7 +740,9 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
 
   thread_local SlotCalcScratch scratch;
   max_num_local_psi_slots_ =
-    ExactSlotCounter(local_successor_offsets_, local_successors_, topo_order_, scratch).Solve();
+    ExactSlotCounter(
+      local_successor_offsets_, local_successors_, topo_order_, scratch, task_slot_ids_)
+      .Solve();
 }
 
 #ifndef __OPENSN_WITH_GPU__

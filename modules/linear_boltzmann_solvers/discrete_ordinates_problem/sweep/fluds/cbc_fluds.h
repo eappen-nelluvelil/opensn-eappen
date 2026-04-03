@@ -27,9 +27,6 @@ namespace opensn
 class CBC_FLUDS : public FLUDS
 {
 public:
-  /// Value used to indicate that a cell currently has no assigned pool slot.
-  static constexpr std::uint32_t INVALID_SLOT = std::numeric_limits<std::uint32_t>::max();
-
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
@@ -37,12 +34,6 @@ public:
 
   const FLUDSCommonData& GetCommonData() const noexcept { return common_data_; }
   size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
-
-  /// Assign a pool slot to the specified local cell.
-  void AllocateSlot(std::uint64_t cell_local_id);
-
-  /// Release the pool slot currently assigned to the specified local cell.
-  void DeallocateSlot(std::uint64_t cell_local_id);
 
   /**
    * Given a local upwind neighbor cell, a node index on this cell, and an
@@ -104,7 +95,7 @@ public:
                              const double* psi_data,
                              size_t data_size);
 
-  /// Reset local slot assignments and received nonlocal angular fluxes.
+  /// Reset received nonlocal angular fluxes.
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
@@ -134,9 +125,7 @@ protected:
   const CBC_FLUDSCommonData& common_data_;
   size_t num_slots_;
   size_t slot_size_;
-  std::vector<std::uint32_t> cell_slot_indices_;
   std::vector<double*> cell_slot_bases_;
-  std::vector<std::uint32_t> free_slot_stack_;
 
   /**
    * Layout for a single slot:
