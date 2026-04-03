@@ -10,7 +10,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "caribou/main.hpp"
 #include "caliper/cali.h"
-#include <thread>
 #include <vector>
 
 namespace opensn
@@ -85,188 +84,47 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   CALI_CXX_MARK_SCOPE("SweepScheduler::ScheduleAlgoAsyncFIFO");
 
   auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
-  // Copy phi and source moments to device
   cbcd_sweep_chunk.GetProblem().CopyPhiAndSrcToDevice();
 
   auto& angle_sets = cbcd_sweep_chunk.GetAngleSets();
-  auto& fluds_list = cbcd_sweep_chunk.GetFLUDS();
-  auto& streams_list = cbcd_sweep_chunk.GetStreams();
-
   const size_t num_angle_sets = angle_sets.size();
-  std::vector<bool> executed(num_angle_sets, 0);
-  std::vector<bool> boundary_data_set(num_angle_sets, 0);
-  std::vector<bool> kernel_in_flight(num_angle_sets, 0);
-  std::vector<std::vector<Task*>> ready_queues(num_angle_sets);
-  std::vector<size_t> num_completed_tasks(num_angle_sets, 0);
-  std::vector<std::vector<Task*>> ready_tasks(num_angle_sets);
-  std::vector<std::vector<std::uint32_t>> ready_cell_ids(num_angle_sets);
-  std::vector<std::vector<Task*>> in_flight_tasks(num_angle_sets);
-  std::vector<std::vector<std::uint32_t>> in_flight_cell_ids(num_angle_sets);
-
   for (auto* angle_set : angle_sets)
-  {
-    auto& current_task_list = angle_set->GetCurrentTaskList();
-    if (current_task_list.empty())
-      current_task_list = static_cast<const CBC_SPDS&>(angle_set->GetSPDS()).GetTaskList();
-  }
+    angle_set->ResetDependencyCounter();
 
-  size_t executed_anglesets = 0;
-  while (executed_anglesets < num_angle_sets)
-  {
-    bool any_work_done = false;
+  const std::size_t num_workers = pool_.GetSize();
 
-    // Poll completed kernels
-    for (size_t i = 0; i < num_angle_sets; ++i)
+  pool_.ExecuteBatch(
+    [num_workers, num_angle_sets, &angle_sets, &cbcd_sweep_chunk](const std::size_t worker_id)
     {
-      if (not kernel_in_flight[i])
-        continue;
-      // Check if the kernel is done
-      if (streams_list[i].is_completed())
+      const std::size_t begin = worker_id * num_angle_sets / num_workers;
+      const std::size_t end = (worker_id + 1) * num_angle_sets / num_workers;
+      std::size_t completed = 0;
+
+      while (completed < (end - begin))
       {
-        // Copy back outgoing (reflecting) boundary and non-local psi
-        fluds_list[i]->CopyOutgoingPsiBackToHost(
-          cbcd_sweep_chunk, angle_sets[i], in_flight_cell_ids[i]);
-        // Update task dependencies
-        auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
-        std::vector<std::uint32_t> cells_to_deallocate;
-        cells_to_deallocate.reserve(in_flight_tasks[i].size());
-        for (auto* task : in_flight_tasks[i])
+        bool any_work_done = false;
+
+        for (std::size_t i = begin; i < end; ++i)
         {
-          for (uint64_t succ : task->successors)
+          auto* angle_set = angle_sets[i];
+          if (angle_set->IsExecuted())
+            continue;
+
+          any_work_done = angle_set->TryInitialize(cbcd_sweep_chunk) || any_work_done;
+          const auto status = angle_set->AngleSetAdvance(cbcd_sweep_chunk, AngleSetStatus::EXECUTE);
+          if (status == AngleSetStatus::FINISHED)
           {
-            --current_task_list[succ].num_dependencies;
-            if (current_task_list[succ].num_dependencies == 0 and boundary_data_set[i])
-              ready_queues[i].push_back(&current_task_list[succ]);
+            ++completed;
+            any_work_done = true;
           }
-
-          if (task->successors.empty())
-            cells_to_deallocate.push_back(task->reference_id);
-
-          for (uint64_t pred : task->predecessors)
-          {
-            auto& pred_task = current_task_list[pred];
-            ++pred_task.num_satisfied_successors;
-            if (pred_task.num_satisfied_successors == pred_task.successors.size())
-              cells_to_deallocate.push_back(pred_task.reference_id);
-          }
-
-          task->completed = true;
+          else if (status != AngleSetStatus::NOT_FINISHED)
+            any_work_done = true;
         }
-        if (not cells_to_deallocate.empty())
-          fluds_list[i]->DeallocateSlots(cells_to_deallocate);
-        num_completed_tasks[i] += in_flight_tasks[i].size();
-        // Send MPI data
-        auto* comm = static_cast<CBCD_AsynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
-        comm->SendData();
-        in_flight_tasks[i].clear();
-        in_flight_cell_ids[i].clear();
-        kernel_in_flight[i] = false;
-        any_work_done = true;
+
+        if (not any_work_done)
+          std::this_thread::yield();
       }
-    }
-
-    // Receive and send MPI data
-    for (size_t i = 0; i < num_angle_sets; ++i)
-    {
-      if (executed[i])
-        continue;
-      auto* comm = static_cast<CBCD_AsynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
-      auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
-      auto received = comm->ReceiveData();
-      if (not received.empty())
-      {
-        for (uint64_t t : received)
-        {
-          --current_task_list[t].num_dependencies;
-          if (current_task_list[t].num_dependencies == 0 and boundary_data_set[i])
-            ready_queues[i].push_back(&current_task_list[t]);
-        }
-        any_work_done = true;
-      }
-      comm->SendData();
-    }
-
-    // Set boundary data
-    for (size_t i = 0; i < num_angle_sets; ++i)
-    {
-      if (executed[i] or boundary_data_set[i] or kernel_in_flight[i])
-        continue;
-      auto* as = angle_sets[i];
-      bool boundaries_ready = true;
-      for (auto& [bid, boundary] : as->GetBoundaries())
-      {
-        if (not boundary->CheckAnglesReadyStatus(as->GetAngleIndices()))
-        {
-          boundaries_ready = false;
-          break;
-        }
-      }
-      if (boundaries_ready)
-      {
-        fluds_list[i]->CopyIncomingBoundaryPsiToDevice(cbcd_sweep_chunk, angle_sets[i]);
-        boundary_data_set[i] = true;
-        any_work_done = true;
-
-        auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
-        for (auto& task : current_task_list)
-        {
-          if (task.num_dependencies == 0 and not task.completed)
-            ready_queues[i].push_back(&task);
-        }
-      }
-    }
-
-    // Collect ready tasks and launch kernels (only if task dependencies changed)
-    if (any_work_done)
-    {
-      for (size_t i = 0; i < num_angle_sets; ++i)
-      {
-        if (executed[i] or (not boundary_data_set[i]) or kernel_in_flight[i])
-          continue;
-
-        if (ready_queues[i].empty())
-          continue;
-
-        ready_tasks[i] = std::move(ready_queues[i]);
-        ready_queues[i].clear();
-
-        ready_cell_ids[i].clear();
-        for (auto* task : ready_tasks[i])
-          ready_cell_ids[i].push_back(task->reference_id);
-
-        fluds_list[i]->AllocateSlots(ready_cell_ids[i]);
-        fluds_list[i]->CopyIncomingNonlocalPsiToDevice(angle_sets[i], ready_cell_ids[i]);
-        cbcd_sweep_chunk.Sweep(ready_cell_ids[i], i);
-        in_flight_tasks[i] = std::move(ready_tasks[i]);
-        in_flight_cell_ids[i] = std::move(ready_cell_ids[i]);
-        kernel_in_flight[i] = true;
-      }
-    }
-
-    // Check angleset completion
-    for (size_t i = 0; i < num_angle_sets; ++i)
-    {
-      if (executed[i] or (not boundary_data_set[i]) or kernel_in_flight[i])
-        continue;
-      auto& current_task_list = angle_sets[i]->GetCurrentTaskList();
-      auto* comm = static_cast<CBCD_AsynchronousCommunicator*>(angle_sets[i]->GetCommunicator());
-      bool all_done = (num_completed_tasks[i] == current_task_list.size());
-      if (all_done and comm->SendData())
-      {
-        for (auto& [bid, boundary] : angle_sets[i]->GetBoundaries())
-          boundary->UpdateAnglesReadyStatus(angle_sets[i]->GetAngleIndices());
-        executed[i] = true;
-        ++executed_anglesets;
-        fluds_list[i]->CopySavedPsiFromDevice();
-        auto* fluds = fluds_list[i];
-        auto* as = angle_sets[i];
-        // Cast away constness to add a callback
-        streams_list[i].add_callback(
-          [fluds, &cbcd_sweep_chunk, as]()
-          { fluds->CopySavedPsiToDestinationPsi(cbcd_sweep_chunk, as); });
-      }
-    }
-  }
+    });
 
   /// Copy phi and outflow data back to host
   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();

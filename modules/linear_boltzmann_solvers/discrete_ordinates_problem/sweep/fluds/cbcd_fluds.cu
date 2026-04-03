@@ -277,6 +277,9 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 {
   if (not save_angular_flux_)
     return;
+
+  stream_.synchronize();
+
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();
   auto grid = problem.GetGrid();
