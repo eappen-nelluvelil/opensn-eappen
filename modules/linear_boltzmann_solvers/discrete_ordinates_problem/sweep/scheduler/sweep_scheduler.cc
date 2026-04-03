@@ -11,6 +11,7 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <thread>
 #include <unordered_map>
 
 namespace opensn
@@ -29,7 +30,8 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     InitializeAlgoDOG();
 
   if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE ||
-      scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH)
+      scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH ||
+      scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
     angle_agg_.SetupAngleSetDependencies();
   }
@@ -38,6 +40,14 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   {
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
+  }
+  else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    const std::size_t hardware_concurrency = std::thread::hardware_concurrency();
+    const std::size_t num_workers = std::max<std::size_t>(
+      1,
+      std::min(angle_agg_.GetNumAngleSets(), hardware_concurrency == 0 ? 1 : hardware_concurrency));
+    pool_.Resize(num_workers);
   }
 
   // Initialize delayed upstream data
