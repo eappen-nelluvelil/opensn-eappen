@@ -76,7 +76,10 @@ struct Arguments
     flud_data = fluds.GetDevicePointerSet();
     flud_index = fluds.GetCommonData().GetDeviceIndex();
     if constexpr (t == SweepType::CBC)
+    {
       cbc_task_graph = &dynamic_cast<const CBC_SPDS&>(angle_set.GetSPDS()).GetDeviceTaskGraph();
+      cbc_task_state = angle_set.GetDeviceTaskState();
+    }
   }
 
   // Mesh and quadrature
@@ -96,6 +99,7 @@ struct Arguments
   const std::uint64_t* __restrict__ flud_index;
   FLUDSPointerSetType flud_data;
   const CBCDeviceTaskGraph* __restrict__ cbc_task_graph = nullptr;
+  CBCD_TaskStateView cbc_task_state{};
 };
 
 } // namespace opensn::gpu_kernel

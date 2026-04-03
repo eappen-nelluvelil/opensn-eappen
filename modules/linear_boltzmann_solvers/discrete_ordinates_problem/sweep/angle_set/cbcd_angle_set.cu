@@ -35,12 +35,21 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   cbcd_fluds->AllocateLocalAndSavedPsi();
   cbcd_fluds->InitializeReflectingBoundaryNodes(boundaries_);
   InitializeTaskGraphData();
+  AllocateDeviceTaskState();
   cbc_spds_.CopyTaskGraphDataOnDevice();
   InitializeReflectingTaskMask();
 }
 
 CBCD_AngleSet::~CBCD_AngleSet()
 {
+  if (device_remaining_deps_.get())
+    device_remaining_deps_.async_free(stream_);
+  if (device_remaining_successors_to_retire_.get())
+    device_remaining_successors_to_retire_.async_free(stream_);
+  if (device_ready_task_indices_.get())
+    device_ready_task_indices_.async_free(stream_);
+  if (device_ready_task_count_.get())
+    device_ready_task_count_.async_free(stream_);
   device_angle_indices_.async_free(stream_);
 }
 
@@ -175,6 +184,59 @@ CBCD_AngleSet::InitializeTaskState()
   in_flight_cell_ids_.clear();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = initial_reflecting_task_count_;
+  ResetDeviceTaskState();
+}
+
+void
+CBCD_AngleSet::AllocateDeviceTaskState()
+{
+  const auto num_tasks = reference_ids_.size();
+  if (num_tasks == 0 or device_remaining_deps_.get() != nullptr)
+    return;
+
+  device_remaining_deps_ = crb::DeviceMemory<int>(num_tasks, stream_);
+  device_remaining_successors_to_retire_ = crb::DeviceMemory<std::uint32_t>(num_tasks, stream_);
+  device_ready_task_indices_ = crb::DeviceMemory<std::uint32_t>(num_tasks, stream_);
+  device_ready_task_count_ = crb::DeviceMemory<std::uint32_t>(1, stream_);
+
+  device_task_state_.remaining_dependencies = device_remaining_deps_.get();
+  device_task_state_.remaining_successors_to_retire = device_remaining_successors_to_retire_.get();
+  device_task_state_.ready_task_indices = device_ready_task_indices_.get();
+  device_task_state_.ready_task_count = device_ready_task_count_.get();
+  device_task_state_.num_tasks = static_cast<std::uint32_t>(num_tasks);
+
+  ResetDeviceTaskState();
+}
+
+void
+CBCD_AngleSet::ResetDeviceTaskState()
+{
+  if (reference_ids_.empty())
+    return;
+
+  crb::HostVector<int> host_initial_deps(initial_deps_.begin(), initial_deps_.end());
+  crb::HostVector<std::uint32_t> host_initial_successors_to_retire(
+    initial_successors_to_retire_.begin(), initial_successors_to_retire_.end());
+  crb::HostVector<std::uint32_t> host_initial_ready_tasks(initial_ready_tasks_.begin(),
+                                                          initial_ready_tasks_.end());
+  crb::HostVector<std::uint32_t> host_ready_task_count(1);
+  host_ready_task_count.front() = static_cast<std::uint32_t>(initial_ready_tasks_.size());
+
+  crb::copy(device_remaining_deps_, host_initial_deps, host_initial_deps.size(), 0, 0, stream_);
+  crb::copy(device_remaining_successors_to_retire_,
+            host_initial_successors_to_retire,
+            host_initial_successors_to_retire.size(),
+            0,
+            0,
+            stream_);
+  if (not host_initial_ready_tasks.empty())
+    crb::copy(device_ready_task_indices_,
+              host_initial_ready_tasks,
+              host_initial_ready_tasks.size(),
+              0,
+              0,
+              stream_);
+  crb::copy(device_ready_task_count_, host_ready_task_count, 1, 0, 0, stream_);
 }
 
 void
