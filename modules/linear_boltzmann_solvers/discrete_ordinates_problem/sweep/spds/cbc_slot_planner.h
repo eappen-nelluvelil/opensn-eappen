@@ -153,7 +153,6 @@ struct CBCSlotPlannerWorkspace
   std::vector<int> dist;
   std::vector<std::uint32_t> queue;
   std::vector<std::uint32_t> topo_rank;
-  std::vector<std::uint8_t> is_sink_rank;
 
   void Prepare(const std::size_t n)
   {
@@ -167,38 +166,40 @@ struct CBCSlotPlannerWorkspace
       queue.resize(n);
     if (topo_rank.size() < n)
       topo_rank.resize(n);
-    if (is_sink_rank.size() < n)
-      is_sink_rank.resize(n);
   }
 };
 
 /// Output of one CBC cell-level slot planning pass.
 struct CBCSlotPlan
 {
-  /// Optimal number of distinct slots for dynamic (free-then-reuse) scheduling:
-  /// n − |M|, where |M| is the max matching on the reuse graph (Dilworth / König).
+  /// Optimal number of distinct slots: n − |M|, where |M| is the max matching on the reuse graph
+  /// (König / Dilworth). Chains of the max matching are the minimum path cover that realizes it.
   std::size_t num_dynamic_slots = 0;
-  /// Number of slots produced by the static (chain + sink attachment) assignment.
+  /// Number of slots produced by the chain-walk static assignment. Always equal to
+  /// num_dynamic_slots by construction.
   std::size_t num_static_slots = 0;
 };
 
 /**
- * Hopcroft-Karp maximum matching on the dense task-reuse bipartite graph, used to produce both
- * the optimal dynamic slot count and a static slot assignment.
+ * Hopcroft-Karp maximum matching on the dense task-reuse bipartite graph; a single pass yields
+ * both the optimal dynamic slot count and a static per-task slot assignment that realizes it.
  *
- * Let tasks be indexed by their topological rank. The reuse relation on the task DAG is
+ * **Reuse relation.** Let tasks be indexed by topological rank. Define
  *   u ~> v  iff  v ∉ succ(u)  and  v ∈ Desc(s) for every s ∈ succ(u),
  * i.e. v (not itself a local successor of u) is reachable from every local successor of u. This
  * is exactly the condition that u's slot is free by the time v writes it, because every
- * consumer of u's slot has already read before any of v's successors could trigger v.
+ * consumer of u's slot has already read before any path could reach v.
  *
- * On the bipartite graph with left and right copies of the tasks and edges u ~> v, a maximum
- * matching M has size n − χ, where χ is the minimum path-cover of the reuse DAG (König /
- * Dilworth). The optimal number of dynamic slots is exactly χ = n − |M|.
+ * **Dynamic count via König / Dilworth.** On the bipartite graph with left and right copies of
+ * the tasks and edges u ~> v, a maximum matching M has size n − χ, where χ is the minimum
+ * path-cover of the reuse DAG. The optimal number of slots is exactly χ = n − |M|.
  *
- * The static assignment reuses the same matcher run with sinks excluded to build non-sink
- * chains, then attaches each sink to a chain whose tail is reuse-compatible with it, falling
- * back to a shared sink slot.
+ * **Static assignment by chain walk.** Sinks (tasks with no local successors) have empty
+ * reuse_targets rows, so mate_u[sink] is always unset — sinks can appear only as matching
+ * targets, i.e. at chain tails. Each unmated target mate_v[i] == INVALID is the head of a
+ * matching chain; walking mate_u from that head assigns one shared slot id to every task on
+ * the chain. Chains are vertex-disjoint and cover all tasks, so the resulting slot count is
+ * exactly n − |M| = the dynamic optimum. The same matching run drives both outputs.
  */
 class CBCDenseHopcroftKarp
 {
@@ -216,20 +217,16 @@ public:
   {
     ws_.Prepare(num_tasks_);
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
-    {
       ws_.topo_rank[topo_order_[i]] = i;
-      ws_.is_sink_rank[i] = task_list_[topo_order_[i]].successors.empty() ? 1U : 0U;
-    }
   }
 
   CBCSlotPlan Solve()
   {
     BuildReachabilityAndReuseTargets();
-    const auto dynamic_matching_size =
-      ComputeMaximumMatching(/*skip_sink_sources=*/false, /*skip_sink_targets=*/false);
-    AssignStaticSlots();
-    return CBCSlotPlan{static_cast<std::size_t>(num_tasks_) - dynamic_matching_size,
-                       num_static_slots_};
+    const auto matching_size = ComputeMaximumMatching();
+    ExtractSlotAssignments();
+    const auto slot_count = static_cast<std::size_t>(num_tasks_) - matching_size;
+    return CBCSlotPlan{slot_count, slot_count};
   }
 
 private:
@@ -285,61 +282,30 @@ private:
     }
   }
 
-  /// Clears the matching; `dist` is always re-cleared at the top of each BFS, so no clear here.
-  void ResetMatchingState()
+  std::size_t ComputeMaximumMatching()
   {
     std::fill_n(ws_.mate_u.begin(), num_tasks_, CBC_SLOT_PLANNER_INVALID_INDEX);
     std::fill_n(ws_.mate_v.begin(), num_tasks_, CBC_SLOT_PLANNER_INVALID_INDEX);
-  }
+    // dist is cleared at the top of each BFS pass (required: DFS leaves stale values behind).
 
-  std::size_t ComputeMaximumMatching(const bool skip_sink_sources, const bool skip_sink_targets)
-  {
-    ResetMatchingState();
-    auto matching_size = GreedyInit(skip_sink_sources, skip_sink_targets);
-    while (BFS(skip_sink_sources, skip_sink_targets))
+    auto matching_size = GreedyInit();
+    while (BFS())
       for (std::uint32_t i = 0; i < num_tasks_; ++i)
-        if (IsEligibleSource(i, skip_sink_sources) and
-            ws_.mate_u[i] == CBC_SLOT_PLANNER_INVALID_INDEX and DFS(i, skip_sink_targets))
+        if (ws_.mate_u[i] == CBC_SLOT_PLANNER_INVALID_INDEX and DFS(i))
           ++matching_size;
     return matching_size;
   }
 
-  bool IsEligibleSource(const std::uint32_t u, const bool skip_sink_sources) const
-  {
-    return (not skip_sink_sources) or ws_.is_sink_rank[u] == 0U;
-  }
-
-  std::size_t FindFirstMatchableNeighbor(const std::uint32_t u,
-                                         const bool skip_sink_targets) const
-  {
-    auto v = ws_.reuse_targets.FindFirstSet(u, u + 1);
-    while (skip_sink_targets and v < num_tasks_ and ws_.is_sink_rank[v] != 0U)
-      v = ws_.reuse_targets.FindNextSet(u, v);
-    return v;
-  }
-
-  std::size_t FindNextMatchableNeighbor(const std::uint32_t u,
-                                        const std::size_t v,
-                                        const bool skip_sink_targets) const
-  {
-    auto next = ws_.reuse_targets.FindNextSet(u, v);
-    while (skip_sink_targets and next < num_tasks_ and ws_.is_sink_rank[next] != 0U)
-      next = ws_.reuse_targets.FindNextSet(u, next);
-    return next;
-  }
-
-  std::size_t GreedyInit(const bool skip_sink_sources, const bool skip_sink_targets)
+  std::size_t GreedyInit()
   {
     std::size_t count = 0;
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (ws_.mate_u[i] != CBC_SLOT_PLANNER_INVALID_INDEX or
-          not IsEligibleSource(i, skip_sink_sources))
+      if (ws_.mate_u[i] != CBC_SLOT_PLANNER_INVALID_INDEX)
         continue;
 
-      auto v = FindFirstMatchableNeighbor(i, skip_sink_targets);
-      while (v < num_tasks_)
-      {
+      for (auto v = ws_.reuse_targets.FindFirstSet(i, i + 1); v < num_tasks_;
+           v = ws_.reuse_targets.FindNextSet(i, v))
         if (ws_.mate_v[v] == CBC_SLOT_PLANNER_INVALID_INDEX)
         {
           ws_.mate_u[i] = static_cast<std::uint32_t>(v);
@@ -347,21 +313,18 @@ private:
           ++count;
           break;
         }
-        v = FindNextMatchableNeighbor(i, v, skip_sink_targets);
-      }
     }
     return count;
   }
 
-  bool BFS(const bool skip_sink_sources, const bool skip_sink_targets)
+  bool BFS()
   {
     std::fill_n(ws_.dist.begin(), num_tasks_, -1);
     std::size_t head = 0;
     std::size_t tail = 0;
 
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
-      if (ws_.mate_u[i] == CBC_SLOT_PLANNER_INVALID_INDEX and
-          IsEligibleSource(i, skip_sink_sources))
+      if (ws_.mate_u[i] == CBC_SLOT_PLANNER_INVALID_INDEX)
       {
         ws_.dist[i] = 0;
         ws_.queue[tail++] = i;
@@ -374,8 +337,8 @@ private:
       if (ws_.dist[u] >= dist_null_)
         continue;
 
-      auto v = FindFirstMatchableNeighbor(u, skip_sink_targets);
-      while (v < num_tasks_)
+      for (auto v = ws_.reuse_targets.FindFirstSet(u, u + 1); v < num_tasks_;
+           v = ws_.reuse_targets.FindNextSet(u, v))
       {
         const auto mate_of_v = ws_.mate_v[v];
         if (mate_of_v == CBC_SLOT_PLANNER_INVALID_INDEX)
@@ -388,16 +351,15 @@ private:
           ws_.dist[mate_of_v] = ws_.dist[u] + 1;
           ws_.queue[tail++] = mate_of_v;
         }
-        v = FindNextMatchableNeighbor(u, v, skip_sink_targets);
       }
     }
     return dist_null_ != std::numeric_limits<int>::max();
   }
 
-  bool DFS(const std::uint32_t u, const bool skip_sink_targets)
+  bool DFS(const std::uint32_t u)
   {
-    auto v = FindFirstMatchableNeighbor(u, skip_sink_targets);
-    while (v < num_tasks_)
+    for (auto v = ws_.reuse_targets.FindFirstSet(u, u + 1); v < num_tasks_;
+         v = ws_.reuse_targets.FindNextSet(u, v))
     {
       const auto mate_of_v = ws_.mate_v[v];
       if (mate_of_v == CBC_SLOT_PLANNER_INVALID_INDEX)
@@ -410,89 +372,45 @@ private:
           return true;
         }
       }
-      else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1 and DFS(mate_of_v, skip_sink_targets))
+      else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1 and DFS(mate_of_v))
       {
         ws_.mate_v[v] = u;
         ws_.mate_u[u] = static_cast<std::uint32_t>(v);
         ws_.dist[u] = -1;
         return true;
       }
-      v = FindNextMatchableNeighbor(u, v, skip_sink_targets);
     }
     ws_.dist[u] = -1;
     return false;
   }
 
   /**
-   * Builds non-sink chains from a sink-free matching, then attaches each sink.
+   * Walks the chains of the full max matching and assigns one slot id per chain.
    *
-   * Each chain c0 -m→ c1 -m→ ... -m→ ck comes from the non-sink matching's alternating paths:
-   * the sink-free matching edge ci -m→ c(i+1) means c(i+1) ∈ reuse_targets[ci], i.e. ci's slot
-   * is free exactly when c(i+1) writes. Thus one physical slot serves all of c0..ck.
-   *
-   * For a sink s, appending s after chain tail ck to share the same slot requires
-   * s ∈ reuse_targets[ck] — and nothing more. This is because the slot's life along the chain
-   * is strictly sequential: it is free after ck's consumers have read, which by definition of
-   * reuse_targets happens before any task in reuse_targets[ck] can write. Checking reuse
-   * compatibility against interior tasks c0..c(k-1) is redundant (that compatibility is already
-   * guaranteed transitively by the matching edges) and only inflates the effective slot count.
-   * We therefore test only the chain tail; monotonically fewer-or-equal slots, never more.
+   * Each chain head is an unmated target (`mate_v[i] == INVALID`). Walking `mate_u` from the
+   * head visits every task on that chain exactly once and terminates at the chain tail (either
+   * a non-sink whose `mate_u` is unset, or a sink — sinks have empty reuse-target rows so they
+   * are never chain sources). Chains are vertex-disjoint and cover all tasks, so the final slot
+   * count equals the chain count, which equals (number of unmated targets) = n − |M|, matching
+   * the dynamic optimum exactly.
    */
-  void AssignStaticSlots()
+  void ExtractSlotAssignments()
   {
-    ComputeMaximumMatching(/*skip_sink_sources=*/true, /*skip_sink_targets=*/true);
-
     task_slot_ids_.assign(num_tasks_, CBC_SLOT_PLANNER_INVALID_INDEX);
     std::uint32_t next_slot_id = 0;
-    std::vector<std::uint32_t> chain_tails;
-    std::vector<std::uint32_t> chain_slot_ids;
-    chain_tails.reserve(num_tasks_);
-    chain_slot_ids.reserve(num_tasks_);
-
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (ws_.is_sink_rank[i] != 0U or ws_.mate_v[i] != CBC_SLOT_PLANNER_INVALID_INDEX)
+      if (ws_.mate_v[i] != CBC_SLOT_PLANNER_INVALID_INDEX)
         continue;
 
       auto current = i;
-      std::uint32_t tail = i;
       while (current != CBC_SLOT_PLANNER_INVALID_INDEX)
       {
         task_slot_ids_[topo_order_[current]] = next_slot_id;
-        tail = current;
         current = ws_.mate_u[current];
       }
-
-      chain_tails.push_back(tail);
-      chain_slot_ids.push_back(next_slot_id);
       ++next_slot_id;
     }
-
-    std::uint32_t shared_sink_slot_id = CBC_SLOT_PLANNER_INVALID_INDEX;
-    for (std::uint32_t sink_rank = 0; sink_rank < num_tasks_; ++sink_rank)
-    {
-      if (ws_.is_sink_rank[sink_rank] == 0U)
-        continue;
-
-      auto assigned_slot_id = CBC_SLOT_PLANNER_INVALID_INDEX;
-      for (std::size_t chain_idx = 0; chain_idx < chain_tails.size(); ++chain_idx)
-        if (ws_.reuse_targets.TestBit(chain_tails[chain_idx], sink_rank))
-        {
-          assigned_slot_id = chain_slot_ids[chain_idx];
-          break;
-        }
-
-      if (assigned_slot_id == CBC_SLOT_PLANNER_INVALID_INDEX)
-      {
-        if (shared_sink_slot_id == CBC_SLOT_PLANNER_INVALID_INDEX)
-          shared_sink_slot_id = next_slot_id++;
-        assigned_slot_id = shared_sink_slot_id;
-      }
-
-      task_slot_ids_[topo_order_[sink_rank]] = assigned_slot_id;
-    }
-
-    num_static_slots_ = next_slot_id;
   }
 
   std::uint32_t num_tasks_;
@@ -501,7 +419,6 @@ private:
   std::vector<std::uint32_t>& task_slot_ids_;
   CBCSlotPlannerWorkspace& ws_;
   int dist_null_ = 0;
-  std::size_t num_static_slots_ = 0;
 };
 
 } // namespace detail
