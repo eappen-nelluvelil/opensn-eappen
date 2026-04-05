@@ -4,6 +4,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc_slot_planner.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+#include "framework/runtime.h"
+#include "framework/logging/log.h"
 #include "caliper/cali.h"
 #include <boost/graph/topological_sort.hpp>
 #include <algorithm>
@@ -135,6 +137,11 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   const auto slot_plan = allocator.Solve();
   max_num_local_psi_slots_ = slot_plan.num_dynamic_slots;
   num_static_local_psi_slots_ = slot_plan.num_static_slots;
+
+  if (not slot_plan.verified)
+    log.LogAllWarning()
+      << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: slot-assignment verifier rejected the planner "
+         "output; falling back to the identity assignment (one slot per local cell).";
 }
 
 } // namespace opensn

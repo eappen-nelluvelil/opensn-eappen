@@ -176,8 +176,11 @@ struct CBCSlotPlan
   /// (König / Dilworth). Chains of the max matching are the minimum path cover that realizes it.
   std::size_t num_dynamic_slots = 0;
   /// Number of slots produced by the chain-walk static assignment. Always equal to
-  /// num_dynamic_slots by construction.
+  /// num_dynamic_slots by construction on a verified output; equal to n on a fallback output.
   std::size_t num_static_slots = 0;
+  /// True if the planner-produced slot assignment passed the safety verifier. False if a
+  /// defensive identity fallback (n slots, one per task) was written instead.
+  bool verified = true;
 };
 
 /**
@@ -226,7 +229,14 @@ public:
     const auto matching_size = ComputeMaximumMatching();
     ExtractSlotAssignments();
     const auto slot_count = static_cast<std::size_t>(num_tasks_) - matching_size;
-    return CBCSlotPlan{slot_count, slot_count};
+    if (not VerifySlotAssignment(slot_count))
+    {
+      ApplyIdentityFallback();
+      return CBCSlotPlan{static_cast<std::size_t>(num_tasks_),
+                         static_cast<std::size_t>(num_tasks_),
+                         /*verified=*/false};
+    }
+    return CBCSlotPlan{slot_count, slot_count, /*verified=*/true};
   }
 
 private:
@@ -411,6 +421,81 @@ private:
       }
       ++next_slot_id;
     }
+  }
+
+  /**
+   * Verifies that every pair of tasks sharing the same slot is reuse-compatible.
+   *
+   * For each slot s, let u_0, u_1, ..., u_k be the tasks assigned to s, ordered by topological
+   * rank. Safety of the chain requires only that each consecutive pair satisfies the reuse
+   * relation: u_{j} ~> u_{j+1}, i.e. u_{j+1} is not a local successor of u_j and u_{j+1} is
+   * reachable from every local successor of u_j. Transitive compatibility with earlier tasks
+   * is NOT required — the slot hand-off happens strictly between adjacent chain members, and
+   * u_0's data is already gone by the time u_2 writes, so u_2's safety depends only on u_1's
+   * successors having completed.
+   *
+   * The consecutive pairs are tested against `reachability` and the raw task-DAG successor
+   * lists rather than against `reuse_targets`, so bugs in the `reuse_targets` construction
+   * (e.g. a spurious set bit that would erroneously authorize a matching edge) are caught
+   * here rather than propagating into the slot output.
+   *
+   * Also checks structural invariants: every task has a slot id in [0, slot_count).
+   *
+   * Single pass over topo-order tracks the most recent task rank assigned to each slot; total
+   * work is O(n * max_local_fanout).
+   */
+  bool VerifySlotAssignment(const std::size_t slot_count) const
+  {
+    if (task_slot_ids_.size() != num_tasks_)
+      return false;
+
+    for (std::uint32_t task = 0; task < num_tasks_; ++task)
+    {
+      const auto sid = task_slot_ids_[task];
+      if (sid == CBC_SLOT_PLANNER_INVALID_INDEX or sid >= slot_count)
+        return false;
+    }
+
+    std::vector<std::uint32_t> last_rank_for_slot(slot_count, CBC_SLOT_PLANNER_INVALID_INDEX);
+    for (std::uint32_t rank = 0; rank < num_tasks_; ++rank)
+    {
+      const auto sid = task_slot_ids_[topo_order_[rank]];
+      const auto prev_rank = last_rank_for_slot[sid];
+      if (prev_rank != CBC_SLOT_PLANNER_INVALID_INDEX and
+          not ReuseRelationHolds(prev_rank, rank))
+        return false;
+      last_rank_for_slot[sid] = rank;
+    }
+    return true;
+  }
+
+  /// Checks the raw reuse semantic for a candidate chain edge u_rank -> v_rank.
+  /// Returns true iff v is not a direct local successor of u AND v is reachable from every
+  /// direct local successor of u (i.e. topo_order[u] ~> topo_order[v]). A sink u cannot satisfy
+  /// this — it has no successors, and the chain-walk never puts sinks in a non-tail position.
+  bool ReuseRelationHolds(const std::uint32_t u_rank, const std::uint32_t v_rank) const
+  {
+    const auto u = topo_order_[u_rank];
+    const auto& u_successors = task_list_[u].successors;
+    if (u_successors.empty())
+      return false;
+    for (const auto succ : u_successors)
+    {
+      const auto succ_rank = ws_.topo_rank[succ];
+      if (succ_rank == v_rank)
+        return false;
+      if (not ws_.reachability.TestBit(succ_rank, v_rank))
+        return false;
+    }
+    return true;
+  }
+
+  /// Overwrites `task_slot_ids_` with the identity assignment (one physical slot per task).
+  /// Used as a safe fallback when verification detects an inconsistency in the planner's output.
+  void ApplyIdentityFallback()
+  {
+    for (std::uint32_t i = 0; i < num_tasks_; ++i)
+      task_slot_ids_[i] = i;
   }
 
   std::uint32_t num_tasks_;
