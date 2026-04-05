@@ -1,3 +1,2617 @@
+// // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
+// // SPDX-License-Identifier: MIT
+
+// #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+// #include "framework/logging/log.h"
+// #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+// #include "framework/runtime.h"
+// #include "caliper/cali.h"
+// #include <queue>
+// #include <limits>
+// #include <algorithm>
+// #include <cstring>
+// #include <numeric>
+// #include <stdexcept>
+// #include <boost/graph/topological_sort.hpp>
+
+// #if __AVX512F__ || __AVX2__
+// #include <immintrin.h>
+// #endif
+
+// namespace opensn
+// {
+
+// namespace
+// {
+
+// constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
+
+// class AlignedBitset
+// {
+// public:
+// #if __AVX512F__
+//   static constexpr std::size_t kWordsAlign = 8;
+// #elif __AVX2__
+//   static constexpr std::size_t kWordsAlign = 4;
+// #else
+//   static constexpr std::size_t kWordsAlign = 1;
+// #endif
+
+//   explicit AlignedBitset(std::size_t n)
+//     : n_(n),
+//       words_(((n + 63) / 64 + kWordsAlign - 1) / kWordsAlign * kWordsAlign),
+//       data_(words_, 0ULL)
+//   {
+//   }
+
+//   void Clear() { std::fill(data_.begin(), data_.end(), 0ULL); }
+  
+//   void SetBit(std::size_t i) { data_[i / 64] |= (1ULL << (i % 64)); }
+//   void ClearBit(std::size_t i) { data_[i / 64] &= ~(1ULL << (i % 64)); }
+//   bool TestBit(std::size_t i) const { return data_[i / 64] & (1ULL << (i % 64)); }
+
+//   void CopyFrom(const AlignedBitset& other)
+//   {
+//     std::memcpy(data_.data(), other.data_.data(), words_ * sizeof(std::uint64_t));
+//   }
+
+//   void OrWith(const AlignedBitset& other)
+//   {
+//     std::uint64_t* d = data_.data();
+//     const std::uint64_t* s = other.data_.data();
+// #if __AVX512F__
+//     for (std::size_t w = 0; w < words_; w += 8)
+//     {
+//       __m512i vd = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(d + w));
+//       __m512i vs = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(s + w));
+//       _mm512_storeu_si512(reinterpret_cast<__m512i*>(d + w), _mm512_or_si512(vd, vs));
+//     }
+// #elif __AVX2__
+//     for (std::size_t w = 0; w < words_; w += 4)
+//     {
+//       __m256i vd = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d + w));
+//       __m256i vs = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + w));
+//       _mm256_storeu_si256(reinterpret_cast<__m256i*>(d + w), _mm256_or_si256(vd, vs));
+//     }
+// #else
+//     for (std::size_t w = 0; w < words_; ++w)
+//       d[w] |= s[w];
+// #endif
+//   }
+
+//   void AndWith(const AlignedBitset& other)
+//   {
+//     std::uint64_t* d = data_.data();
+//     const std::uint64_t* s = other.data_.data();
+// #if __AVX512F__
+//     for (std::size_t w = 0; w < words_; w += 8)
+//     {
+//       __m512i vd = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(d + w));
+//       __m512i vs = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(s + w));
+//       _mm512_storeu_si512(reinterpret_cast<__m512i*>(d + w), _mm512_and_si512(vd, vs));
+//     }
+// #elif __AVX2__
+//     for (std::size_t w = 0; w < words_; w += 4)
+//     {
+//       __m256i vd = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d + w));
+//       __m256i vs = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + w));
+//       _mm256_storeu_si256(reinterpret_cast<__m256i*>(d + w), _mm256_and_si256(vd, vs));
+//     }
+// #else
+//     for (std::size_t w = 0; w < words_; ++w)
+//       d[w] &= s[w];
+// #endif
+//   }
+
+//   std::size_t FindFirstSet(std::size_t start_pos = 0) const
+//   {
+//     std::size_t w = start_pos / 64;
+//     if (w >= words_)
+//       return n_;
+
+//     std::uint64_t masked = data_[w] & (~0ULL << (start_pos % 64));
+//     if (masked)
+//     {
+//       std::size_t pos = w * 64 + static_cast<std::size_t>(__builtin_ctzll(masked));
+//       return pos < n_ ? pos : n_;
+//     }
+
+//     for (++w; w < words_; ++w)
+//     {
+//       if (data_[w])
+//       {
+//         std::size_t pos = w * 64 + static_cast<std::size_t>(__builtin_ctzll(data_[w]));
+//         return pos < n_ ? pos : n_;
+//       }
+//     }
+//     return n_;
+//   }
+
+//   std::size_t FindNextSet(std::size_t pos) const { return FindFirstSet(pos + 1); }
+
+// private:
+//   std::size_t n_;
+//   std::size_t words_;
+//   std::vector<std::uint64_t> data_;
+// };
+
+// class OnTheFlyHopcroftKarp
+// {
+// public:
+//   static constexpr std::size_t kMaxDFSDepth = 64;
+
+//   OnTheFlyHopcroftKarp(std::uint32_t num_tasks,
+//                        const std::vector<Task>& task_list,
+//                        std::vector<std::uint32_t>& task_slot_ids)
+//     : num_tasks_(num_tasks),
+//       task_list_(task_list),
+//       task_slot_ids_(task_slot_ids),
+//       mate_u_(num_tasks, INVALID_INDEX),
+//       mate_v_(num_tasks, INVALID_INDEX),
+//       dist_(num_tasks, -1),
+//       bfs_buffer_(num_tasks_),
+//       dfs_pool_(kMaxDFSDepth, AlignedBitset(num_tasks_)),
+//       queue_(num_tasks)
+//   {
+//   }
+
+//   std::size_t Solve()
+//   {
+//     std::size_t matching_size = GreedyInit();
+//     while (BFS())
+//     {
+//       for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//       {
+//         if (mate_u_[u] == INVALID_INDEX && DFS(u, 0))
+//           ++matching_size;
+//       }
+//     }
+    
+//     AssignStaticSlots();
+//     return static_cast<std::size_t>(num_tasks_) - matching_size;
+//   }
+
+// private:
+//   void ComputeDescendantsBFS(std::uint32_t start, AlignedBitset& result)
+//   {
+//     result.Clear();
+//     result.SetBit(start);
+
+//     std::size_t head = 0, tail = 0;
+//     queue_[tail++] = start;
+
+//     while (head < tail)
+//     {
+//       std::uint32_t v = queue_[head++];
+//       for (const auto& s : task_list_[v].successors)
+//       {
+//         if (!result.TestBit(s))
+//         {
+//           result.SetBit(s);
+//           queue_[tail++] = s;
+//         }
+//       }
+//     }
+//   }
+
+//   void ComputeReuseTargets(std::uint32_t u, AlignedBitset& result)
+//   {
+//     const auto& task = task_list_[u];
+//     if (task.successors.empty())
+//     {
+//       result.Clear();
+//       return;
+//     }
+
+//     ComputeDescendantsBFS(task.successors[0], result);
+
+//     AlignedBitset temp_buf(num_tasks_);
+//     for (std::size_t i = 1; i < task.successors.size(); ++i)
+//     {
+//       ComputeDescendantsBFS(task.successors[i], temp_buf);
+//       result.AndWith(temp_buf);
+//     }
+
+//     for (const auto& succ : task.successors)
+//       result.ClearBit(succ);
+//   }
+
+//   std::size_t GreedyInit()
+//   {
+//     std::size_t count = 0;
+//     for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//     {
+//       if (mate_u_[u] != INVALID_INDEX)
+//         continue;
+        
+//       ComputeReuseTargets(u, bfs_buffer_);
+//       std::size_t v = bfs_buffer_.FindFirstSet();
+//       while (v < num_tasks_)
+//       {
+//         if (mate_v_[v] == INVALID_INDEX)
+//         {
+//           mate_u_[u] = static_cast<std::uint32_t>(v);
+//           mate_v_[v] = u;
+//           ++count;
+//           break;
+//         }
+//         v = bfs_buffer_.FindNextSet(v);
+//       }
+//     }
+//     return count;
+//   }
+
+//   bool BFS()
+//   {
+//     std::fill(dist_.begin(), dist_.end(), -1);
+//     std::size_t head = 0, tail = 0;
+
+//     for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//     {
+//       if (mate_u_[u] == INVALID_INDEX)
+//       {
+//         dist_[u] = 0;
+//         queue_[tail++] = u;
+//       }
+//     }
+
+//     dist_null_ = std::numeric_limits<int>::max();
+
+//     while (head < tail)
+//     {
+//       std::uint32_t u = queue_[head++];
+
+//       if (dist_[u] < dist_null_)
+//       {
+//         ComputeReuseTargets(u, bfs_buffer_);
+//         std::size_t v = bfs_buffer_.FindFirstSet();
+        
+//         while (v < num_tasks_)
+//         {
+//           std::uint32_t mate_of_v = mate_v_[v];
+//           if (mate_of_v == INVALID_INDEX)
+//           {
+//             if (dist_null_ == std::numeric_limits<int>::max())
+//               dist_null_ = dist_[u] + 1;
+//           }
+//           else if (dist_[mate_of_v] == -1)
+//           {
+//             dist_[mate_of_v] = dist_[u] + 1;
+//             queue_[tail++] = mate_of_v;
+//           }
+//           v = bfs_buffer_.FindNextSet(v);
+//         }
+//       }
+//     }
+//     return dist_null_ != std::numeric_limits<int>::max();
+//   }
+
+//   bool DFS(std::uint32_t u, std::size_t depth)
+//   {
+//     if (depth >= kMaxDFSDepth)
+//       return false;
+
+//     AlignedBitset& neighbors = dfs_pool_[depth];
+//     ComputeReuseTargets(u, neighbors);
+
+//     std::size_t v = neighbors.FindFirstSet();
+//     while (v < num_tasks_)
+//     {
+//       std::uint32_t mate_of_v = mate_v_[v];
+//       if (mate_of_v == INVALID_INDEX)
+//       {
+//         if (dist_null_ == dist_[u] + 1)
+//         {
+//           mate_v_[v] = u;
+//           mate_u_[u] = static_cast<std::uint32_t>(v);
+//           dist_[u] = -1;
+//           return true;
+//         }
+//       }
+//       else if (dist_[mate_of_v] == dist_[u] + 1)
+//       {
+//         if (DFS(mate_of_v, depth + 1))
+//         {
+//           mate_v_[v] = u;
+//           mate_u_[u] = static_cast<std::uint32_t>(v);
+//           dist_[u] = -1;
+//           return true;
+//         }
+//       }
+//       v = neighbors.FindNextSet(v);
+//     }
+//     dist_[u] = -1;
+//     return false;
+//   }
+
+//   void AssignStaticSlots()
+//   {
+//     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
+//     std::uint32_t next_slot_id = 0;
+
+//     for (std::uint32_t task_id = 0; task_id < num_tasks_; ++task_id)
+//     {
+//       if (mate_v_[task_id] == INVALID_INDEX)
+//       {
+//         std::uint32_t current = task_id;
+//         while (current != INVALID_INDEX)
+//         {
+//           task_slot_ids_[current] = next_slot_id;
+//           current = mate_u_[current];
+//         }
+//         ++next_slot_id;
+//       }
+//     }
+//   }
+
+//   std::uint32_t num_tasks_;
+//   const std::vector<Task>& task_list_;
+//   std::vector<std::uint32_t>& task_slot_ids_;
+
+//   std::vector<std::uint32_t> mate_u_;
+//   std::vector<std::uint32_t> mate_v_;
+//   std::vector<int> dist_;
+//   int dist_null_ = 0;
+  
+//   AlignedBitset bfs_buffer_;
+//   std::vector<AlignedBitset> dfs_pool_;
+//   std::vector<std::uint32_t> queue_;
+// };
+
+// } // namespace
+
+// void
+// CBC_SPDS::BuildTaskGraph()
+// {
+//   constexpr auto INCOMING = FaceOrientation::INCOMING;
+//   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
+
+//   const auto num_loc_cells = grid_->local_cells.size();
+//   task_list_.assign(num_loc_cells, Task{});
+//   local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+//   std::size_t successor_count = 0;
+//   for (const auto& cell : grid_->local_cells)
+//   {
+//     unsigned int num_dependencies = 0;
+//     std::vector<std::uint32_t> predecessors;
+//     std::vector<std::uint32_t> successors;
+
+//     for (std::size_t f = 0; f < cell.faces.size(); ++f)
+//     {
+//       const auto& face = cell.faces[f];
+//       const auto orientation = cell_face_orientations_[cell.local_id][f];
+
+//       if (orientation == INCOMING and face.has_neighbor)
+//       {
+//         ++num_dependencies;
+//         if (face.IsNeighborLocal(grid_.get()))
+//           predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
+//       }
+//       else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
+//         successors.push_back(grid_->cells[face.neighbor_id].local_id);
+//     }
+
+//     successor_count += successors.size();
+//     local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+//     task_list_[cell.local_id] = Task{
+//       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+//   }
+
+//   local_successors_.resize(successor_count);
+//   initial_successors_to_retire_.resize(task_list_.size());
+//   for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+//   {
+//     initial_successors_to_retire_[cell_id] =
+//       static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
+//     std::copy(task_list_[cell_id].successors.begin(),
+//               task_list_[cell_id].successors.end(),
+//               local_successors_.begin() + local_successor_offsets_[cell_id]);
+//   }
+// }
+
+// CBC_SPDS::CBC_SPDS(const Vector3& omega,
+//                    const std::shared_ptr<MeshContinuum>& grid,
+//                    const bool allow_cycles)
+//   : SPDS(omega, grid)
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
+
+//   const auto num_loc_cells = grid->local_cells.size();
+
+//   std::vector<std::set<std::pair<std::uint32_t, double>>> cell_successors(num_loc_cells);
+//   std::set<int> location_successors;
+//   std::set<int> location_dependencies;
+
+//   PopulateCellRelationships(omega, location_dependencies, location_successors, cell_successors);
+
+//   location_successors_.reserve(location_successors.size());
+//   location_dependencies_.reserve(location_dependencies.size());
+
+//   for (const auto loc : location_successors)
+//     location_successors_.push_back(loc);
+
+//   for (const auto loc : location_dependencies)
+//     location_dependencies_.push_back(loc);
+
+//   Graph local_dg(num_loc_cells);
+//   for (std::size_t c = 0; c < num_loc_cells; ++c)
+//     for (const auto& successor : cell_successors[c])
+//       boost::add_edge(c, successor.first, successor.second, local_dg);
+
+//   if (allow_cycles)
+//   {
+//     const auto edges_to_remove = RemoveCyclicDependencies(local_dg);
+//     for (const auto& [u, v] : edges_to_remove)
+//       local_sweep_fas_.emplace_back(u, v);
+//   }
+
+//   spls_.clear();
+//   boost::topological_sort(local_dg, std::back_inserter(spls_));
+//   std::reverse(spls_.begin(), spls_.end());
+//   if (spls_.empty())
+//   {
+//     throw std::logic_error("CBC_SPDS: Cyclic dependencies found in the local cell graph.\n"
+//                            "Cycles need to be allowed by the calling application.");
+//   }
+
+//   topo_order_.reserve(spls_.size());
+//   for (const auto v : spls_)
+//     topo_order_.push_back(static_cast<std::uint32_t>(v));
+
+//   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
+//   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
+//   BuildTaskGraph();
+
+//   max_num_local_psi_slots_ = num_loc_cells;
+//   task_slot_ids_.resize(num_loc_cells);
+//   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
+// }
+
+// const std::vector<Task>&
+// CBC_SPDS::GetTaskList() const noexcept
+// {
+//   return task_list_;
+// }
+
+// void
+// CBC_SPDS::ComputeMaxNumLocalPsiSlots()
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+//   const std::uint32_t num_tasks = static_cast<std::uint32_t>(task_list_.size());
+//   if (num_tasks == 0)
+//   {
+//     max_num_local_psi_slots_ = 0;
+//     return;
+//   }
+
+//   OnTheFlyHopcroftKarp allocator(num_tasks, task_list_, task_slot_ids_);
+//   max_num_local_psi_slots_ = allocator.Solve();
+// }
+
+// #ifndef __OPENSN_WITH_GPU__
+// void
+// CBC_SPDS::CopyTaskGraphDataOnDevice() const
+// {
+// }
+
+// void
+// CBC_SPDS::FreeDeviceData() const
+// {
+// }
+// #endif
+
+// CBC_SPDS::~CBC_SPDS()
+// {
+//   FreeDeviceData();
+// }
+
+// } // namespace opensn
+
+// // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
+// // SPDX-License-Identifier: MIT
+
+// #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+// #include "framework/logging/log.h"
+// #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+// #include "framework/runtime.h"
+// #include "caliper/cali.h"
+// #include <queue>
+// #include <limits>
+// #include <algorithm>
+// #include <cstring>
+// #include <numeric>
+// #include <stdexcept>
+// #include <boost/graph/topological_sort.hpp>
+
+// #if __AVX512F__ || __AVX2__
+// #include <immintrin.h>
+// #endif
+
+// namespace opensn
+// {
+
+// namespace
+// {
+
+// constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
+
+// class AVXBitMatrix
+// {
+// public:
+// #if __AVX512F__
+//   static constexpr std::size_t kWordsAlign = 8;
+// #elif __AVX2__
+//   static constexpr std::size_t kWordsAlign = 4;
+// #else
+//   static constexpr std::size_t kWordsAlign = 1;
+// #endif
+
+//   AVXBitMatrix() : n_(0), words_per_row_(0) {}
+
+//   void ResizeAndClear(std::size_t n)
+//   {
+//     n_ = n;
+//     words_per_row_ = ((n + 63) / 64 + kWordsAlign - 1) / kWordsAlign * kWordsAlign;
+//     const std::size_t required_words = n * words_per_row_;
+    
+//     if (data_.size() < required_words)
+//       data_.resize(required_words);
+      
+//     std::memset(data_.data(), 0, required_words * sizeof(std::uint64_t));
+//   }
+
+//   std::size_t WordsPerRow() const { return words_per_row_; }
+//   std::uint64_t* Row(std::size_t i) { return data_.data() + i * words_per_row_; }
+//   const std::uint64_t* Row(std::size_t i) const { return data_.data() + i * words_per_row_; }
+  
+//   void SetBit(std::size_t i, std::size_t j) { Row(i)[j / 64] |= (1ULL << (j % 64)); }
+//   void ClearBit(std::size_t i, std::size_t j) { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
+
+//   void CopyRow(std::size_t dst, const AVXBitMatrix& src_mat, std::size_t src_row)
+//   {
+//     std::memcpy(Row(dst), src_mat.Row(src_row), words_per_row_ * sizeof(std::uint64_t));
+//   }
+
+//   void ClearRow(std::size_t i)
+//   {
+//     std::memset(Row(i), 0, words_per_row_ * sizeof(std::uint64_t));
+//   }
+
+//   void OrRows(std::size_t dst, const AVXBitMatrix& src_mat, std::size_t src_row)
+//   {
+//     std::uint64_t* d = Row(dst);
+//     const std::uint64_t* s = src_mat.Row(src_row);
+// #if __AVX512F__
+//     for (std::size_t w = 0; w < words_per_row_; w += 8)
+//     {
+//       __m512i vd = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(d + w));
+//       __m512i vs = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(s + w));
+//       _mm512_storeu_si512(reinterpret_cast<__m512i*>(d + w), _mm512_or_si512(vd, vs));
+//     }
+// #elif __AVX2__
+//     for (std::size_t w = 0; w < words_per_row_; w += 4)
+//     {
+//       __m256i vd = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d + w));
+//       __m256i vs = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + w));
+//       _mm256_storeu_si256(reinterpret_cast<__m256i*>(d + w), _mm256_or_si256(vd, vs));
+//     }
+// #else
+//     for (std::size_t w = 0; w < words_per_row_; ++w) d[w] |= s[w];
+// #endif
+//   }
+
+//   void AndRows(std::size_t dst, const AVXBitMatrix& src_mat, std::size_t src_row)
+//   {
+//     std::uint64_t* d = Row(dst);
+//     const std::uint64_t* s = src_mat.Row(src_row);
+// #if __AVX512F__
+//     for (std::size_t w = 0; w < words_per_row_; w += 8)
+//     {
+//       __m512i vd = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(d + w));
+//       __m512i vs = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(s + w));
+//       _mm512_storeu_si512(reinterpret_cast<__m512i*>(d + w), _mm512_and_si512(vd, vs));
+//     }
+// #elif __AVX2__
+//     for (std::size_t w = 0; w < words_per_row_; w += 4)
+//     {
+//       __m256i vd = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d + w));
+//       __m256i vs = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + w));
+//       _mm256_storeu_si256(reinterpret_cast<__m256i*>(d + w), _mm256_and_si256(vd, vs));
+//     }
+// #else
+//     for (std::size_t w = 0; w < words_per_row_; ++w) d[w] &= s[w];
+// #endif
+//   }
+
+//   std::size_t FindFirstSet(std::size_t row, std::size_t start_pos = 0) const
+//   {
+//     const std::uint64_t* r = Row(row);
+//     std::size_t w = start_pos / 64;
+
+//     if (w >= words_per_row_) return n_;
+
+//     // Handle partial first word
+//     std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
+//     if (masked)
+//       return std::min(n_, w * 64 + static_cast<std::size_t>(__builtin_ctzll(masked)));
+
+//     ++w;
+
+//     // SIMD Accelerated Block Scanning skips arrays of 0s instantly
+// #if __AVX512F__
+//     const __m512i v_zero = _mm512_setzero_si512();
+//     for (; w + 7 < words_per_row_; w += 8)
+//     {
+//       __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(r + w));
+//       if (_mm512_cmpneq_epi64_mask(v, v_zero) != 0) break;
+//     }
+// #elif __AVX2__
+//     const __m256i v_zero = _mm256_setzero_si256();
+//     for (; w + 3 < words_per_row_; w += 4)
+//     {
+//       __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(r + w));
+//       if (!_mm256_testz_si256(v, v)) break;
+//     }
+// #endif
+
+//     // Scalar fallback/tail processing
+//     for (; w < words_per_row_; ++w)
+//     {
+//       if (r[w])
+//         return std::min(n_, w * 64 + static_cast<std::size_t>(__builtin_ctzll(r[w])));
+//     }
+//     return n_;
+//   }
+
+//   std::size_t FindNextSet(std::size_t row, std::size_t pos) const 
+//   { 
+//     return FindFirstSet(row, pos + 1); 
+//   }
+
+// private:
+//   std::size_t n_;
+//   std::size_t words_per_row_;
+//   std::vector<std::uint64_t> data_;
+// };
+
+// // Thread-local workspace prevents massive dynamic allocation overhead and 
+// // locks memory to the thread's executing NUMA node.
+// struct ThreadLocalWorkspace
+// {
+//   AVXBitMatrix reachability;
+//   AVXBitMatrix reuse_targets;
+//   std::vector<std::uint32_t> mate_u;
+//   std::vector<std::uint32_t> mate_v;
+//   std::vector<int> dist;
+//   std::vector<std::uint32_t> queue;
+  
+//   void Prepare(std::size_t n)
+//   {
+//     reachability.ResizeAndClear(n);
+//     reuse_targets.ResizeAndClear(n);
+//     mate_u.assign(n, INVALID_INDEX);
+//     mate_v.assign(n, INVALID_INDEX);
+//     dist.assign(n, -1);
+//     if (queue.size() < n) queue.resize(n);
+//   }
+// };
+
+// class DenseHopcroftKarp
+// {
+// public:
+//   DenseHopcroftKarp(std::uint32_t num_tasks,
+//                     const std::vector<Task>& task_list,
+//                     const std::vector<std::uint32_t>& topo_order,
+//                     std::vector<std::uint32_t>& task_slot_ids,
+//                     ThreadLocalWorkspace& ws)
+//     : num_tasks_(num_tasks),
+//       task_list_(task_list),
+//       topo_order_(topo_order),
+//       task_slot_ids_(task_slot_ids),
+//       ws_(ws)
+//   {
+//     ws_.Prepare(num_tasks_);
+//   }
+
+//   std::size_t Solve()
+//   {
+//     // 1. Build Transitive Closure Bottom-Up (Projecting downstream dependencies up)
+//     for (auto it = topo_order_.rbegin(); it != topo_order_.rend(); ++it)
+//     {
+//       const std::uint32_t u = *it;
+//       ws_.reachability.SetBit(u, u);
+//       for (const auto& succ : task_list_[u].successors)
+//         ws_.reachability.OrRows(u, ws_.reachability, succ); 
+//     }
+
+//     // 2. Precompute Exact Reuse Intersections
+//     // R_U = Intersect(Desc(S)) \ succ(U) for S in succ(U)
+//     for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//     {
+//       const auto& successors = task_list_[u].successors;
+//       if (successors.empty()) continue;
+
+//       // Draw sets from the constructed reachability graph
+//       ws_.reuse_targets.CopyRow(u, ws_.reachability, successors[0]);
+//       for (std::size_t i = 1; i < successors.size(); ++i)
+//         ws_.reuse_targets.AndRows(u, ws_.reachability, successors[i]);
+
+//       for (const auto& succ : successors)
+//         ws_.reuse_targets.ClearBit(u, succ);
+//     }
+
+//     // 3. Dense Hopcroft-Karp Bipartite Matching
+//     std::size_t matching_size = GreedyInit();
+//     while (BFS())
+//     {
+//       for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//       {
+//         if (ws_.mate_u[u] == INVALID_INDEX && DFS(u))
+//           ++matching_size;
+//       }
+//     }
+    
+//     AssignStaticSlots();
+//     return static_cast<std::size_t>(num_tasks_) - matching_size;
+//   }
+
+// private:
+//   std::size_t GreedyInit()
+//   {
+//     std::size_t count = 0;
+//     for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//     {
+//       if (ws_.mate_u[u] != INVALID_INDEX) continue;
+        
+//       std::size_t v = ws_.reuse_targets.FindFirstSet(u);
+//       while (v < num_tasks_)
+//       {
+//         if (ws_.mate_v[v] == INVALID_INDEX)
+//         {
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.mate_v[v] = u;
+//           ++count;
+//           break;
+//         }
+//         v = ws_.reuse_targets.FindNextSet(u, v);
+//       }
+//     }
+//     return count;
+//   }
+
+//   bool BFS()
+//   {
+//     std::fill(ws_.dist.begin(), ws_.dist.begin() + num_tasks_, -1);
+//     std::size_t head = 0, tail = 0;
+
+//     for (std::uint32_t u = 0; u < num_tasks_; ++u)
+//     {
+//       if (ws_.mate_u[u] == INVALID_INDEX)
+//       {
+//         ws_.dist[u] = 0;
+//         ws_.queue[tail++] = u;
+//       }
+//     }
+
+//     dist_null_ = std::numeric_limits<int>::max();
+
+//     while (head < tail)
+//     {
+//       std::uint32_t u = ws_.queue[head++];
+
+//       if (ws_.dist[u] < dist_null_)
+//       {
+//         std::size_t v = ws_.reuse_targets.FindFirstSet(u);
+//         while (v < num_tasks_)
+//         {
+//           std::uint32_t mate_of_v = ws_.mate_v[v];
+//           if (mate_of_v == INVALID_INDEX)
+//           {
+//             if (dist_null_ == std::numeric_limits<int>::max())
+//               dist_null_ = ws_.dist[u] + 1;
+//           }
+//           else if (ws_.dist[mate_of_v] == -1)
+//           {
+//             ws_.dist[mate_of_v] = ws_.dist[u] + 1;
+//             ws_.queue[tail++] = mate_of_v;
+//           }
+//           v = ws_.reuse_targets.FindNextSet(u, v);
+//         }
+//       }
+//     }
+//     return dist_null_ != std::numeric_limits<int>::max();
+//   }
+
+//   bool DFS(std::uint32_t u)
+//   {
+//     std::size_t v = ws_.reuse_targets.FindFirstSet(u);
+//     while (v < num_tasks_)
+//     {
+//       std::uint32_t mate_of_v = ws_.mate_v[v];
+//       if (mate_of_v == INVALID_INDEX)
+//       {
+//         if (dist_null_ == ws_.dist[u] + 1)
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1)
+//       {
+//         if (DFS(mate_of_v))
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       v = ws_.reuse_targets.FindNextSet(u, v);
+//     }
+//     ws_.dist[u] = -1;
+//     return false;
+//   }
+
+//   void AssignStaticSlots()
+//   {
+//     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
+//     std::uint32_t next_slot_id = 0;
+
+//     for (std::uint32_t task_id = 0; task_id < num_tasks_; ++task_id)
+//     {
+//       if (ws_.mate_v[task_id] == INVALID_INDEX)
+//       {
+//         std::uint32_t current = task_id;
+//         while (current != INVALID_INDEX)
+//         {
+//           task_slot_ids_[current] = next_slot_id;
+//           current = ws_.mate_u[current];
+//         }
+//         ++next_slot_id;
+//       }
+//     }
+//   }
+
+//   std::uint32_t num_tasks_;
+//   const std::vector<Task>& task_list_;
+//   const std::vector<std::uint32_t>& topo_order_;
+//   std::vector<std::uint32_t>& task_slot_ids_;
+
+//   ThreadLocalWorkspace& ws_;
+//   int dist_null_ = 0;
+// };
+
+// } // namespace
+
+// void
+// CBC_SPDS::BuildTaskGraph()
+// {
+//   constexpr auto INCOMING = FaceOrientation::INCOMING;
+//   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
+
+//   const auto num_loc_cells = grid_->local_cells.size();
+//   task_list_.assign(num_loc_cells, Task{});
+//   local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+//   std::size_t successor_count = 0;
+//   for (const auto& cell : grid_->local_cells)
+//   {
+//     unsigned int num_dependencies = 0;
+//     std::vector<std::uint32_t> predecessors;
+//     std::vector<std::uint32_t> successors;
+
+//     for (std::size_t f = 0; f < cell.faces.size(); ++f)
+//     {
+//       const auto& face = cell.faces[f];
+//       const auto orientation = cell_face_orientations_[cell.local_id][f];
+
+//       if (orientation == INCOMING and face.has_neighbor)
+//       {
+//         ++num_dependencies;
+//         if (face.IsNeighborLocal(grid_.get()))
+//           predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
+//       }
+//       else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
+//         successors.push_back(grid_->cells[face.neighbor_id].local_id);
+//     }
+
+//     successor_count += successors.size();
+//     local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+//     task_list_[cell.local_id] = Task{
+//       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+//   }
+
+//   local_successors_.resize(successor_count);
+//   initial_successors_to_retire_.resize(task_list_.size());
+//   for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+//   {
+//     initial_successors_to_retire_[cell_id] =
+//       static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
+//     std::copy(task_list_[cell_id].successors.begin(),
+//               task_list_[cell_id].successors.end(),
+//               local_successors_.begin() + local_successor_offsets_[cell_id]);
+//   }
+// }
+
+// CBC_SPDS::CBC_SPDS(const Vector3& omega,
+//                    const std::shared_ptr<MeshContinuum>& grid,
+//                    const bool allow_cycles)
+//   : SPDS(omega, grid)
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
+
+//   const auto num_loc_cells = grid->local_cells.size();
+
+//   std::vector<std::set<std::pair<std::uint32_t, double>>> cell_successors(num_loc_cells);
+//   std::set<int> location_successors;
+//   std::set<int> location_dependencies;
+
+//   PopulateCellRelationships(omega, location_dependencies, location_successors, cell_successors);
+
+//   location_successors_.reserve(location_successors.size());
+//   location_dependencies_.reserve(location_dependencies.size());
+
+//   for (const auto loc : location_successors)
+//     location_successors_.push_back(loc);
+
+//   for (const auto loc : location_dependencies)
+//     location_dependencies_.push_back(loc);
+
+//   Graph local_dg(num_loc_cells);
+//   for (std::size_t c = 0; c < num_loc_cells; ++c)
+//     for (const auto& successor : cell_successors[c])
+//       boost::add_edge(c, successor.first, successor.second, local_dg);
+
+//   if (allow_cycles)
+//   {
+//     const auto edges_to_remove = RemoveCyclicDependencies(local_dg);
+//     for (const auto& [u, v] : edges_to_remove)
+//       local_sweep_fas_.emplace_back(u, v);
+//   }
+
+//   spls_.clear();
+//   boost::topological_sort(local_dg, std::back_inserter(spls_));
+//   std::reverse(spls_.begin(), spls_.end());
+//   if (spls_.empty())
+//   {
+//     throw std::logic_error("CBC_SPDS: Cyclic dependencies found in the local cell graph.\n"
+//                            "Cycles need to be allowed by the calling application.");
+//   }
+
+//   topo_order_.reserve(spls_.size());
+//   for (const auto v : spls_)
+//     topo_order_.push_back(static_cast<std::uint32_t>(v));
+
+//   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
+//   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
+//   BuildTaskGraph();
+
+//   max_num_local_psi_slots_ = num_loc_cells;
+//   task_slot_ids_.resize(num_loc_cells);
+//   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
+// }
+
+// const std::vector<Task>&
+// CBC_SPDS::GetTaskList() const noexcept
+// {
+//   return task_list_;
+// }
+
+// void
+// CBC_SPDS::ComputeMaxNumLocalPsiSlots()
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+//   const std::uint32_t num_tasks = static_cast<std::uint32_t>(task_list_.size());
+//   if (num_tasks == 0)
+//   {
+//     max_num_local_psi_slots_ = 0;
+//     return;
+//   }
+
+//   // Persists exactly once per thread in the SPMD_ThreadPool
+//   thread_local ThreadLocalWorkspace workspace;
+  
+//   DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
+//   max_num_local_psi_slots_ = allocator.Solve();
+// }
+
+// #ifndef __OPENSN_WITH_GPU__
+// void
+// CBC_SPDS::CopyTaskGraphDataOnDevice() const
+// {
+// }
+
+// void
+// CBC_SPDS::FreeDeviceData() const
+// {
+// }
+// #endif
+
+// CBC_SPDS::~CBC_SPDS()
+// {
+//   FreeDeviceData();
+// }
+
+// } // namespace opensn
+
+// // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
+// // SPDX-License-Identifier: MIT
+
+// #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+// #include "framework/logging/log.h"
+// #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+// #include "framework/runtime.h"
+// #include "caliper/cali.h"
+// #include <queue>
+// #include <limits>
+// #include <algorithm>
+// #include <cstring>
+// #include <numeric>
+// #include <stdexcept>
+// #include <boost/graph/topological_sort.hpp>
+
+// #if __AVX512F__ || __AVX2__
+// #include <immintrin.h>
+// #endif
+
+// namespace opensn
+// {
+
+// namespace
+// {
+
+// constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
+
+// class AVXBitMatrix
+// {
+// public:
+// #if __AVX512F__
+//   static constexpr std::size_t kWordsAlign = 8;
+// #elif __AVX2__
+//   static constexpr std::size_t kWordsAlign = 4;
+// #else
+//   static constexpr std::size_t kWordsAlign = 1;
+// #endif
+
+//   AVXBitMatrix() : n_(0), words_per_row_(0) {}
+
+//   void ResizeAndClear(std::size_t n)
+//   {
+//     n_ = n;
+//     words_per_row_ = ((n + 63) / 64 + kWordsAlign - 1) / kWordsAlign * kWordsAlign;
+//     const std::size_t required_words = n * words_per_row_;
+    
+//     if (data_.size() < required_words)
+//       data_.resize(required_words);
+      
+//     std::memset(data_.data(), 0, required_words * sizeof(std::uint64_t));
+//   }
+
+//   std::size_t WordsPerRow() const { return words_per_row_; }
+//   std::uint64_t* Row(std::size_t i) { return data_.data() + i * words_per_row_; }
+//   const std::uint64_t* Row(std::size_t i) const { return data_.data() + i * words_per_row_; }
+  
+//   void SetBit(std::size_t i, std::size_t j) { Row(i)[j / 64] |= (1ULL << (j % 64)); }
+//   void ClearBit(std::size_t i, std::size_t j) { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
+
+//   // Exploits topological ordering to skip the left half of the matrix
+//   void CopyRow(std::size_t dst, const AVXBitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = (start_pos / 64 / kWordsAlign) * kWordsAlign;
+//     const std::size_t words_to_copy = words_per_row_ - start_word;
+//     std::memcpy(Row(dst) + start_word, src_mat.Row(src_row) + start_word, words_to_copy * sizeof(std::uint64_t));
+//   }
+
+//   void ClearRow(std::size_t i)
+//   {
+//     std::memset(Row(i), 0, words_per_row_ * sizeof(std::uint64_t));
+//   }
+
+//   // SIMD truncated loops natively handle 50% operations on Upper Triangular graphs
+//   void OrRows(std::size_t dst, const AVXBitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = (start_pos / 64 / kWordsAlign) * kWordsAlign;
+//     std::uint64_t* d = Row(dst) + start_word;
+//     const std::uint64_t* s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_process = words_per_row_ - start_word;
+//     std::size_t w = 0;
+
+// #if __AVX512F__
+//     for (; w < words_to_process; w += 8)
+//     {
+//       __m512i vd = _mm512_loadu_si512(reinterpret_cast<const void*>(d + w));
+//       __m512i vs = _mm512_loadu_si512(reinterpret_cast<const void*>(s + w));
+//       _mm512_storeu_si512(reinterpret_cast<void*>(d + w), _mm512_or_si512(vd, vs));
+//     }
+// #elif __AVX2__
+//     for (; w < words_to_process; w += 4)
+//     {
+//       __m256i vd = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d + w));
+//       __m256i vs = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + w));
+//       _mm256_storeu_si256(reinterpret_cast<__m256i*>(d + w), _mm256_or_si256(vd, vs));
+//     }
+// #else
+//     for (; w < words_to_process; ++w) d[w] |= s[w];
+// #endif
+//   }
+
+//   void AndRows(std::size_t dst, const AVXBitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = (start_pos / 64 / kWordsAlign) * kWordsAlign;
+//     std::uint64_t* d = Row(dst) + start_word;
+//     const std::uint64_t* s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_process = words_per_row_ - start_word;
+//     std::size_t w = 0;
+
+// #if __AVX512F__
+//     for (; w < words_to_process; w += 8)
+//     {
+//       __m512i vd = _mm512_loadu_si512(reinterpret_cast<const void*>(d + w));
+//       __m512i vs = _mm512_loadu_si512(reinterpret_cast<const void*>(s + w));
+//       _mm512_storeu_si512(reinterpret_cast<void*>(d + w), _mm512_and_si512(vd, vs));
+//     }
+// #elif __AVX2__
+//     for (; w < words_to_process; w += 4)
+//     {
+//       __m256i vd = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(d + w));
+//       __m256i vs = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s + w));
+//       _mm256_storeu_si256(reinterpret_cast<__m256i*>(d + w), _mm256_and_si256(vd, vs));
+//     }
+// #else
+//     for (; w < words_to_process; ++w) d[w] &= s[w];
+// #endif
+//   }
+
+//   std::size_t FindFirstSet(std::size_t row, std::size_t start_pos = 0) const
+//   {
+//     const std::uint64_t* r = Row(row);
+//     std::size_t w = start_pos / 64;
+
+//     if (w >= words_per_row_) return n_;
+
+//     std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
+//     if (masked)
+//       return std::min(n_, w * 64 + static_cast<std::size_t>(__builtin_ctzll(masked)));
+
+//     ++w;
+
+// #if __AVX512F__
+//     const __m512i v_zero = _mm512_setzero_si512();
+//     for (; w + 7 < words_per_row_; w += 8)
+//     {
+//       __m512i v = _mm512_loadu_si512(reinterpret_cast<const void*>(r + w));
+//       if (_mm512_cmpneq_epi64_mask(v, v_zero) != 0) break;
+//     }
+// #elif __AVX2__
+//     const __m256i v_zero = _mm256_setzero_si256();
+//     for (; w + 3 < words_per_row_; w += 4)
+//     {
+//       __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(r + w));
+//       if (!_mm256_testz_si256(v, v)) break;
+//     }
+// #endif
+
+//     for (; w < words_per_row_; ++w)
+//     {
+//       if (r[w])
+//         return std::min(n_, w * 64 + static_cast<std::size_t>(__builtin_ctzll(r[w])));
+//     }
+//     return n_;
+//   }
+
+//   std::size_t FindNextSet(std::size_t row, std::size_t pos) const 
+//   { 
+//     return FindFirstSet(row, pos + 1); 
+//   }
+
+// private:
+//   std::size_t n_;
+//   std::size_t words_per_row_;
+//   std::vector<std::uint64_t> data_;
+// };
+
+// struct ThreadLocalWorkspace
+// {
+//   AVXBitMatrix reachability;
+//   AVXBitMatrix reuse_targets;
+//   std::vector<std::uint32_t> mate_u;
+//   std::vector<std::uint32_t> mate_v;
+//   std::vector<int> dist;
+//   std::vector<std::uint32_t> queue;
+//   std::vector<std::uint32_t> topo_rank;
+  
+//   void Prepare(std::size_t n)
+//   {
+//     reachability.ResizeAndClear(n);
+//     reuse_targets.ResizeAndClear(n);
+//     mate_u.assign(n, INVALID_INDEX);
+//     mate_v.assign(n, INVALID_INDEX);
+//     dist.assign(n, -1);
+    
+//     if (queue.size() < n) queue.resize(n);
+//     if (topo_rank.size() < n) topo_rank.resize(n);
+//   }
+// };
+
+// class DenseHopcroftKarp
+// {
+// public:
+//   DenseHopcroftKarp(std::uint32_t num_tasks,
+//                     const std::vector<Task>& task_list,
+//                     const std::vector<std::uint32_t>& topo_order,
+//                     std::vector<std::uint32_t>& task_slot_ids,
+//                     ThreadLocalWorkspace& ws)
+//     : num_tasks_(num_tasks),
+//       task_list_(task_list),
+//       topo_order_(topo_order),
+//       task_slot_ids_(task_slot_ids),
+//       ws_(ws)
+//   {
+//     ws_.Prepare(num_tasks_);
+    
+//     // O(1) translation from internal cell.local_id to topological rank
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//       ws_.topo_rank[topo_order_[i]] = i;
+//   }
+
+//   std::size_t Solve()
+//   {
+//     // 1. Build Transitive Closure Bottom-Up (Exploiting upper-triangular structure)
+//     for (int i = static_cast<int>(num_tasks_) - 1; i >= 0; --i)
+//     {
+//       ws_.reachability.SetBit(i, i);
+//       const std::uint32_t u = topo_order_[i];
+//       for (const auto& succ : task_list_[u].successors)
+//       {
+//         std::uint32_t succ_rank = ws_.topo_rank[succ];
+//         ws_.reachability.OrRows(i, ws_.reachability, succ_rank, i); 
+//       }
+//     }
+
+//     // 2. Precompute Exact Reuse Intersections
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       const std::uint32_t u = topo_order_[i];
+//       const auto& successors = task_list_[u].successors;
+//       if (successors.empty()) continue;
+
+//       std::uint32_t first_succ_rank = ws_.topo_rank[successors[0]];
+//       ws_.reuse_targets.CopyRow(i, ws_.reachability, first_succ_rank, i);
+
+//       for (std::size_t j = 1; j < successors.size(); ++j)
+//       {
+//         ws_.reuse_targets.AndRows(i, ws_.reachability, ws_.topo_rank[successors[j]], i);
+//       }
+
+//       for (const auto& succ : successors)
+//         ws_.reuse_targets.ClearBit(i, ws_.topo_rank[succ]);
+//     }
+
+//     // 3. Dense Hopcroft-Karp Bipartite Matching on Topological Space
+//     std::size_t matching_size = GreedyInit();
+//     while (BFS())
+//     {
+//       for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//       {
+//         if (ws_.mate_u[i] == INVALID_INDEX && DFS(i))
+//           ++matching_size;
+//       }
+//     }
+    
+//     AssignStaticSlots();
+//     return static_cast<std::size_t>(num_tasks_) - matching_size;
+//   }
+
+// private:
+//   std::size_t GreedyInit()
+//   {
+//     std::size_t count = 0;
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_u[i] != INVALID_INDEX) continue;
+        
+//       // Interval Graph Theory: Topologically earliest target generates perfect matching
+//       std::size_t v = ws_.reuse_targets.FindFirstSet(i, i + 1);
+//       while (v < num_tasks_)
+//       {
+//         if (ws_.mate_v[v] == INVALID_INDEX)
+//         {
+//           ws_.mate_u[i] = static_cast<std::uint32_t>(v);
+//           ws_.mate_v[v] = i;
+//           ++count;
+//           break;
+//         }
+//         v = ws_.reuse_targets.FindNextSet(i, v);
+//       }
+//     }
+//     return count;
+//   }
+
+//   bool BFS()
+//   {
+//     std::fill(ws_.dist.begin(), ws_.dist.begin() + num_tasks_, -1);
+//     std::size_t head = 0, tail = 0;
+
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_u[i] == INVALID_INDEX)
+//       {
+//         ws_.dist[i] = 0;
+//         ws_.queue[tail++] = i;
+//       }
+//     }
+
+//     dist_null_ = std::numeric_limits<int>::max();
+
+//     while (head < tail)
+//     {
+//       std::uint32_t u = ws_.queue[head++];
+
+//       if (ws_.dist[u] < dist_null_)
+//       {
+//         std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+//         while (v < num_tasks_)
+//         {
+//           std::uint32_t mate_of_v = ws_.mate_v[v];
+//           if (mate_of_v == INVALID_INDEX)
+//           {
+//             if (dist_null_ == std::numeric_limits<int>::max())
+//               dist_null_ = ws_.dist[u] + 1;
+//           }
+//           else if (ws_.dist[mate_of_v] == -1)
+//           {
+//             ws_.dist[mate_of_v] = ws_.dist[u] + 1;
+//             ws_.queue[tail++] = mate_of_v;
+//           }
+//           v = ws_.reuse_targets.FindNextSet(u, v);
+//         }
+//       }
+//     }
+//     return dist_null_ != std::numeric_limits<int>::max();
+//   }
+
+//   bool DFS(std::uint32_t u)
+//   {
+//     std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+//     while (v < num_tasks_)
+//     {
+//       std::uint32_t mate_of_v = ws_.mate_v[v];
+//       if (mate_of_v == INVALID_INDEX)
+//       {
+//         if (dist_null_ == ws_.dist[u] + 1)
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1)
+//       {
+//         if (DFS(mate_of_v))
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       v = ws_.reuse_targets.FindNextSet(u, v);
+//     }
+//     ws_.dist[u] = -1;
+//     return false;
+//   }
+
+//   void AssignStaticSlots()
+//   {
+//     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
+//     std::uint32_t next_slot_id = 0;
+
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_v[i] == INVALID_INDEX)
+//       {
+//         std::uint32_t current = i;
+//         while (current != INVALID_INDEX)
+//         {
+//           // Re-translate from topological index back to application cell.local_id
+//           task_slot_ids_[topo_order_[current]] = next_slot_id;
+//           current = ws_.mate_u[current];
+//         }
+//         ++next_slot_id;
+//       }
+//     }
+//   }
+
+//   std::uint32_t num_tasks_;
+//   const std::vector<Task>& task_list_;
+//   const std::vector<std::uint32_t>& topo_order_;
+//   std::vector<std::uint32_t>& task_slot_ids_;
+
+//   ThreadLocalWorkspace& ws_;
+//   int dist_null_ = 0;
+// };
+
+// } // namespace
+
+// void
+// CBC_SPDS::BuildTaskGraph()
+// {
+//   constexpr auto INCOMING = FaceOrientation::INCOMING;
+//   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
+
+//   const auto num_loc_cells = grid_->local_cells.size();
+//   task_list_.assign(num_loc_cells, Task{});
+//   local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+//   std::size_t successor_count = 0;
+//   for (const auto& cell : grid_->local_cells)
+//   {
+//     unsigned int num_dependencies = 0;
+//     std::vector<std::uint32_t> predecessors;
+//     std::vector<std::uint32_t> successors;
+
+//     for (std::size_t f = 0; f < cell.faces.size(); ++f)
+//     {
+//       const auto& face = cell.faces[f];
+//       const auto orientation = cell_face_orientations_[cell.local_id][f];
+
+//       if (orientation == INCOMING and face.has_neighbor)
+//       {
+//         ++num_dependencies;
+//         if (face.IsNeighborLocal(grid_.get()))
+//           predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
+//       }
+//       else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
+//         successors.push_back(grid_->cells[face.neighbor_id].local_id);
+//     }
+
+//     successor_count += successors.size();
+//     local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+//     task_list_[cell.local_id] = Task{
+//       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+//   }
+
+//   local_successors_.resize(successor_count);
+//   initial_successors_to_retire_.resize(task_list_.size());
+//   for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+//   {
+//     initial_successors_to_retire_[cell_id] =
+//       static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
+//     std::copy(task_list_[cell_id].successors.begin(),
+//               task_list_[cell_id].successors.end(),
+//               local_successors_.begin() + local_successor_offsets_[cell_id]);
+//   }
+// }
+
+// CBC_SPDS::CBC_SPDS(const Vector3& omega,
+//                    const std::shared_ptr<MeshContinuum>& grid,
+//                    const bool allow_cycles)
+//   : SPDS(omega, grid)
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
+
+//   const auto num_loc_cells = grid->local_cells.size();
+
+//   std::vector<std::set<std::pair<std::uint32_t, double>>> cell_successors(num_loc_cells);
+//   std::set<int> location_successors;
+//   std::set<int> location_dependencies;
+
+//   PopulateCellRelationships(omega, location_dependencies, location_successors, cell_successors);
+
+//   location_successors_.reserve(location_successors.size());
+//   location_dependencies_.reserve(location_dependencies.size());
+
+//   for (const auto loc : location_successors)
+//     location_successors_.push_back(loc);
+
+//   for (const auto loc : location_dependencies)
+//     location_dependencies_.push_back(loc);
+
+//   Graph local_dg(num_loc_cells);
+//   for (std::size_t c = 0; c < num_loc_cells; ++c)
+//     for (const auto& successor : cell_successors[c])
+//       boost::add_edge(c, successor.first, successor.second, local_dg);
+
+//   if (allow_cycles)
+//   {
+//     const auto edges_to_remove = RemoveCyclicDependencies(local_dg);
+//     for (const auto& [u, v] : edges_to_remove)
+//       local_sweep_fas_.emplace_back(u, v);
+//   }
+
+//   spls_.clear();
+//   boost::topological_sort(local_dg, std::back_inserter(spls_));
+//   std::reverse(spls_.begin(), spls_.end());
+//   if (spls_.empty())
+//   {
+//     throw std::logic_error("CBC_SPDS: Cyclic dependencies found in the local cell graph.\n"
+//                            "Cycles need to be allowed by the calling application.");
+//   }
+
+//   topo_order_.reserve(spls_.size());
+//   for (const auto v : spls_)
+//     topo_order_.push_back(static_cast<std::uint32_t>(v));
+
+//   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
+//   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
+//   BuildTaskGraph();
+
+//   max_num_local_psi_slots_ = num_loc_cells;
+//   task_slot_ids_.resize(num_loc_cells);
+//   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
+// }
+
+// const std::vector<Task>&
+// CBC_SPDS::GetTaskList() const noexcept
+// {
+//   return task_list_;
+// }
+
+// void
+// CBC_SPDS::ComputeMaxNumLocalPsiSlots()
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+//   const std::uint32_t num_tasks = static_cast<std::uint32_t>(task_list_.size());
+//   if (num_tasks == 0)
+//   {
+//     max_num_local_psi_slots_ = 0;
+//     return;
+//   }
+
+//   thread_local ThreadLocalWorkspace workspace;
+  
+//   DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
+//   max_num_local_psi_slots_ = allocator.Solve();
+// }
+
+// #ifndef __OPENSN_WITH_GPU__
+// void
+// CBC_SPDS::CopyTaskGraphDataOnDevice() const
+// {
+// }
+
+// void
+// CBC_SPDS::FreeDeviceData() const
+// {
+// }
+// #endif
+
+// CBC_SPDS::~CBC_SPDS()
+// {
+//   FreeDeviceData();
+// }
+
+// } // namespace opensn
+
+// SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
+// SPDX-License-Identifier: MIT
+
+// #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+// #include "framework/logging/log.h"
+// #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+// #include "framework/runtime.h"
+// #include "caliper/cali.h"
+// #include <queue>
+// #include <limits>
+// #include <algorithm>
+// #include <cstring>
+// #include <numeric>
+// #include <stdexcept>
+// #include <boost/graph/topological_sort.hpp>
+
+// namespace opensn
+// {
+
+// namespace
+// {
+
+// constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
+
+// class BitMatrix
+// {
+// public:
+//   BitMatrix() : n_(0), words_per_row_(0) {}
+
+//   void ResizeAndClear(std::size_t n)
+//   {
+//     n_ = n;
+//     // Pad to multiple of 8 words (512 bits) to guarantee perfect 
+//     // boundary alignment for compiler auto-vectorization
+//     words_per_row_ = (((n + 63) / 64) + 7) & ~7ULL;
+//     const std::size_t required_words = n * words_per_row_;
+    
+//     if (data_.size() < required_words)
+//       data_.resize(required_words);
+      
+//     std::memset(data_.data(), 0, required_words * sizeof(std::uint64_t));
+//   }
+
+//   std::size_t WordsPerRow() const { return words_per_row_; }
+//   std::uint64_t* Row(std::size_t i) { return data_.data() + i * words_per_row_; }
+//   const std::uint64_t* Row(std::size_t i) const { return data_.data() + i * words_per_row_; }
+  
+//   void SetBit(std::size_t i, std::size_t j) { Row(i)[j / 64] |= (1ULL << (j % 64)); }
+//   void ClearBit(std::size_t i, std::size_t j) { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
+
+//   // The __restrict keyword guarantees no pointer aliasing, enabling the 
+//   // compiler to aggressively unroll and vectorize the loops natively.
+//   void CopyRow(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = start_pos / 64;
+//     std::uint64_t* __restrict d = Row(dst) + start_word;
+//     const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_copy = words_per_row_ - start_word;
+    
+//     std::memcpy(d, s, words_to_copy * sizeof(std::uint64_t));
+//   }
+
+//   void OrRows(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = start_pos / 64;
+//     std::uint64_t* __restrict d = Row(dst) + start_word;
+//     const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_process = words_per_row_ - start_word;
+
+//     for (std::size_t w = 0; w < words_to_process; ++w)
+//       d[w] |= s[w];
+//   }
+
+//   void AndRows(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = start_pos / 64;
+//     std::uint64_t* __restrict d = Row(dst) + start_word;
+//     const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_process = words_per_row_ - start_word;
+
+//     for (std::size_t w = 0; w < words_to_process; ++w)
+//       d[w] &= s[w];
+//   }
+
+//   std::size_t FindFirstSet(std::size_t row, std::size_t start_pos = 0) const
+//   {
+//     const std::uint64_t* __restrict r = Row(row);
+//     std::size_t w = start_pos / 64;
+
+//     if (w >= words_per_row_) return n_;
+
+//     std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
+//     if (masked)
+//       return std::min(n_, w * 64 + static_cast<std::size_t>(__builtin_ctzll(masked)));
+
+//     for (++w; w < words_per_row_; ++w)
+//     {
+//       if (r[w])
+//         return std::min(n_, w * 64 + static_cast<std::size_t>(__builtin_ctzll(r[w])));
+//     }
+//     return n_;
+//   }
+
+//   std::size_t FindNextSet(std::size_t row, std::size_t pos) const 
+//   { 
+//     return FindFirstSet(row, pos + 1); 
+//   }
+
+// private:
+//   std::size_t n_;
+//   std::size_t words_per_row_;
+//   std::vector<std::uint64_t> data_;
+// };
+
+// struct ThreadLocalWorkspace
+// {
+//   BitMatrix reachability;
+//   BitMatrix reuse_targets;
+//   std::vector<std::uint32_t> mate_u;
+//   std::vector<std::uint32_t> mate_v;
+//   std::vector<int> dist;
+//   std::vector<std::uint32_t> queue;
+//   std::vector<std::uint32_t> topo_rank;
+  
+//   void Prepare(std::size_t n)
+//   {
+//     reachability.ResizeAndClear(n);
+//     reuse_targets.ResizeAndClear(n);
+//     mate_u.assign(n, INVALID_INDEX);
+//     mate_v.assign(n, INVALID_INDEX);
+//     dist.assign(n, -1);
+    
+//     if (queue.size() < n) queue.resize(n);
+//     if (topo_rank.size() < n) topo_rank.resize(n);
+//   }
+// };
+
+// class DenseHopcroftKarp
+// {
+// public:
+//   DenseHopcroftKarp(std::uint32_t num_tasks,
+//                     const std::vector<Task>& task_list,
+//                     const std::vector<std::uint32_t>& topo_order,
+//                     std::vector<std::uint32_t>& task_slot_ids,
+//                     ThreadLocalWorkspace& ws)
+//     : num_tasks_(num_tasks),
+//       task_list_(task_list),
+//       topo_order_(topo_order),
+//       task_slot_ids_(task_slot_ids),
+//       ws_(ws)
+//   {
+//     ws_.Prepare(num_tasks_);
+    
+//     // O(1) translation from internal cell.local_id to topological rank
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//       ws_.topo_rank[topo_order_[i]] = i;
+//   }
+
+//   std::size_t Solve()
+//   {
+//     // 1. Build Transitive Closure Bottom-Up
+//     for (int i = static_cast<int>(num_tasks_) - 1; i >= 0; --i)
+//     {
+//       ws_.reachability.SetBit(i, i);
+//       const std::uint32_t u = topo_order_[i];
+//       for (const auto& succ : task_list_[u].successors)
+//       {
+//         std::uint32_t succ_rank = ws_.topo_rank[succ];
+//         // Mathematical Truncation: A successor can mathematically never reach
+//         // a node with a topological rank lower than its own. Skip entire memory blocks.
+//         ws_.reachability.OrRows(i, ws_.reachability, succ_rank, succ_rank); 
+//       }
+//     }
+
+//     // 2. Precompute Exact Reuse Intersections
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       const std::uint32_t u = topo_order_[i];
+//       const auto& successors = task_list_[u].successors;
+//       if (successors.empty()) continue;
+
+//       // Mathematical Truncation: The intersection of downstream targets cannot 
+//       // yield a valid match prior to the highest topological rank of any immediate successor.
+//       std::uint32_t max_succ_rank = ws_.topo_rank[successors[0]];
+//       for (std::size_t j = 1; j < successors.size(); ++j)
+//         max_succ_rank = std::max(max_succ_rank, ws_.topo_rank[successors[j]]);
+
+//       ws_.reuse_targets.CopyRow(i, ws_.reachability, ws_.topo_rank[successors[0]], max_succ_rank);
+
+//       for (std::size_t j = 1; j < successors.size(); ++j)
+//       {
+//         ws_.reuse_targets.AndRows(i, ws_.reachability, ws_.topo_rank[successors[j]], max_succ_rank);
+//       }
+
+//       for (const auto& succ : successors)
+//         ws_.reuse_targets.ClearBit(i, ws_.topo_rank[succ]);
+//     }
+
+//     // 3. Dense Hopcroft-Karp Bipartite Matching on Topological Space
+//     std::size_t matching_size = GreedyInit();
+//     while (BFS())
+//     {
+//       for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//       {
+//         if (ws_.mate_u[i] == INVALID_INDEX && DFS(i))
+//           ++matching_size;
+//       }
+//     }
+    
+//     AssignStaticSlots();
+//     return static_cast<std::size_t>(num_tasks_) - matching_size;
+//   }
+
+// private:
+//   std::size_t GreedyInit()
+//   {
+//     std::size_t count = 0;
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_u[i] != INVALID_INDEX) continue;
+        
+//       // Interval Graph Theory: Topologically earliest target generates perfect/near-perfect matching
+//       std::size_t v = ws_.reuse_targets.FindFirstSet(i, i + 1);
+//       while (v < num_tasks_)
+//       {
+//         if (ws_.mate_v[v] == INVALID_INDEX)
+//         {
+//           ws_.mate_u[i] = static_cast<std::uint32_t>(v);
+//           ws_.mate_v[v] = i;
+//           ++count;
+//           break;
+//         }
+//         v = ws_.reuse_targets.FindNextSet(i, v);
+//       }
+//     }
+//     return count;
+//   }
+
+//   bool BFS()
+//   {
+//     std::fill(ws_.dist.begin(), ws_.dist.begin() + num_tasks_, -1);
+//     std::size_t head = 0, tail = 0;
+
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_u[i] == INVALID_INDEX)
+//       {
+//         ws_.dist[i] = 0;
+//         ws_.queue[tail++] = i;
+//       }
+//     }
+
+//     dist_null_ = std::numeric_limits<int>::max();
+
+//     while (head < tail)
+//     {
+//       std::uint32_t u = ws_.queue[head++];
+
+//       if (ws_.dist[u] < dist_null_)
+//       {
+//         std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+//         while (v < num_tasks_)
+//         {
+//           std::uint32_t mate_of_v = ws_.mate_v[v];
+//           if (mate_of_v == INVALID_INDEX)
+//           {
+//             if (dist_null_ == std::numeric_limits<int>::max())
+//               dist_null_ = ws_.dist[u] + 1;
+//           }
+//           else if (ws_.dist[mate_of_v] == -1)
+//           {
+//             ws_.dist[mate_of_v] = ws_.dist[u] + 1;
+//             ws_.queue[tail++] = mate_of_v;
+//           }
+//           v = ws_.reuse_targets.FindNextSet(u, v);
+//         }
+//       }
+//     }
+//     return dist_null_ != std::numeric_limits<int>::max();
+//   }
+
+//   bool DFS(std::uint32_t u)
+//   {
+//     std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+//     while (v < num_tasks_)
+//     {
+//       std::uint32_t mate_of_v = ws_.mate_v[v];
+//       if (mate_of_v == INVALID_INDEX)
+//       {
+//         if (dist_null_ == ws_.dist[u] + 1)
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1)
+//       {
+//         if (DFS(mate_of_v))
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       v = ws_.reuse_targets.FindNextSet(u, v);
+//     }
+//     ws_.dist[u] = -1;
+//     return false;
+//   }
+
+//   void AssignStaticSlots()
+//   {
+//     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
+//     std::uint32_t next_slot_id = 0;
+
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_v[i] == INVALID_INDEX)
+//       {
+//         std::uint32_t current = i;
+//         while (current != INVALID_INDEX)
+//         {
+//           // Re-translate from topological index back to application cell.local_id
+//           task_slot_ids_[topo_order_[current]] = next_slot_id;
+//           current = ws_.mate_u[current];
+//         }
+//         ++next_slot_id;
+//       }
+//     }
+//   }
+
+//   std::uint32_t num_tasks_;
+//   const std::vector<Task>& task_list_;
+//   const std::vector<std::uint32_t>& topo_order_;
+//   std::vector<std::uint32_t>& task_slot_ids_;
+
+//   ThreadLocalWorkspace& ws_;
+//   int dist_null_ = 0;
+// };
+
+// } // namespace
+
+// void
+// CBC_SPDS::BuildTaskGraph()
+// {
+//   constexpr auto INCOMING = FaceOrientation::INCOMING;
+//   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
+
+//   const auto num_loc_cells = grid_->local_cells.size();
+//   task_list_.assign(num_loc_cells, Task{});
+//   local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+//   std::size_t successor_count = 0;
+//   for (const auto& cell : grid_->local_cells)
+//   {
+//     unsigned int num_dependencies = 0;
+//     std::vector<std::uint32_t> predecessors;
+//     std::vector<std::uint32_t> successors;
+
+//     for (std::size_t f = 0; f < cell.faces.size(); ++f)
+//     {
+//       const auto& face = cell.faces[f];
+//       const auto orientation = cell_face_orientations_[cell.local_id][f];
+
+//       if (orientation == INCOMING and face.has_neighbor)
+//       {
+//         ++num_dependencies;
+//         if (face.IsNeighborLocal(grid_.get()))
+//           predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
+//       }
+//       else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
+//         successors.push_back(grid_->cells[face.neighbor_id].local_id);
+//     }
+
+//     successor_count += successors.size();
+//     local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+//     task_list_[cell.local_id] = Task{
+//       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+//   }
+
+//   local_successors_.resize(successor_count);
+//   initial_successors_to_retire_.resize(task_list_.size());
+//   for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+//   {
+//     initial_successors_to_retire_[cell_id] =
+//       static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
+//     std::copy(task_list_[cell_id].successors.begin(),
+//               task_list_[cell_id].successors.end(),
+//               local_successors_.begin() + local_successor_offsets_[cell_id]);
+//   }
+// }
+
+// CBC_SPDS::CBC_SPDS(const Vector3& omega,
+//                    const std::shared_ptr<MeshContinuum>& grid,
+//                    const bool allow_cycles)
+//   : SPDS(omega, grid)
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
+
+//   const auto num_loc_cells = grid->local_cells.size();
+
+//   std::vector<std::set<std::pair<std::uint32_t, double>>> cell_successors(num_loc_cells);
+//   std::set<int> location_successors;
+//   std::set<int> location_dependencies;
+
+//   PopulateCellRelationships(omega, location_dependencies, location_successors, cell_successors);
+
+//   location_successors_.reserve(location_successors.size());
+//   location_dependencies_.reserve(location_dependencies.size());
+
+//   for (const auto loc : location_successors)
+//     location_successors_.push_back(loc);
+
+//   for (const auto loc : location_dependencies)
+//     location_dependencies_.push_back(loc);
+
+//   Graph local_dg(num_loc_cells);
+//   for (std::size_t c = 0; c < num_loc_cells; ++c)
+//     for (const auto& successor : cell_successors[c])
+//       boost::add_edge(c, successor.first, successor.second, local_dg);
+
+//   if (allow_cycles)
+//   {
+//     const auto edges_to_remove = RemoveCyclicDependencies(local_dg);
+//     for (const auto& [u, v] : edges_to_remove)
+//       local_sweep_fas_.emplace_back(u, v);
+//   }
+
+//   spls_.clear();
+//   boost::topological_sort(local_dg, std::back_inserter(spls_));
+//   std::reverse(spls_.begin(), spls_.end());
+//   if (spls_.empty())
+//   {
+//     throw std::logic_error("CBC_SPDS: Cyclic dependencies found in the local cell graph.\n"
+//                            "Cycles need to be allowed by the calling application.");
+//   }
+
+//   topo_order_.reserve(spls_.size());
+//   for (const auto v : spls_)
+//     topo_order_.push_back(static_cast<std::uint32_t>(v));
+
+//   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
+//   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
+//   BuildTaskGraph();
+
+//   max_num_local_psi_slots_ = num_loc_cells;
+//   task_slot_ids_.resize(num_loc_cells);
+//   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
+// }
+
+// const std::vector<Task>&
+// CBC_SPDS::GetTaskList() const noexcept
+// {
+//   return task_list_;
+// }
+
+// void
+// CBC_SPDS::ComputeMaxNumLocalPsiSlots()
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+//   const std::uint32_t num_tasks = static_cast<std::uint32_t>(task_list_.size());
+//   if (num_tasks == 0)
+//   {
+//     max_num_local_psi_slots_ = 0;
+//     return;
+//   }
+
+//   // Persists exactly once per thread in the SPMD_ThreadPool
+//   thread_local ThreadLocalWorkspace workspace;
+  
+//   DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
+//   max_num_local_psi_slots_ = allocator.Solve();
+// }
+
+// #ifndef __OPENSN_WITH_GPU__
+// void
+// CBC_SPDS::CopyTaskGraphDataOnDevice() const
+// {
+// }
+
+// void
+// CBC_SPDS::FreeDeviceData() const
+// {
+// }
+// #endif
+
+// CBC_SPDS::~CBC_SPDS()
+// {
+//   FreeDeviceData();
+// }
+
+// } // namespace opensn
+
+// This version should be the one that I stick with
+// // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
+// // SPDX-License-Identifier: MIT
+
+// #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+// #include "framework/logging/log.h"
+// #include "framework/mesh/mesh_continuum/mesh_continuum.h"
+// #include "framework/runtime.h"
+// #include "caliper/cali.h"
+// #include <queue>
+// #include <limits>
+// #include <algorithm>
+// #include <cstring>
+// #include <numeric>
+// #include <stdexcept>
+// #include <bit> // C++20 hardware bit-manipulation
+// #include <boost/graph/topological_sort.hpp>
+
+// namespace opensn
+// {
+
+// namespace
+// {
+
+// constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
+
+// class BitMatrix
+// {
+// public:
+//   BitMatrix() : n_(0), words_per_row_(0) {}
+
+//   void ResizeAndClear(std::size_t n)
+//   {
+//     n_ = n;
+//     // Pad to multiple of 8 words (512 bits) to guarantee perfect 
+//     // boundary alignment for compiler auto-vectorization
+//     words_per_row_ = (((n + 63) / 64) + 7) & ~7ULL;
+//     const std::size_t required_words = n * words_per_row_;
+    
+//     // Elide double-initialization overhead during growth
+//     if (data_.size() < required_words)
+//       data_.resize(required_words, 0ULL);
+//     else
+//       std::fill_n(data_.begin(), required_words, 0ULL);
+//   }
+
+//   std::size_t WordsPerRow() const { return words_per_row_; }
+//   std::uint64_t* Row(std::size_t i) { return data_.data() + i * words_per_row_; }
+//   const std::uint64_t* Row(std::size_t i) const { return data_.data() + i * words_per_row_; }
+  
+//   void SetBit(std::size_t i, std::size_t j) { Row(i)[j / 64] |= (1ULL << (j % 64)); }
+//   void ClearBit(std::size_t i, std::size_t j) { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
+
+//   // The __restrict keyword guarantees no pointer aliasing, enabling the 
+//   // compiler to aggressively unroll and vectorize the loops natively.
+//   void CopyRow(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = start_pos / 64;
+//     std::uint64_t* __restrict d = Row(dst) + start_word;
+//     const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_copy = words_per_row_ - start_word;
+    
+//     std::memcpy(d, s, words_to_copy * sizeof(std::uint64_t));
+//   }
+
+//   void OrRows(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = start_pos / 64;
+//     std::uint64_t* __restrict d = Row(dst) + start_word;
+//     const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_process = words_per_row_ - start_word;
+
+//     for (std::size_t w = 0; w < words_to_process; ++w)
+//       d[w] |= s[w];
+//   }
+
+//   void AndRows(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+//   {
+//     const std::size_t start_word = start_pos / 64;
+//     std::uint64_t* __restrict d = Row(dst) + start_word;
+//     const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+//     const std::size_t words_to_process = words_per_row_ - start_word;
+
+//     for (std::size_t w = 0; w < words_to_process; ++w)
+//       d[w] &= s[w];
+//   }
+
+//   std::size_t FindFirstSet(std::size_t row, std::size_t start_pos = 0) const
+//   {
+//     const std::uint64_t* __restrict r = Row(row);
+//     std::size_t w = start_pos / 64;
+
+//     if (w >= words_per_row_) return n_;
+
+//     std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
+    
+//     // Mathematical Truncation: Padding bits are strictly guaranteed to be 0.
+//     // Branchless return eliminates boundary checks. std::countr_zero maps to hardware TZCNT.
+//     if (masked)
+//       return w * 64 + static_cast<std::size_t>(std::countr_zero(masked));
+
+//     for (++w; w < words_per_row_; ++w)
+//     {
+//       if (r[w])
+//         return w * 64 + static_cast<std::size_t>(std::countr_zero(r[w]));
+//     }
+//     return n_;
+//   }
+
+//   std::size_t FindNextSet(std::size_t row, std::size_t pos) const 
+//   { 
+//     return FindFirstSet(row, pos + 1); 
+//   }
+
+// private:
+//   std::size_t n_;
+//   std::size_t words_per_row_;
+//   std::vector<std::uint64_t> data_;
+// };
+
+// struct ThreadLocalWorkspace
+// {
+//   BitMatrix reachability;
+//   BitMatrix reuse_targets;
+//   std::vector<std::uint32_t> mate_u;
+//   std::vector<std::uint32_t> mate_v;
+//   std::vector<int> dist;
+//   std::vector<std::uint32_t> queue;
+//   std::vector<std::uint32_t> topo_rank;
+//   std::vector<std::uint32_t> dfs_ptr; // Dead-edge tracker for bounded O(E) DFS
+  
+//   void Prepare(std::size_t n)
+//   {
+//     reachability.ResizeAndClear(n);
+//     reuse_targets.ResizeAndClear(n);
+//     mate_u.assign(n, INVALID_INDEX);
+//     mate_v.assign(n, INVALID_INDEX);
+//     dist.assign(n, -1);
+    
+//     if (queue.size() < n) queue.resize(n);
+//     if (topo_rank.size() < n) topo_rank.resize(n);
+//     if (dfs_ptr.size() < n) dfs_ptr.resize(n);
+//   }
+// };
+
+// class DenseHopcroftKarp
+// {
+// public:
+//   DenseHopcroftKarp(std::uint32_t num_tasks,
+//                     const std::vector<Task>& task_list,
+//                     const std::vector<std::uint32_t>& topo_order,
+//                     std::vector<std::uint32_t>& task_slot_ids,
+//                     ThreadLocalWorkspace& ws)
+//     : num_tasks_(num_tasks),
+//       task_list_(task_list),
+//       topo_order_(topo_order),
+//       task_slot_ids_(task_slot_ids),
+//       ws_(ws)
+//   {
+//     ws_.Prepare(num_tasks_);
+    
+//     // O(1) translation from internal cell.local_id to topological rank
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//       ws_.topo_rank[topo_order_[i]] = i;
+//   }
+
+//   std::size_t Solve()
+//   {
+//     // 1. Build Transitive Closure Bottom-Up
+//     for (std::uint32_t i = num_tasks_; i-- > 0; )
+//     {
+//       const std::uint32_t u = topo_order_[i];
+//       const auto& successors = task_list_[u].successors;
+
+//       if (successors.empty())
+//       {
+//         ws_.reachability.SetBit(i, i);
+//       }
+//       else
+//       {
+//         // Copy-Init Elision: Direct memory copy from the first successor bypasses 
+//         // a fully redundant bitwise OR over an empty initialization row.
+//         std::uint32_t first_succ_rank = ws_.topo_rank[successors[0]];
+//         ws_.reachability.CopyRow(i, ws_.reachability, first_succ_rank, first_succ_rank);
+//         ws_.reachability.SetBit(i, i);
+
+//         for (std::size_t j = 1; j < successors.size(); ++j)
+//         {
+//           std::uint32_t succ_rank = ws_.topo_rank[successors[j]];
+//           ws_.reachability.OrRows(i, ws_.reachability, succ_rank, succ_rank); 
+//         }
+//       }
+//     }
+
+//     // 2. Precompute Exact Reuse Intersections
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       const std::uint32_t u = topo_order_[i];
+//       const auto& successors = task_list_[u].successors;
+//       if (successors.empty()) continue;
+
+//       // Mathematical Truncation: The intersection of downstream targets cannot 
+//       // yield a valid match prior to the highest topological rank of any immediate successor.
+//       std::uint32_t max_succ_rank = ws_.topo_rank[successors[0]];
+//       for (std::size_t j = 1; j < successors.size(); ++j)
+//         max_succ_rank = std::max(max_succ_rank, ws_.topo_rank[successors[j]]);
+
+//       ws_.reuse_targets.CopyRow(i, ws_.reachability, ws_.topo_rank[successors[0]], max_succ_rank);
+
+//       for (std::size_t j = 1; j < successors.size(); ++j)
+//         ws_.reuse_targets.AndRows(i, ws_.reachability, ws_.topo_rank[successors[j]], max_succ_rank);
+
+//       for (const auto& succ : successors)
+//         ws_.reuse_targets.ClearBit(i, ws_.topo_rank[succ]);
+//     }
+
+//     // 3. Dense Hopcroft-Karp Bipartite Matching
+//     std::size_t matching_size = GreedyInit();
+//     while (BFS())
+//     {
+//       // Reset dead-edge trackers at the start of a new phase.
+//       // Because reuse targets are strictly downstream, scanning starts at i + 1.
+//       for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//         ws_.dfs_ptr[i] = i + 1;
+
+//       for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//       {
+//         if (ws_.mate_u[i] == INVALID_INDEX && DFS(i))
+//           ++matching_size;
+//       }
+//     }
+    
+//     AssignStaticSlots();
+//     return static_cast<std::size_t>(num_tasks_) - matching_size;
+//   }
+
+// private:
+//   std::size_t GreedyInit()
+//   {
+//     std::size_t count = 0;
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_u[i] != INVALID_INDEX) continue;
+        
+//       std::size_t v = ws_.reuse_targets.FindFirstSet(i, i + 1);
+//       while (v < num_tasks_)
+//       {
+//         if (ws_.mate_v[v] == INVALID_INDEX)
+//         {
+//           ws_.mate_u[i] = static_cast<std::uint32_t>(v);
+//           ws_.mate_v[v] = i;
+//           ++count;
+//           break;
+//         }
+//         v = ws_.reuse_targets.FindNextSet(i, v);
+//       }
+//     }
+//     return count;
+//   }
+
+//   bool BFS()
+//   {
+//     std::fill_n(ws_.dist.begin(), num_tasks_, -1);
+//     std::size_t head = 0, tail = 0;
+
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_u[i] == INVALID_INDEX)
+//       {
+//         ws_.dist[i] = 0;
+//         ws_.queue[tail++] = i;
+//       }
+//     }
+
+//     dist_null_ = std::numeric_limits<int>::max();
+
+//     while (head < tail)
+//     {
+//       std::uint32_t u = ws_.queue[head++];
+
+//       if (ws_.dist[u] < dist_null_)
+//       {
+//         std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+//         while (v < num_tasks_)
+//         {
+//           std::uint32_t mate_of_v = ws_.mate_v[v];
+//           if (mate_of_v == INVALID_INDEX)
+//           {
+//             if (dist_null_ == std::numeric_limits<int>::max())
+//               dist_null_ = ws_.dist[u] + 1;
+//           }
+//           else if (ws_.dist[mate_of_v] == -1)
+//           {
+//             ws_.dist[mate_of_v] = ws_.dist[u] + 1;
+//             ws_.queue[tail++] = mate_of_v;
+//           }
+//           v = ws_.reuse_targets.FindNextSet(u, v);
+//         }
+//       }
+//     }
+//     return dist_null_ != std::numeric_limits<int>::max();
+//   }
+
+//   bool DFS(std::uint32_t u)
+//   {
+//     // Resume DFS from the last unevaluated edge in this phase
+//     for (std::size_t v = ws_.reuse_targets.FindFirstSet(u, ws_.dfs_ptr[u]); 
+//          v < num_tasks_; 
+//          v = ws_.reuse_targets.FindFirstSet(u, ws_.dfs_ptr[u]))
+//     {
+//       ws_.dfs_ptr[u] = v + 1; // Dead-edge tracking guarantees O(E) evaluation per phase
+      
+//       std::uint32_t mate_of_v = ws_.mate_v[v];
+//       if (mate_of_v == INVALID_INDEX)
+//       {
+//         if (dist_null_ == ws_.dist[u] + 1)
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//       else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1)
+//       {
+//         if (DFS(mate_of_v))
+//         {
+//           ws_.mate_v[v] = u;
+//           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+//           ws_.dist[u] = -1;
+//           return true;
+//         }
+//       }
+//     }
+//     ws_.dist[u] = -1;
+//     return false;
+//   }
+
+//   void AssignStaticSlots()
+//   {
+//     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
+//     std::uint32_t next_slot_id = 0;
+
+//     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+//     {
+//       if (ws_.mate_v[i] == INVALID_INDEX)
+//       {
+//         std::uint32_t current = i;
+//         while (current != INVALID_INDEX)
+//         {
+//           task_slot_ids_[topo_order_[current]] = next_slot_id;
+//           current = ws_.mate_u[current];
+//         }
+//         ++next_slot_id;
+//       }
+//     }
+//   }
+
+//   std::uint32_t num_tasks_;
+//   const std::vector<Task>& task_list_;
+//   const std::vector<std::uint32_t>& topo_order_;
+//   std::vector<std::uint32_t>& task_slot_ids_;
+
+//   ThreadLocalWorkspace& ws_;
+//   int dist_null_ = 0;
+// };
+
+// } // namespace
+
+// void
+// CBC_SPDS::BuildTaskGraph()
+// {
+//   constexpr auto INCOMING = FaceOrientation::INCOMING;
+//   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
+
+//   const auto num_loc_cells = grid_->local_cells.size();
+//   task_list_.assign(num_loc_cells, Task{});
+//   local_successor_offsets_.resize(num_loc_cells + 1, 0);
+
+//   std::size_t successor_count = 0;
+//   for (const auto& cell : grid_->local_cells)
+//   {
+//     unsigned int num_dependencies = 0;
+//     std::vector<std::uint32_t> predecessors;
+//     std::vector<std::uint32_t> successors;
+
+//     // Pre-allocate to prevent vector expansion during face checks
+//     predecessors.reserve(cell.faces.size());
+//     successors.reserve(cell.faces.size());
+
+//     for (std::size_t f = 0; f < cell.faces.size(); ++f)
+//     {
+//       const auto& face = cell.faces[f];
+//       const auto orientation = cell_face_orientations_[cell.local_id][f];
+
+//       if (orientation == INCOMING and face.has_neighbor)
+//       {
+//         ++num_dependencies;
+//         if (face.IsNeighborLocal(grid_.get()))
+//           predecessors.push_back(grid_->cells[face.neighbor_id].local_id);
+//       }
+//       else if (orientation == OUTGOING and face.has_neighbor and face.IsNeighborLocal(grid_.get()))
+//         successors.push_back(grid_->cells[face.neighbor_id].local_id);
+//     }
+
+//     successor_count += successors.size();
+//     local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
+//     task_list_[cell.local_id] = Task{
+//       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
+//   }
+
+//   local_successors_.resize(successor_count);
+//   initial_successors_to_retire_.resize(task_list_.size());
+//   for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
+//   {
+//     initial_successors_to_retire_[cell_id] =
+//       static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
+//     std::copy(task_list_[cell_id].successors.begin(),
+//               task_list_[cell_id].successors.end(),
+//               local_successors_.begin() + local_successor_offsets_[cell_id]);
+//   }
+// }
+
+// CBC_SPDS::CBC_SPDS(const Vector3& omega,
+//                    const std::shared_ptr<MeshContinuum>& grid,
+//                    const bool allow_cycles)
+//   : SPDS(omega, grid)
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
+
+//   const auto num_loc_cells = grid->local_cells.size();
+
+//   std::vector<std::set<std::pair<std::uint32_t, double>>> cell_successors(num_loc_cells);
+//   std::set<int> location_successors;
+//   std::set<int> location_dependencies;
+
+//   PopulateCellRelationships(omega, location_dependencies, location_successors, cell_successors);
+
+//   location_successors_.reserve(location_successors.size());
+//   location_dependencies_.reserve(location_dependencies.size());
+
+//   for (const auto loc : location_successors)
+//     location_successors_.push_back(loc);
+
+//   for (const auto loc : location_dependencies)
+//     location_dependencies_.push_back(loc);
+
+//   Graph local_dg(num_loc_cells);
+//   for (std::size_t c = 0; c < num_loc_cells; ++c)
+//     for (const auto& successor : cell_successors[c])
+//       boost::add_edge(c, successor.first, successor.second, local_dg);
+
+//   if (allow_cycles)
+//   {
+//     const auto edges_to_remove = RemoveCyclicDependencies(local_dg);
+//     for (const auto& [u, v] : edges_to_remove)
+//       local_sweep_fas_.emplace_back(u, v);
+//   }
+
+//   spls_.clear();
+//   boost::topological_sort(local_dg, std::back_inserter(spls_));
+//   std::reverse(spls_.begin(), spls_.end());
+//   if (spls_.empty())
+//   {
+//     throw std::logic_error("CBC_SPDS: Cyclic dependencies found in the local cell graph.\n"
+//                            "Cycles need to be allowed by the calling application.");
+//   }
+
+//   topo_order_.reserve(spls_.size());
+//   for (const auto v : spls_)
+//     topo_order_.push_back(static_cast<std::uint32_t>(v));
+
+//   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
+//   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
+//   BuildTaskGraph();
+
+//   max_num_local_psi_slots_ = num_loc_cells;
+//   task_slot_ids_.resize(num_loc_cells);
+//   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
+// }
+
+// const std::vector<Task>&
+// CBC_SPDS::GetTaskList() const noexcept
+// {
+//   return task_list_;
+// }
+
+// void
+// CBC_SPDS::ComputeMaxNumLocalPsiSlots()
+// {
+//   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+//   const std::uint32_t num_tasks = static_cast<std::uint32_t>(task_list_.size());
+//   if (num_tasks == 0)
+//   {
+//     max_num_local_psi_slots_ = 0;
+//     return;
+//   }
+
+//   thread_local ThreadLocalWorkspace workspace;
+  
+//   DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
+//   max_num_local_psi_slots_ = allocator.Solve();
+// }
+
+// #ifndef __OPENSN_WITH_GPU__
+// void
+// CBC_SPDS::CopyTaskGraphDataOnDevice() const
+// {
+// }
+
+// void
+// CBC_SPDS::FreeDeviceData() const
+// {
+// }
+// #endif
+
+// CBC_SPDS::~CBC_SPDS()
+// {
+//   FreeDeviceData();
+// }
+
+// } // namespace opensn
+
+// No, this is the version I should go with as it removes the dfs_ptr entirely
 // SPDX-FileCopyrightText: 2024 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
@@ -6,12 +2620,13 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
-#include <algorithm>
+#include <queue>
 #include <limits>
+#include <algorithm>
+#include <cstring>
 #include <numeric>
 #include <stdexcept>
-#include <boost/graph/connected_components.hpp>
-#include <boost/graph/max_cardinality_matching.hpp>
+#include <bit>
 #include <boost/graph/topological_sort.hpp>
 
 namespace opensn
@@ -21,593 +2636,321 @@ namespace
 {
 
 constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
-using MatchingGraph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
-using MatchingVertex = boost::graph_traits<MatchingGraph>::vertex_descriptor;
 
-struct ChainCoverData
+class BitMatrix
 {
-  std::uint32_t num_chains = 0;
-  std::vector<std::uint32_t> chain_id;
-  std::vector<std::uint32_t> pos_in_chain;
-  std::vector<std::uint32_t> chain_offsets;
-  std::vector<std::uint32_t> chain_vertices;
+public:
+  BitMatrix() : n_(0), words_per_row_(0) {}
+
+  void ResizeAndClear(std::size_t n)
+  {
+    n_ = n;
+    words_per_row_ = (((n + 63) / 64) + 7) & ~7ULL;
+    const std::size_t required_words = n * words_per_row_;
+    
+    if (data_.size() < required_words)
+      data_.resize(required_words, 0ULL);
+    else
+      std::fill_n(data_.begin(), required_words, 0ULL);
+  }
+
+  std::size_t WordsPerRow() const { return words_per_row_; }
+  std::uint64_t* Row(std::size_t i) { return data_.data() + i * words_per_row_; }
+  const std::uint64_t* Row(std::size_t i) const { return data_.data() + i * words_per_row_; }
+  
+  void SetBit(std::size_t i, std::size_t j) { Row(i)[j / 64] |= (1ULL << (j % 64)); }
+  void ClearBit(std::size_t i, std::size_t j) { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
+
+  void CopyRow(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+  {
+    const std::size_t start_word = start_pos / 64;
+    std::uint64_t* __restrict d = Row(dst) + start_word;
+    const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+    const std::size_t words_to_copy = words_per_row_ - start_word;
+    
+    std::memcpy(d, s, words_to_copy * sizeof(std::uint64_t));
+  }
+
+  void OrRows(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+  {
+    const std::size_t start_word = start_pos / 64;
+    std::uint64_t* __restrict d = Row(dst) + start_word;
+    const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+    const std::size_t words_to_process = words_per_row_ - start_word;
+
+    for (std::size_t w = 0; w < words_to_process; ++w)
+      d[w] |= s[w];
+  }
+
+  void AndRows(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
+  {
+    const std::size_t start_word = start_pos / 64;
+    std::uint64_t* __restrict d = Row(dst) + start_word;
+    const std::uint64_t* __restrict s = src_mat.Row(src_row) + start_word;
+    const std::size_t words_to_process = words_per_row_ - start_word;
+
+    for (std::size_t w = 0; w < words_to_process; ++w)
+      d[w] &= s[w];
+  }
+
+  std::size_t FindFirstSet(std::size_t row, std::size_t start_pos = 0) const
+  {
+    const std::uint64_t* __restrict r = Row(row);
+    std::size_t w = start_pos / 64;
+
+    if (w >= words_per_row_) return n_;
+
+    std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
+    
+    if (masked)
+      return w * 64 + static_cast<std::size_t>(std::countr_zero(masked));
+
+    for (++w; w < words_per_row_; ++w)
+    {
+      if (r[w])
+        return w * 64 + static_cast<std::size_t>(std::countr_zero(r[w]));
+    }
+    return n_;
+  }
+
+  std::size_t FindNextSet(std::size_t row, std::size_t pos) const 
+  { 
+    return FindFirstSet(row, pos + 1); 
+  }
+
+private:
+  std::size_t n_;
+  std::size_t words_per_row_;
+  std::vector<std::uint64_t> data_;
 };
 
-struct SlotCalcScratch
+struct ThreadLocalWorkspace
 {
+  BitMatrix reachability;
+  BitMatrix reuse_targets;
   std::vector<std::uint32_t> mate_u;
   std::vector<std::uint32_t> mate_v;
   std::vector<int> dist;
-  std::vector<std::uint32_t> bfs_queue;
-  std::vector<std::uint32_t> first_reachable;
-  std::vector<std::uint32_t> reuse_row;
-  std::vector<std::uint8_t> is_immediate_successor;
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> reuse_edges;
-  std::vector<int> component_ids;
-  std::vector<std::uint32_t> local_vertex_ids;
-  std::vector<std::size_t> component_vertex_counts;
-  std::vector<std::size_t> component_edge_counts;
-  std::vector<std::size_t> component_vertex_offsets;
-  std::vector<std::size_t> component_edge_offsets;
-  std::vector<std::size_t> component_edge_write_offsets;
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> component_edges;
-  std::vector<std::uint32_t> compact_to_orig;
-  std::vector<std::uint32_t> component_vertices;
-  std::vector<std::size_t> component_matching_mate;
-  std::vector<std::uint8_t> is_active_vertex;
-  std::vector<std::uint32_t> matched_next;
-  std::vector<std::uint32_t> matched_prev;
-
-  void ResizeMatchingState(const std::uint32_t num_tasks)
+  std::vector<std::uint32_t> queue;
+  std::vector<std::uint32_t> topo_rank;
+  
+  void Prepare(std::size_t n)
   {
-    mate_u.assign(num_tasks, INVALID_INDEX);
-    mate_v.assign(num_tasks, INVALID_INDEX);
-    dist.assign(num_tasks, -1);
-    bfs_queue.resize(num_tasks);
-    is_immediate_successor.assign(num_tasks, 0);
-    matched_next.assign(num_tasks, INVALID_INDEX);
-    matched_prev.assign(num_tasks, INVALID_INDEX);
+    reachability.ResizeAndClear(n);
+    reuse_targets.ResizeAndClear(n);
+    mate_u.assign(n, INVALID_INDEX);
+    mate_v.assign(n, INVALID_INDEX);
+    dist.assign(n, -1);
+    
+    if (queue.size() < n) queue.resize(n);
+    if (topo_rank.size() < n) topo_rank.resize(n);
   }
 };
 
-struct TaskGraphData
-{
-  Task task;
-  std::size_t successor_count = 0;
-};
-
-std::size_t
-ComputeCheckedMatchingSize(const MatchingGraph& graph,
-                           std::vector<MatchingVertex>& mate_storage,
-                           const char* warning_message)
-{
-  const auto null_vertex = boost::graph_traits<MatchingGraph>::null_vertex();
-  mate_storage.assign(num_vertices(graph), null_vertex);
-  const auto mate_map =
-    boost::make_iterator_property_map(mate_storage.begin(), get(boost::vertex_index, graph));
-  const bool is_maximum_matching =
-    boost::checked_edmonds_maximum_cardinality_matching(graph, mate_map);
-  if (not is_maximum_matching)
-  {
-    log.Log0Warning() << warning_message
-                      << " Falling back to one local psi slot per task for this CBC_SPDS.";
-    return std::numeric_limits<std::size_t>::max();
-  }
-  return boost::matching_size(graph, mate_map);
-}
-
-class CSRBipartiteMatcher
+class DenseHopcroftKarp
 {
 public:
-  CSRBipartiteMatcher(const std::vector<std::uint32_t>& row_offsets,
-                      const std::vector<std::uint32_t>& columns,
-                      SlotCalcScratch& scratch)
-    : row_offsets_(row_offsets), columns_(columns), scratch_(scratch)
+  DenseHopcroftKarp(std::uint32_t num_tasks,
+                    const std::vector<Task>& task_list,
+                    const std::vector<std::uint32_t>& topo_order,
+                    std::vector<std::uint32_t>& task_slot_ids,
+                    ThreadLocalWorkspace& ws)
+    : num_tasks_(num_tasks),
+      task_list_(task_list),
+      topo_order_(topo_order),
+      task_slot_ids_(task_slot_ids),
+      ws_(ws)
   {
+    ws_.Prepare(num_tasks_);
+    
+    for (std::uint32_t i = 0; i < num_tasks_; ++i)
+      ws_.topo_rank[topo_order_[i]] = i;
   }
 
   std::size_t Solve()
   {
-    std::size_t matching_size = GreedyInitialize();
+    for (std::uint32_t i = num_tasks_; i-- > 0; )
+    {
+      const std::uint32_t u = topo_order_[i];
+      const auto& successors = task_list_[u].successors;
+
+      if (successors.empty())
+      {
+        ws_.reachability.SetBit(i, i);
+      }
+      else
+      {
+        std::uint32_t first_succ_rank = ws_.topo_rank[successors[0]];
+        ws_.reachability.CopyRow(i, ws_.reachability, first_succ_rank, first_succ_rank);
+        ws_.reachability.SetBit(i, i);
+
+        for (std::size_t j = 1; j < successors.size(); ++j)
+        {
+          std::uint32_t succ_rank = ws_.topo_rank[successors[j]];
+          ws_.reachability.OrRows(i, ws_.reachability, succ_rank, succ_rank); 
+        }
+      }
+    }
+
+    for (std::uint32_t i = 0; i < num_tasks_; ++i)
+    {
+      const std::uint32_t u = topo_order_[i];
+      const auto& successors = task_list_[u].successors;
+      if (successors.empty()) continue;
+
+      std::uint32_t max_succ_rank = ws_.topo_rank[successors[0]];
+      for (std::size_t j = 1; j < successors.size(); ++j)
+        max_succ_rank = std::max(max_succ_rank, ws_.topo_rank[successors[j]]);
+
+      ws_.reuse_targets.CopyRow(i, ws_.reachability, ws_.topo_rank[successors[0]], max_succ_rank);
+
+      for (std::size_t j = 1; j < successors.size(); ++j)
+        ws_.reuse_targets.AndRows(i, ws_.reachability, ws_.topo_rank[successors[j]], max_succ_rank);
+
+      for (const auto& succ : successors)
+        ws_.reuse_targets.ClearBit(i, ws_.topo_rank[succ]);
+    }
+
+    std::size_t matching_size = GreedyInit();
     while (BFS())
     {
-      for (std::uint32_t u = 0; u + 1 < row_offsets_.size(); ++u)
+      for (std::uint32_t i = 0; i < num_tasks_; ++i)
       {
-        if (scratch_.mate_u[u] == INVALID_INDEX and DFS(u))
+        if (ws_.mate_u[i] == INVALID_INDEX && DFS(i))
           ++matching_size;
       }
     }
-    return matching_size;
+    
+    AssignStaticSlots();
+    return static_cast<std::size_t>(num_tasks_) - matching_size;
   }
 
 private:
-  std::size_t GreedyInitialize()
+  std::size_t GreedyInit()
   {
-    std::size_t matching_size = 0;
-
-    for (std::uint32_t u = 0; u + 1 < row_offsets_.size(); ++u)
+    std::size_t count = 0;
+    for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      for (auto e = row_offsets_[u]; e < row_offsets_[u + 1]; ++e)
+      if (ws_.mate_u[i] != INVALID_INDEX) continue;
+        
+      std::size_t v = ws_.reuse_targets.FindFirstSet(i, i + 1);
+      while (v < num_tasks_)
       {
-        const auto v = columns_[e];
-        if (scratch_.mate_v[v] != INVALID_INDEX)
-          continue;
-
-        scratch_.mate_u[u] = v;
-        scratch_.mate_v[v] = u;
-        ++matching_size;
-        break;
+        if (ws_.mate_v[v] == INVALID_INDEX)
+        {
+          ws_.mate_u[i] = static_cast<std::uint32_t>(v);
+          ws_.mate_v[v] = i;
+          ++count;
+          break;
+        }
+        v = ws_.reuse_targets.FindNextSet(i, v);
       }
     }
-
-    return matching_size;
+    return count;
   }
 
   bool BFS()
   {
-    std::fill(scratch_.dist.begin(), scratch_.dist.end(), -1);
+    std::fill_n(ws_.dist.begin(), num_tasks_, -1);
+    std::size_t head = 0, tail = 0;
 
-    std::size_t queue_head = 0;
-    std::size_t queue_tail = 0;
-
-    for (std::uint32_t u = 0; u + 1 < row_offsets_.size(); ++u)
+    for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (scratch_.mate_u[u] == INVALID_INDEX)
+      if (ws_.mate_u[i] == INVALID_INDEX)
       {
-        scratch_.dist[u] = 0;
-        scratch_.bfs_queue[queue_tail++] = u;
+        ws_.dist[i] = 0;
+        ws_.queue[tail++] = i;
       }
     }
 
     dist_null_ = std::numeric_limits<int>::max();
 
-    while (queue_head < queue_tail)
+    while (head < tail)
     {
-      const auto u = scratch_.bfs_queue[queue_head++];
-      if (scratch_.dist[u] >= dist_null_)
-        continue;
+      std::uint32_t u = ws_.queue[head++];
 
-      for (auto e = row_offsets_[u]; e < row_offsets_[u + 1]; ++e)
+      if (ws_.dist[u] < dist_null_)
       {
-        const auto v = columns_[e];
-        const auto mate_of_v = scratch_.mate_v[v];
-
-        if (mate_of_v == INVALID_INDEX)
-          dist_null_ = std::min(dist_null_, scratch_.dist[u] + 1);
-        else if (scratch_.dist[mate_of_v] == -1)
+        std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+        while (v < num_tasks_)
         {
-          scratch_.dist[mate_of_v] = scratch_.dist[u] + 1;
-          scratch_.bfs_queue[queue_tail++] = mate_of_v;
+          std::uint32_t mate_of_v = ws_.mate_v[v];
+          if (mate_of_v == INVALID_INDEX)
+          {
+            if (dist_null_ == std::numeric_limits<int>::max())
+              dist_null_ = ws_.dist[u] + 1;
+          }
+          else if (ws_.dist[mate_of_v] == -1)
+          {
+            ws_.dist[mate_of_v] = ws_.dist[u] + 1;
+            ws_.queue[tail++] = mate_of_v;
+          }
+          v = ws_.reuse_targets.FindNextSet(u, v);
         }
       }
     }
-
     return dist_null_ != std::numeric_limits<int>::max();
   }
 
-  bool DFS(const std::uint32_t u)
+  bool DFS(std::uint32_t u)
   {
-    for (auto e = row_offsets_[u]; e < row_offsets_[u + 1]; ++e)
+    std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+    while (v < num_tasks_)
     {
-      const auto v = columns_[e];
-      const auto mate_of_v = scratch_.mate_v[v];
-
+      std::uint32_t mate_of_v = ws_.mate_v[v];
       if (mate_of_v == INVALID_INDEX)
       {
-        if (dist_null_ == scratch_.dist[u] + 1)
+        if (dist_null_ == ws_.dist[u] + 1)
         {
-          scratch_.mate_u[u] = v;
-          scratch_.mate_v[v] = u;
-          scratch_.dist[u] = -1;
+          ws_.mate_v[v] = u;
+          ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+          ws_.dist[u] = -1;
           return true;
         }
       }
-      else if (scratch_.dist[mate_of_v] == scratch_.dist[u] + 1 and DFS(mate_of_v))
+      else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1)
       {
-        scratch_.mate_u[u] = v;
-        scratch_.mate_v[v] = u;
-        scratch_.dist[u] = -1;
-        return true;
+        if (DFS(mate_of_v))
+        {
+          ws_.mate_v[v] = u;
+          ws_.mate_u[u] = static_cast<std::uint32_t>(v);
+          ws_.dist[u] = -1;
+          return true;
+        }
       }
+      v = ws_.reuse_targets.FindNextSet(u, v);
     }
-
-    scratch_.dist[u] = -1;
+    ws_.dist[u] = -1;
     return false;
   }
 
-  const std::vector<std::uint32_t>& row_offsets_;
-  const std::vector<std::uint32_t>& columns_;
-  SlotCalcScratch& scratch_;
-  int dist_null_ = std::numeric_limits<int>::max();
-};
-
-class ExactSlotCounter
-{
-public:
-  ExactSlotCounter(const std::vector<std::uint32_t>& successor_offsets,
-                   const std::vector<std::uint32_t>& successors,
-                   const std::vector<std::uint32_t>& topo_order,
-                   SlotCalcScratch& scratch,
-                   std::vector<std::uint32_t>& task_slot_ids)
-    : successor_offsets_(successor_offsets),
-      successors_(successors),
-      topo_order_(topo_order),
-      scratch_(scratch),
-      task_slot_ids_(task_slot_ids),
-      num_tasks_(static_cast<std::uint32_t>(successor_offsets.size() - 1))
-  {
-  }
-
-  std::size_t Solve()
-  {
-    if (num_tasks_ == 0)
-      return 0;
-
-    try
-    {
-      BuildMinimumPathCover();
-      BuildFirstReachable();
-      BuildReuseEdges();
-      const auto reuse_matching_size = ComputeReuseMatchingSize();
-      AssignTaskSlots();
-      return (reuse_matching_size == std::numeric_limits<std::size_t>::max())
-               ? static_cast<std::size_t>(num_tasks_)
-               : static_cast<std::size_t>(num_tasks_) - reuse_matching_size;
-    }
-    catch (const std::logic_error& error)
-    {
-      log.Log0Warning() << error.what()
-                        << " Falling back to one local psi slot per task for this CBC_SPDS.";
-      return static_cast<std::size_t>(num_tasks_);
-    }
-  }
-
-private:
-  MatchingGraph BuildActiveReuseGraph()
-  {
-    const auto num_graph_vertices = static_cast<std::size_t>(num_tasks_) * 2;
-    scratch_.is_active_vertex.assign(num_graph_vertices, 0);
-    for (const auto& [u, v] : scratch_.reuse_edges)
-    {
-      scratch_.is_active_vertex[u] = 1;
-      scratch_.is_active_vertex[v] = 1;
-    }
-
-    scratch_.local_vertex_ids.assign(num_graph_vertices, INVALID_INDEX);
-    scratch_.compact_to_orig.clear();
-    scratch_.compact_to_orig.reserve(num_graph_vertices);
-    std::uint32_t active_vertex_count = 0;
-    for (std::size_t vertex = 0; vertex < num_graph_vertices; ++vertex)
-      if (scratch_.is_active_vertex[vertex])
-      {
-        scratch_.local_vertex_ids[vertex] = active_vertex_count++;
-        scratch_.compact_to_orig.push_back(static_cast<std::uint32_t>(vertex));
-      }
-
-    scratch_.component_edges.resize(scratch_.reuse_edges.size());
-    std::transform(scratch_.reuse_edges.begin(),
-                   scratch_.reuse_edges.end(),
-                   scratch_.component_edges.begin(),
-                   [&](const auto& edge)
-                   {
-                     return std::pair<std::uint32_t, std::uint32_t>{
-                       scratch_.local_vertex_ids[edge.first],
-                       scratch_.local_vertex_ids[edge.second]};
-                   });
-
-    return MatchingGraph(
-      scratch_.component_edges.begin(), scratch_.component_edges.end(), active_vertex_count);
-  }
-
-  std::size_t ComputeComponentMatchingSize(const MatchingGraph& reuse_graph)
-  {
-    std::fill(scratch_.matched_next.begin(), scratch_.matched_next.end(), INVALID_INDEX);
-    std::fill(scratch_.matched_prev.begin(), scratch_.matched_prev.end(), INVALID_INDEX);
-    scratch_.component_ids.assign(num_vertices(reuse_graph), -1);
-    const auto component_map = boost::make_iterator_property_map(
-      scratch_.component_ids.begin(), get(boost::vertex_index, reuse_graph));
-    const int num_components = boost::connected_components(reuse_graph, component_map);
-
-    if (num_components <= 1)
-    {
-      const auto matching_size = ComputeCheckedMatchingSize(
-        reuse_graph,
-        scratch_.component_matching_mate,
-        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-      if (matching_size == std::numeric_limits<std::size_t>::max())
-        return matching_size;
-      RecordMatchingPairs(scratch_.component_matching_mate, scratch_.compact_to_orig, 0);
-      return matching_size;
-    }
-
-    scratch_.component_vertex_counts.assign(num_components, 0);
-    scratch_.component_edge_counts.assign(num_components, 0);
-    for (const auto component_id : scratch_.component_ids)
-      ++scratch_.component_vertex_counts[component_id];
-    for (const auto& [u, _] : scratch_.reuse_edges)
-      ++scratch_.component_edge_counts[scratch_.component_ids[u]];
-
-    scratch_.component_vertex_offsets.resize(num_components + 1, 0);
-    scratch_.component_edge_offsets.resize(num_components + 1, 0);
-    for (int component_id = 0; component_id < num_components; ++component_id)
-    {
-      scratch_.component_vertex_offsets[component_id + 1] =
-        scratch_.component_vertex_offsets[component_id] +
-        scratch_.component_vertex_counts[component_id];
-      scratch_.component_edge_offsets[component_id + 1] =
-        scratch_.component_edge_offsets[component_id] +
-        scratch_.component_edge_counts[component_id];
-    }
-
-    auto next_component_vertex = scratch_.component_vertex_offsets;
-    scratch_.component_vertices.resize(num_vertices(reuse_graph));
-    for (MatchingVertex vertex = 0; vertex < num_vertices(reuse_graph); ++vertex)
-    {
-      const auto component_id = scratch_.component_ids[vertex];
-      const auto local_offset = next_component_vertex[component_id];
-      scratch_.local_vertex_ids[vertex] = static_cast<std::uint32_t>(
-        local_offset - scratch_.component_vertex_offsets[component_id]);
-      scratch_.component_vertices[local_offset] = scratch_.compact_to_orig[vertex];
-      ++next_component_vertex[component_id];
-    }
-
-    scratch_.component_edges.resize(scratch_.reuse_edges.size());
-    scratch_.component_edge_write_offsets = scratch_.component_edge_offsets;
-    for (const auto& [u, v] : scratch_.reuse_edges)
-    {
-      const auto component_id = scratch_.component_ids[u];
-      scratch_.component_edges[scratch_.component_edge_write_offsets[component_id]++] = {
-        scratch_.local_vertex_ids[u], scratch_.local_vertex_ids[v]};
-    }
-
-    std::size_t matching_size = 0;
-    for (int component_id = 0; component_id < num_components; ++component_id)
-    {
-      const auto vertex_count = scratch_.component_vertex_counts[component_id];
-      const auto edge_begin =
-        scratch_.component_edges.begin() +
-        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id]);
-      const auto edge_end =
-        scratch_.component_edges.begin() +
-        static_cast<std::ptrdiff_t>(scratch_.component_edge_offsets[component_id + 1]);
-      MatchingGraph component_graph(edge_begin, edge_end, vertex_count);
-      const auto component_matching_size = ComputeCheckedMatchingSize(
-        component_graph,
-        scratch_.component_matching_mate,
-        "CBC_SPDS: Boost Edmonds matching failed to produce a maximum reuse matching.");
-      if (component_matching_size == std::numeric_limits<std::size_t>::max())
-        return component_matching_size;
-      RecordMatchingPairs(scratch_.component_matching_mate,
-                          scratch_.component_vertices,
-                          scratch_.component_vertex_offsets[component_id]);
-      matching_size += component_matching_size;
-    }
-
-    return matching_size;
-  }
-
-  void RecordMatchingPairs(const std::vector<std::size_t>& mate_storage,
-                           const std::vector<std::uint32_t>& vertices,
-                           const std::size_t base_offset)
-  {
-    const auto null_vertex = boost::graph_traits<MatchingGraph>::null_vertex();
-    for (std::size_t local_u = 0; local_u < mate_storage.size(); ++local_u)
-    {
-      const auto local_v = mate_storage[local_u];
-      if (local_v == static_cast<std::size_t>(null_vertex) or local_u >= local_v)
-        continue;
-
-      auto lhs = vertices[base_offset + local_u];
-      auto rhs = vertices[base_offset + local_v];
-      if (lhs >= num_tasks_)
-        std::swap(lhs, rhs);
-
-      if (lhs >= num_tasks_ or rhs < num_tasks_)
-        throw std::logic_error("CBC_SPDS: Invalid reuse matching edge orientation.");
-
-      const auto predecessor = lhs;
-      const auto successor = rhs - num_tasks_;
-      scratch_.matched_next[predecessor] = successor;
-      scratch_.matched_prev[successor] = predecessor;
-    }
-  }
-
-  void BuildMinimumPathCover()
-  {
-    scratch_.ResizeMatchingState(num_tasks_);
-    CSRBipartiteMatcher(successor_offsets_, successors_, scratch_).Solve();
-
-    chain_cover_.chain_id.assign(num_tasks_, INVALID_INDEX);
-    chain_cover_.pos_in_chain.assign(num_tasks_, INVALID_INDEX);
-    chain_cover_.chain_offsets.clear();
-    chain_cover_.chain_offsets.reserve(num_tasks_ + 1);
-    chain_cover_.chain_offsets.push_back(0);
-    chain_cover_.chain_vertices.clear();
-    chain_cover_.chain_vertices.reserve(num_tasks_);
-    chain_cover_.num_chains = 0;
-
-    const auto append_chain = [this](std::uint32_t start_vertex)
-    {
-      std::uint32_t current = start_vertex;
-      std::uint32_t chain_pos = 0;
-
-      while (current != INVALID_INDEX)
-      {
-        if (chain_cover_.chain_id[current] != INVALID_INDEX)
-          throw std::logic_error("CBC_SPDS: Invalid minimum path cover construction.");
-
-        chain_cover_.chain_id[current] = chain_cover_.num_chains;
-        chain_cover_.pos_in_chain[current] = chain_pos++;
-        chain_cover_.chain_vertices.push_back(current);
-        current = scratch_.mate_u[current];
-      }
-
-      ++chain_cover_.num_chains;
-      chain_cover_.chain_offsets.push_back(
-        static_cast<std::uint32_t>(chain_cover_.chain_vertices.size()));
-    };
-
-    for (std::uint32_t v = 0; v < num_tasks_; ++v)
-      if (scratch_.mate_v[v] == INVALID_INDEX)
-        append_chain(v);
-
-    for (std::uint32_t v = 0; v < num_tasks_; ++v)
-      if (chain_cover_.chain_id[v] == INVALID_INDEX)
-        append_chain(v);
-  }
-
-  void BuildFirstReachable()
-  {
-    const auto num_chains = chain_cover_.num_chains;
-    scratch_.first_reachable.assign(static_cast<std::size_t>(num_tasks_) * num_chains,
-                                    INVALID_INDEX);
-
-    for (auto topo_it = topo_order_.rbegin(); topo_it != topo_order_.rend(); ++topo_it)
-    {
-      const auto u = *topo_it;
-      auto* const row = scratch_.first_reachable.data() + static_cast<std::size_t>(u) * num_chains;
-
-      row[chain_cover_.chain_id[u]] = chain_cover_.pos_in_chain[u];
-
-      for (auto e = successor_offsets_[u]; e < successor_offsets_[u + 1]; ++e)
-      {
-        const auto succ = successors_[e];
-        const auto* const succ_row =
-          scratch_.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
-
-        for (std::uint32_t chain = 0; chain < num_chains; ++chain)
-        {
-          const auto succ_pos = succ_row[chain];
-          auto& first_pos = row[chain];
-          if (succ_pos == INVALID_INDEX)
-            continue;
-
-          if (first_pos == INVALID_INDEX or succ_pos < first_pos)
-            first_pos = succ_pos;
-        }
-      }
-    }
-  }
-
-  template <class F>
-  void ForEachReuseNeighbor(const std::uint32_t u, F&& func)
-  {
-    const auto num_chains = chain_cover_.num_chains;
-    const auto succ_begin = successor_offsets_[u];
-    const auto succ_end = successor_offsets_[u + 1];
-    if (succ_begin == succ_end)
-      return;
-
-    scratch_.reuse_row.resize(num_chains);
-    const auto first_succ = successors_[succ_begin];
-    const auto* const first_succ_row =
-      scratch_.first_reachable.data() + static_cast<std::size_t>(first_succ) * num_chains;
-    std::copy_n(first_succ_row, num_chains, scratch_.reuse_row.begin());
-
-    for (auto e = succ_begin + 1; e < succ_end; ++e)
-    {
-      const auto succ = successors_[e];
-      const auto* const succ_row =
-        scratch_.first_reachable.data() + static_cast<std::size_t>(succ) * num_chains;
-
-      for (std::uint32_t chain = 0; chain < num_chains; ++chain)
-      {
-        auto& candidate_pos = scratch_.reuse_row[chain];
-        const auto succ_pos = succ_row[chain];
-        if (candidate_pos == INVALID_INDEX or succ_pos == INVALID_INDEX)
-          candidate_pos = INVALID_INDEX;
-        else
-          candidate_pos = std::max(candidate_pos, succ_pos);
-      }
-    }
-
-    for (auto e = succ_begin; e < succ_end; ++e)
-      scratch_.is_immediate_successor[successors_[e]] = 1;
-
-    for (std::uint32_t chain = 0; chain < num_chains; ++chain)
-    {
-      const auto start_pos = scratch_.reuse_row[chain];
-      if (start_pos == INVALID_INDEX)
-        continue;
-
-      const auto chain_begin = chain_cover_.chain_offsets[chain];
-      const auto chain_end = chain_cover_.chain_offsets[chain + 1];
-      for (std::uint32_t pos = chain_begin + start_pos; pos < chain_end; ++pos)
-      {
-        const auto v = chain_cover_.chain_vertices[pos];
-        if (not scratch_.is_immediate_successor[v])
-          func(v);
-      }
-    }
-
-    for (auto e = succ_begin; e < succ_end; ++e)
-      scratch_.is_immediate_successor[successors_[e]] = 0;
-  }
-
-  void BuildReuseEdges()
-  {
-    std::size_t reuse_edge_count = 0;
-    for (std::uint32_t u = 0; u < num_tasks_; ++u)
-      ForEachReuseNeighbor(u, [&](const std::uint32_t) { ++reuse_edge_count; });
-
-    scratch_.reuse_edges.clear();
-    scratch_.reuse_edges.reserve(reuse_edge_count);
-
-    for (std::uint32_t u = 0; u < num_tasks_; ++u)
-      ForEachReuseNeighbor(
-        u, [&](const std::uint32_t v) { scratch_.reuse_edges.emplace_back(u, num_tasks_ + v); });
-  }
-
-  std::size_t ComputeReuseMatchingSize()
-  {
-    if (scratch_.reuse_edges.empty())
-    {
-      std::fill(scratch_.matched_next.begin(), scratch_.matched_next.end(), INVALID_INDEX);
-      std::fill(scratch_.matched_prev.begin(), scratch_.matched_prev.end(), INVALID_INDEX);
-      return 0;
-    }
-    return ComputeComponentMatchingSize(BuildActiveReuseGraph());
-  }
-
-  void AssignTaskSlots()
+  void AssignStaticSlots()
   {
     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
     std::uint32_t next_slot_id = 0;
 
-    for (std::uint32_t task_id = 0; task_id < num_tasks_; ++task_id)
+    for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (scratch_.matched_prev[task_id] != INVALID_INDEX)
-        continue;
-
-      std::uint32_t current = task_id;
-      while (current != INVALID_INDEX)
+      if (ws_.mate_v[i] == INVALID_INDEX)
       {
-        if (task_slot_ids_[current] != INVALID_INDEX)
-          throw std::logic_error("CBC_SPDS: Invalid slot-chain assignment.");
-
-        task_slot_ids_[current] = next_slot_id;
-        current = scratch_.matched_next[current];
+        std::uint32_t current = i;
+        while (current != INVALID_INDEX)
+        {
+          task_slot_ids_[topo_order_[current]] = next_slot_id;
+          current = ws_.mate_u[current];
+        }
+        ++next_slot_id;
       }
-
-      ++next_slot_id;
-    }
-
-    for (std::uint32_t task_id = 0; task_id < num_tasks_; ++task_id)
-    {
-      if (task_slot_ids_[task_id] != INVALID_INDEX)
-        continue;
-      task_slot_ids_[task_id] = next_slot_id++;
     }
   }
 
-private:
-  const std::vector<std::uint32_t>& successor_offsets_;
-  const std::vector<std::uint32_t>& successors_;
+  std::uint32_t num_tasks_;
+  const std::vector<Task>& task_list_;
   const std::vector<std::uint32_t>& topo_order_;
-  SlotCalcScratch& scratch_;
   std::vector<std::uint32_t>& task_slot_ids_;
-  const std::uint32_t num_tasks_;
-  ChainCoverData chain_cover_;
+
+  ThreadLocalWorkspace& ws_;
+  int dist_null_ = 0;
 };
 
 } // namespace
@@ -628,6 +2971,9 @@ CBC_SPDS::BuildTaskGraph()
     unsigned int num_dependencies = 0;
     std::vector<std::uint32_t> predecessors;
     std::vector<std::uint32_t> successors;
+
+    predecessors.reserve(cell.faces.size());
+    successors.reserve(cell.faces.size());
 
     for (std::size_t f = 0; f < cell.faces.size(); ++f)
     {
@@ -731,18 +3077,17 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
 {
   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
 
-  const auto num_tasks = static_cast<std::uint32_t>(task_list_.size());
+  const std::uint32_t num_tasks = static_cast<std::uint32_t>(task_list_.size());
   if (num_tasks == 0)
   {
     max_num_local_psi_slots_ = 0;
     return;
   }
 
-  thread_local SlotCalcScratch scratch;
-  max_num_local_psi_slots_ =
-    ExactSlotCounter(
-      local_successor_offsets_, local_successors_, topo_order_, scratch, task_slot_ids_)
-      .Solve();
+  thread_local ThreadLocalWorkspace workspace;
+  
+  DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
+  max_num_local_psi_slots_ = allocator.Solve();
 }
 
 #ifndef __OPENSN_WITH_GPU__
