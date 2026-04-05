@@ -1583,7 +1583,7 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       for (const auto& spds : spds_list)
       {
         quadrature_fluds_commondata_map_[quadrature].push_back(
-          std::make_unique<CBC_FLUDSCommonData>(*spds, grid_nodal_mappings_));
+          std::make_unique<CBC_FLUDSCommonData>(*spds, grid_nodal_mappings_, *discretization_));
       }
     }
   }

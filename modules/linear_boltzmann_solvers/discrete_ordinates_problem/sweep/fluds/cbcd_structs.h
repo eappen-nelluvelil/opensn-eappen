@@ -136,6 +136,10 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
   /// Pointer to local cell slot offsets, in node units.
   const std::uint32_t* __restrict__ local_slot_offsets = nullptr;
+  /// Pointer to per-cell offsets into the compact local-node map.
+  const std::uint32_t* __restrict__ local_cell_node_offsets = nullptr;
+  /// Pointer to compact local-node indices for each cell node.
+  const std::uint32_t* __restrict__ local_compact_node_indices = nullptr;
   /// Pointer to incoming boundary angular fluxes.
   double* __restrict__ incoming_boundary_psi = nullptr;
   /// Pointer to outgoing boundary angular fluxes.
@@ -146,10 +150,20 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     return local_psi + static_cast<std::size_t>(local_slot_offsets[cell_local_id]) * stride_size;
   }
 
+  constexpr std::uint32_t GetCompactLocalNodeIndex(const std::uint32_t cell_local_id,
+                                                   const std::uint16_t cell_node) const noexcept
+  {
+    const auto index_offset = local_cell_node_offsets[cell_local_id] + static_cast<std::uint32_t>(cell_node);
+    return local_compact_node_indices[index_offset];
+  }
+
   constexpr double* GetLocalFluxPointer(double* local_cell_base,
+                                        const std::uint32_t cell_local_id,
                                         const std::uint16_t cell_node) const noexcept
   {
-    return local_cell_base + static_cast<std::size_t>(cell_node) * stride_size;
+    return local_cell_base +
+           static_cast<std::size_t>(GetCompactLocalNodeIndex(cell_local_id, cell_node)) *
+             stride_size;
   }
 
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
@@ -172,6 +186,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     if (node_index.IsLocal())
     {
       return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
+                                 node_index.GetCellLocalID(),
                                  node_index.GetCellNode());
     }
     // Incoming non-local case
@@ -201,6 +216,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     if (node_index.IsLocal())
     {
       return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
+                                 node_index.GetCellLocalID(),
                                  node_index.GetCellNode());
     }
     // Outgoing non-local case

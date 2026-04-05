@@ -20,7 +20,10 @@ CBCD_FLUDSCommonData::CBCD_FLUDSCommonData(
     num_incoming_nonlocal_nodes_(0),
     num_outgoing_nonlocal_faces_(0),
     num_outgoing_nonlocal_nodes_(0),
+    max_local_outgoing_node_count_(0),
     device_cell_face_node_map_(nullptr),
+    device_local_cell_node_offsets_(nullptr),
+    device_local_compact_node_indices_(nullptr),
     incoming_boundary_node_map_()
 {
   CopyFlattenedNodeIndexToDevice(sdm);

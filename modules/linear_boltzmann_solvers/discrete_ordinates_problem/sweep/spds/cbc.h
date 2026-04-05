@@ -34,6 +34,7 @@ public:
   void ComputeMaxNumLocalPsiSlots();
 
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
+  std::size_t GetNumStaticLocalPsiSlots() const noexcept { return num_static_local_psi_slots_; }
 
   const std::vector<std::uint32_t>& GetTaskSlotIDs() const noexcept { return task_slot_ids_; }
 
@@ -54,6 +55,7 @@ private:
   std::vector<Task> task_list_;
   std::vector<std::uint32_t> task_slot_ids_;
   std::size_t max_num_local_psi_slots_ = 0;
+  std::size_t num_static_local_psi_slots_ = 0;
   mutable CBCDeviceTaskGraph device_task_graph_;
 };
 

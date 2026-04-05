@@ -39,14 +39,7 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
                             num_groups_),
     num_local_psi_slots_(
       static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
-    local_psi_slot_stride_(
-      [&]()
-      {
-        std::size_t max_num_nodes = 0;
-        for (const auto& cell : common_data.GetSPDS().GetGrid()->local_cells)
-          max_num_nodes = std::max(max_num_nodes, sdm_.GetCellMapping(cell).GetNumNodes());
-        return max_num_nodes;
-      }()),
+    local_psi_slot_stride_(common_data_.GetMaxLocalOutgoingNodeCount()),
     local_psi_data_size_(num_local_psi_slots_ * local_psi_slot_stride_ * num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
@@ -204,6 +197,13 @@ CBCD_FLUDS::CreatePointerSet()
   pointer_set_.local_slot_offsets = local_slot_offsets_.data();
   if (not local_slot_offsets_.empty())
     assert(pointer_set_.local_slot_offsets != nullptr);
+  pointer_set_.local_cell_node_offsets = common_data_.GetDeviceLocalCellNodeOffsets();
+  pointer_set_.local_compact_node_indices = common_data_.GetDeviceLocalCompactNodeIndices();
+  if (not local_slot_offsets_.empty())
+  {
+    assert(pointer_set_.local_cell_node_offsets != nullptr);
+    assert(pointer_set_.local_compact_node_indices != nullptr);
+  }
 
   pointer_set_.incoming_boundary_psi = incoming_boundary_psi_.data();
   if (common_data_.GetNumIncomingBoundaryNodes() > 0)

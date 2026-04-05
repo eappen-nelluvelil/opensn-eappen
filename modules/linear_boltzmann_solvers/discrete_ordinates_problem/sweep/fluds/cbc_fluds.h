@@ -44,8 +44,10 @@ public:
                     unsigned int adj_cell_node,
                     size_t as_ss_idx) const noexcept
   {
+    const auto compact_node =
+      common_data_.GetLocalOutgoingCompactNodeIndex(face_neighbor_local_id, adj_cell_node);
     return LocalPsiBase(face_neighbor_local_id) +
-           static_cast<size_t>(adj_cell_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
+           static_cast<size_t>(compact_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
   /**
@@ -56,8 +58,9 @@ public:
   double*
   OutgoingPsi(std::uint32_t cell_local_id, unsigned int cell_node, size_t as_ss_idx) const noexcept
   {
-    return LocalPsiBase(cell_local_id) + static_cast<size_t>(cell_node) * num_groups_and_angles_ +
-           as_ss_idx * num_groups_;
+    const auto compact_node = common_data_.GetLocalOutgoingCompactNodeIndex(cell_local_id, cell_node);
+    return LocalPsiBase(cell_local_id) +
+           static_cast<size_t>(compact_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
   /**

@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
+#include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/cell/cell.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include <cassert>
@@ -11,7 +12,9 @@ namespace opensn
 {
 
 CBC_FLUDSCommonData::CBC_FLUDSCommonData(
-  const SPDS& spds, const std::vector<CellFaceNodalMapping>& grid_nodal_mappings)
+  const SPDS& spds,
+  const std::vector<CellFaceNodalMapping>& grid_nodal_mappings,
+  const SpatialDiscretization& sdm)
   : FLUDSCommonData(spds, grid_nodal_mappings),
     num_incoming_nonlocal_faces_(0),
     num_incoming_nonlocal_face_nodes_(0),
@@ -22,25 +25,47 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   outgoing_nonlocal_face_counts_.assign(spds.GetLocationSuccessors().size(), 0);
   outgoing_nonlocal_face_node_counts_.assign(spds.GetLocationSuccessors().size(), 0);
   cell_face_offsets_.resize(grid.local_cells.size() + 1, 0);
+  cell_node_offsets_.resize(grid.local_cells.size() + 1, 0);
   size_t total_num_faces = 0;
+  size_t total_num_cell_nodes = 0;
   for (const auto& cell : grid.local_cells)
   {
     cell_face_offsets_[cell.local_id] = total_num_faces;
     total_num_faces += cell.faces.size();
+    cell_node_offsets_[cell.local_id] = static_cast<std::uint32_t>(total_num_cell_nodes);
+    total_num_cell_nodes += sdm.GetCellMapping(cell).GetNumNodes();
   }
   cell_face_offsets_.back() = total_num_faces;
+  cell_node_offsets_.back() = static_cast<std::uint32_t>(total_num_cell_nodes);
+  local_outgoing_node_indices_.assign(total_num_cell_nodes, std::numeric_limits<std::uint32_t>::max());
   incoming_nonlocal_face_info_.resize(total_num_faces);
   outgoing_nonlocal_face_info_.resize(total_num_faces);
 
   for (const auto& cell : grid.local_cells)
   {
     const size_t face_offset = cell_face_offsets_[cell.local_id];
+    const auto& cell_mapping = sdm.GetCellMapping(cell);
+    const auto cell_node_offset = cell_node_offsets_[cell.local_id];
+    std::uint32_t next_local_outgoing_node = 0;
 
     for (size_t f = 0; f < cell.faces.size(); ++f)
     {
       const auto& face = cell.faces[f];
       const auto orientation = face_orientations[cell.local_id][f];
       const size_t face_storage_index = face_offset + f;
+
+      if (orientation == FaceOrientation::OUTGOING and face.has_neighbor and
+          face.IsNeighborLocal(&grid))
+      {
+        const auto num_face_nodes = cell_mapping.GetNumFaceNodes(f);
+        for (size_t fi = 0; fi < num_face_nodes; ++fi)
+        {
+          const auto cell_node = static_cast<std::uint32_t>(cell_mapping.MapFaceNode(f, fi));
+          auto& compact_index = local_outgoing_node_indices_[cell_node_offset + cell_node];
+          if (compact_index == std::numeric_limits<std::uint32_t>::max())
+            compact_index = next_local_outgoing_node++;
+        }
+      }
 
       if ((not face.has_neighbor) or (face.IsNeighborLocal(&grid)))
         continue;
@@ -75,6 +100,9 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
             grid_nodal_mappings[cell.local_id][f].face_node_mapping_.size())};
       }
     }
+
+    max_local_outgoing_node_count_ =
+      std::max(max_local_outgoing_node_count_, static_cast<size_t>(next_local_outgoing_node));
   }
 }
 
@@ -114,6 +142,15 @@ CBC_FLUDSCommonData::GetOutgoingNonlocalFaceInfo(const std::uint32_t cell_local_
                                                  const unsigned int face_id) const noexcept
 {
   return outgoing_nonlocal_face_info_[cell_face_offsets_[cell_local_id] + face_id];
+}
+
+std::uint32_t
+CBC_FLUDSCommonData::GetLocalOutgoingCompactNodeIndex(const std::uint32_t cell_local_id,
+                                                      const std::uint32_t cell_node) const noexcept
+{
+  const auto compact_index = local_outgoing_node_indices_[cell_node_offsets_[cell_local_id] + cell_node];
+  assert(compact_index != std::numeric_limits<std::uint32_t>::max());
+  return compact_index;
 }
 
 } // namespace opensn

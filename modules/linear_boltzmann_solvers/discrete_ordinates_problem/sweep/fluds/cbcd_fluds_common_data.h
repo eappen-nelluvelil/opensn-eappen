@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <span>
+#include <cstddef>
 #include <unordered_map>
 #include <cstdint>
 #include <vector>
@@ -96,6 +97,18 @@ public:
   /// Get pointer to cell-face-node map on device.
   const std::uint64_t* GetDeviceIndex() const { return device_cell_face_node_map_; }
 
+  /// Get maximum number of locally consumed outgoing nodes per cell.
+  std::size_t GetMaxLocalOutgoingNodeCount() const { return max_local_outgoing_node_count_; }
+
+  /// Get pointer to per-cell offsets into the compact local-node index table on device.
+  const std::uint32_t* GetDeviceLocalCellNodeOffsets() const { return device_local_cell_node_offsets_; }
+
+  /// Get pointer to compact local-node indices on device.
+  const std::uint32_t* GetDeviceLocalCompactNodeIndices() const
+  {
+    return device_local_compact_node_indices_;
+  }
+
 private:
   /// Number of incoming boundary face nodes.
   size_t num_incoming_boundary_nodes_;
@@ -109,8 +122,14 @@ private:
   size_t num_outgoing_nonlocal_faces_;
   /// Number of outgoing non-local face nodes.
   size_t num_outgoing_nonlocal_nodes_;
+  /// Maximum number of locally consumed outgoing nodes over all local cells.
+  size_t max_local_outgoing_node_count_;
   /// Device pointer to cell-face-node map for angular flux buffer access.
   std::uint64_t* device_cell_face_node_map_;
+  /// Device pointer to per-cell offsets into the compact local-node index table.
+  std::uint32_t* device_local_cell_node_offsets_;
+  /// Device pointer to compact local-node indices for each cell node.
+  std::uint32_t* device_local_compact_node_indices_;
   /// Map from incoming face boundary node to indexing metadata.
   std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
   /// Cell-to-outgoing-boundary-node offset table.

@@ -7,6 +7,7 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caribou/main.hpp"
 #include <cstring>
+#include <limits>
 #include <unordered_map>
 
 namespace crb = caribou;
@@ -21,17 +22,25 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   const size_t num_local_cells = grid.local_cells.size();
   const auto& face_orientations = spds_.GetCellFaceOrientations();
   std::uint64_t total_face_nodes = 0;
+  std::size_t total_cell_nodes = 0;
   for (const auto& cell : grid.local_cells)
+  {
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
       total_face_nodes += sdm.GetCellMapping(cell).GetNumFaceNodes(f);
+    total_cell_nodes += sdm.GetCellMapping(cell).GetNumNodes();
+  }
 
   const size_t offsets_size = 2 * num_local_cells;
   const size_t total_size = offsets_size + total_face_nodes;
   std::vector<std::uint64_t> local_map(total_size);
+  std::vector<std::uint32_t> local_cell_node_offsets(num_local_cells + 1, 0);
+  std::vector<std::uint32_t> local_compact_node_indices(
+    total_cell_nodes, std::numeric_limits<std::uint32_t>::max());
   std::uint64_t* cell_offsets_ptr = local_map.data();
   std::uint64_t* indices_ptr = local_map.data() + offsets_size;
   std::uint64_t current_index_offset = offsets_size;
   std::uint64_t local_indices_filled = 0;
+  std::size_t current_cell_node_offset = 0;
 
   cell_to_outgoing_boundary_node_offsets_.assign(num_local_cells + 1, 0);
   cell_to_incoming_nonlocal_face_offsets_.assign(num_local_cells + 1, 0);
@@ -59,6 +68,9 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
 
     cell_offsets_ptr[2 * cell.local_id] = current_index_offset;
     std::uint64_t num_cell_nodes = 0;
+    const auto& cell_mapping = sdm.GetCellMapping(cell);
+    local_cell_node_offsets[cell.local_id] = static_cast<std::uint32_t>(current_cell_node_offset);
+    std::uint32_t next_local_outgoing_node = 0;
     std::vector<int> incoming_face_to_grouped_index(cell.faces.size(), -1);
     std::vector<int> outgoing_face_to_grouped_index(cell.faces.size(), -1);
     for (size_t f = 0; f < cell.faces.size(); ++f)
@@ -66,7 +78,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       const CellFace& face = cell.faces[f];
       const FaceOrientation& orientation = face_orientations[cell.local_id][f];
       const FaceNodalMapping& face_nodal_mapping = grid_nodal_mappings_[cell.local_id][f];
-      const size_t num_face_nodes = sdm.GetCellMapping(cell).GetNumFaceNodes(f);
+      const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
       const bool is_outgoing_face = (orientation == FaceOrientation::OUTGOING);
       const bool is_incoming_face = (orientation == FaceOrientation::INCOMING);
       const bool is_local_face = face.IsNeighborLocal(&grid);
@@ -127,7 +139,11 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
         {
           if (is_local_face)
           {
-            const int cell_node = sdm.GetCellMapping(cell).MapFaceNode(f, fn);
+            const auto cell_node = static_cast<std::uint32_t>(cell_mapping.MapFaceNode(f, fn));
+            auto& compact_index =
+              local_compact_node_indices[current_cell_node_offset + cell_node];
+            if (compact_index == std::numeric_limits<std::uint32_t>::max())
+              compact_index = next_local_outgoing_node++;
             node_index = CBCD_NodeIndex(
               cell.local_id, static_cast<std::uint16_t>(cell_node), is_outgoing_face);
           }
@@ -198,6 +214,10 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       }
       num_cell_nodes += num_face_nodes;
     }
+    max_local_outgoing_node_count_ =
+      std::max(max_local_outgoing_node_count_, static_cast<size_t>(next_local_outgoing_node));
+    current_cell_node_offset += cell_mapping.GetNumNodes();
+    local_cell_node_offsets[cell.local_id + 1] = static_cast<std::uint32_t>(current_cell_node_offset);
     update_cell_offsets(cell.local_id + 1);
     cell_offsets_ptr[2 * cell.local_id + 1] = num_cell_nodes;
     current_index_offset += num_cell_nodes;
@@ -208,6 +228,26 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   crb::DeviceMemory<std::uint64_t> device_mem(local_map.size());
   crb::copy(device_mem, host_mem, host_mem.size());
   device_cell_face_node_map_ = device_mem.release();
+
+  crb::HostVector<std::uint32_t> host_local_cell_node_offsets(local_cell_node_offsets.begin(),
+                                                              local_cell_node_offsets.end());
+  crb::DeviceMemory<std::uint32_t> device_local_cell_node_offsets(host_local_cell_node_offsets.size());
+  crb::copy(device_local_cell_node_offsets,
+            host_local_cell_node_offsets,
+            host_local_cell_node_offsets.size());
+  device_local_cell_node_offsets_ = device_local_cell_node_offsets.release();
+
+  if (not local_compact_node_indices.empty())
+  {
+    crb::HostVector<std::uint32_t> host_local_compact_node_indices(
+      local_compact_node_indices.begin(), local_compact_node_indices.end());
+    crb::DeviceMemory<std::uint32_t> device_local_compact_node_indices(
+      host_local_compact_node_indices.size());
+    crb::copy(device_local_compact_node_indices,
+              host_local_compact_node_indices,
+              host_local_compact_node_indices.size());
+    device_local_compact_node_indices_ = device_local_compact_node_indices.release();
+  }
 }
 
 void
@@ -218,6 +258,21 @@ CBCD_FLUDSCommonData::DeallocateDeviceMemory()
     crb::DeviceMemory<std::uint64_t> device_cell_face_node_map(device_cell_face_node_map_);
     device_cell_face_node_map.reset();
     device_cell_face_node_map_ = nullptr;
+  }
+
+  if (device_local_cell_node_offsets_ != nullptr)
+  {
+    crb::DeviceMemory<std::uint32_t> device_local_cell_node_offsets(device_local_cell_node_offsets_);
+    device_local_cell_node_offsets.reset();
+    device_local_cell_node_offsets_ = nullptr;
+  }
+
+  if (device_local_compact_node_indices_ != nullptr)
+  {
+    crb::DeviceMemory<std::uint32_t> device_local_compact_node_indices(
+      device_local_compact_node_indices_);
+    device_local_compact_node_indices.reset();
+    device_local_compact_node_indices_ = nullptr;
   }
 }
 } // namespace opensn

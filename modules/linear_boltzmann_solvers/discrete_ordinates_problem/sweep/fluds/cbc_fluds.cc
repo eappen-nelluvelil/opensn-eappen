@@ -46,8 +46,9 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
-    slot_size_(RoundUpToCacheLineMultiple(max_cell_dof_count * num_groups_and_angles_)),
+    num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetNumStaticLocalPsiSlots()),
+    slot_size_(RoundUpToCacheLineMultiple(common_data.GetMaxLocalOutgoingNodeCount() *
+                                          num_groups_and_angles_)),
     cell_slot_bases_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr),
     local_psi_buffer_(AllocateAlignedBuffer(num_slots_ * slot_size_)),
     incoming_nonlocal_face_dof_offsets_(common_data.GetNumCellFaces(), 0),
@@ -70,6 +71,8 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
         return AllocateAlignedBuffer(incoming_nonlocal_dof_count);
       }())
 {
+  static_cast<void>(max_cell_dof_count);
+
   const auto& cbc_spds = static_cast<const CBC_SPDS&>(common_data.GetSPDS());
   const auto& task_list = cbc_spds.GetTaskList();
   const auto& task_slot_ids = cbc_spds.GetTaskSlotIDs();

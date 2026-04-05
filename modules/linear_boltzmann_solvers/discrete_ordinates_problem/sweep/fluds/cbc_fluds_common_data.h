@@ -6,10 +6,13 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <cinttypes>
 #include <cstddef>
+#include <limits>
 #include <unordered_map>
 
 namespace opensn
 {
+
+class SpatialDiscretization;
 
 class CBC_FLUDSCommonData : public FLUDSCommonData
 {
@@ -41,7 +44,8 @@ public:
   };
 
   CBC_FLUDSCommonData(const SPDS& spds,
-                      const std::vector<CellFaceNodalMapping>& grid_nodal_mappings);
+                      const std::vector<CellFaceNodalMapping>& grid_nodal_mappings,
+                      const SpatialDiscretization& sdm);
 
   size_t GetNumIncomingNonlocalFaces() const { return num_incoming_nonlocal_faces_; }
 
@@ -77,11 +81,19 @@ public:
     return cell_face_offsets_[cell_local_id];
   }
 
+  size_t GetMaxLocalOutgoingNodeCount() const noexcept { return max_local_outgoing_node_count_; }
+
+  std::uint32_t GetLocalOutgoingCompactNodeIndex(const std::uint32_t cell_local_id,
+                                                 const std::uint32_t cell_node) const noexcept;
+
 private:
   size_t num_incoming_nonlocal_faces_;
   size_t num_incoming_nonlocal_face_nodes_;
   size_t num_outgoing_nonlocal_faces_;
+  size_t max_local_outgoing_node_count_ = 0;
   std::vector<size_t> cell_face_offsets_;
+  std::vector<std::uint32_t> cell_node_offsets_;
+  std::vector<std::uint32_t> local_outgoing_node_indices_;
   std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
   std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
   std::vector<size_t> outgoing_nonlocal_face_counts_;

@@ -2660,6 +2660,10 @@ public:
   
   void SetBit(std::size_t i, std::size_t j) { Row(i)[j / 64] |= (1ULL << (j % 64)); }
   void ClearBit(std::size_t i, std::size_t j) { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
+  bool TestBit(std::size_t i, std::size_t j) const
+  {
+    return (Row(i)[j / 64] & (1ULL << (j % 64))) != 0ULL;
+  }
 
   void CopyRow(std::size_t dst, const BitMatrix& src_mat, std::size_t src_row, std::size_t start_pos = 0)
   {
@@ -2733,6 +2737,7 @@ struct ThreadLocalWorkspace
   std::vector<int> dist;
   std::vector<std::uint32_t> queue;
   std::vector<std::uint32_t> topo_rank;
+  std::vector<std::uint8_t> is_sink_rank;
   
   void Prepare(std::size_t n)
   {
@@ -2744,7 +2749,14 @@ struct ThreadLocalWorkspace
     
     if (queue.size() < n) queue.resize(n);
     if (topo_rank.size() < n) topo_rank.resize(n);
+    if (is_sink_rank.size() < n) is_sink_rank.resize(n);
   }
+};
+
+struct CBCSlotPlan
+{
+  std::size_t num_dynamic_slots = 0;
+  std::size_t num_static_slots = 0;
 };
 
 class DenseHopcroftKarp
@@ -2764,10 +2776,27 @@ public:
     ws_.Prepare(num_tasks_);
     
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
+    {
       ws_.topo_rank[topo_order_[i]] = i;
+      ws_.is_sink_rank[i] = task_list_[topo_order_[i]].successors.empty() ? 1U : 0U;
+    }
   }
 
-  std::size_t Solve()
+  CBCSlotPlan Solve()
+  {
+    BuildReachabilityAndReuseTargets();
+
+    const auto dynamic_matching_size =
+      ComputeMaximumMatching(/*skip_sink_sources=*/false, /*skip_sink_targets=*/false);
+
+    AssignStaticSlots();
+
+    return CBCSlotPlan{static_cast<std::size_t>(num_tasks_) - dynamic_matching_size,
+                       num_static_slots_};
+  }
+
+private:
+  void BuildReachabilityAndReuseTargets()
   {
     for (std::uint32_t i = num_tasks_; i-- > 0; )
     {
@@ -2810,30 +2839,66 @@ public:
       for (const auto& succ : successors)
         ws_.reuse_targets.ClearBit(i, ws_.topo_rank[succ]);
     }
+  }
 
-    std::size_t matching_size = GreedyInit();
-    while (BFS())
+  void ResetMatchingState()
+  {
+    std::fill_n(ws_.mate_u.begin(), num_tasks_, INVALID_INDEX);
+    std::fill_n(ws_.mate_v.begin(), num_tasks_, INVALID_INDEX);
+    std::fill_n(ws_.dist.begin(), num_tasks_, -1);
+  }
+
+  std::size_t ComputeMaximumMatching(const bool skip_sink_sources,
+                                     const bool skip_sink_targets)
+  {
+    ResetMatchingState();
+
+    std::size_t matching_size = GreedyInit(skip_sink_sources, skip_sink_targets);
+    while (BFS(skip_sink_sources, skip_sink_targets))
     {
       for (std::uint32_t i = 0; i < num_tasks_; ++i)
       {
-        if (ws_.mate_u[i] == INVALID_INDEX && DFS(i))
+        if (IsEligibleSource(i, skip_sink_sources) and ws_.mate_u[i] == INVALID_INDEX and
+            DFS(i, skip_sink_targets))
           ++matching_size;
       }
     }
-    
-    AssignStaticSlots();
-    return static_cast<std::size_t>(num_tasks_) - matching_size;
+    return matching_size;
   }
 
-private:
-  std::size_t GreedyInit()
+  bool IsEligibleSource(const std::uint32_t u, const bool skip_sink_sources) const
+  {
+    return (not skip_sink_sources) or ws_.is_sink_rank[u] == 0U;
+  }
+
+  std::size_t FindFirstMatchableNeighbor(const std::uint32_t u,
+                                         const bool skip_sink_targets) const
+  {
+    std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+    while (skip_sink_targets and v < num_tasks_ and ws_.is_sink_rank[v] != 0U)
+      v = ws_.reuse_targets.FindNextSet(u, v);
+    return v;
+  }
+
+  std::size_t FindNextMatchableNeighbor(const std::uint32_t u,
+                                        const std::size_t v,
+                                        const bool skip_sink_targets) const
+  {
+    std::size_t next = ws_.reuse_targets.FindNextSet(u, v);
+    while (skip_sink_targets and next < num_tasks_ and ws_.is_sink_rank[next] != 0U)
+      next = ws_.reuse_targets.FindNextSet(u, next);
+    return next;
+  }
+
+  std::size_t GreedyInit(const bool skip_sink_sources, const bool skip_sink_targets)
   {
     std::size_t count = 0;
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (ws_.mate_u[i] != INVALID_INDEX) continue;
-        
-      std::size_t v = ws_.reuse_targets.FindFirstSet(i, i + 1);
+      if (ws_.mate_u[i] != INVALID_INDEX or not IsEligibleSource(i, skip_sink_sources))
+        continue;
+
+      std::size_t v = FindFirstMatchableNeighbor(i, skip_sink_targets);
       while (v < num_tasks_)
       {
         if (ws_.mate_v[v] == INVALID_INDEX)
@@ -2843,20 +2908,20 @@ private:
           ++count;
           break;
         }
-        v = ws_.reuse_targets.FindNextSet(i, v);
+        v = FindNextMatchableNeighbor(i, v, skip_sink_targets);
       }
     }
     return count;
   }
 
-  bool BFS()
+  bool BFS(const bool skip_sink_sources, const bool skip_sink_targets)
   {
     std::fill_n(ws_.dist.begin(), num_tasks_, -1);
     std::size_t head = 0, tail = 0;
 
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (ws_.mate_u[i] == INVALID_INDEX)
+      if (ws_.mate_u[i] == INVALID_INDEX and IsEligibleSource(i, skip_sink_sources))
       {
         ws_.dist[i] = 0;
         ws_.queue[tail++] = i;
@@ -2871,7 +2936,7 @@ private:
 
       if (ws_.dist[u] < dist_null_)
       {
-        std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+        std::size_t v = FindFirstMatchableNeighbor(u, skip_sink_targets);
         while (v < num_tasks_)
         {
           std::uint32_t mate_of_v = ws_.mate_v[v];
@@ -2885,16 +2950,16 @@ private:
             ws_.dist[mate_of_v] = ws_.dist[u] + 1;
             ws_.queue[tail++] = mate_of_v;
           }
-          v = ws_.reuse_targets.FindNextSet(u, v);
+          v = FindNextMatchableNeighbor(u, v, skip_sink_targets);
         }
       }
     }
     return dist_null_ != std::numeric_limits<int>::max();
   }
 
-  bool DFS(std::uint32_t u)
+  bool DFS(std::uint32_t u, const bool skip_sink_targets)
   {
-    std::size_t v = ws_.reuse_targets.FindFirstSet(u, u + 1);
+    std::size_t v = FindFirstMatchableNeighbor(u, skip_sink_targets);
     while (v < num_tasks_)
     {
       std::uint32_t mate_of_v = ws_.mate_v[v];
@@ -2910,7 +2975,7 @@ private:
       }
       else if (ws_.dist[mate_of_v] == ws_.dist[u] + 1)
       {
-        if (DFS(mate_of_v))
+        if (DFS(mate_of_v, skip_sink_targets))
         {
           ws_.mate_v[v] = u;
           ws_.mate_u[u] = static_cast<std::uint32_t>(v);
@@ -2918,7 +2983,7 @@ private:
           return true;
         }
       }
-      v = ws_.reuse_targets.FindNextSet(u, v);
+      v = FindNextMatchableNeighbor(u, v, skip_sink_targets);
     }
     ws_.dist[u] = -1;
     return false;
@@ -2926,22 +2991,69 @@ private:
 
   void AssignStaticSlots()
   {
+    ComputeMaximumMatching(/*skip_sink_sources=*/true, /*skip_sink_targets=*/true);
+
     task_slot_ids_.assign(num_tasks_, INVALID_INDEX);
     std::uint32_t next_slot_id = 0;
+    std::vector<std::vector<std::uint32_t>> non_sink_chains;
+    std::vector<std::uint32_t> chain_slot_ids;
+    non_sink_chains.reserve(num_tasks_);
+    chain_slot_ids.reserve(num_tasks_);
 
     for (std::uint32_t i = 0; i < num_tasks_; ++i)
     {
-      if (ws_.mate_v[i] == INVALID_INDEX)
+      if (ws_.is_sink_rank[i] != 0U or ws_.mate_v[i] != INVALID_INDEX)
+        continue;
+
+      std::vector<std::uint32_t> chain;
+      std::uint32_t current = i;
+      while (current != INVALID_INDEX)
       {
-        std::uint32_t current = i;
-        while (current != INVALID_INDEX)
-        {
-          task_slot_ids_[topo_order_[current]] = next_slot_id;
-          current = ws_.mate_u[current];
-        }
-        ++next_slot_id;
+        task_slot_ids_[topo_order_[current]] = next_slot_id;
+        chain.push_back(current);
+        current = ws_.mate_u[current];
       }
+
+      non_sink_chains.push_back(std::move(chain));
+      chain_slot_ids.push_back(next_slot_id);
+      ++next_slot_id;
     }
+
+    std::uint32_t shared_sink_slot_id = INVALID_INDEX;
+    for (std::uint32_t sink_rank = 0; sink_rank < num_tasks_; ++sink_rank)
+    {
+      if (ws_.is_sink_rank[sink_rank] == 0U)
+        continue;
+
+      std::uint32_t assigned_slot_id = INVALID_INDEX;
+      for (std::size_t chain_idx = 0; chain_idx < non_sink_chains.size(); ++chain_idx)
+      {
+        bool chain_is_compatible = true;
+        for (const auto task_rank : non_sink_chains[chain_idx])
+          if (not ws_.reuse_targets.TestBit(task_rank, sink_rank))
+          {
+            chain_is_compatible = false;
+            break;
+          }
+
+        if (chain_is_compatible)
+        {
+          assigned_slot_id = chain_slot_ids[chain_idx];
+          break;
+        }
+      }
+
+      if (assigned_slot_id == INVALID_INDEX)
+      {
+        if (shared_sink_slot_id == INVALID_INDEX)
+          shared_sink_slot_id = next_slot_id++;
+        assigned_slot_id = shared_sink_slot_id;
+      }
+
+      task_slot_ids_[topo_order_[sink_rank]] = assigned_slot_id;
+    }
+
+    num_static_slots_ = next_slot_id;
   }
 
   std::uint32_t num_tasks_;
@@ -2951,6 +3063,7 @@ private:
 
   ThreadLocalWorkspace& ws_;
   int dist_null_ = 0;
+  std::size_t num_static_slots_ = 0;
 };
 
 } // namespace
@@ -3062,6 +3175,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   BuildTaskGraph();
 
   max_num_local_psi_slots_ = num_loc_cells;
+  num_static_local_psi_slots_ = num_loc_cells;
   task_slot_ids_.resize(num_loc_cells);
   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), 0);
 }
@@ -3081,13 +3195,17 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   if (num_tasks == 0)
   {
     max_num_local_psi_slots_ = 0;
+    num_static_local_psi_slots_ = 0;
+    task_slot_ids_.clear();
     return;
   }
 
   thread_local ThreadLocalWorkspace workspace;
-  
+
   DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
-  max_num_local_psi_slots_ = allocator.Solve();
+  const auto slot_plan = allocator.Solve();
+  max_num_local_psi_slots_ = slot_plan.num_dynamic_slots;
+  num_static_local_psi_slots_ = slot_plan.num_static_slots;
 }
 
 #ifndef __OPENSN_WITH_GPU__

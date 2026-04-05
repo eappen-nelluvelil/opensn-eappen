@@ -90,6 +90,7 @@ ComputeSurfaceIntegral(double* sweep_matrix,
       if (idx.IsLocal() and not idx.IsBoundary())
         local_face_base = args.flud_data.GetLocalCellFluxBase(idx.GetCellLocalID());
     }
+    const auto local_face_cell_local_id = idx.GetCellLocalID();
     double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                 direction.omega[2] * face.normal[2];
     // compute surface integral
@@ -108,8 +109,8 @@ ComputeSurfaceIntegral(double* sweep_matrix,
         {
           if (local_face_base != nullptr and face_node_index.IsLocal() and
               not face_node_index.IsBoundary() and not face_node_index.IsOutgoing())
-            upwind_psi =
-              args.flud_data.GetLocalFluxPointer(local_face_base, face_node_index.GetCellNode());
+            upwind_psi = args.flud_data.GetLocalFluxPointer(
+              local_face_base, local_face_cell_local_id, face_node_index.GetCellNode());
           else
             upwind_psi = args.flud_data.GetIncomingFluxPointer(face_node_index);
         }
@@ -198,6 +199,7 @@ WritePsiToFludsAndOutflow(double* psi,
       if (idx.IsLocal() and not idx.IsBoundary())
         local_face_base = args.flud_data.GetLocalCellFluxBase(idx.GetCellLocalID());
     }
+    const auto local_face_cell_local_id = idx.GetCellLocalID();
     double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                 direction.omega[2] * face.normal[2];
     // loop over each face node
@@ -211,8 +213,8 @@ WritePsiToFludsAndOutflow(double* psi,
       {
         if (local_face_base != nullptr and face_node_index.IsLocal() and
             not face_node_index.IsBoundary() and face_node_index.IsOutgoing())
-          downwind_psi =
-            args.flud_data.GetLocalFluxPointer(local_face_base, face_node_index.GetCellNode());
+          downwind_psi = args.flud_data.GetLocalFluxPointer(
+            local_face_base, local_face_cell_local_id, face_node_index.GetCellNode());
         else
           downwind_psi = args.flud_data.GetOutgoingFluxPointer(face_node_index);
       }
