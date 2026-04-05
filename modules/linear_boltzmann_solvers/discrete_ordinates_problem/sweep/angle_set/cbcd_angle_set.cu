@@ -296,8 +296,6 @@ CBCD_AngleSet::TryAdvanceOneStep()
   {
     cbcd_fluds->CopyOutgoingPsiBackToHost(cbcd_sweep_chunk, this, in_flight_cell_ids_);
 
-    std::vector<std::uint32_t> cells_to_deallocate;
-    cells_to_deallocate.reserve(2 * in_flight_task_indices_.size());
     for (const auto task_idx : in_flight_task_indices_)
     {
       const auto succ_begin = successor_offsets_[task_idx];
@@ -309,17 +307,13 @@ CBCD_AngleSet::TryAdvanceOneStep()
           ready_queue_.push_back(succ);
       }
 
-      if (succ_begin == succ_end)
-        cells_to_deallocate.push_back(reference_ids_[task_idx]);
-
       const auto pred_begin = predecessor_offsets_[task_idx];
       const auto pred_end = predecessor_offsets_[task_idx + 1];
       for (auto pred_i = pred_begin; pred_i < pred_end; ++pred_i)
       {
         const auto pred = predecessor_data_[pred_i];
         assert(remaining_successors_to_retire_[pred] > 0);
-        if (--remaining_successors_to_retire_[pred] == 0)
-          cells_to_deallocate.push_back(reference_ids_[pred]);
+        --remaining_successors_to_retire_[pred];
       }
 
       if (task_has_outgoing_reflecting_boundary_[task_idx] != 0)
@@ -328,8 +322,6 @@ CBCD_AngleSet::TryAdvanceOneStep()
         --pending_reflecting_tasks_;
       }
     }
-    if (not cells_to_deallocate.empty())
-      cbcd_fluds->DeallocateSlots(cells_to_deallocate);
     num_completed_tasks_ += in_flight_task_indices_.size();
     in_flight_task_indices_.clear();
     in_flight_cell_ids_.clear();
@@ -368,7 +360,6 @@ CBCD_AngleSet::TryAdvanceOneStep()
     for (const auto task_idx : in_flight_task_indices_)
       in_flight_cell_ids_.push_back(reference_ids_[task_idx]);
 
-    cbcd_fluds->AllocateSlots(in_flight_cell_ids_);
     cbcd_fluds->CopyIncomingNonlocalPsiToDevice(this, in_flight_cell_ids_);
     cbcd_sweep_chunk.Sweep(in_flight_cell_ids_, GetID());
     kernel_in_flight_ = true;

@@ -2,9 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
-#include "framework/mesh/cell/cell.h"
-#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -46,11 +43,9 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    num_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetNumStaticLocalPsiSlots()),
-    slot_size_(RoundUpToCacheLineMultiple(common_data.GetMaxLocalOutgoingNodeCount() *
-                                          num_groups_and_angles_)),
-    cell_slot_bases_(common_data.GetSPDS().GetGrid()->local_cells.size(), nullptr),
-    local_psi_buffer_(AllocateAlignedBuffer(num_slots_ * slot_size_)),
+    num_face_node_slots_(common_data.GetNumLocalPsiFaceNodeSlots()),
+    local_psi_buffer_(
+      AllocateAlignedBuffer(RoundUpToCacheLineMultiple(num_face_node_slots_ * num_groups_and_angles_))),
     incoming_nonlocal_face_dof_offsets_(common_data.GetNumCellFaces(), 0),
     incoming_nonlocal_psi_buffer_(
       [&]()
@@ -72,20 +67,6 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
       }())
 {
   static_cast<void>(max_cell_dof_count);
-
-  const auto& cbc_spds = static_cast<const CBC_SPDS&>(common_data.GetSPDS());
-  const auto& task_list = cbc_spds.GetTaskList();
-  const auto& task_slot_ids = cbc_spds.GetTaskSlotIDs();
-  assert(task_list.size() == task_slot_ids.size());
-
-  for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
-  {
-    const auto cell_local_id = task_list[task_idx].reference_id;
-    const auto slot_id = task_slot_ids[task_idx];
-    assert(slot_id < num_slots_);
-    cell_slot_bases_[cell_local_id] =
-      local_psi_buffer_.get() + static_cast<size_t>(slot_id) * slot_size_;
-  }
 }
 
 void

@@ -35,32 +35,11 @@ public:
   const FLUDSCommonData& GetCommonData() const noexcept { return common_data_; }
   size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
 
-  /**
-   * Given a local upwind neighbor cell, a node index on this cell, and an
-   * angleset subset index, this function returns a pointer to
-   * the start of the group data for the specified node and angle.
-   */
-  double* UpwindPsi(std::uint32_t face_neighbor_local_id,
-                    unsigned int adj_cell_node,
-                    size_t as_ss_idx) const noexcept
+  double* LocalPsi(const std::uint32_t face_node_slot, const size_t as_ss_idx) const noexcept
   {
-    const auto compact_node =
-      common_data_.GetLocalOutgoingCompactNodeIndex(face_neighbor_local_id, adj_cell_node);
-    return LocalPsiBase(face_neighbor_local_id) +
-           static_cast<size_t>(compact_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  }
-
-  /**
-   * Given a local cell, a node index on this cell, and an angleset subset index,
-   * this function returns a pointer to the start of the group data for the specified
-   * node and angle for writing its just solved angular fluxes.
-   */
-  double*
-  OutgoingPsi(std::uint32_t cell_local_id, unsigned int cell_node, size_t as_ss_idx) const noexcept
-  {
-    const auto compact_node = common_data_.GetLocalOutgoingCompactNodeIndex(cell_local_id, cell_node);
-    return LocalPsiBase(cell_local_id) +
-           static_cast<size_t>(compact_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
+    assert(face_node_slot < num_face_node_slots_);
+    return local_psi_buffer_.get() + static_cast<size_t>(face_node_slot) * num_groups_and_angles_ +
+           as_ss_idx * num_groups_;
   }
 
   /**
@@ -118,21 +97,13 @@ protected:
 
   static AlignedDoubleBuffer AllocateAlignedBuffer(size_t num_values);
 
-  double* LocalPsiBase(std::uint32_t cell_local_id) const noexcept
-  {
-    auto* const slot_base = cell_slot_bases_[cell_local_id];
-    assert(slot_base != nullptr);
-    return slot_base;
-  }
-
   const CBC_FLUDSCommonData& common_data_;
-  size_t num_slots_;
-  size_t slot_size_;
-  std::vector<double*> cell_slot_bases_;
+  /// Total number of statically planned reusable local face-node slots.
+  size_t num_face_node_slots_;
 
   /**
-   * Layout for a single slot:
-   * node major -> angle in angleset major -> group in groupset major.
+   * Layout:
+   * face-node slot major -> angle in angleset major -> group in groupset major.
    */
   AlignedDoubleBuffer local_psi_buffer_;
   std::vector<size_t> incoming_nonlocal_face_dof_offsets_;

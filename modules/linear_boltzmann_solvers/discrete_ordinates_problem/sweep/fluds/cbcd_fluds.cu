@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
@@ -37,10 +36,8 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
-    num_local_psi_slots_(
-      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
-    local_psi_slot_stride_(common_data_.GetMaxLocalOutgoingNodeCount()),
-    local_psi_data_size_(num_local_psi_slots_ * local_psi_slot_stride_ * num_groups_and_angles_),
+    num_local_psi_face_node_slots_(common_data_.GetNumLocalPsiFaceNodeSlots()),
+    local_psi_data_size_(num_local_psi_face_node_slots_ * num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
@@ -48,14 +45,10 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
     local_cell_ids_(num_local_cells),
-    local_slot_offsets_(num_local_cells, INVALID_SLOT_OFFSET),
     save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
   deplocs_outgoing_messages_.reserve(common_data.GetNumIncomingNonlocalFaces());
-  free_slot_stack_.resize(num_local_psi_slots_);
-  for (std::uint32_t slot = 0; slot < num_local_psi_slots_; ++slot)
-    free_slot_stack_[slot] = slot;
 
   const auto& outgoing_localities = common_data_.GetOutgoingLocalities();
   outgoing_destinations_.reserve(outgoing_localities.size());
@@ -110,7 +103,6 @@ CBCD_FLUDS::~CBCD_FLUDS()
     device_saved_psi_.async_free(stream_);
   }
   local_cell_ids_.clear();
-  local_slot_offsets_.clear();
   incoming_boundary_psi_.clear();
   outgoing_boundary_psi_.clear();
   incoming_nonlocal_psi_.clear();
@@ -194,16 +186,6 @@ CBCD_FLUDS::CreatePointerSet()
   pointer_set_.local_psi = local_psi_.get();
   if (local_psi_data_size_ > 0)
     assert(pointer_set_.local_psi != nullptr);
-  pointer_set_.local_slot_offsets = local_slot_offsets_.data();
-  if (not local_slot_offsets_.empty())
-    assert(pointer_set_.local_slot_offsets != nullptr);
-  pointer_set_.local_cell_node_offsets = common_data_.GetDeviceLocalCellNodeOffsets();
-  pointer_set_.local_compact_node_indices = common_data_.GetDeviceLocalCompactNodeIndices();
-  if (not local_slot_offsets_.empty())
-  {
-    assert(pointer_set_.local_cell_node_offsets != nullptr);
-    assert(pointer_set_.local_compact_node_indices != nullptr);
-  }
 
   pointer_set_.incoming_boundary_psi = incoming_boundary_psi_.data();
   if (common_data_.GetNumIncomingBoundaryNodes() > 0)
@@ -222,33 +204,6 @@ CBCD_FLUDS::CreatePointerSet()
     assert(pointer_set_.nonlocal_outgoing_psi != nullptr);
 
   pointer_set_.stride_size = num_groups_and_angles_;
-}
-
-void
-CBCD_FLUDS::AllocateSlots(const std::vector<std::uint32_t>& cell_local_ids)
-{
-  for (const auto cell_local_id : cell_local_ids)
-  {
-    assert(local_slot_offsets_[cell_local_id] == INVALID_SLOT_OFFSET);
-    assert(not free_slot_stack_.empty());
-
-    const auto slot = free_slot_stack_.back();
-    free_slot_stack_.pop_back();
-    local_slot_offsets_[cell_local_id] = slot * static_cast<std::uint32_t>(local_psi_slot_stride_);
-  }
-}
-
-void
-CBCD_FLUDS::DeallocateSlots(const std::vector<std::uint32_t>& cell_local_ids)
-{
-  for (const auto cell_local_id : cell_local_ids)
-  {
-    const auto slot_offset = local_slot_offsets_[cell_local_id];
-    assert(slot_offset != INVALID_SLOT_OFFSET);
-
-    free_slot_stack_.push_back(slot_offset / static_cast<std::uint32_t>(local_psi_slot_stride_));
-    local_slot_offsets_[cell_local_id] = INVALID_SLOT_OFFSET;
-  }
 }
 
 void
@@ -453,10 +408,6 @@ void
 CBCD_FLUDS::ClearLocalAndReceivePsi()
 {
   deplocs_outgoing_messages_.clear();
-  std::fill(local_slot_offsets_.begin(), local_slot_offsets_.end(), INVALID_SLOT_OFFSET);
-  free_slot_stack_.resize(num_local_psi_slots_);
-  for (std::uint32_t slot = 0; slot < num_local_psi_slots_; ++slot)
-    free_slot_stack_[slot] = slot;
 }
 
 } // namespace opensn

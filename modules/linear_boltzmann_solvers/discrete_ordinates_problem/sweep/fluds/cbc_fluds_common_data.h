@@ -81,19 +81,31 @@ public:
     return cell_face_offsets_[cell_local_id];
   }
 
-  size_t GetMaxLocalOutgoingNodeCount() const noexcept { return max_local_outgoing_node_count_; }
+  /// Get total number of statically planned reusable local face-node slots.
+  size_t GetNumLocalPsiFaceNodeSlots() const noexcept { return num_local_psi_face_node_slots_; }
 
-  std::uint32_t GetLocalOutgoingCompactNodeIndex(const std::uint32_t cell_local_id,
-                                                 const std::uint32_t cell_node) const noexcept;
+  /// Get direct incoming local face-node slot indices for one cell face.
+  const std::uint32_t*
+  GetIncomingLocalFaceNodeSlotIndices(const std::uint32_t cell_local_id,
+                                      const unsigned int face_id) const noexcept;
+
+  /// Get direct outgoing local face-node slot indices for one cell face.
+  const std::uint32_t*
+  GetOutgoingLocalFaceNodeSlotIndices(const std::uint32_t cell_local_id,
+                                      const unsigned int face_id) const noexcept;
 
 private:
   size_t num_incoming_nonlocal_faces_;
   size_t num_incoming_nonlocal_face_nodes_;
   size_t num_outgoing_nonlocal_faces_;
-  size_t max_local_outgoing_node_count_ = 0;
+  size_t num_local_psi_face_node_slots_ = 0;
   std::vector<size_t> cell_face_offsets_;
-  std::vector<std::uint32_t> cell_node_offsets_;
-  std::vector<std::uint32_t> local_outgoing_node_indices_;
+  /// Face-storage-index to flat face-node offset map over all local cell faces.
+  std::vector<std::uint32_t> face_node_offsets_;
+  /// Incoming local-face node to statically assigned physical slot index.
+  std::vector<std::uint32_t> incoming_local_face_node_slot_indices_;
+  /// Outgoing local-face node to statically assigned physical slot index.
+  std::vector<std::uint32_t> outgoing_local_face_node_slot_indices_;
   std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
   std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
   std::vector<size_t> outgoing_nonlocal_face_counts_;

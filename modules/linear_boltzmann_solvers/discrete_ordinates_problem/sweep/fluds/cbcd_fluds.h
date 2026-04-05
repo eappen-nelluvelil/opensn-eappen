@@ -13,7 +13,6 @@
 #include <limits>
 #include <map>
 #include <span>
-#include <span>
 
 namespace crb = caribou;
 
@@ -32,8 +31,6 @@ class MeshContinuum;
 class CBCD_FLUDS : public FLUDS
 {
 public:
-  static constexpr std::uint32_t INVALID_SLOT_OFFSET = std::numeric_limits<std::uint32_t>::max();
-
   CBCD_FLUDS(size_t num_groups,
              size_t num_angles,
              size_t num_local_cells,
@@ -65,9 +62,6 @@ public:
 
   /// Get vector of local cells to be swept.
   crb::MappedHostVector<std::uint32_t>& GetLocalCellIDs() { return local_cell_ids_; }
-
-  void AllocateSlots(const std::vector<std::uint32_t>& cell_local_ids);
-  void DeallocateSlots(const std::vector<std::uint32_t>& cell_local_ids);
 
   /// Get saved angular flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
@@ -123,8 +117,7 @@ private:
   size_t num_angles_in_gs_quadrature_;
   size_t num_quadrature_local_dofs_;
   size_t num_local_spatial_dofs_;
-  size_t num_local_psi_slots_;
-  size_t local_psi_slot_stride_;
+  size_t num_local_psi_face_node_slots_;
   size_t local_psi_data_size_;
   size_t saved_psi_data_size_;
   const MeshContinuum* grid_ptr_ = nullptr;
@@ -137,16 +130,14 @@ private:
   /// Associated angleset's stream.
   crb::Stream stream_;
   crb::MappedHostVector<std::uint32_t> local_cell_ids_;
-  crb::MappedHostVector<std::uint32_t> local_slot_offsets_;
   bool save_angular_flux_;
-  /// Device storage for local angular fluxes.
+  /// Device storage for statically indexed local face-node angular fluxes.
   crb::DeviceMemory<double> local_psi_;
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
   crb::HostVector<double> host_saved_psi_;
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
-  std::vector<std::uint32_t> free_slot_stack_;
   /// Ordered outgoing destination metadata.
   struct OutgoingDestination
   {

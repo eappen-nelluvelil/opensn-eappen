@@ -25,6 +25,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
     bool is_local_face = false;
     bool is_boundary_face = false;
     const FaceNodalMapping* face_nodal_mapping = nullptr;
+    const std::uint32_t* local_face_node_slot_indices = nullptr;
     const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo* incoming_nonlocal_face_info = nullptr;
   };
 
@@ -33,6 +34,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
     bool is_local_face = false;
     bool is_boundary_face = false;
     bool is_reflecting_boundary_face = false;
+    const std::uint32_t* local_face_node_slot_indices = nullptr;
     const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo* outgoing_nonlocal_face_info = nullptr;
   };
 
@@ -110,6 +112,10 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
       face_data.is_local_face = is_local_face;
       face_data.is_boundary_face = is_boundary_face;
       face_data.face_nodal_mapping = face_nodal_mapping;
+      if (is_local_face)
+        face_data.local_face_node_slot_indices =
+          cbc_common.GetIncomingLocalFaceNodeSlotIndices(data.cell_local_id,
+                                                         static_cast<unsigned int>(f));
       if (not is_local_face and not is_boundary_face)
         face_data.incoming_nonlocal_face_info =
           &cbc_common.GetIncomingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
@@ -122,6 +128,10 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
       face_data.is_boundary_face = is_boundary_face;
       face_data.is_reflecting_boundary_face =
         is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting();
+      if (is_local_face)
+        face_data.local_face_node_slot_indices =
+          cbc_common.GetOutgoingLocalFaceNodeSlotIndices(data.cell_local_id,
+                                                         static_cast<unsigned int>(f));
       if (not is_local_face and not is_boundary_face)
         face_data.outgoing_nonlocal_face_info =
           &cbc_common.GetOutgoingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
@@ -157,6 +167,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
       const bool is_local_face = face_data.is_local_face;
       const bool is_boundary_face = face_data.is_boundary_face;
       const auto* face_nodal_mapping = face_data.face_nodal_mapping;
+      const auto* local_face_node_slot_indices = face_data.local_face_node_slot_indices;
 
       const auto& Ms_f = data.M_surf[f];
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
@@ -168,9 +179,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
         const double* psi = nullptr;
         if (is_local_face)
-          psi = data.fluds.UpwindPsi(data.cell_transport_view.FaceNeighbor(f)->local_id,
-                                     face_nodal_mapping->cell_node_mapping_[fj],
-                                     as_ss_idx);
+          psi = data.fluds.LocalPsi(local_face_node_slot_indices[fj], as_ss_idx);
         else if (not is_boundary_face)
           psi = data.fluds.NLUpwindPsi(data.cell_local_id,
                                        static_cast<unsigned int>(f),
@@ -375,6 +384,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
       const bool is_local_face = face_data.is_local_face;
       const bool is_boundary_face = face_data.is_boundary_face;
       const bool is_reflecting_boundary_face = face_data.is_reflecting_boundary_face;
+      const auto* local_face_node_slot_indices = face_data.local_face_node_slot_indices;
       const auto& IntF_shapeI = data.IntS_shapeI[f];
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
@@ -411,7 +421,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
         double* psi = nullptr;
         if (is_local_face)
-          psi = data.fluds.OutgoingPsi(data.cell_local_id, i, as_ss_idx);
+          psi = data.fluds.LocalPsi(local_face_node_slot_indices[fi], as_ss_idx);
         else if (not is_boundary_face)
           psi = data.fluds.NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)

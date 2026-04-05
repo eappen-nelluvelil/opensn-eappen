@@ -7,28 +7,23 @@
 #include <array>
 #include <cstddef>
 #include <functional>
+#include <stdexcept>
 
 namespace opensn
 {
 
 /**
  * Node index specific to CBCD FLUDS.
- * Does not support delayed nodes. Reclaims the delayed bit for indices.
+ * Does not support delayed nodes. Reclaims the delayed bit for indices and
+ * stores direct indices into the corresponding local, boundary, or non-local banks.
  * - Bit 63: Incoming/outgoing bit.
  * - Bit 62: Boundary bit.
  * - Bit 61: Local bit.
- * - For local nodes:
- *   - Bits 16-60: Cell local id.
- *   - Bits 0-15: Cell-local node index.
- * - For boundary/nonlocal nodes:
- *   - Bits 0-60: Bank index.
+ * - Bits 0-60: Bank index.
  */
 class CBCD_NodeIndex : public NodeIndex
 {
 public:
-  static constexpr std::uint32_t kLocalNodeBits = 16;
-  static constexpr std::uint64_t kLocalNodeMask = (std::uint64_t(1) << kLocalNodeBits) - 1;
-
   /// Default constructor.
   constexpr CBCD_NodeIndex() = default;
 
@@ -52,20 +47,6 @@ public:
   }
 
   /**
-   * Construct a local node index.
-   * \param cell_local_id Local cell id.
-   * \param cell_node Local node id within the cell.
-   * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
-   */
-  CBCD_NodeIndex(std::uint32_t cell_local_id, std::uint16_t cell_node, bool is_outgoing)
-  {
-    SetInOut(is_outgoing);
-    SetLocal(true);
-    SetBoundary(false);
-    SetLocalCellNode(cell_local_id, cell_node);
-  }
-
-  /**
    * Construct a boundary node index.
    * \param index Index into the corresponding bank. Cannot exceed 2^61 - 1.
    * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
@@ -85,16 +66,6 @@ public:
 
   /// Get the index into the bank.
   constexpr std::uint64_t GetIndex() const noexcept { return value_ & index_bit_mask; }
-  /// Get local cell id for a local node index.
-  constexpr std::uint32_t GetCellLocalID() const noexcept
-  {
-    return static_cast<std::uint32_t>((value_ & index_bit_mask) >> kLocalNodeBits);
-  }
-  /// Get local node id within a local cell.
-  constexpr std::uint16_t GetCellNode() const noexcept
-  {
-    return static_cast<std::uint16_t>(value_ & kLocalNodeMask);
-  }
 
 private:
   /// \name Local bit
@@ -121,11 +92,6 @@ private:
     value_ &= ~index_bit_mask;
     value_ |= (index & index_bit_mask);
   }
-  constexpr void SetLocalCellNode(std::uint32_t cell_local_id, std::uint16_t cell_node) noexcept
-  {
-    SetIndex((static_cast<std::uint64_t>(cell_local_id) << kLocalNodeBits) |
-             static_cast<std::uint64_t>(cell_node));
-  }
   /// \}
 };
 
@@ -134,37 +100,10 @@ private:
  */
 struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
-  /// Pointer to local cell slot offsets, in node units.
-  const std::uint32_t* __restrict__ local_slot_offsets = nullptr;
-  /// Pointer to per-cell offsets into the compact local-node map.
-  const std::uint32_t* __restrict__ local_cell_node_offsets = nullptr;
-  /// Pointer to compact local-node indices for each cell node.
-  const std::uint32_t* __restrict__ local_compact_node_indices = nullptr;
   /// Pointer to incoming boundary angular fluxes.
   double* __restrict__ incoming_boundary_psi = nullptr;
   /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
-
-  constexpr double* GetLocalCellFluxBase(const std::uint32_t cell_local_id) const noexcept
-  {
-    return local_psi + static_cast<std::size_t>(local_slot_offsets[cell_local_id]) * stride_size;
-  }
-
-  constexpr std::uint32_t GetCompactLocalNodeIndex(const std::uint32_t cell_local_id,
-                                                   const std::uint16_t cell_node) const noexcept
-  {
-    const auto index_offset = local_cell_node_offsets[cell_local_id] + static_cast<std::uint32_t>(cell_node);
-    return local_compact_node_indices[index_offset];
-  }
-
-  constexpr double* GetLocalFluxPointer(double* local_cell_base,
-                                        const std::uint32_t cell_local_id,
-                                        const std::uint16_t cell_node) const noexcept
-  {
-    return local_cell_base +
-           static_cast<std::size_t>(GetCompactLocalNodeIndex(cell_local_id, cell_node)) *
-             stride_size;
-  }
 
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
@@ -185,9 +124,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Incoming local case
     if (node_index.IsLocal())
     {
-      return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
-                                 node_index.GetCellLocalID(),
-                                 node_index.GetCellNode());
+      return local_psi + node_index.GetIndex() * stride_size;
     }
     // Incoming non-local case
     else
@@ -215,9 +152,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Outgoing local case
     if (node_index.IsLocal())
     {
-      return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
-                                 node_index.GetCellLocalID(),
-                                 node_index.GetCellNode());
+      return local_psi + node_index.GetIndex() * stride_size;
     }
     // Outgoing non-local case
     else
