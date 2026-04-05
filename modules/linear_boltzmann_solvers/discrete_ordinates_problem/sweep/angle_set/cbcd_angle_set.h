@@ -5,7 +5,6 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "caribou/main.hpp"
 #include <atomic>
 #include <set>
@@ -56,7 +55,7 @@ public:
 
   int GetMaxBufferMessages() const override { return 0; }
 
-  void SetMaxBufferMessages(int new_max) override {}
+  void SetMaxBufferMessages(int /*new_max*/) override {}
 
   /// Initialize host-side sweep state once all dependencies are resolved.
   bool TryInitialize(CBCDSweepChunk& sweep_chunk);
@@ -98,9 +97,6 @@ public:
   /// Get the device angle-index array.
   std::uint32_t* GetDeviceAngleIndices() { return device_angle_indices_.get(); }
 
-  /// Get the mutable device-visible CBC task-state view.
-  const CBCD_TaskStateView& GetDeviceTaskState() const noexcept { return device_task_state_; }
-
   /// Check whether the angle set has completed its sweep.
   bool IsExecuted() const { return executed_; }
   bool IsInitialized() const { return boundary_data_initialized_; }
@@ -118,34 +114,16 @@ protected:
   crb::Stream stream_;
   /// Angle indices on the device.
   crb::DeviceMemory<std::uint32_t> device_angle_indices_;
-  /// Mutable remaining dependency counts on the device.
-  crb::DeviceMemory<int> device_remaining_deps_;
-  /// Mutable remaining-successor-retirement counts on the device.
-  crb::DeviceMemory<std::uint32_t> device_remaining_successors_to_retire_;
-  /// Device-visible ready-task staging buffer.
-  crb::DeviceMemory<std::uint32_t> device_ready_task_indices_;
-  /// Device-visible count of staged ready tasks.
-  crb::DeviceMemory<std::uint32_t> device_ready_task_count_;
-  /// Mutable device task-state view consumed by CBC-specific kernels.
-  CBCD_TaskStateView device_task_state_;
   /// Cell local ID per task.
   std::vector<std::uint32_t> reference_ids_;
   /// Flat successor offsets.
   std::vector<std::uint32_t> successor_offsets_;
   /// Flat successor task indices.
   std::vector<std::uint32_t> successor_data_;
-  /// Flat predecessor offsets.
-  std::vector<std::uint32_t> predecessor_offsets_;
-  /// Flat predecessor task indices.
-  std::vector<std::uint32_t> predecessor_data_;
   /// Initial dependency counts per task.
   std::vector<int> initial_deps_;
   /// Per-sweep dependency counts per task.
   std::vector<int> remaining_deps_;
-  /// Initial successor-retirement countdown per task.
-  std::vector<std::uint32_t> initial_successors_to_retire_;
-  /// Per-sweep successor-retirement countdown per task.
-  std::vector<std::uint32_t> remaining_successors_to_retire_;
   /// Task indices with zero initial dependencies.
   std::vector<std::uint32_t> initial_ready_tasks_;
   /// Number of unresolved angle-set dependencies at startup.
@@ -186,10 +164,6 @@ private:
                                 std::size_t face_id) const;
   /// Initialize mutable task state for a new sweep.
   void InitializeTaskState();
-  /// Allocate mutable device task state once the immutable task graph is known.
-  void AllocateDeviceTaskState();
-  /// Reset mutable device task state for a new sweep.
-  void ResetDeviceTaskState();
   /// Decrement following angle-set dependency counters once all reflecting data is ready.
   void NotifyFollowingAngleSets();
   /// Notify following angle sets once all reflecting-boundary producers have completed.

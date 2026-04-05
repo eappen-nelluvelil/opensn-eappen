@@ -1470,8 +1470,6 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   //     size_t min_local_psi_slots = std::numeric_limits<size_t>::max();
   //     for (const auto& spds : cbc_spds_list)
   //     {
-  //       max_local_psi_slots = std::max(max_local_psi_slots, spds->GetMaxNumLocalPsiSlots());
-  //       min_local_psi_slots = std::min(min_local_psi_slots, spds->GetMaxNumLocalPsiSlots());
   //     }
   //     // Print the current time, the elapsed time for the parallel region, and the max num local psi slots
   //     log.Log() << program_timer.GetTimeString() << " Finished computing max num local psi slots. Elapsed time: " << elapsed_time << " seconds. Max num local psi slots: " << max_local_psi_slots << ". Min num local psi slots: " << min_local_psi_slots << ".\n";
