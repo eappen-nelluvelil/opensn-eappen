@@ -212,18 +212,6 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 };
 
 /**
- * Mutable device-visible CBCD task-state view.
- */
-struct CBCD_TaskStateView
-{
-  int* __restrict__ remaining_dependencies = nullptr;
-  std::uint32_t* __restrict__ remaining_successors_to_retire = nullptr;
-  std::uint32_t* __restrict__ ready_task_indices = nullptr;
-  std::uint32_t* __restrict__ ready_task_count = nullptr;
-  std::uint32_t num_tasks = 0;
-};
-
-/**
  * Metadata for boundary face nodes.
  */
 struct BoundaryNodeInfo

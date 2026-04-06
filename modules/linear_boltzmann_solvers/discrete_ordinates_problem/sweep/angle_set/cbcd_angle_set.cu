@@ -35,21 +35,11 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   cbcd_fluds->AllocateLocalAndSavedPsi();
   cbcd_fluds->InitializeReflectingBoundaryNodes(boundaries_);
   InitializeTaskGraphData();
-  AllocateDeviceTaskState();
-  cbc_spds_.CopyTaskGraphDataOnDevice();
   InitializeReflectingTaskMask();
 }
 
 CBCD_AngleSet::~CBCD_AngleSet()
 {
-  if (device_remaining_deps_.get())
-    device_remaining_deps_.async_free(stream_);
-  if (device_remaining_successors_to_retire_.get())
-    device_remaining_successors_to_retire_.async_free(stream_);
-  if (device_ready_task_indices_.get())
-    device_ready_task_indices_.async_free(stream_);
-  if (device_ready_task_count_.get())
-    device_ready_task_count_.async_free(stream_);
   device_angle_indices_.async_free(stream_);
 }
 
@@ -136,9 +126,7 @@ CBCD_AngleSet::InitializeTaskGraphData()
 
   reference_ids_.resize(num_tasks);
   initial_deps_.resize(num_tasks);
-  initial_successors_to_retire_.resize(num_tasks);
   successor_offsets_.assign(num_tasks + 1, 0);
-  predecessor_offsets_.assign(num_tasks + 1, 0);
   initial_ready_tasks_.clear();
   initial_ready_tasks_.reserve(num_tasks);
 
@@ -147,30 +135,21 @@ CBCD_AngleSet::InitializeTaskGraphData()
     const auto& task = task_list[task_idx];
     reference_ids_[task_idx] = static_cast<std::uint32_t>(task.reference_id);
     initial_deps_[task_idx] = static_cast<int>(task.num_dependencies);
-    initial_successors_to_retire_[task_idx] = static_cast<std::uint32_t>(task.successors.size());
     successor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.successors.size());
-    predecessor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.predecessors.size());
     if (task.num_dependencies == 0)
       initial_ready_tasks_.push_back(static_cast<std::uint32_t>(task_idx));
   }
 
   for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
-  {
     successor_offsets_[task_idx + 1] += successor_offsets_[task_idx];
-    predecessor_offsets_[task_idx + 1] += predecessor_offsets_[task_idx];
-  }
 
   successor_data_.resize(successor_offsets_.back());
-  predecessor_data_.resize(predecessor_offsets_.back());
   for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
   {
     const auto& task = task_list[task_idx];
     std::copy(task.successors.begin(),
               task.successors.end(),
               successor_data_.begin() + successor_offsets_[task_idx]);
-    std::copy(task.predecessors.begin(),
-              task.predecessors.end(),
-              predecessor_data_.begin() + predecessor_offsets_[task_idx]);
   }
 }
 
@@ -178,65 +157,11 @@ void
 CBCD_AngleSet::InitializeTaskState()
 {
   remaining_deps_ = initial_deps_;
-  remaining_successors_to_retire_ = initial_successors_to_retire_;
   ready_queue_ = initial_ready_tasks_;
   in_flight_task_indices_.clear();
   in_flight_cell_ids_.clear();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = initial_reflecting_task_count_;
-  ResetDeviceTaskState();
-}
-
-void
-CBCD_AngleSet::AllocateDeviceTaskState()
-{
-  const auto num_tasks = reference_ids_.size();
-  if (num_tasks == 0 or device_remaining_deps_.get() != nullptr)
-    return;
-
-  device_remaining_deps_ = crb::DeviceMemory<int>(num_tasks, stream_);
-  device_remaining_successors_to_retire_ = crb::DeviceMemory<std::uint32_t>(num_tasks, stream_);
-  device_ready_task_indices_ = crb::DeviceMemory<std::uint32_t>(num_tasks, stream_);
-  device_ready_task_count_ = crb::DeviceMemory<std::uint32_t>(1, stream_);
-
-  device_task_state_.remaining_dependencies = device_remaining_deps_.get();
-  device_task_state_.remaining_successors_to_retire = device_remaining_successors_to_retire_.get();
-  device_task_state_.ready_task_indices = device_ready_task_indices_.get();
-  device_task_state_.ready_task_count = device_ready_task_count_.get();
-  device_task_state_.num_tasks = static_cast<std::uint32_t>(num_tasks);
-
-  ResetDeviceTaskState();
-}
-
-void
-CBCD_AngleSet::ResetDeviceTaskState()
-{
-  if (reference_ids_.empty())
-    return;
-
-  crb::HostVector<int> host_initial_deps(initial_deps_.begin(), initial_deps_.end());
-  crb::HostVector<std::uint32_t> host_initial_successors_to_retire(
-    initial_successors_to_retire_.begin(), initial_successors_to_retire_.end());
-  crb::HostVector<std::uint32_t> host_initial_ready_tasks(initial_ready_tasks_.begin(),
-                                                          initial_ready_tasks_.end());
-  crb::HostVector<std::uint32_t> host_ready_task_count(1);
-  host_ready_task_count.front() = static_cast<std::uint32_t>(initial_ready_tasks_.size());
-
-  crb::copy(device_remaining_deps_, host_initial_deps, host_initial_deps.size(), 0, 0, stream_);
-  crb::copy(device_remaining_successors_to_retire_,
-            host_initial_successors_to_retire,
-            host_initial_successors_to_retire.size(),
-            0,
-            0,
-            stream_);
-  if (not host_initial_ready_tasks.empty())
-    crb::copy(device_ready_task_indices_,
-              host_initial_ready_tasks,
-              host_initial_ready_tasks.size(),
-              0,
-              0,
-              stream_);
-  crb::copy(device_ready_task_count_, host_ready_task_count, 1, 0, 0, stream_);
 }
 
 void
@@ -296,30 +221,14 @@ CBCD_AngleSet::TryAdvanceOneStep()
   {
     cbcd_fluds->CopyOutgoingPsiBackToHost(cbcd_sweep_chunk, this, in_flight_cell_ids_);
 
-    std::vector<std::uint32_t> cells_to_deallocate;
-    cells_to_deallocate.reserve(2 * in_flight_task_indices_.size());
     for (const auto task_idx : in_flight_task_indices_)
     {
       const auto succ_begin = successor_offsets_[task_idx];
       const auto succ_end = successor_offsets_[task_idx + 1];
       for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
       {
-        const auto succ = successor_data_[succ_i];
-        if (--remaining_deps_[succ] == 0)
-          ready_queue_.push_back(succ);
-      }
-
-      if (succ_begin == succ_end)
-        cells_to_deallocate.push_back(reference_ids_[task_idx]);
-
-      const auto pred_begin = predecessor_offsets_[task_idx];
-      const auto pred_end = predecessor_offsets_[task_idx + 1];
-      for (auto pred_i = pred_begin; pred_i < pred_end; ++pred_i)
-      {
-        const auto pred = predecessor_data_[pred_i];
-        assert(remaining_successors_to_retire_[pred] > 0);
-        if (--remaining_successors_to_retire_[pred] == 0)
-          cells_to_deallocate.push_back(reference_ids_[pred]);
+        if (--remaining_deps_[successor_data_[succ_i]] == 0)
+          ready_queue_.push_back(successor_data_[succ_i]);
       }
 
       if (task_has_outgoing_reflecting_boundary_[task_idx] != 0)
@@ -328,8 +237,6 @@ CBCD_AngleSet::TryAdvanceOneStep()
         --pending_reflecting_tasks_;
       }
     }
-    if (not cells_to_deallocate.empty())
-      cbcd_fluds->DeallocateSlots(cells_to_deallocate);
     num_completed_tasks_ += in_flight_task_indices_.size();
     in_flight_task_indices_.clear();
     in_flight_cell_ids_.clear();
@@ -368,7 +275,6 @@ CBCD_AngleSet::TryAdvanceOneStep()
     for (const auto task_idx : in_flight_task_indices_)
       in_flight_cell_ids_.push_back(reference_ids_[task_idx]);
 
-    cbcd_fluds->AllocateSlots(in_flight_cell_ids_);
     cbcd_fluds->CopyIncomingNonlocalPsiToDevice(this, in_flight_cell_ids_);
     cbcd_sweep_chunk.Sweep(in_flight_cell_ids_, GetID());
     kernel_in_flight_ = true;

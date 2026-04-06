@@ -12,7 +12,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/quadrature_carrier.h"
@@ -75,11 +74,6 @@ struct Arguments
     // Copy FLUDS data to GPU and retrieve the pointer set
     flud_data = fluds.GetDevicePointerSet();
     flud_index = fluds.GetCommonData().GetDeviceIndex();
-    if constexpr (t == SweepType::CBC)
-    {
-      cbc_task_graph = &dynamic_cast<const CBC_SPDS&>(angle_set.GetSPDS()).GetDeviceTaskGraph();
-      cbc_task_state = angle_set.GetDeviceTaskState();
-    }
   }
 
   // Mesh and quadrature
@@ -98,8 +92,6 @@ struct Arguments
   // FLUDS
   const std::uint64_t* __restrict__ flud_index;
   FLUDSPointerSetType flud_data;
-  const CBCDeviceTaskGraph* __restrict__ cbc_task_graph = nullptr;
-  CBCD_TaskStateView cbc_task_state{};
 };
 
 } // namespace opensn::gpu_kernel

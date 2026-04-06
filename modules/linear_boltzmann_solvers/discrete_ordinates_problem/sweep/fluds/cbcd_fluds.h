@@ -10,9 +10,7 @@
 #include "framework/data_types/byte_array.h"
 #include "caribou/main.hpp"
 #include <cstddef>
-#include <limits>
 #include <map>
-#include <span>
 #include <span>
 
 namespace crb = caribou;
@@ -32,8 +30,6 @@ class MeshContinuum;
 class CBCD_FLUDS : public FLUDS
 {
 public:
-  static constexpr std::uint32_t INVALID_SLOT_OFFSET = std::numeric_limits<std::uint32_t>::max();
-
   CBCD_FLUDS(size_t num_groups,
              size_t num_angles,
              size_t num_local_cells,
@@ -65,9 +61,6 @@ public:
 
   /// Get vector of local cells to be swept.
   crb::MappedHostVector<std::uint32_t>& GetLocalCellIDs() { return local_cell_ids_; }
-
-  void AllocateSlots(const std::vector<std::uint32_t>& cell_local_ids);
-  void DeallocateSlots(const std::vector<std::uint32_t>& cell_local_ids);
 
   /// Get saved angular flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
@@ -146,7 +139,6 @@ private:
   crb::HostVector<double> host_saved_psi_;
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
-  std::vector<std::uint32_t> free_slot_stack_;
   /// Ordered outgoing destination metadata.
   struct OutgoingDestination
   {
