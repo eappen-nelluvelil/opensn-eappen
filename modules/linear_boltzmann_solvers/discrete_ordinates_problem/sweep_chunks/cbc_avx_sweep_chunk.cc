@@ -44,7 +44,8 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
                           "CBC_Sweep_FixedN invoked for an incompatible cell topology.");
 
   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[data.cell_local_id];
-  const auto& sigma_t = data.xs.at(data.cell.block_id)->GetSigmaTotal();
+  const auto& cell_xs = data.cell_transport_view.GetXS();
+  const auto& sigma_t = cell_xs.GetSigmaTotal();
 
   constexpr size_t matrix_size = static_cast<size_t>(NumNodes) * static_cast<size_t>(NumNodes);
   auto idx = [](size_t i, size_t j) -> size_t { return i * NumNodes + j; };
@@ -75,7 +76,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
   std::vector<double> tau_gsg;
   if constexpr (time_dependent)
   {
-    const auto& inv_velg = data.xs.at(data.cell.block_id)->GetInverseVelocity();
+    const auto& inv_velg = cell_xs.GetInverseVelocity();
     const double theta = data.problem.GetTheta();
     const double inv_theta = 1.0 / theta;
     const double dt = data.problem.GetTimeStep();

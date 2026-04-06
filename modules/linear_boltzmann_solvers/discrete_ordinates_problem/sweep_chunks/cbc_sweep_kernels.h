@@ -20,7 +20,6 @@ struct CBCSweepData
   const SpatialDiscretization& discretization;
   const std::vector<double>& source_moments;
   const LBSGroupset& groupset;
-  const BlockID2XSMap& xs;
   unsigned int num_moments;
   unsigned int max_num_cell_dofs;
   bool save_angular_flux;
@@ -81,6 +80,7 @@ struct CBCGenericSweepScratch
   std::vector<double> tau_gsg;
   std::vector<CBCIncomingFaceData> incoming_face_data;
   std::vector<CBCOutgoingFaceData> outgoing_face_data;
+  std::vector<size_t> moment_dof_map;
 
   void
   EnsureCapacity(const size_t max_num_cell_dofs, const size_t gs_size, const size_t cell_num_faces)
@@ -127,12 +127,13 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
   auto& face_mu_values = scratch.face_mu_values;
 
   const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[data.cell_local_id];
-  const auto& sigma_t = data.xs.at(data.cell.block_id)->GetSigmaTotal();
+  const auto& cell_xs = data.cell_transport_view.GetXS();
+  const auto& sigma_t = cell_xs.GetSigmaTotal();
 
   scratch.tau_gsg.clear();
   if constexpr (time_dependent)
   {
-    const auto& inv_velg = data.xs.at(data.cell.block_id)->GetInverseVelocity();
+    const auto& inv_velg = cell_xs.GetInverseVelocity();
     const double theta = data.problem.GetTheta();
     const double inv_theta = 1.0 / theta;
     const double dt = data.problem.GetTimeStep();
@@ -187,6 +188,13 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
           &cbc_common.GetOutgoingNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
     }
   }
+
+  auto& moment_dof_map = scratch.moment_dof_map;
+  moment_dof_map.resize(static_cast<size_t>(data.num_moments) * data.cell_num_nodes);
+  for (unsigned int m = 0; m < data.num_moments; ++m)
+    for (size_t i = 0; i < data.cell_num_nodes; ++i)
+      moment_dof_map[static_cast<size_t>(m) * data.cell_num_nodes + i] =
+        data.cell_transport_view.MapDOF(i, m, data.gs_gi);
 
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
   {
@@ -273,7 +281,7 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
         double temp_src = 0.0;
         for (unsigned int m = 0; m < data.num_moments; ++m)
         {
-          const auto ir = data.cell_transport_view.MapDOF(i, m, data.gs_gi + gsg);
+          const auto ir = moment_dof_map[static_cast<size_t>(m) * data.cell_num_nodes + i] + gsg;
           temp_src += m2d_row[m] * data.source_moments[ir];
         }
 
@@ -309,7 +317,7 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
       const auto wn_d2m = d2m_row[m];
       for (size_t i = 0; i < data.cell_num_nodes; ++i)
       {
-        const auto ir = data.cell_transport_view.MapDOF(i, m, data.gs_gi);
+        const auto ir = moment_dof_map[static_cast<size_t>(m) * data.cell_num_nodes + i];
         for (size_t gsg = 0; gsg < data.gs_size; ++gsg)
           data.destination_phi[ir + gsg] += wn_d2m * b[gsg](i);
       }

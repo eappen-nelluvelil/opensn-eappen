@@ -10,7 +10,6 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aah_fluds.h"
-#include "modules/linear_boltzmann_solvers/lbs_problem/lbs_structs.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_view.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aah_sweep_chunk.h"
 #include <algorithm>
@@ -26,7 +25,6 @@ struct AAHSweepData
   std::vector<CellLBSView>& cell_transport_views;
   const std::vector<double>& source_moments;
   const LBSGroupset& groupset;
-  const BlockID2XSMap& xs;
   const unsigned int num_moments;
   const unsigned int max_num_cell_dofs;
   const unsigned int min_num_cell_dofs;
@@ -79,12 +77,13 @@ AAH_Sweep_Generic(AAHSweepData& data, AngleSet& angle_set)
     const auto& face_orientations = spds.GetCellFaceOrientations()[cell_local_id];
     std::vector<double> face_mu_values(cell_num_faces);
 
-    const auto& sigma_t = data.xs.at(cell.block_id)->GetSigmaTotal();
+    const auto& cell_xs = cell_transport_view.GetXS();
+    const auto& sigma_t = cell_xs.GetSigmaTotal();
 
     std::vector<double> tau_gsg;
     if constexpr (time_dependent)
     {
-      const auto& inv_velg = data.xs.at(cell.block_id)->GetInverseVelocity();
+      const auto& inv_velg = cell_xs.GetInverseVelocity();
       const double theta = data.problem.GetTheta();
       const double inv_theta = 1.0 / theta;
       const double dt = data.problem.GetTimeStep();

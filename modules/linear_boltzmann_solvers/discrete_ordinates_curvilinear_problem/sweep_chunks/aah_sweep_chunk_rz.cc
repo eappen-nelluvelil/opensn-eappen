@@ -22,7 +22,6 @@ AAHSweepChunkRZ::AAHSweepChunkRZ(DiscreteOrdinatesProblem& problem, LBSGroupset&
                problem.GetCellTransportViews(),
                problem.GetQMomentsLocal(),
                groupset,
-               problem.GetBlockID2XSMap(),
                problem.GetNumMoments(),
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
@@ -96,7 +95,7 @@ AAHSweepChunkRZ::Sweep(AngleSet& angle_set)
     const auto& face_orientations = spds.GetCellFaceOrientations()[cell_local_id];
     std::vector<double> face_mu_values(cell_num_faces);
 
-    const auto& sigma_t = xs_.at(cell.block_id)->GetSigmaTotal();
+    const auto& sigma_t = cell_transport_view.GetXS().GetSigmaTotal();
 
     // Get cell matrices
     const auto& G = unit_cell_matrices_[cell_local_id].intV_shapeI_gradshapeJ;
