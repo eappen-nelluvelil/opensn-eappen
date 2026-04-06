@@ -443,9 +443,7 @@ CBC_SPDS::BuildTaskGraph()
 
   const auto num_loc_cells = grid_->local_cells.size();
   task_list_.assign(num_loc_cells, Task{});
-  local_successor_offsets_.resize(num_loc_cells + 1, 0);
 
-  std::size_t successor_count = 0;
   for (const auto& cell : grid_->local_cells)
   {
     unsigned int num_dependencies = 0;
@@ -470,21 +468,8 @@ CBC_SPDS::BuildTaskGraph()
         successors.push_back(grid_->cells[face.neighbor_id].local_id);
     }
 
-    successor_count += successors.size();
-    local_successor_offsets_[cell.local_id + 1] = static_cast<std::uint32_t>(successor_count);
     task_list_[cell.local_id] = Task{
       0, num_dependencies, std::move(predecessors), std::move(successors), cell.local_id, &cell};
-  }
-
-  local_successors_.resize(successor_count);
-  initial_successors_to_retire_.resize(task_list_.size());
-  for (std::uint32_t cell_id = 0; cell_id < task_list_.size(); ++cell_id)
-  {
-    initial_successors_to_retire_[cell_id] =
-      static_cast<std::uint32_t>(task_list_[cell_id].successors.size());
-    std::copy(task_list_[cell_id].successors.begin(),
-              task_list_[cell_id].successors.end(),
-              local_successors_.begin() + local_successor_offsets_[cell_id]);
   }
 }
 
@@ -562,23 +547,6 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
 
   DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
   max_num_local_psi_slots_ = allocator.Solve();
-}
-
-#ifndef __OPENSN_WITH_GPU__
-void
-CBC_SPDS::CopyTaskGraphDataOnDevice() const
-{
-}
-
-void
-CBC_SPDS::FreeDeviceData() const
-{
-}
-#endif
-
-CBC_SPDS::~CBC_SPDS()
-{
-  FreeDeviceData();
 }
 
 } // namespace opensn

@@ -14,9 +14,6 @@ SweepKernelCBC(Arguments<SweepType::CBC> args,
                const unsigned int num_cells,
                double* saved_psi)
 {
-  (void)args.cbc_task_graph;
-  (void)args.cbc_task_state;
-
   unsigned int cell_idx = threadIdx.y + blockDim.y * blockIdx.y;
   unsigned int angle_group_idx = threadIdx.x + blockDim.x * blockIdx.x;
   if (cell_idx >= num_cells || angle_group_idx >= args.flud_data.stride_size)
