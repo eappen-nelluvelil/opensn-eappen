@@ -26,7 +26,35 @@ class CBCDSweepChunk;
 class SweepBoundary;
 class MeshContinuum;
 
-/// CBC FLUDS for device.
+/**
+ * Device-side flux data structures for the cell-by-cell (CBCD) sweep algorithm.
+ *
+ * Manages GPU-resident and mapped-host angular-flux buffers for local, nonlocal,
+ * and boundary face data during a CBCD sweep. The local angular-flux buffer is
+ * allocated on the device with \f$s^*\f$ slots determined by the CBC_SPDS static
+ * slot assignment, analogous to the host-side CBC_FLUDS but using device memory
+ * (caribou::DeviceMemory) and mapped host vectors (caribou::MappedHostVector) for
+ * zero-copy CPU-GPU data transfer.
+ *
+ * ## Data flow
+ *
+ * 1. **Incoming boundary/nonlocal psi:** Copied from host to device before
+ *    kernel launch via CopyIncomingBoundaryPsiToDevice.
+ * 2. **Local psi:** Computed and consumed entirely on-device using slot-based
+ *    addressing through CBCD_FLUDSPointerSet.
+ * 3. **Outgoing nonlocal psi:** Copied from device to host after kernel
+ *    completion via CopyOutgoingPsiBackToHost, then packed into wire-format
+ *    ByteArray sections and enqueued to the aggregated communicator.
+ * 4. **Saved psi:** If angular-flux storage is enabled, the device kernel writes
+ *    to device_saved_psi_, which is later copied to the host destination vector.
+ *
+ * ## Outgoing buffer management
+ *
+ * Each outgoing destination locality has a reusable ByteArray (dest_buffers_)
+ * with pre-reserved capacity (dest_buffer_capacities_). The swap-and-re-reserve
+ * pattern in CopyOutgoingPsiBackToHost preserves allocation across batches,
+ * avoiding geometric-growth reallocations.
+ */
 class CBCD_FLUDS : public FLUDS
 {
 public:

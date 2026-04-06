@@ -15,71 +15,136 @@
 namespace opensn
 {
 
+/**
+ * Aggregated sweep parameters for one cell in the CBC Generic/FixedN kernels.
+ *
+ * Bundles all data needed by the per-cell sweep kernel into a single struct
+ * to avoid long parameter lists. Includes references to the spatial
+ * discretization, groupset, FLUDS, cell geometry, and unit cell matrices.
+ * Constructed once per cell by CBCSweepChunk::MakeSweepData.
+ */
 struct CBCSweepData
 {
+  /// Spatial discretization providing DOF mapping.
   const SpatialDiscretization& discretization;
+  /// Source moment vector (indexed by DOF mapping).
   const std::vector<double>& source_moments;
+  /// Groupset containing quadrature and group range.
   const LBSGroupset& groupset;
+  /// Number of angular moments.
   unsigned int num_moments;
+  /// Maximum number of DOFs (nodes) per cell in the mesh.
   unsigned int max_num_cell_dofs;
+  /// Whether to store solved angular fluxes into destination_psi.
   bool save_angular_flux;
+  /// Stride in the psi array: num_angles_in_quadrature * num_groups.
   size_t groupset_angle_group_stride;
+  /// Stride in the psi array: num_groups.
   size_t groupset_group_stride;
+  /// Output scalar flux moments vector (accumulated across angles).
   std::vector<double>& destination_phi;
+  /// Output angular flux vector (written if save_angular_flux is true).
   std::vector<double>& destination_psi;
+  /// Whether surface source boundary conditions are active.
   bool surface_source_active;
+  /// Whether the RHS time-derivative term is included.
   bool include_rhs_time_term;
+  /// Owning discrete ordinates problem (for time-step and theta access).
   DiscreteOrdinatesProblem& problem;
+  /// Previous-time-step angular flux (nullptr for steady-state sweeps).
   const std::vector<double>* psi_old;
+  /// Energy group block size for FixedN SIMD batch solve.
   unsigned int group_block_size;
 
+  /// FLUDS providing local/nonlocal angular flux access.
   CBC_FLUDS& fluds;
+  /// Current cell being swept.
   const Cell& cell;
+  /// Local ID of the current cell.
   std::uint32_t cell_local_id;
+  /// Cell mapping providing face-node maps and DOF counts.
   const CellMapping& cell_mapping;
+  /// Transport view providing cross-section data and DOF mapping.
   CellLBSView& cell_transport_view;
+  /// Number of faces on the current cell.
   size_t cell_num_faces;
+  /// Number of nodes on the current cell.
   size_t cell_num_nodes;
 
+  /// Number of energy groups in the groupset.
   size_t gs_size;
+  /// First group index in the groupset.
   unsigned int gs_gi;
+  /// Number of angles in the current angle set.
   size_t num_angles_in_as;
+  /// Per-angle group stride (= num_groups).
   unsigned int group_stride;
+  /// Per-node angular stride (= num_angles * num_groups).
   size_t group_angle_stride;
 
+  /// Volume integral: \f$\int_V \nabla\phi_i \cdot \phi_j \, dV\f$.
   const DenseMatrix<Vector3>& G;
+  /// Mass matrix: \f$\int_V \phi_i \phi_j \, dV\f$.
   const DenseMatrix<double>& M;
+  /// Per-face surface mass matrices: \f$\int_S \phi_i \phi_j \, dS\f$.
   const std::vector<DenseMatrix<double>>& M_surf;
+  /// Per-face surface integrals: \f$\int_S \phi_i \, dS\f$.
   const std::vector<Vector<double>>& IntS_shapeI;
 };
 
+/// Pre-resolved metadata for one incoming face of the current cell.
 struct CBCIncomingFaceData
 {
+  /// Whether the upwind neighbor is on the same MPI rank.
   bool is_local_face = false;
+  /// Whether the face is a domain boundary (no neighbor).
   bool is_boundary_face = false;
+  /// Nodal mapping for local face access (nullptr for nonlocal/boundary).
   const FaceNodalMapping* face_nodal_mapping = nullptr;
+  /// Nonlocal face info for MPI-received data (nullptr for local/boundary).
   const CBC_FLUDSCommonData::IncomingNonlocalFaceInfo* incoming_nonlocal_face_info = nullptr;
 };
 
+/// Pre-resolved metadata for one outgoing face of the current cell.
 struct CBCOutgoingFaceData
 {
+  /// Whether the downwind neighbor is on the same MPI rank.
   bool is_local_face = false;
+  /// Whether the face is a domain boundary.
   bool is_boundary_face = false;
+  /// Whether the face is a reflecting boundary.
   bool is_reflecting_boundary_face = false;
+  /// Nodal mapping for local face access (nullptr for nonlocal/boundary).
   const FaceNodalMapping* face_nodal_mapping = nullptr;
+  /// Nonlocal face info for MPI send staging (nullptr for local/boundary).
   const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo* outgoing_nonlocal_face_info = nullptr;
 };
 
+/**
+ * Reusable scratch buffers for the CBC Generic sweep kernel.
+ *
+ * Allocated once per sweep chunk and resized lazily via EnsureCapacity.
+ * Avoids per-cell heap allocation in the hot path.
+ */
 struct CBCGenericSweepScratch
 {
+  /// Transport matrix: \f$A_{ij} = \hat\Omega \cdot G_{ij} + \text{face terms}\f$.
   DenseMatrix<double> Amat;
+  /// Temporary copy of A with \f$\sigma_t M\f$ added, consumed by Gauss elimination.
   DenseMatrix<double> Atemp;
+  /// Per-group RHS vectors.
   std::vector<Vector<double>> b;
+  /// Per-node source assembly scratch.
   std::vector<double> source;
+  /// Per-face dot product \f$\hat\Omega \cdot \hat n_f\f$.
   std::vector<double> face_mu_values;
+  /// Per-group time-absorption coefficient \f$v_g^{-1} / (\theta \Delta t)\f$.
   std::vector<double> tau_gsg;
+  /// Pre-resolved incoming face metadata (one per cell face).
   std::vector<CBCIncomingFaceData> incoming_face_data;
+  /// Pre-resolved outgoing face metadata (one per cell face).
   std::vector<CBCOutgoingFaceData> outgoing_face_data;
+  /// Pre-computed DOF indices: \c moment_dof_map[m * cell_num_nodes + i].
   std::vector<size_t> moment_dof_map;
 
   void
@@ -112,6 +177,16 @@ struct CBCGenericSweepScratch
   }
 };
 
+/**
+ * Generic CBC sweep kernel for one cell, parameterized by time dependence.
+ *
+ * Assembles and solves the local transport system for all angles and groups
+ * in the angle set, using dynamic-size matrices and Gauss elimination.
+ * Used when the cell node count does not match a compile-time FixedN
+ * specialization.
+ *
+ * \tparam time_dependent if true, include the time-derivative source term
+ */
 template <bool time_dependent>
 inline void
 CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet& angle_set)
@@ -415,6 +490,16 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
   }
 }
 
+/**
+ * Fixed-node-count CBC sweep kernel with AVX/AVX512 SIMD batch solve.
+ *
+ * Specialized in cbc_avx_sweep_chunk.cc for compile-time-known node counts
+ * (4, 8, etc.), enabling stack-allocated matrices, loop unrolling, and SIMD
+ * batch Gauss elimination across multiple energy groups simultaneously.
+ *
+ * \tparam NumNodes compile-time number of cell nodes
+ * \tparam time_dependent if true, include the time-derivative source term
+ */
 template <unsigned int NumNodes, bool time_dependent>
 void CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set);
 

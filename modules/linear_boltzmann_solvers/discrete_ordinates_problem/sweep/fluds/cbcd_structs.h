@@ -12,16 +12,23 @@ namespace opensn
 {
 
 /**
- * Node index specific to CBCD FLUDS.
- * Does not support delayed nodes. Reclaims the delayed bit for indices.
- * - Bit 63: Incoming/outgoing bit.
- * - Bit 62: Boundary bit.
- * - Bit 61: Local bit.
- * - For local nodes:
- *   - Bits 16-60: Cell local id.
- *   - Bits 0-15: Cell-local node index.
- * - For boundary/nonlocal nodes:
- *   - Bits 0-60: Bank index.
+ * Packed 64-bit angular-flux buffer index for CBCD FLUDS device kernels.
+ *
+ * Encodes the buffer type (local/boundary/nonlocal, incoming/outgoing) and
+ * address into a single 64-bit value that the GPU kernel decodes via
+ * CBCD_FLUDSPointerSet::GetIncomingFluxPointer / GetOutgoingFluxPointer.
+ * Does not support delayed nodes; reclaims the delayed bit for indices.
+ *
+ * ## Bit layout
+ *
+ * - Bit 63: incoming (0) / outgoing (1).
+ * - Bit 62: boundary (1) / non-boundary (0).
+ * - Bit 61: local (1) / nonlocal (0).
+ * - For local nodes (bits 61 set, bit 62 clear):
+ *   - Bits 16--60: cell local ID.
+ *   - Bits 0--15: cell-local node index.
+ * - For boundary or nonlocal nodes:
+ *   - Bits 0--60: flat bank index.
  */
 class CBCD_NodeIndex : public NodeIndex
 {

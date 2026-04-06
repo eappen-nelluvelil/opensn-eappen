@@ -34,14 +34,22 @@ enum class AngleSetStatus
   MESSAGES_PENDING = 7
 };
 
+/// Per-cell task descriptor for the CBC sweep task graph.
 struct Task
 {
+  /// Number of successors whose dependencies have been satisfied by this task.
   unsigned int num_satisfied_successors = 0;
+  /// Total number of predecessor dependencies (local + nonlocal incoming).
   unsigned int num_dependencies;
+  /// Local cell IDs of predecessor tasks.
   std::vector<std::uint32_t> predecessors;
+  /// Local cell IDs of successor tasks.
   std::vector<std::uint32_t> successors;
+  /// Cell local ID that this task corresponds to.
   uint64_t reference_id;
+  /// Pointer to the cell in the mesh continuum.
   const Cell* cell_ptr;
+  /// Whether this task has been completed in the current sweep.
   bool completed = false;
 };
 

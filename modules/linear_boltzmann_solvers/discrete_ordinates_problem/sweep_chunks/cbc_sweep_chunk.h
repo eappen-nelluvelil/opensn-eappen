@@ -53,17 +53,26 @@ public:
   void Sweep(AngleSet& angle_set) override;
 
 protected:
+  /// Owning discrete ordinates problem.
   DiscreteOrdinatesProblem& problem_;
+  /// Cached per-cell and per-angle-set context.
   CBCSweepChunkContext ctx_;
+  /// Energy group block size for SIMD batch solve.
   unsigned int group_block_size_ = 0;
+  /// Reusable scratch buffers for the Generic kernel.
   CBCGenericSweepScratch generic_scratch_;
 
 private:
+  /// Pointer-to-member for the selected sweep implementation.
   using SweepFunc = void (CBCSweepChunk::*)(AngleSet&);
+  /// Selected sweep function pointer (Generic or FixedN).
   SweepFunc sweep_impl_ = nullptr;
 
+  /// Construct the aggregated sweep data struct for the current cell.
   CBCSweepData MakeSweepData(const std::vector<double>* psi_old);
+  /// Sweep using the generic (dynamic-size) kernel.
   void Sweep_Generic(AngleSet& angle_set);
+  /// Sweep using the FixedN (compile-time node count) kernel.
   template <unsigned int NumNodes>
   void Sweep_FixedN(AngleSet& angle_set);
 };
