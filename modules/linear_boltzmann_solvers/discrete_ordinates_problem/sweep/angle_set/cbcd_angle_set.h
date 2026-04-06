@@ -15,6 +15,7 @@ namespace opensn
 {
 
 class CBC_SPDS;
+class CBCD_FLUDS;
 class CBCDSweepChunk;
 class CellFace;
 
@@ -106,6 +107,8 @@ protected:
   const CBC_SPDS& cbc_spds_;
   /// Communicator-set metadata for aggregated communicator construction.
   const MPICommunicatorSet& comm_set_;
+  /// Per-angle-set FLUDS storage (cached to avoid per-step virtual dispatch).
+  CBCD_FLUDS& cbcd_fluds_;
   /// Chunk-owned aggregated communicator.
   CBCD_AsynchronousCommunicator* async_comm_ = nullptr;
   /// Owning sweep chunk for the current sweep.
@@ -136,8 +139,8 @@ protected:
   std::vector<std::uint32_t> ready_queue_;
   /// Tasks in the current in-flight kernel batch.
   std::vector<std::uint32_t> in_flight_task_indices_;
-  /// Cell ids for the current in-flight kernel batch.
-  std::vector<std::uint32_t> in_flight_cell_ids_;
+  /// Completed cell IDs awaiting deferred outgoing-data handling.
+  std::vector<std::uint32_t> deferred_cell_ids_;
   /// Cached reflecting-boundary task mask.
   std::vector<std::uint8_t> task_has_outgoing_reflecting_boundary_;
   /// Number of completed local tasks.

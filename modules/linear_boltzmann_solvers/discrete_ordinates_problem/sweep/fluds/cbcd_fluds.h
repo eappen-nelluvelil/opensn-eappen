@@ -77,10 +77,6 @@ public:
   /// Copies incoming boundary psi from host to device.
   void CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
 
-  /// Copies incoming non-local psi from host to device.
-  void CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
-                                       const std::vector<std::uint32_t>& cell_local_ids);
-
   /// Copy outgoing psi on host after D2H copy is done.
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                  CBCD_AngleSet* angle_set,

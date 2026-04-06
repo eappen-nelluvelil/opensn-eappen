@@ -261,14 +261,6 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 }
 
 void
-CBCD_FLUDS::CopyIncomingNonlocalPsiToDevice(CBCD_AngleSet* angle_set,
-                                            const std::vector<std::uint32_t>& cell_local_ids)
-{
-  (void)angle_set;
-  (void)cell_local_ids;
-}
-
-void
 CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AngleSet* angle_set,
                                       const std::vector<std::uint32_t>& cell_local_ids)

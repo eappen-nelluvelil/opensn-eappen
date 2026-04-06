@@ -1,83 +1,3 @@
-// // SPDX-FileCopyrightText: 2026 The OpenSn Authors <https://open-sn.github.io/opensn/>
-// // SPDX-License-Identifier: MIT
-
-// #pragma once
-
-// #include <atomic>
-// #include <cassert>
-// #include <functional>
-// #include <semaphore>
-// #include <thread>
-// #include <vector>
-
-// namespace opensn
-// {
-
-// /**
-//  * Single-Program Multiple-Data (SPMD) thread pool using C++20 primitives.
-//  * Utilizes lock-free atomics and hardware-accelerated semaphores to support
-//  * both individual asynchronous dispatch (AAHD) and synchronous batching (CBCD).
-//  */
-// class SPMD_ThreadPool
-// {
-// public:
-//   SPMD_ThreadPool() = default;
-//   explicit SPMD_ThreadPool(std::size_t n);
-
-//   SPMD_ThreadPool(const SPMD_ThreadPool&) = delete;
-//   SPMD_ThreadPool& operator=(const SPMD_ThreadPool&) = delete;
-
-//   ~SPMD_ThreadPool();
-
-//   std::size_t GetSize() const noexcept;
-
-//   void Resize(std::size_t n);
-//   void Stop();
-
-//   template <class F>
-//   void AssignTask(F&& task)
-//   {
-//     task_ = std::forward<F>(task);
-//   }
-
-//   void Run(std::size_t thread_idx);
-//   void WaitAll();
-
-//   template <class F>
-//   void ExecuteBatch(F&& task)
-//   {
-//     AssignTask(std::forward<F>(task));
-//     const std::size_t n = worker_data_.size();
-//     if (n == 0)
-//       return;
-
-//     outstanding_.store(n, std::memory_order_release);
-//     for (auto& wd : worker_data_)
-//       wd.wake_signal.release();
-
-//     WaitAll();
-//   }
-
-// private:
-//   struct alignas(64) WorkerData
-//   {
-//     std::binary_semaphore wake_signal{0};
-//   };
-
-//   void Start(std::size_t n);
-//   void InfiniteLoop(std::size_t thread_idx);
-
-//   std::vector<std::jthread> worker_threads_;
-//   std::vector<WorkerData> worker_data_;
-//   std::function<void(std::size_t)> task_;
-
-//   std::atomic<std::size_t> outstanding_{0};
-//   std::atomic<bool> stop_workers_{false};
-//   std::counting_semaphore<> done_signal_{0};
-// };
-
-// } // namespace opensn
-
 // SPDX-FileCopyrightText: 2026 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
@@ -86,10 +6,8 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <new>
-#include <semaphore>
 #include <thread>
 #include <vector>
 
