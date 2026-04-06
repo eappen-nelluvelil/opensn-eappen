@@ -22,7 +22,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetCellTransportViews(),
                problem.GetQMomentsLocal(),
                groupset,
-               problem.GetBlockID2XSMap(),
                problem.GetNumMoments(),
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),

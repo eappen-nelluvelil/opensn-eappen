@@ -58,7 +58,8 @@ AAH_Sweep_FixedN(AAHSweepData& data, AngleSet& angle_set)
     const int ni_deploc_face_counter = deploc_face_counter;
     const int ni_preloc_face_counter = preloc_face_counter;
 
-    const auto& sigma_t = data.xs.at(cell.block_id)->GetSigmaTotal();
+    const auto& cell_xs = cell_transport_view.GetXS();
+    const auto& sigma_t = cell_xs.GetSigmaTotal();
 
     const auto& unit_mats = data.unit_cell_matrices[cell_local_id];
     const auto& G = unit_mats.intV_shapeI_gradshapeJ;
@@ -90,7 +91,7 @@ AAH_Sweep_FixedN(AAHSweepData& data, AngleSet& angle_set)
     std::vector<double> tau_gsg;
     if constexpr (time_dependent)
     {
-      const auto& inv_velg = data.xs.at(cell.block_id)->GetInverseVelocity();
+      const auto& inv_velg = cell_xs.GetInverseVelocity();
       const double theta = data.problem.GetTheta();
       const double inv_theta = 1.0 / theta;
       const double dt = data.problem.GetTimeStep();
@@ -400,7 +401,6 @@ AAHSweepChunk::Sweep_FixedN(AngleSet& angle_set)
                     cell_transport_views_,
                     source_moments_,
                     groupset_,
-                    xs_,
                     num_moments_,
                     max_num_cell_dofs_,
                     min_num_cell_dofs_,

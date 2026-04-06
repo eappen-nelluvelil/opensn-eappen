@@ -6,7 +6,6 @@
 #include "framework/math/spatial_discretization/finite_element/unit_cell_matrices.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_aggregation/angle_aggregation.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
-#include "modules/linear_boltzmann_solvers/lbs_problem/lbs_structs.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_view.h"
 #include <functional>
 
@@ -28,7 +27,6 @@ public:
              std::vector<CellLBSView>& cell_transport_views,
              const std::vector<double>& source_moments,
              const LBSGroupset& groupset,
-             const BlockID2XSMap& xs,
              unsigned int num_moments,
              unsigned int max_num_cell_dofs,
              unsigned int min_num_cell_dofs)
@@ -38,7 +36,6 @@ public:
       cell_transport_views_(cell_transport_views),
       source_moments_(source_moments),
       groupset_(groupset),
-      xs_(xs),
       num_moments_(num_moments),
       max_num_cell_dofs_(max_num_cell_dofs),
       min_num_cell_dofs_(min_num_cell_dofs),
@@ -99,7 +96,6 @@ protected:
   std::vector<CellLBSView>& cell_transport_views_;
   const std::vector<double>& source_moments_;
   const LBSGroupset& groupset_;
-  const BlockID2XSMap& xs_;
   const unsigned int num_moments_;
   const unsigned int max_num_cell_dofs_;
   const unsigned int min_num_cell_dofs_;

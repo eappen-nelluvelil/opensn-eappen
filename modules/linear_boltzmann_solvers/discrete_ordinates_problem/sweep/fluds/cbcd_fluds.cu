@@ -356,8 +356,11 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     std::memcpy(data.data() + sizeof(size_t),
                 &scratch_dest_face_counts_[dest_index],
                 sizeof(size_t));
+    ByteArray send_buffer;
+    std::swap(send_buffer, dest_buffers_[dest_index]);
+    dest_buffers_[dest_index].Data().reserve(dest_buffer_capacities_[dest_index]);
     angle_set->GetAsyncCommunicator().EnqueuePrepackedByIndex(
-      outgoing_destinations_[dest_index].queue_index, angle_set_id, std::move(dest_buffers_[dest_index]));
+      outgoing_destinations_[dest_index].queue_index, angle_set_id, std::move(send_buffer));
     scratch_dest_touched_[dest_index] = 0;
     scratch_dest_face_counts_[dest_index] = 0;
   }
