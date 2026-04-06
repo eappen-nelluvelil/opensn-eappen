@@ -101,6 +101,20 @@ AAH_Sweep_Generic(AAHSweepData& data, AngleSet& angle_set)
     const int ni_preloc_face_counter = preloc_face_counter;
     const std::vector<std::uint32_t>& as_angle_indices = angle_set.GetAngleIndices();
 
+    double* psi_new_base = nullptr;
+    double theta = 1.0;
+    double inv_theta = 1.0;
+    if (data.save_angular_flux)
+    {
+      psi_new_base = &data.destination_psi[data.discretization.MapDOFLocal(
+        cell, 0, groupset.psi_uk_man_, 0, 0)];
+      if constexpr (time_dependent)
+      {
+        theta = data.problem.GetTheta();
+        inv_theta = 1.0 / theta;
+      }
+    }
+
     for (size_t as_ss_idx = 0; as_ss_idx < as_angle_indices.size(); ++as_ss_idx)
     {
       const auto direction_num = as_angle_indices[as_ss_idx];
@@ -230,17 +244,6 @@ AAH_Sweep_Generic(AAHSweepData& data, AngleSet& angle_set)
 
       if (data.save_angular_flux)
       {
-        double* psi_new =
-          &data
-             .destination_psi[data.discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
-        double theta = 1.0;
-        double inv_theta = 1.0;
-        if constexpr (time_dependent)
-        {
-          theta = data.problem.GetTheta();
-          inv_theta = 1.0 / theta;
-        }
-
         for (size_t i = 0; i < cell_num_nodes; ++i)
         {
           const size_t imap =
@@ -251,11 +254,11 @@ AAH_Sweep_Generic(AAHSweepData& data, AngleSet& angle_set)
             if constexpr (time_dependent)
             {
               const double psi_old_val = psi_old ? psi_old[imap + gsg] : 0.0;
-              psi_new[imap + gsg] = inv_theta * (psi_sol + (theta - 1.0) * psi_old_val);
+              psi_new_base[imap + gsg] = inv_theta * (psi_sol + (theta - 1.0) * psi_old_val);
             }
             else
             {
-              psi_new[imap + gsg] = psi_sol;
+              psi_new_base[imap + gsg] = psi_sol;
             }
           }
         }

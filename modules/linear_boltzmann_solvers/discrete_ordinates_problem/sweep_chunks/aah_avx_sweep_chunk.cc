@@ -101,6 +101,20 @@ AAH_Sweep_FixedN(AAHSweepData& data, AngleSet& angle_set)
         tau_gsg[gsg] = inv_velg[gs_gi + gsg] * inv_theta * inv_dt;
     }
 
+    double* psi_new_base = nullptr;
+    double theta = 1.0;
+    double inv_theta = 1.0;
+    if (data.save_angular_flux)
+    {
+      psi_new_base = &data.destination_psi[data.discretization.MapDOFLocal(
+        cell, 0, groupset.psi_uk_man_, 0, 0)];
+      if constexpr (time_dependent)
+      {
+        theta = data.problem.GetTheta();
+        inv_theta = 1.0 / theta;
+      }
+    }
+
     const std::vector<std::uint32_t>& as_angle_indices = angle_set.GetAngleIndices();
     for (size_t as_ss_idx = 0; as_ss_idx < as_angle_indices.size(); ++as_ss_idx)
     {
@@ -305,19 +319,13 @@ AAH_Sweep_FixedN(AAHSweepData& data, AngleSet& angle_set)
             const double w = d2m_row[m];
             PRAGMA_UNROLL
             for (int i = 0; i < NumNodes; ++i)
-            {
-              const size_t dof = cell_transport_view.MapDOF(i, m, gs_gi);
-              data.destination_phi[dof + gsg] += w * bg[i];
-            }
+              data.destination_phi[moment_dof_map[m][i] + gsg] += w * bg[i];
           }
         }
       }
 
       if (data.save_angular_flux)
       {
-        double* cell_psi_data =
-          &data
-             .destination_psi[data.discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
         PRAGMA_UNROLL
         for (int i = 0; i < NumNodes; ++i)
         {
@@ -328,13 +336,11 @@ AAH_Sweep_FixedN(AAHSweepData& data, AngleSet& angle_set)
             const double psi_sol = b[gsg * NumNodes + i];
             if constexpr (time_dependent)
             {
-              const double theta = data.problem.GetTheta();
-              const double inv_theta = 1.0 / theta;
               const double psi_old_val = psi_old ? psi_old[imap + gsg] : 0.0;
-              cell_psi_data[imap + gsg] = inv_theta * (psi_sol + (theta - 1.0) * psi_old_val);
+              psi_new_base[imap + gsg] = inv_theta * (psi_sol + (theta - 1.0) * psi_old_val);
             }
             else
-              cell_psi_data[imap + gsg] = psi_sol;
+              psi_new_base[imap + gsg] = psi_sol;
           }
         }
       }
