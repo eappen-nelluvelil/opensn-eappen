@@ -39,9 +39,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
       destinations.insert(succ);
   }
 
-  source_ranks_.reserve(sources.size());
-  for (int source : sources)
-    source_ranks_.push_back(comm_set_.MapIonJ(source, my_rank));
+  const size_t num_sources = sources.size();
 
   outgoing_queues_.reserve(destinations.size());
   dest_to_queue_index_.reserve(destinations.size());
@@ -65,7 +63,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     for (auto& shard : queue.shards)
       shard->Preallocate(1);
 
-  const size_t num_sources = source_ranks_.size();
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);
 
@@ -73,7 +70,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   recv_buffer_reuse_cache_.reserve(num_sources);
   in_flight_sends_.reserve(outgoing_queues_.size());
   send_buffer_pool_.reserve(outgoing_queues_.size());
-  drained_sections_.reserve(num_angle_sets_);
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -155,33 +151,6 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
   }
 }
 
-bool
-CBCD_AsynchronousCommunicator::HasQueuedSections(const NeighborQueue& queue) const
-{
-  for (const auto& shard : queue.shards)
-    if (not shard->Empty())
-      return true;
-  return false;
-}
-
-bool
-CBCD_AsynchronousCommunicator::DrainSections(NeighborQueue& queue,
-                                             size_t& num_sections,
-                                             size_t& total_bytes)
-{
-  drained_sections_.clear();
-  bool has_data = false;
-  for (auto& shard : queue.shards)
-    has_data |= shard->DrainAndProcess(
-      [&](ByteArray&& section)
-      {
-        total_bytes += section.Size();
-        ++num_sections;
-        drained_sections_.push_back(std::move(section));
-      });
-  return has_data;
-}
-
 std::shared_ptr<CBCD_AsynchronousCommunicator::IncomingSection::IncomingBuffer>
 CBCD_AsynchronousCommunicator::AcquireReceiveBuffer(size_t num_bytes)
 {
@@ -206,28 +175,28 @@ CBCD_AsynchronousCommunicator::FlushOutgoing()
   bool any_sent = false;
   for (auto& queue : outgoing_queues_)
   {
-    if (not HasQueuedSections(queue))
-      continue;
-
-    size_t num_sections = 0;
-    size_t total_bytes = Wire::AGGREGATE_HEADER_BYTES;
-    if (not DrainSections(queue, num_sections, total_bytes))
-      continue;
-    any_sent = true;
-
     ByteArray send_buffer = AcquireSendBuffer();
     auto& send_data = send_buffer.Data();
-    send_data.resize(total_bytes);
-    Wire::StoreSize(send_data.data(), num_sections);
+    send_data.resize(Wire::AGGREGATE_HEADER_BYTES);
+    size_t num_sections = 0;
 
-    auto* dst = send_data.data() + Wire::AGGREGATE_HEADER_BYTES;
-    for (auto& section : drained_sections_)
+    for (auto& shard : queue.shards)
+      shard->DrainAndProcess(
+        [&](ByteArray&& section)
+        {
+          const auto& sec = section.Data();
+          send_data.insert(send_data.end(), sec.begin(), sec.end());
+          ++num_sections;
+        });
+
+    if (num_sections == 0)
     {
-      const auto& section_data = section.Data();
-      std::memcpy(dst, section_data.data(), section_data.size());
-      dst += section_data.size();
+      ReleaseSendBuffer(std::move(send_buffer));
+      continue;
     }
-    drained_sections_.clear();
+    any_sent = true;
+
+    Wire::StoreSize(send_data.data(), num_sections);
 
     InFlightSend send;
     send.data = std::move(send_buffer);
@@ -251,37 +220,35 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   const int my_rank = opensn::mpi_comm.rank();
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank);
 
-  for (const int source_rank : source_ranks_)
+  mpi::Status status;
+  while (recv_comm.iprobe(mpi::ANY_SOURCE, mpi_tag_, status))
   {
-    mpi::Status status;
-    while (recv_comm.iprobe(source_rank, mpi_tag_, status))
+    received_any = true;
+    const int source_rank = status.source();
+    const int num_bytes = status.count<std::byte>();
+
+    auto recv_buffer = AcquireReceiveBuffer(num_bytes);
+    recv_comm.recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
+
+    const auto* ptr = recv_buffer->data.Data().data();
+    const size_t num_sections = Wire::LoadSize(ptr);
+    for (size_t s = 0; s < num_sections; ++s)
     {
-      received_any = true;
-      const int num_bytes = status.count<std::byte>();
+      const size_t angle_set_id = Wire::LoadSize(ptr);
+      const size_t num_entries = Wire::LoadSize(ptr);
+      assert(angle_set_id < num_angle_sets_);
 
-      auto recv_buffer = AcquireReceiveBuffer(num_bytes);
-      recv_comm.recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
-
-      const auto* ptr = recv_buffer->data.Data().data();
-      const size_t num_sections = Wire::LoadSize(ptr);
-      for (size_t s = 0; s < num_sections; ++s)
+      const size_t section_start =
+        static_cast<size_t>(ptr - recv_buffer->data.Data().data()) - sizeof(size_t);
+      for (size_t e = 0; e < num_entries; ++e)
       {
-        const size_t angle_set_id = Wire::LoadSize(ptr);
-        const size_t num_entries = Wire::LoadSize(ptr);
-        assert(angle_set_id < num_angle_sets_);
-
-        const size_t section_start =
-          static_cast<size_t>(ptr - recv_buffer->data.Data().data()) - sizeof(size_t);
-        for (size_t e = 0; e < num_entries; ++e)
-        {
-          const auto entry_header = Wire::LoadEntryHeader(ptr);
-          ptr += entry_header.data_size * sizeof(double);
-        }
-
-        const size_t section_end = static_cast<size_t>(ptr - recv_buffer->data.Data().data());
-        incoming_mailboxes_[angle_set_id].Push(
-          IncomingSection{recv_buffer, section_start, section_end - section_start});
+        const auto entry_header = Wire::LoadEntryHeader(ptr);
+        ptr += entry_header.data_size * sizeof(double);
       }
+
+      const size_t section_end = static_cast<size_t>(ptr - recv_buffer->data.Data().data());
+      incoming_mailboxes_[angle_set_id].Push(
+        IncomingSection{recv_buffer, section_start, section_end - section_start});
     }
   }
   return received_any;
