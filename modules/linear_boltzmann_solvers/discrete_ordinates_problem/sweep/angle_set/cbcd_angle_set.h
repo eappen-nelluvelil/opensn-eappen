@@ -19,11 +19,47 @@ class CBCD_FLUDS;
 class CBCDSweepChunk;
 class CellFace;
 
-/// CBC angle set for device.
+/**
+ * Device-side CBC angle set with task-graph-driven batched kernel dispatch.
+ *
+ * Manages the per-angle-set sweep state for the CBCD algorithm: dependency
+ * tracking via CSR-format successor lists, ready-queue management, batched
+ * GPU kernel launches, and deferred outgoing-data handling. Each angle set
+ * maintains its own device stream for asynchronous kernel execution.
+ *
+ * ## Sweep lifecycle
+ *
+ * 1. **Initialization:** TryInitialize copies boundary psi to the device and
+ *    seeds the ready queue with zero-dependency root tasks.
+ * 2. **Batched execution:** AngleSetAdvance repeatedly drains the ready queue,
+ *    launches a GPU kernel batch, processes deferred outgoing data from the
+ *    previous batch (overlapping compute with host-side packing), and receives
+ *    incoming nonlocal data from the aggregated communicator.
+ * 3. **Completion:** Once all tasks are complete, reflecting-boundary data is
+ *    copied, following angle sets are notified, and saved angular fluxes are
+ *    transferred to the host.
+ *
+ * ## Deferred outgoing data
+ *
+ * Outgoing angular flux is not packed immediately after a kernel batch.
+ * Instead, the next kernel batch is launched first, and the previous batch's
+ * outgoing data is packed while the GPU computes, hiding the host-side
+ * memcpy/packing latency behind kernel execution.
+ */
 class CBCD_AngleSet : public AngleSet
 {
 public:
-  /// Construct a device CBC angle set.
+  /**
+   * Construct a device CBC angle set.
+   *
+   * \param id unique angle set identifier
+   * \param num_groups number of energy groups
+   * \param spds sweep-plane data structure (must be a CBC_SPDS)
+   * \param fluds shared FLUDS storage (must be a CBCD_FLUDS)
+   * \param angle_indices quadrature angle indices for this set
+   * \param boundaries boundary condition map
+   * \param comm_set MPI communicator set for aggregated communicator construction
+   */
   CBCD_AngleSet(size_t id,
                 size_t num_groups,
                 const SPDS& spds,

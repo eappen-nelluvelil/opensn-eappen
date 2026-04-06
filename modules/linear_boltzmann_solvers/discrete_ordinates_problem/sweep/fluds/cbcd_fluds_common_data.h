@@ -15,7 +15,16 @@ namespace opensn
 
 class SpatialDiscretization;
 
-/// Common data for CBCD_FLUDS
+/**
+ * Shared face-level indexing metadata for device CBCD FLUDS instances.
+ *
+ * Precomputes and stores the mapping between local cell faces and their
+ * boundary, incoming nonlocal, and outgoing nonlocal counterparts. Also
+ * builds and uploads to the device a flattened cell-face-node index map
+ * used by the GPU sweep kernel to resolve angular-flux buffer addresses
+ * via CBCD_NodeIndex encoding. Multiple CBCD_FLUDS instances (one per
+ * angle set) reference the same CBCD_FLUDSCommonData.
+ */
 class CBCD_FLUDSCommonData : public FLUDSCommonData
 {
 public:
