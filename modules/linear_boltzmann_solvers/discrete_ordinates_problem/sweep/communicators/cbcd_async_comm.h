@@ -210,10 +210,6 @@ private:
   bool PollInFlightSends();
   /// Check whether all angle sets are complete and all sends are retired.
   bool AllWorkComplete() const;
-  /// Check whether any shard in a neighbor queue has pending sections.
-  bool HasQueuedSections(const NeighborQueue& queue) const;
-  /// Drain all shards of a neighbor queue into the drained_sections_ staging area.
-  bool DrainSections(NeighborQueue& queue, size_t& num_sections, size_t& total_bytes);
   /// Acquire a receive buffer (recycled or freshly allocated).
   std::shared_ptr<IncomingSection::IncomingBuffer> AcquireReceiveBuffer(size_t num_bytes);
 
@@ -245,8 +241,6 @@ private:
   size_t max_message_bytes_ = 0;
   /// MPI tag for all sends/recvs.
   int mpi_tag_ = 0;
-  /// MPI ranks from which incoming messages are expected.
-  std::vector<int> source_ranks_;
   /// Per-destination outgoing queues.
   std::vector<NeighborQueue> outgoing_queues_;
   /// Map from destination location to outgoing queue index.
@@ -261,8 +255,6 @@ private:
   std::vector<InFlightSend> in_flight_sends_;
   /// Pool of reusable send buffers.
   std::vector<ByteArray> send_buffer_pool_;
-  /// Staging area for drained sections during flush.
-  std::vector<ByteArray> drained_sections_;
   /// Total number of shards across all outgoing queues.
   size_t num_outgoing_shards_ = 0;
   /// Flag set by Stop() to request the communication thread to exit.
