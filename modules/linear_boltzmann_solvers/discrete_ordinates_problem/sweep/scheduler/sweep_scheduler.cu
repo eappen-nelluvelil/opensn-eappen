@@ -4,17 +4,10 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/sweep_scheduler.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/aahd_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aahd_sweep_chunk.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "caribou/main.hpp"
 #include "caliper/cali.h"
-#include <vector>
-
-#if defined(__x86_64__) || defined(_M_X64)
-#include <immintrin.h>
-#endif
 
 namespace opensn
 {
@@ -82,7 +75,6 @@ SweepScheduler::ScheduleAlgoAAO(SweepChunk& sweep_chunk)
     angle_set->ResetSweepBuffers();
 }
 
-// /*
 void
 SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 {
@@ -96,20 +88,16 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   for (auto* angle_set : angle_sets)
     angle_set->ResetDependencyCounter();
 
-  const std::size_t num_workers = pool_.GetSize();
-
   cbcd_sweep_chunk.StartCommunicator();
 
+  const std::size_t num_workers = pool_.GetSize();
   pool_.ExecuteBatch(
     [num_workers, num_angle_sets, &angle_sets, &cbcd_sweep_chunk](const std::size_t worker_id)
     {
-      // Partition angle sets among worker threads
-      // Each worker thread processes a contiguous range of anglesets
       const size_t chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
       const size_t begin = worker_id * chunk_size;
       const size_t end = std::min(begin + chunk_size, num_angle_sets);
 
-      // Process until all assigned angle sets are finished
       bool all_done = false;
       while (not all_done)
       {
@@ -134,95 +122,20 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           any_work_done |= angle_set->TryAdvanceOneStep();
         }
 
-        if ((not any_work_done) and (not all_done))
+        if (not any_work_done and not all_done)
           std::this_thread::yield();
       }
     });
 
   cbcd_sweep_chunk.StopCommunicator();
 
-  /// Copy phi and outflow data back to host
   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
 
-  // Reset all
-  for (auto& angle_set : angle_sets)
+  for (auto* angle_set : angle_sets)
     angle_set->ResetSweepBuffers();
 
   for (const auto& [bid, bndry] : angle_agg_.GetSimBoundaries())
     bndry->ResetAnglesReadyStatus();
 }
-// */
-
-// void
-// SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
-// {
-//   CALI_CXX_MARK_SCOPE("SweepScheduler::ScheduleAlgoAsyncFIFO");
-
-//   auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
-//   cbcd_sweep_chunk.GetProblem().CopyPhiAndSrcToDevice();
-//   cbcd_sweep_chunk.StartCommunicator();
-
-//   auto& angle_sets = cbcd_sweep_chunk.GetAngleSets();
-//   const size_t num_angle_sets = angle_sets.size();
-//   for (auto* angle_set : angle_sets)
-//     angle_set->ResetDependencyCounter();
-
-//   const std::size_t num_workers = pool_.GetSize();
-  
-//   // Extract raw pointer to guarantee zero-overhead indexing
-//   auto* const* angle_sets_ptr = angle_sets.data();
-
-//   pool_.ExecuteBatch(
-//     [num_workers, num_angle_sets, angle_sets_ptr, &cbcd_sweep_chunk](const std::size_t worker_id)
-//     {
-//       const std::size_t begin = worker_id * num_angle_sets / num_workers;
-//       const std::size_t end = (worker_id + 1) * num_angle_sets / num_workers;
-//       const std::size_t target_completions = end - begin;
-      
-//       std::size_t completed = 0;
-
-//       while (completed < target_completions)
-//       {
-//         bool any_work_done = false;
-
-//         for (std::size_t i = begin; i < end; ++i)
-//         {
-//           auto* angle_set = angle_sets_ptr[i];
-//           if (angle_set->IsExecuted())
-//             continue;
-
-//           if (not angle_set->IsInitialized())
-//           {
-//             // Bitwise OR eliminates conditional branch generation
-//             any_work_done |= angle_set->TryInitialize(cbcd_sweep_chunk);
-//             continue;
-//           }
-
-//           any_work_done |= angle_set->TryAdvanceOneStep();
-          
-//           if (angle_set->IsExecuted())
-//           {
-//             ++completed;
-//             any_work_done = true;
-//           }
-//         }
-
-//         if (not any_work_done)
-//           std::this_thread::yield();
-//       }
-//     });
-
-//   cbcd_sweep_chunk.StopCommunicator();
-
-//   /// Copy phi and outflow data back to host
-//   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
-
-//   // Reset all
-//   for (auto* angle_set : angle_sets)
-//     angle_set->ResetSweepBuffers();
-
-//   for (const auto& [bid, bndry] : angle_agg_.GetSimBoundaries())
-//     bndry->ResetAnglesReadyStatus();
-// }
 
 } // namespace opensn
