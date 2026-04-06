@@ -196,6 +196,20 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
       moment_dof_map[static_cast<size_t>(m) * data.cell_num_nodes + i] =
         data.cell_transport_view.MapDOF(i, m, data.gs_gi);
 
+  double* psi_new_base = nullptr;
+  double theta = 1.0;
+  double inv_theta = 1.0;
+  if (data.save_angular_flux)
+  {
+    psi_new_base = &data.destination_psi[data.discretization.MapDOFLocal(
+      data.cell, 0, groupset.psi_uk_man_, 0, 0)];
+    if constexpr (time_dependent)
+    {
+      theta = data.problem.GetTheta();
+      inv_theta = 1.0 / theta;
+    }
+  }
+
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
   {
     const auto direction_num = as_angle_indices[as_ss_idx];
@@ -325,17 +339,6 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
 
     if (data.save_angular_flux)
     {
-      double* psi_new = &data.destination_psi[data.discretization.MapDOFLocal(
-        data.cell, 0, groupset.psi_uk_man_, 0, 0)];
-
-      double theta = 1.0;
-      double inv_theta = 1.0;
-      if constexpr (time_dependent)
-      {
-        theta = data.problem.GetTheta();
-        inv_theta = 1.0 / theta;
-      }
-
       for (size_t i = 0; i < data.cell_num_nodes; ++i)
       {
         const size_t imap =
@@ -347,10 +350,10 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
           if constexpr (time_dependent)
           {
             const double psi_old_val = psi_old ? psi_old[imap + gsg] : 0.0;
-            psi_new[imap + gsg] = inv_theta * (psi_sol + (theta - 1.0) * psi_old_val);
+            psi_new_base[imap + gsg] = inv_theta * (psi_sol + (theta - 1.0) * psi_old_val);
           }
           else
-            psi_new[imap + gsg] = psi_sol;
+            psi_new_base[imap + gsg] = psi_sol;
         }
       }
     }
