@@ -9,6 +9,7 @@
 #include "framework/parameters/parameter_block.h"
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <tuple>
 
 namespace opensn
@@ -203,6 +204,26 @@ private:
   std::shared_ptr<SweepChunk> CreateAAHD_SweepChunk(LBSGroupset& groupset);
 
   void CreateCBCD_FLUDSCommonData();
+
+  /**
+   * Construct per-SPDS CBC-style FLUDS common data in parallel.
+   *
+   * Flattens all \c (quadrature, spds) pairs into a single work list, pre-sizes each
+   * quadrature's entry in \c quadrature_fluds_commondata_map_, and fans construction out
+   * across an \c SPMD_ThreadPool. Each worker constructs one \c CommonDataT instance, which
+   * internally drives the expensive face-node slot planning. Timing and min/max local psi
+   * face-node slot counts across the constructed objects are logged.
+   *
+   * The template body is defined in \c discrete_ordinates_problem_fluds_build_impl.h, which
+   * must be included in each translation unit that instantiates this helper.
+   *
+   * \tparam CommonDataT Concrete FLUDSCommonData type derived from \c FLUDSCommonData that
+   *                     exposes \c GetNumLocalPsiFaceNodeSlots().
+   * \param label Short tag used in diagnostic log lines (e.g. "CBC", "CBCD").
+   */
+  template <typename CommonDataT>
+  void BuildCBCLikeFLUDSCommonDataInParallel(std::string_view label);
+
   std::shared_ptr<FLUDS> CreateCBCD_FLUDS(std::size_t num_groups,
                                           std::size_t num_angles,
                                           std::size_t num_local_cells,

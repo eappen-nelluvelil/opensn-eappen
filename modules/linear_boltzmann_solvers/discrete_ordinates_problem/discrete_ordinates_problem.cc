@@ -16,6 +16,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aah_sweep_chunk_td.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk_td.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem_fluds_build_impl.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/iterative_methods/sweep_wgs_context.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
@@ -1477,8 +1479,6 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   // }
   else if (sweep_type_ == "CBC")
   {
-    std::vector<std::shared_ptr<CBC_SPDS>> cbc_spds_list;
-
     // Build SPDS
     for (const auto& [quadrature, info] : quadrature_unq_so_grouping_map_)
     {
@@ -1490,61 +1490,9 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
 
         const size_t master_dir_id = so_grouping.front();
         const auto& omega = quadrature->omegas[master_dir_id];
-        const auto new_swp_order =
-          std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]);
-        quadrature_spds_map_[quadrature].push_back(new_swp_order);
-        cbc_spds_list.push_back(new_swp_order);
+        quadrature_spds_map_[quadrature].push_back(
+          std::make_shared<CBC_SPDS>(omega, this->grid_, quadrature_allow_cycles_map_[quadrature]));
       }
-    }
-
-    if (cbc_spds_list.size() == 1)
-    {
-      cbc_spds_list.front()->ComputeMaxNumLocalPsiSlots();
-    }
-    else if (not cbc_spds_list.empty())
-    {
-      const auto hardware_threads = std::max<std::size_t>(1, std::thread::hardware_concurrency());
-      const auto num_workers = std::min(cbc_spds_list.size(), hardware_threads);
-
-      SPMD_ThreadPool cbc_spds_thread_pool(num_workers);
-      std::atomic<std::size_t> next_index{0};
-
-      log.Log() << program_timer.GetTimeString() 
-                << " Computing max num local psi slots for " << cbc_spds_list.size() 
-                << " CBC SPDS using " << num_workers << " worker threads.\n";
-      
-      auto start_time = std::chrono::steady_clock::now();
-      
-      cbc_spds_thread_pool.ExecuteBatch(
-        [&](std::size_t /*thread_id*/)
-        {
-          std::size_t index;
-          // Use memory_order_relaxed to avoid expensive hardware memory barriers
-          // Since threads only need an atomic increment to claim an independent index,
-          // strict memory ordering synchronization across threads is not required here.
-          while ((index = next_index.fetch_add(1, std::memory_order_relaxed)) < cbc_spds_list.size())
-          {
-            cbc_spds_list[index]->ComputeMaxNumLocalPsiSlots();
-          }
-        });
-      
-      auto end_time = std::chrono::steady_clock::now();
-      std::chrono::duration<double> elapsed_seconds = end_time - start_time;
-      double elapsed_time = elapsed_seconds.count();
-      
-      size_t max_local_psi_slots = 0;
-      size_t min_local_psi_slots = std::numeric_limits<size_t>::max();
-      
-      for (const auto& spds : cbc_spds_list)
-      {
-        max_local_psi_slots = std::max(max_local_psi_slots, spds->GetMaxNumLocalPsiSlots());
-        min_local_psi_slots = std::min(min_local_psi_slots, spds->GetMaxNumLocalPsiSlots());
-      }
-      
-      log.Log() << program_timer.GetTimeString() 
-                << " Finished computing max num local psi slots. Elapsed time: " << elapsed_time 
-                << " seconds. Max num local psi slots: " << max_local_psi_slots 
-                << ". Min num local psi slots: " << min_local_psi_slots << ".\n";
     }
   }
   else
@@ -1576,14 +1524,7 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   }
   else if (sweep_type_ == "CBC")
   {
-    for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
-    {
-      for (const auto& spds : spds_list)
-      {
-        quadrature_fluds_commondata_map_[quadrature].push_back(
-          std::make_unique<CBC_FLUDSCommonData>(*spds, grid_nodal_mappings_, *discretization_));
-      }
-    }
+    BuildCBCLikeFLUDSCommonDataInParallel<CBC_FLUDSCommonData>("CBC");
   }
 
   log.Log() << program_timer.GetTimeString() << " Done initializing sweep datastructures.\n";

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem_fluds_build_impl.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/aahd_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aahd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/aahd_fluds.h"
@@ -62,14 +63,7 @@ DiscreteOrdinatesProblem::CreateAAHD_SweepChunk(LBSGroupset& groupset)
 void
 DiscreteOrdinatesProblem::CreateCBCD_FLUDSCommonData()
 {
-  for (const auto& [quadrature, spds_list] : quadrature_spds_map_)
-  {
-    for (const auto& spds : spds_list)
-    {
-      quadrature_fluds_commondata_map_[quadrature].push_back(
-        std::make_unique<CBCD_FLUDSCommonData>(*spds, grid_nodal_mappings_, *discretization_));
-    }
-  }
+  BuildCBCLikeFLUDSCommonDataInParallel<CBCD_FLUDSCommonData>("CBCD");
 }
 
 std::shared_ptr<FLUDS>
