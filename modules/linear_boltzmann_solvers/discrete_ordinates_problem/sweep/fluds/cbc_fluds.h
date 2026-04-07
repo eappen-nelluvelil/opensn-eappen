@@ -138,10 +138,10 @@ public:
    * \param psi_data pointer to the received angular flux payload
    * \param data_size number of doubles in the payload
    */
-  void StoreIncomingFaceData(uint64_t cell_global_id,
-                             unsigned int face_id,
-                             const double* psi_data,
-                             size_t data_size);
+  uint64_t StoreIncomingFaceData(uint64_t cell_global_id,
+                                unsigned int face_id,
+                                const double* psi_data,
+                                size_t data_size);
 
   /// Reset received nonlocal angular fluxes.
   void ClearLocalAndReceivePsi() override;

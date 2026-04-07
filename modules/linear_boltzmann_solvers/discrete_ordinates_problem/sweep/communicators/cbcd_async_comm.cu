@@ -27,7 +27,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 {
   std::set<int> sources;
   std::set<int> destinations;
-  const int my_rank = opensn::mpi_comm.rank();
+  my_rank_ = opensn::mpi_comm.rank();
 
   for (size_t i = 0; i < angle_sets.size(); ++i)
   {
@@ -217,11 +217,10 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
     [this](ByteArray&& buf) { recv_buffer_reuse_cache_.push_back(std::move(buf)); });
 
   bool received_any = false;
-  const int my_rank = opensn::mpi_comm.rank();
-  const auto& recv_comm = comm_set_.LocICommunicator(my_rank);
+  const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
 
   mpi::Status status;
-  while (recv_comm.iprobe(mpi::ANY_SOURCE, mpi_tag_, status))
+  while (recv_comm.iprobe(ANY_SOURCE, mpi_tag_, status))
   {
     received_any = true;
     const int source_rank = status.source();

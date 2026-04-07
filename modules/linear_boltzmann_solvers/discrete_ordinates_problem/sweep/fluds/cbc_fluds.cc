@@ -85,7 +85,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
   }
 }
 
-void
+uint64_t
 CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
                                  unsigned int face_id,
                                  const double* psi_data,
@@ -101,6 +101,7 @@ CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
 
   const size_t base = incoming_nonlocal_face_dof_offsets_[face_storage_index];
   std::memcpy(incoming_nonlocal_psi_buffer_.get() + base, psi_data, data_size * sizeof(double));
+  return face_info.cell_local_id;
 }
 
 void

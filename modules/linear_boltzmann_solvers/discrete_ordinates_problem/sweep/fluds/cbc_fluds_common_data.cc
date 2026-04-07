@@ -51,7 +51,8 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         const auto num_face_nodes = static_cast<std::uint32_t>(
           grid_nodal_mappings[cell.local_id][f].face_node_mapping_.size());
 
-        IncomingNonlocalFaceInfo info{static_cast<std::uint32_t>(num_incoming_nonlocal_face_nodes_),
+        IncomingNonlocalFaceInfo info{static_cast<std::uint32_t>(cell.local_id),
+                                      static_cast<std::uint32_t>(num_incoming_nonlocal_face_nodes_),
                                       num_face_nodes};
 
         incoming_nonlocal_face_info_[face_storage_index] = info;

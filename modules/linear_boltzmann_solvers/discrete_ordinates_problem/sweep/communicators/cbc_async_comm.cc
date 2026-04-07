@@ -169,39 +169,35 @@ CBC_AsynchronousCommunicator::ReceiveData()
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
 
   std::vector<uint64_t> cells_who_received_data;
-  const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  for (int locJ : location_dependencies)
+  const auto& comm = comm_set_.LocICommunicator(opensn::mpi_comm.rank());
+  const auto tag = static_cast<int>(angle_set_id_);
+
+  mpi::Status status;
+  while (comm.iprobe(ANY_SOURCE, tag, status))
   {
-    const auto& comm = comm_set_.LocICommunicator(opensn::mpi_comm.rank());
-    auto source_rank = comm_set_.MapIonJ(locJ, opensn::mpi_comm.rank());
-    auto tag = static_cast<int>(angle_set_id_);
-    mpi::Status status;
-    while (comm.iprobe(source_rank, tag, status))
+    const int source_rank = status.source();
+    const int num_items = status.count<std::byte>();
+    receive_buffer_.resize(static_cast<size_t>(num_items));
+    comm.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
+    size_t offset = 0;
+    const std::span<const std::byte> data_array(receive_buffer_);
+
+    while (offset < data_array.size())
     {
-      int num_items = status.count<std::byte>();
-      receive_buffer_.resize(static_cast<size_t>(num_items));
-      comm.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
-      size_t offset = 0;
-      const std::span<const std::byte> data_array(receive_buffer_);
+      const auto cell_global_id = ReadBytes<uint64_t>(data_array, offset);
+      const auto face_id = ReadBytes<unsigned int>(data_array, offset);
+      const auto data_size = ReadBytes<size_t>(data_array, offset);
 
-      while (offset < data_array.size())
-      {
-        const auto cell_global_id = ReadBytes<uint64_t>(data_array, offset);
-        const auto face_id = ReadBytes<unsigned int>(data_array, offset);
-        const auto data_size = ReadBytes<size_t>(data_array, offset);
+      const size_t num_bytes = data_size * sizeof(double);
+      const auto cell_local_id = cbc_fluds_.StoreIncomingFaceData(
+        cell_global_id,
+        face_id,
+        reinterpret_cast<const double*>(data_array.data() + offset),
+        data_size);
+      offset += num_bytes;
 
-        const size_t num_bytes = data_size * sizeof(double);
-        cbc_fluds_.StoreIncomingFaceData(
-          cell_global_id,
-          face_id,
-          reinterpret_cast<const double*>(data_array.data() + offset),
-          data_size);
-        offset += num_bytes;
-
-        cells_who_received_data.push_back(
-          fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
-      } // while not at end of buffer
-    } // Process each message embedded in buffer
+      cells_who_received_data.push_back(cell_local_id);
+    }
   }
 
   return cells_who_received_data;

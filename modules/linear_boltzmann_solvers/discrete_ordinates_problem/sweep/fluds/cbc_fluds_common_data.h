@@ -40,6 +40,8 @@ public:
   /// Metadata for one incoming nonlocal face.
   struct IncomingNonlocalFaceInfo
   {
+    /// Local ID of the cell owning this face.
+    std::uint32_t cell_local_id = 0;
     /// Offset into the incoming nonlocal psi buffer for this face's node data.
     std::uint32_t face_node_offset = 0;
     /// Number of face nodes.
