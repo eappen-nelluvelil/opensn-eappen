@@ -59,7 +59,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
-  deplocs_outgoing_messages_.reserve(common_data.GetNumIncomingNonlocalFaces());
 
   // Static slot assignment: each cell is permanently mapped to its slot from
   // the cell-level planner, eliminating dynamic allocate/deallocate overhead.
@@ -238,14 +237,16 @@ void
 CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
 {
   const auto& angle_indices = angle_set->GetAngleIndices();
-  const auto& num_angles = angle_indices.size();
+  const auto num_angles = angle_indices.size();
   const size_t groups_bytes = num_groups_ * sizeof(double);
+  const auto gs_gi = sweep_chunk.GetGroupsetGroupIndex();
+  const bool surface_source_active = sweep_chunk.IsSurfaceSourceActive();
 
   for (const auto& node : incoming_boundary_node_map_)
   {
     for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
     {
-      auto direction_num = angle_indices[as_ss_idx];
+      const auto direction_num = angle_indices[as_ss_idx];
       double* dst_psi = incoming_boundary_psi_.data() +
                         node.storage_index * num_groups_and_angles_ + as_ss_idx * num_groups_;
       const double* src_psi = angle_set->PsiBoundary(node.boundary_id,
@@ -253,8 +254,8 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
                                                      node.cell_local_id,
                                                      node.face_id,
                                                      node.face_node,
-                                                     sweep_chunk.GetGroupsetGroupIndex(),
-                                                     sweep_chunk.IsSurfaceSourceActive());
+                                                     gs_gi,
+                                                     surface_source_active);
       std::memcpy(dst_psi, src_psi, groups_bytes);
     }
   }
@@ -430,7 +431,6 @@ CBCD_FLUDS::ScatterReceivedFaceData(std::uint64_t cell_global_id,
 void
 CBCD_FLUDS::ClearLocalAndReceivePsi()
 {
-  deplocs_outgoing_messages_.clear();
 }
 
 } // namespace opensn

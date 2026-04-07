@@ -176,6 +176,7 @@ public:
   void Start();
 
   /// Request the communication thread to stop and join it.
+  void Stop();
 
   ~CBCD_AsynchronousCommunicator();
 
@@ -241,6 +242,8 @@ private:
   size_t max_message_bytes_ = 0;
   /// MPI tag for all sends/recvs.
   int mpi_tag_ = 0;
+  /// Cached local MPI rank for receive operations.
+  int my_rank_ = 0;
   /// Per-destination outgoing queues.
   std::vector<NeighborQueue> outgoing_queues_;
   /// Map from destination location to outgoing queue index.

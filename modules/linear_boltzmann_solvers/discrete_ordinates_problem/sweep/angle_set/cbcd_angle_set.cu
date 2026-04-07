@@ -95,16 +95,15 @@ CBCD_AngleSet::InitializeReflectingTaskMask()
   for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
   {
     const auto& cell = *task_list[task_idx].cell_ptr;
-    const bool has_outgoing_reflecting_face = std::any_of(
-      cell.faces.begin(),
-      cell.faces.end(),
-      [this, cell_local_id = cell.local_id, face_id = std::size_t{0}](const CellFace& face) mutable
+    bool has_outgoing_reflecting_face = false;
+    for (std::size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      if (IsOutgoingReflectingFace(cell.faces[f], cell.local_id, f))
       {
-        const bool is_outgoing_reflecting_face =
-          IsOutgoingReflectingFace(face, cell_local_id, face_id);
-        ++face_id;
-        return is_outgoing_reflecting_face;
-      });
+        has_outgoing_reflecting_face = true;
+        break;
+      }
+    }
 
     if (has_outgoing_reflecting_face)
     {
