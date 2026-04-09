@@ -51,13 +51,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
 
   if (not angle_sets_.empty())
   {
-    struct PerSourceAngleSetInfo
-    {
-      size_t num_entries = 0;
-      size_t psi_bytes = 0;
-    };
-
-    std::unordered_map<int, std::unordered_map<size_t, PerSourceAngleSetInfo>> source_as_info;
+    std::unordered_map<int, std::vector<size_t>> source_as_section_bytes;
     for (size_t as_idx = 0; as_idx < angle_sets_.size(); ++as_idx)
     {
       const auto stride = fluds_list[as_idx]->GetStrideSize();
@@ -68,22 +62,24 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
         {
           if (face_info.num_nodes == 0)
             continue;
-          auto& info = source_as_info[face_info.source_partition][as_idx];
-          ++info.num_entries;
-          info.psi_bytes += sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
-                            static_cast<size_t>(face_info.num_nodes) * stride * sizeof(double);
+          auto& per_as_bytes = source_as_section_bytes[face_info.source_partition];
+          if (per_as_bytes.empty())
+            per_as_bytes.assign(angle_sets_.size(), 0);
+          per_as_bytes[as_idx] += sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
+                                  static_cast<size_t>(face_info.num_nodes) * stride * sizeof(double);
         }
       }
     }
 
     size_t max_message_bytes = 0;
-    for (const auto& [_, as_map] : source_as_info)
+    for (const auto& [_, per_as_bytes] : source_as_section_bytes)
     {
       size_t msg_size_in_bytes = sizeof(size_t);
-      for (const auto& [__, info] : as_map)
+      for (const auto section_bytes : per_as_bytes)
       {
-        msg_size_in_bytes += sizeof(size_t) + sizeof(size_t);
-        msg_size_in_bytes += info.psi_bytes;
+        if (section_bytes == 0)
+          continue;
+        msg_size_in_bytes += 2 * sizeof(size_t) + section_bytes;
       }
       max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
     }

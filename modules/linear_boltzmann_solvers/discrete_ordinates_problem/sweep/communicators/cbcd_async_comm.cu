@@ -22,7 +22,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     max_message_bytes_(max_message_bytes),
     mpi_tag_(static_cast<int>(num_angle_sets_)),
     incoming_mailboxes_(num_angle_sets_),
-    num_outgoing_shards_(std::max<size_t>(1, num_angle_sets_)),
     angle_set_done_(num_angle_sets_)
 {
   std::set<int> sources;
@@ -47,10 +46,10 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (int dest : destinations)
   {
     NeighborQueue queue;
-    queue.dest_location = dest;
+    queue.communicator = &comm_set_.LocICommunicator(dest);
     queue.dest_rank = comm_set_.MapIonJ(dest, dest);
-    queue.shards.reserve(num_outgoing_shards_);
-    for (size_t shard = 0; shard < num_outgoing_shards_; ++shard)
+    queue.shards.reserve(std::max<size_t>(1, num_angle_sets_));
+    for (size_t shard = 0; shard < std::max<size_t>(1, num_angle_sets_); ++shard)
       queue.shards.push_back(std::make_unique<LockFreeTreiberStack<ByteArray>>());
     outgoing_queues_.push_back(std::move(queue));
     dest_to_queue_index_[dest] = queue_idx++;
@@ -93,7 +92,7 @@ CBCD_AsynchronousCommunicator::EnqueuePrepackedByIndex(int queue_index,
                                                        ByteArray&& data)
 {
   assert(queue_index >= 0 and queue_index < static_cast<int>(outgoing_queues_.size()));
-  const size_t shard_index = producer_id % num_outgoing_shards_;
+  const size_t shard_index = producer_id % outgoing_queues_[queue_index].shards.size();
   outgoing_queues_[queue_index].shards[shard_index]->Push(std::move(data));
 }
 
@@ -185,7 +184,9 @@ CBCD_AsynchronousCommunicator::FlushOutgoing()
         [&](ByteArray&& section)
         {
           const auto& sec = section.Data();
-          send_data.insert(send_data.end(), sec.begin(), sec.end());
+          const auto old_size = send_data.size();
+          send_data.resize(old_size + sec.size());
+          std::memcpy(send_data.data() + old_size, sec.data(), sec.size());
           ++num_sections;
         });
 
@@ -200,8 +201,7 @@ CBCD_AsynchronousCommunicator::FlushOutgoing()
 
     InFlightSend send;
     send.data = std::move(send_buffer);
-    const auto& comm = comm_set_.LocICommunicator(queue.dest_location);
-    send.request = comm.isend(queue.dest_rank, mpi_tag_, send.data.Data());
+    send.request = queue.communicator->isend(queue.dest_rank, mpi_tag_, send.data.Data());
     in_flight_sends_.push_back(std::move(send));
   }
 

@@ -184,8 +184,8 @@ private:
   /// Per-destination outgoing queue with sharded lock-free stacks.
   struct NeighborQueue
   {
-    /// Destination location index.
-    int dest_location = 0;
+    /// Communicator used to reach this destination locality.
+    const mpi::Communicator* communicator = nullptr;
     /// Destination MPI rank.
     int dest_rank = 0;
     /// Per-angle-set shards to reduce contention on concurrent enqueue.
@@ -223,7 +223,10 @@ private:
       send_buffer_pool_.pop_back();
       return buf;
     }
-    return ByteArray();
+    ByteArray buf;
+    if (max_message_bytes_ > 0)
+      buf.Data().reserve(max_message_bytes_);
+    return buf;
   }
 
   /// Return a completed send buffer to the pool for reuse.
@@ -258,8 +261,6 @@ private:
   std::vector<InFlightSend> in_flight_sends_;
   /// Pool of reusable send buffers.
   std::vector<ByteArray> send_buffer_pool_;
-  /// Total number of shards across all outgoing queues.
-  size_t num_outgoing_shards_ = 0;
   /// Flag set by Stop() to request the communication thread to exit.
   std::atomic<bool> stop_requested_{false};
   /// Per-angle-set completion flags.
