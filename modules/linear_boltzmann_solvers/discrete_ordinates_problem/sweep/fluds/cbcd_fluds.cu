@@ -62,13 +62,10 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
 
   outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
-  outgoing_face_payload_sizes_.resize(common_data_.GetNumOutgoingNonlocalFaces());
   for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
   {
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
-      outgoing_face_payload_sizes_[face_info.pack_plan_index] =
-        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
       {
         outgoing_node_memcpy_plan_.push_back(
@@ -89,7 +86,8 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
       dest_buffer_capacities_[face_info.dest_slot] +=
-        entry_header_size + outgoing_face_payload_sizes_[face_info.pack_plan_index] * sizeof(double);
+        entry_header_size +
+        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_ * sizeof(double);
     }
   }
   for (size_t dest_index = 0; dest_index < num_dests; ++dest_index)
@@ -297,7 +295,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
       const size_t dest_index = face_info.dest_slot;
-      const size_t face_data_size = outgoing_face_payload_sizes_[face_info.pack_plan_index];
+      const size_t face_data_size =
+        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       if (not scratch_dest_touched_[dest_index])
         initialize_dest_buffer(dest_index);
       ++scratch_dest_face_counts_[dest_index];

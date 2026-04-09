@@ -185,8 +185,6 @@ private:
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Flat byte-level memcpy descriptors referenced by outgoing faces.
   std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
-  /// Packed payload size, in doubles, for each grouped outgoing nonlocal face.
-  std::vector<std::size_t> outgoing_face_payload_sizes_;
 
   /// Creates device pointer set to the local, boundary, and non-local angular flux buffers.
   void CreatePointerSet();

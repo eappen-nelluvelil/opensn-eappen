@@ -224,7 +224,6 @@ struct OutgoingNodeCopy
 struct GroupedOutgoingNonlocalFace
 {
   std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
-  std::uint32_t pack_plan_index = 0;
   std::uint32_t dest_slot = 0;
   std::uint16_t num_face_nodes = 0;
   std::uint32_t node_copy_offset = 0;
