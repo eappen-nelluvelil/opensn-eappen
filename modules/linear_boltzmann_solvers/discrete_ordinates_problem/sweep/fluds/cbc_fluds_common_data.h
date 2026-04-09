@@ -136,6 +136,15 @@ public:
     return cell_face_offsets_[cell_local_id];
   }
 
+  /// Flat face-table index for a given cell face.
+  size_t GetFaceStorageIndex(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
+  {
+    return cell_face_offsets_[cell_local_id] + face_id;
+  }
+
+  /// Return the flat cell-face offsets table.
+  const std::vector<size_t>& GetCellFaceOffsets() const noexcept { return cell_face_offsets_; }
+
 private:
   /// Total incoming nonlocal faces.
   size_t num_incoming_nonlocal_faces_;

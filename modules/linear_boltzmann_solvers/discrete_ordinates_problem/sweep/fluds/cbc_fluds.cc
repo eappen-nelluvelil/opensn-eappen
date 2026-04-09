@@ -46,12 +46,14 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      size_t max_cell_dof_count)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
+    cell_face_offsets_(common_data.GetCellFaceOffsets()),
     num_slots_(common_data.GetNumLocalFaceSlots()),
     slot_size_(RoundUpToCacheLineMultiple(common_data.GetMaxLocalFaceNodeCount() *
                                           num_groups_and_angles_)),
     local_face_slot_bases_(common_data.GetNumCellFaces(), nullptr),
     local_psi_buffer_(AllocateAlignedBuffer(num_slots_ * slot_size_)),
     incoming_nonlocal_face_dof_offsets_(common_data.GetNumCellFaces(), 0),
+    incoming_nonlocal_face_bases_(common_data.GetNumCellFaces(), nullptr),
     incoming_nonlocal_psi_buffer_(
       [&]()
       {
@@ -75,7 +77,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
 
   for (const auto& cell : common_data.GetSPDS().GetGrid()->local_cells)
   {
-    const auto face_storage_offset = common_data.GetCellFaceOffset(cell.local_id);
+    const auto face_storage_offset = cell_face_offsets_[cell.local_id];
     for (std::size_t face_id = 0; face_id < cell.faces.size(); ++face_id)
     {
       const auto slot_id = common_data.GetLocalFaceSlotID(cell.local_id,
@@ -86,6 +88,16 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
       local_face_slot_bases_[face_storage_offset + face_id] =
         local_psi_buffer_.get() + static_cast<size_t>(slot_id) * slot_size_;
     }
+  }
+
+  for (std::size_t face_storage_index = 0; face_storage_index < common_data.GetNumCellFaces();
+       ++face_storage_index)
+  {
+    const auto& face_info = common_data.GetIncomingNonlocalFaceInfoByStorageIndex(face_storage_index);
+    if (face_info.num_face_nodes == 0)
+      continue;
+    incoming_nonlocal_face_bases_[face_storage_index] =
+      incoming_nonlocal_psi_buffer_.get() + incoming_nonlocal_face_dof_offsets_[face_storage_index];
   }
 }
 

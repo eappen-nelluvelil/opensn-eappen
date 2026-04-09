@@ -65,6 +65,24 @@ public:
   /// Stride in doubles between consecutive angle slots (= num_groups).
   size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
 
+  /// Return the slot base pointer for a local cell face.
+  double* GetLocalFacePsiBase(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
+  {
+    auto* const slot_base = local_face_slot_bases_[cell_face_offsets_[cell_local_id] + face_id];
+    assert(slot_base != nullptr);
+    return slot_base;
+  }
+
+  /// Return the base pointer for an incoming nonlocal face.
+  double* GetIncomingNonlocalFacePsiBase(std::uint32_t cell_local_id,
+                                         unsigned int face_id) noexcept
+  {
+    auto* const face_base =
+      incoming_nonlocal_face_bases_[cell_face_offsets_[cell_local_id] + face_id];
+    assert(face_base != nullptr);
+    return face_base;
+  }
+
   /**
    * Return a pointer to the upwind angular flux for a local incoming face.
    *
@@ -79,7 +97,7 @@ public:
                     unsigned int face_node_mapped,
                     size_t as_ss_idx) const noexcept
   {
-    return LocalFacePsiBase(cell_local_id, face_id) +
+    return GetLocalFacePsiBase(cell_local_id, face_id) +
            static_cast<size_t>(face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
@@ -101,7 +119,7 @@ public:
               unsigned int face_node,
               size_t as_ss_idx) const noexcept
   {
-    return LocalFacePsiBase(cell_local_id, face_id) +
+    return GetLocalFacePsiBase(cell_local_id, face_id) +
            static_cast<size_t>(face_node) * num_groups_and_angles_ +
            as_ss_idx * num_groups_;
   }
@@ -120,11 +138,8 @@ public:
                       unsigned int face_node_mapped,
                       size_t as_ss_idx) noexcept
   {
-    const size_t face_storage_index = common_data_.GetCellFaceOffset(cell_local_id) + face_id;
-    const size_t dof_offset = incoming_nonlocal_face_dof_offsets_[face_storage_index] +
-                              static_cast<size_t>(face_node_mapped) * num_groups_and_angles_ +
-                              as_ss_idx * num_groups_;
-    return incoming_nonlocal_psi_buffer_.get() + dof_offset;
+    return GetIncomingNonlocalFacePsiBase(cell_local_id, face_id) +
+           static_cast<size_t>(face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
   /**
@@ -177,16 +192,10 @@ protected:
   /// Allocate a zero-initialized, 64-byte-aligned double buffer.
   static AlignedDoubleBuffer AllocateAlignedBuffer(size_t num_values);
 
-  /// Return the slot base pointer for a local cell face.
-  double* LocalFacePsiBase(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
-  {
-    auto* const slot_base = local_face_slot_bases_[common_data_.GetCellFaceOffset(cell_local_id) + face_id];
-    assert(slot_base != nullptr);
-    return slot_base;
-  }
-
   /// Shared face-level indexing metadata.
   const CBC_FLUDSCommonData& common_data_;
+  /// Flat face-table offsets cached locally for hot-path indexing.
+  std::vector<size_t> cell_face_offsets_;
   /// Number of angular-flux storage slots (\f$s^*\f$).
   size_t num_slots_;
   /// Size of each slot in doubles (cache-line-aligned).
@@ -202,6 +211,8 @@ protected:
   AlignedDoubleBuffer local_psi_buffer_;
   /// Per-face-storage-index DOF offset into the incoming nonlocal buffer.
   std::vector<size_t> incoming_nonlocal_face_dof_offsets_;
+  /// Per-face-storage-index base pointer into the incoming nonlocal buffer.
+  std::vector<double*> incoming_nonlocal_face_bases_;
   /// Flat buffer holding received nonlocal angular fluxes.
   AlignedDoubleBuffer incoming_nonlocal_psi_buffer_;
 
