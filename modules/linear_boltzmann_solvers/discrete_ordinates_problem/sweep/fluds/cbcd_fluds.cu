@@ -37,16 +37,9 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
-    num_local_psi_slots_(
-      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
+    num_local_psi_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
     local_psi_slot_stride_(
-      [&]()
-      {
-        std::size_t max_num_nodes = 0;
-        for (const auto& cell : common_data.GetSPDS().GetGrid()->local_cells)
-          max_num_nodes = std::max(max_num_nodes, sdm_.GetCellMapping(cell).GetNumNodes());
-        return max_num_nodes;
-      }()),
+      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxLocalFaceNodeCount()),
     local_psi_data_size_(num_local_psi_slots_ * local_psi_slot_stride_ * num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
@@ -55,23 +48,9 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
     local_cell_ids_(num_local_cells),
-    local_slot_offsets_(num_local_cells, 0),
     save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
-
-  // Static slot assignment: each cell is permanently mapped to its slot from
-  // the cell-level planner, eliminating dynamic allocate/deallocate overhead.
-  const auto& cbc_spds = static_cast<const CBC_SPDS&>(common_data.GetSPDS());
-  const auto& task_list = cbc_spds.GetTaskList();
-  const auto& task_slot_ids = cbc_spds.GetTaskSlotIDs();
-  for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
-  {
-    const auto cell_local_id = task_list[task_idx].reference_id;
-    const auto slot_id = task_slot_ids[task_idx];
-    local_slot_offsets_[cell_local_id] =
-      slot_id * static_cast<std::uint32_t>(local_psi_slot_stride_);
-  }
 
   const auto& outgoing_localities = common_data_.GetOutgoingLocalities();
   outgoing_destinations_.reserve(outgoing_localities.size());
@@ -126,7 +105,6 @@ CBCD_FLUDS::~CBCD_FLUDS()
     device_saved_psi_.async_free(stream_);
   }
   local_cell_ids_.clear();
-  local_slot_offsets_.clear();
   incoming_boundary_psi_.clear();
   outgoing_boundary_psi_.clear();
   incoming_nonlocal_psi_.clear();
@@ -210,9 +188,6 @@ CBCD_FLUDS::CreatePointerSet()
   pointer_set_.local_psi = local_psi_.get();
   if (local_psi_data_size_ > 0)
     assert(pointer_set_.local_psi != nullptr);
-  pointer_set_.local_slot_offsets = local_slot_offsets_.data();
-  if (not local_slot_offsets_.empty())
-    assert(pointer_set_.local_slot_offsets != nullptr);
 
   pointer_set_.incoming_boundary_psi = incoming_boundary_psi_.data();
   if (common_data_.GetNumIncomingBoundaryNodes() > 0)

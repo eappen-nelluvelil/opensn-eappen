@@ -79,6 +79,15 @@ public:
   /// Total number of outgoing nonlocal faces across all local cells.
   size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
 
+  /// Total number of local directed faces across all local cells.
+  size_t GetNumLocalFaces() const { return num_local_faces_; }
+
+  /// Maximum number of nodes on any local directed face.
+  size_t GetMaxLocalFaceNodeCount() const { return max_local_face_node_count_; }
+
+  /// Optimal number of local-face storage slots.
+  size_t GetNumLocalFaceSlots() const { return num_local_face_slots_; }
+
   /// Number of outgoing nonlocal faces for dependent locality \p deplocI.
   size_t GetDeplocIFaceCount(std::size_t deplocI) const noexcept
   {
@@ -115,6 +124,12 @@ public:
   const OutgoingNonlocalFaceInfo& GetOutgoingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
 
+  /// Look up the static local-face slot id by cell local ID and face index.
+  std::uint32_t GetLocalFaceSlotID(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
+  {
+    return local_face_slot_ids_[cell_face_offsets_[cell_local_id] + face_id];
+  }
+
   /// Flat face-table offset for a given cell.
   size_t GetCellFaceOffset(std::uint32_t cell_local_id) const noexcept
   {
@@ -128,8 +143,16 @@ private:
   size_t num_incoming_nonlocal_face_nodes_;
   /// Total outgoing nonlocal faces.
   size_t num_outgoing_nonlocal_faces_;
+  /// Total local directed faces.
+  size_t num_local_faces_;
+  /// Maximum number of nodes on any local directed face.
+  size_t max_local_face_node_count_;
+  /// Optimal number of local-face storage slots.
+  size_t num_local_face_slots_;
   /// Prefix-sum offsets into the flat face tables, indexed by cell_local_id.
   std::vector<size_t> cell_face_offsets_;
+  /// Flat local-face slot ids, indexed by face storage index.
+  std::vector<std::uint32_t> local_face_slot_ids_;
   /// Flat incoming nonlocal face metadata, indexed by face storage index.
   std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
   /// Flat outgoing nonlocal face metadata, indexed by face storage index.

@@ -24,18 +24,14 @@ namespace opensn
  * - Bit 63: incoming (0) / outgoing (1).
  * - Bit 62: boundary (1) / non-boundary (0).
  * - Bit 61: local (1) / nonlocal (0).
- * - For local nodes (bits 61 set, bit 62 clear):
- *   - Bits 16--60: cell local ID.
- *   - Bits 0--15: cell-local node index.
+ * - For local non-boundary nodes:
+ *   - Bits 0--60: flat local-face-slot-node bank index.
  * - For boundary or nonlocal nodes:
  *   - Bits 0--60: flat bank index.
  */
 class CBCD_NodeIndex : public NodeIndex
 {
 public:
-  static constexpr std::uint32_t kLocalNodeBits = 16;
-  static constexpr std::uint64_t kLocalNodeMask = (std::uint64_t(1) << kLocalNodeBits) - 1;
-
   /// Default constructor.
   constexpr CBCD_NodeIndex() = default;
 
@@ -59,20 +55,6 @@ public:
   }
 
   /**
-   * Construct a local node index.
-   * \param cell_local_id Local cell id.
-   * \param cell_node Local node id within the cell.
-   * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
-   */
-  CBCD_NodeIndex(std::uint32_t cell_local_id, std::uint16_t cell_node, bool is_outgoing)
-  {
-    SetInOut(is_outgoing);
-    SetLocal(true);
-    SetBoundary(false);
-    SetLocalCellNode(cell_local_id, cell_node);
-  }
-
-  /**
    * Construct a boundary node index.
    * \param index Index into the corresponding bank. Cannot exceed 2^61 - 1.
    * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
@@ -92,16 +74,6 @@ public:
 
   /// Get the index into the bank.
   constexpr std::uint64_t GetIndex() const noexcept { return value_ & index_bit_mask; }
-  /// Get local cell id for a local node index.
-  constexpr std::uint32_t GetCellLocalID() const noexcept
-  {
-    return static_cast<std::uint32_t>((value_ & index_bit_mask) >> kLocalNodeBits);
-  }
-  /// Get local node id within a local cell.
-  constexpr std::uint16_t GetCellNode() const noexcept
-  {
-    return static_cast<std::uint16_t>(value_ & kLocalNodeMask);
-  }
 
 private:
   /// \name Local bit
@@ -128,11 +100,6 @@ private:
     value_ &= ~index_bit_mask;
     value_ |= (index & index_bit_mask);
   }
-  constexpr void SetLocalCellNode(std::uint32_t cell_local_id, std::uint16_t cell_node) noexcept
-  {
-    SetIndex((static_cast<std::uint64_t>(cell_local_id) << kLocalNodeBits) |
-             static_cast<std::uint64_t>(cell_node));
-  }
   /// \}
 };
 
@@ -141,23 +108,10 @@ private:
  */
 struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
-  /// Pointer to local cell slot offsets, in node units.
-  const std::uint32_t* __restrict__ local_slot_offsets = nullptr;
   /// Pointer to incoming boundary angular fluxes.
   double* __restrict__ incoming_boundary_psi = nullptr;
   /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
-
-  constexpr double* GetLocalCellFluxBase(const std::uint32_t cell_local_id) const noexcept
-  {
-    return local_psi + static_cast<std::size_t>(local_slot_offsets[cell_local_id]) * stride_size;
-  }
-
-  constexpr double* GetLocalFluxPointer(double* local_cell_base,
-                                        const std::uint16_t cell_node) const noexcept
-  {
-    return local_cell_base + static_cast<std::size_t>(cell_node) * stride_size;
-  }
 
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
@@ -178,8 +132,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Incoming local case
     if (node_index.IsLocal())
     {
-      return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
-                                 node_index.GetCellNode());
+      return local_psi + node_index.GetIndex() * stride_size;
     }
     // Incoming non-local case
     else
@@ -207,8 +160,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Outgoing local case
     if (node_index.IsLocal())
     {
-      return GetLocalFluxPointer(GetLocalCellFluxBase(node_index.GetCellLocalID()),
-                                 node_index.GetCellNode());
+      return local_psi + node_index.GetIndex() * stride_size;
     }
     // Outgoing non-local case
     else

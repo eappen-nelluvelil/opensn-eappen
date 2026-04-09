@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace opensn
@@ -44,6 +45,18 @@ namespace opensn
 class CBC_SPDS : public SPDS
 {
 public:
+  struct LocalFaceTask
+  {
+    std::uint32_t producer_cell_local_id = 0;
+    std::uint32_t consumer_cell_local_id = 0;
+    std::uint16_t producer_face_id = 0;
+    std::uint16_t consumer_face_id = 0;
+    std::uint16_t num_face_nodes = 0;
+  };
+
+  static constexpr std::uint32_t INVALID_LOCAL_FACE_TASK_ID =
+    std::numeric_limits<std::uint32_t>::max();
+
   /**
    * Construct a CBC SPDS for a given sweep direction.
    *
@@ -76,11 +89,34 @@ public:
    */
   void ComputeMaxNumLocalPsiSlots();
 
-  /// Optimal number of angular-flux storage slots for this SPDS instance.
+  /// Optimal number of local-face angular-flux storage slots for this SPDS instance.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
 
-  /// Static slot assignment: \c task_slot_ids_[cell_local_id] = slot index.
+  /// Optimal number of cell-slot angular-flux storage slots for this SPDS instance.
+  std::size_t GetMaxNumLocalCellPsiSlots() const noexcept { return max_num_local_cell_psi_slots_; }
+
+  /// Static cell-slot assignment: \c task_slot_ids_[cell_local_id] = slot index.
   const std::vector<std::uint32_t>& GetTaskSlotIDs() const noexcept { return task_slot_ids_; }
+
+  /// Static local-face slot assignment: \c local_face_slot_ids_[face_task_id] = slot index.
+  const std::vector<std::uint32_t>& GetLocalFaceSlotIDs() const noexcept
+  {
+    return local_face_slot_ids_;
+  }
+
+  /// Return the local directed-face task list.
+  const std::vector<LocalFaceTask>& GetLocalFaceTasks() const noexcept { return local_face_tasks_; }
+
+  /// Return the maximum number of nodes on any local directed face.
+  std::size_t GetMaxLocalFaceNodeCount() const noexcept { return max_local_face_node_count_; }
+
+  /// Return the local directed-face task id for an outgoing local face.
+  std::uint32_t GetOutgoingLocalFaceTaskID(std::uint32_t cell_local_id,
+                                           unsigned int face_id) const noexcept;
+
+  /// Return the local directed-face task id for an incoming local face.
+  std::uint32_t GetIncomingLocalFaceTaskID(std::uint32_t cell_local_id,
+                                           unsigned int face_id) const noexcept;
 
   ~CBC_SPDS() override = default;
 
@@ -93,15 +129,34 @@ private:
    * sweep direction.
    */
   void BuildTaskGraph();
+  void BuildLocalFaceTaskGraph();
 
   /// Topological ordering of local cell IDs: \c topo_order_[rank] = cell_local_id.
   std::vector<std::uint32_t> topo_order_;
   /// Per-cell task descriptors with predecessor/successor adjacency lists.
   std::vector<Task> task_list_;
+  /// Local directed-face tasks ordered by producer-cell topological rank.
+  std::vector<LocalFaceTask> local_face_tasks_;
+  /// Per-cell-face outgoing local-face task ids.
+  std::vector<std::vector<std::uint32_t>> outgoing_local_face_task_ids_;
+  /// Per-cell-face incoming local-face task ids.
+  std::vector<std::vector<std::uint32_t>> incoming_local_face_task_ids_;
+  /// Face-rank offsets grouped by producer-cell topological rank.
+  std::vector<std::uint32_t> producer_cell_face_offsets_;
+  /// Producer cell local id for each local directed face.
+  std::vector<std::uint32_t> local_face_producers_;
+  /// Consumer cell local id for each local directed face.
+  std::vector<std::uint32_t> local_face_consumers_;
   /// Static slot assignment: \c task_slot_ids_[cell_local_id] = slot_id.
   std::vector<std::uint32_t> task_slot_ids_;
-  /// Minimum number of angular-flux storage slots.
+  /// Static slot assignment: \c local_face_slot_ids_[face_task_id] = slot_id.
+  std::vector<std::uint32_t> local_face_slot_ids_;
+  /// Minimum number of cell-slot angular-flux storage slots.
+  std::size_t max_num_local_cell_psi_slots_ = 0;
+  /// Minimum number of local-face angular-flux storage slots.
   std::size_t max_num_local_psi_slots_ = 0;
+  /// Maximum number of nodes on any local directed face.
+  std::size_t max_local_face_node_count_ = 0;
 };
 
 } // namespace opensn

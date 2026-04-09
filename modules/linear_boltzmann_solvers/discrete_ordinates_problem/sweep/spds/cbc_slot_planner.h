@@ -215,6 +215,16 @@ struct ThreadLocalWorkspace
   std::vector<std::uint32_t> topo_rank;
   /// Per-slot last-assigned topological rank, used by the verifier.
   std::vector<std::uint32_t> last_rank_for_slot;
+  /// U-side matching for the local-face planner.
+  std::vector<std::uint32_t> face_mate_u;
+  /// V-side matching for the local-face planner.
+  std::vector<std::uint32_t> face_mate_v;
+  /// BFS distance labels for the local-face planner.
+  std::vector<int> face_dist;
+  /// BFS queue for the local-face planner.
+  std::vector<std::uint32_t> face_queue;
+  /// Per-slot last-assigned face rank, used by the local-face verifier.
+  std::vector<std::uint32_t> face_last_rank_for_slot;
 
   /**
    * Prepare all buffers for \p n tasks.
@@ -238,6 +248,258 @@ struct ThreadLocalWorkspace
     if (last_rank_for_slot.size() < n)
       last_rank_for_slot.resize(n);
   }
+
+  /// Prepare buffers for the local-face slot planner.
+  void PrepareFaces(std::size_t n)
+  {
+    face_mate_u.assign(n, INVALID_INDEX);
+    face_mate_v.assign(n, INVALID_INDEX);
+    face_dist.assign(n, -1);
+
+    if (face_queue.size() < n)
+      face_queue.resize(n);
+    if (face_last_rank_for_slot.size() < n)
+      face_last_rank_for_slot.resize(n);
+  }
+};
+
+/**
+ * Optimal local-face slot-count solver via dense Hopcroft-Karp matching with
+ * implicit adjacency.
+ *
+ * The left and right vertices are the local directed faces of the CBC task DAG.
+ * A left-face \f$f\f$ may match a right-face \f$g\f$ if the producer cell of
+ * \f$g\f$ is reachable from, or equal to, the consumer cell of \f$f\f$. This
+ * is the exact schedule-safe reuse relation for local face storage when all
+ * incoming faces are read before any outgoing faces are written during a cell
+ * sweep.
+ *
+ * Adjacency is generated on demand from the cell reachability matrix together
+ * with per-producer contiguous face ranges. This avoids constructing a dense
+ * face-by-face reuse matrix, which would be prohibitively large.
+ */
+class DenseLocalFaceHopcroftKarp
+{
+public:
+  DenseLocalFaceHopcroftKarp(const std::vector<std::uint32_t>& face_producers,
+                             const std::vector<std::uint32_t>& face_consumers,
+                             const std::vector<std::uint32_t>& producer_cell_face_offsets,
+                             std::vector<std::uint32_t>& face_slot_ids,
+                             ThreadLocalWorkspace& ws)
+    : num_faces_(static_cast<std::uint32_t>(face_producers.size())),
+      face_producers_(face_producers),
+      face_consumers_(face_consumers),
+      producer_cell_face_offsets_(producer_cell_face_offsets),
+      face_slot_ids_(face_slot_ids),
+      ws_(ws)
+  {
+    ws_.PrepareFaces(num_faces_);
+  }
+
+  std::size_t Solve()
+  {
+    if (num_faces_ == 0)
+    {
+      face_slot_ids_.clear();
+      return 0;
+    }
+
+    std::size_t matching_size = GreedyInit();
+    while (BFS())
+    {
+      for (std::uint32_t i = 0; i < num_faces_; ++i)
+      {
+        if (ws_.face_mate_u[i] == INVALID_INDEX and DFS(i))
+          ++matching_size;
+      }
+    }
+
+    ExtractSlotAssignment();
+
+    const std::size_t optimal_slot_count = static_cast<std::size_t>(num_faces_) - matching_size;
+    if (not VerifySlotAssignment(optimal_slot_count))
+    {
+      std::iota(face_slot_ids_.begin(), face_slot_ids_.end(), std::uint32_t{0});
+      return static_cast<std::size_t>(num_faces_);
+    }
+
+    return optimal_slot_count;
+  }
+
+private:
+  template <class F>
+  void ForEachCandidate(const std::uint32_t u_face_rank, F&& fn) const
+  {
+    const auto consumer_cell_rank = ws_.topo_rank[face_consumers_[u_face_rank]];
+    for (std::size_t producer_cell_rank =
+           ws_.reachability.FindFirstSet(consumer_cell_rank, consumer_cell_rank);
+         producer_cell_rank < producer_cell_face_offsets_.size() - 1;
+         producer_cell_rank = ws_.reachability.FindNextSet(consumer_cell_rank, producer_cell_rank))
+    {
+      const auto face_begin = producer_cell_face_offsets_[producer_cell_rank];
+      const auto face_end = producer_cell_face_offsets_[producer_cell_rank + 1];
+      for (std::uint32_t v_face_rank = face_begin; v_face_rank < face_end; ++v_face_rank)
+        fn(v_face_rank);
+    }
+  }
+
+  bool ReuseRelationHolds(const std::uint32_t u_face_rank, const std::uint32_t v_face_rank) const
+  {
+    const auto consumer_cell_rank = ws_.topo_rank[face_consumers_[u_face_rank]];
+    const auto producer_cell_rank = ws_.topo_rank[face_producers_[v_face_rank]];
+    return ws_.reachability.TestBit(consumer_cell_rank, producer_cell_rank);
+  }
+
+  void ExtractSlotAssignment()
+  {
+    face_slot_ids_.assign(num_faces_, INVALID_INDEX);
+    std::uint32_t next_slot_id = 0;
+
+    for (std::uint32_t i = 0; i < num_faces_; ++i)
+    {
+      if (ws_.face_mate_v[i] == INVALID_INDEX)
+      {
+        std::uint32_t current = i;
+        while (current != INVALID_INDEX)
+        {
+          face_slot_ids_[current] = next_slot_id;
+          current = ws_.face_mate_u[current];
+        }
+        ++next_slot_id;
+      }
+    }
+  }
+
+  bool VerifySlotAssignment(const std::size_t slot_count) const
+  {
+    for (std::uint32_t face = 0; face < num_faces_; ++face)
+    {
+      if (face_slot_ids_[face] >= slot_count)
+        return false;
+    }
+
+    std::fill_n(ws_.face_last_rank_for_slot.begin(), slot_count, INVALID_INDEX);
+    for (std::uint32_t rank = 0; rank < num_faces_; ++rank)
+    {
+      const auto sid = face_slot_ids_[rank];
+      const auto prev_rank = ws_.face_last_rank_for_slot[sid];
+      if (prev_rank != INVALID_INDEX and not ReuseRelationHolds(prev_rank, rank))
+        return false;
+      ws_.face_last_rank_for_slot[sid] = rank;
+    }
+    return true;
+  }
+
+  std::size_t GreedyInit()
+  {
+    std::size_t count = 0;
+    for (std::uint32_t i = 0; i < num_faces_; ++i)
+    {
+      if (ws_.face_mate_u[i] != INVALID_INDEX)
+        continue;
+
+      bool matched = false;
+      ForEachCandidate(
+        i,
+        [&](const std::uint32_t v_face_rank)
+        {
+          if (matched or ws_.face_mate_v[v_face_rank] != INVALID_INDEX)
+            return;
+          ws_.face_mate_u[i] = v_face_rank;
+          ws_.face_mate_v[v_face_rank] = i;
+          matched = true;
+        });
+      if (matched)
+        ++count;
+    }
+    return count;
+  }
+
+  bool BFS()
+  {
+    std::fill_n(ws_.face_dist.begin(), num_faces_, -1);
+    std::size_t head = 0;
+    std::size_t tail = 0;
+
+    for (std::uint32_t i = 0; i < num_faces_; ++i)
+    {
+      if (ws_.face_mate_u[i] == INVALID_INDEX)
+      {
+        ws_.face_dist[i] = 0;
+        ws_.face_queue[tail++] = i;
+      }
+    }
+
+    dist_null_ = std::numeric_limits<int>::max();
+
+    while (head < tail)
+    {
+      const auto u_face_rank = ws_.face_queue[head++];
+      if (ws_.face_dist[u_face_rank] >= dist_null_)
+        continue;
+
+      ForEachCandidate(
+        u_face_rank,
+        [&](const std::uint32_t v_face_rank)
+        {
+          const auto mate_of_v = ws_.face_mate_v[v_face_rank];
+          if (mate_of_v == INVALID_INDEX)
+          {
+            if (dist_null_ == std::numeric_limits<int>::max())
+              dist_null_ = ws_.face_dist[u_face_rank] + 1;
+          }
+          else if (ws_.face_dist[mate_of_v] == -1)
+          {
+            ws_.face_dist[mate_of_v] = ws_.face_dist[u_face_rank] + 1;
+            ws_.face_queue[tail++] = mate_of_v;
+          }
+        });
+    }
+
+    return dist_null_ != std::numeric_limits<int>::max();
+  }
+
+  bool DFS(const std::uint32_t u_face_rank)
+  {
+    bool matched = false;
+    ForEachCandidate(
+      u_face_rank,
+      [&](const std::uint32_t v_face_rank)
+      {
+        if (matched)
+          return;
+
+        const auto mate_of_v = ws_.face_mate_v[v_face_rank];
+        if (mate_of_v == INVALID_INDEX)
+        {
+          if (dist_null_ == ws_.face_dist[u_face_rank] + 1)
+          {
+            ws_.face_mate_v[v_face_rank] = u_face_rank;
+            ws_.face_mate_u[u_face_rank] = v_face_rank;
+            ws_.face_dist[u_face_rank] = -1;
+            matched = true;
+          }
+        }
+        else if (ws_.face_dist[mate_of_v] == ws_.face_dist[u_face_rank] + 1 and DFS(mate_of_v))
+        {
+          ws_.face_mate_v[v_face_rank] = u_face_rank;
+          ws_.face_mate_u[u_face_rank] = v_face_rank;
+          ws_.face_dist[u_face_rank] = -1;
+          matched = true;
+        }
+      });
+    if (not matched)
+      ws_.face_dist[u_face_rank] = -1;
+    return matched;
+  }
+
+  std::uint32_t num_faces_ = 0;
+  const std::vector<std::uint32_t>& face_producers_;
+  const std::vector<std::uint32_t>& face_consumers_;
+  const std::vector<std::uint32_t>& producer_cell_face_offsets_;
+  std::vector<std::uint32_t>& face_slot_ids_;
+  ThreadLocalWorkspace& ws_;
+  int dist_null_ = 0;
 };
 
 /**

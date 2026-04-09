@@ -20,18 +20,22 @@ namespace opensn
  * Manages angular-flux storage for local, nonlocal, and boundary face data
  * during a CBC sweep. The local angular-flux buffer is organized as
  * \f$s^*\f$ cache-line-aligned slots of uniform size, where \f$s^*\f$ is the
- * optimal slot count computed by CBC_SPDS::ComputeMaxNumLocalPsiSlots.
- * Each local cell is mapped to a slot via the static assignment
- * \f$\sigma(\text{cell}) \to \{0, \ldots, s^*{-}1\}\f$, enabling multiple
- * cells to share the same slot when DAG dependencies guarantee that the
- * previous occupant's data has been fully consumed.
+ * optimal slot count computed by CBC_SPDS::ComputeMaxNumLocalPsiSlots for the
+ * local directed-face reuse graph.
+ *
+ * Each local directed face is mapped to a slot via the static assignment
+ * \f$\sigma(\text{face}) \to \{0, \ldots, s^*{-}1\}\f$, enabling multiple
+ * producer/consumer face pairs to share the same slot when the corresponding
+ * schedule-safe reuse relation guarantees that the previous occupant's data has
+ * already been consumed under every valid CBC sweep order.
  *
  * ## Buffer layout
  *
  * - **Local psi buffer:** \f$s^* \times \text{slot\_size}\f$ doubles, where
- *   each slot holds \f$N_{\text{dof}} \times N_{\text{angles}} \times G\f$
+ *   each slot holds \f$N_{\text{face,max}} \times N_{\text{angles}} \times G\f$
  *   values, rounded up to a cache-line boundary (64 bytes). Addressed via
- *   cell_slot_bases_, which maps each cell_local_id to its slot base pointer.
+ *   local_face_slot_bases_, which maps each local cell face to its slot base
+ *   pointer when the face is local.
  * - **Incoming nonlocal psi buffer:** flat array indexed by face storage
  *   offset, holding angular fluxes received from remote MPI ranks.
  */
@@ -42,8 +46,8 @@ public:
    * Construct CBC FLUDS from the SPDS slot assignment and common face data.
    *
    * Allocates the local psi buffer with \f$s^*\f$ slots from the CBC_SPDS,
-   * populates cell_slot_bases_ from the static slot assignment, and allocates
-   * the incoming nonlocal psi buffer sized by face-node counts.
+   * populates local_face_slot_bases_ from the static local-face assignment,
+   * and allocates the incoming nonlocal psi buffer sized by face-node counts.
    *
    * \param num_groups number of energy groups in the groupset
    * \param num_angles number of angles in the angle set
@@ -62,36 +66,43 @@ public:
   size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
 
   /**
-   * Return a pointer to the upwind angular flux for a local neighbor cell.
+   * Return a pointer to the upwind angular flux for a local incoming face.
    *
-   * \param face_neighbor_local_id local ID of the upwind neighbor cell
-   * \param adj_cell_node node index on the neighbor cell's face
+   * \param cell_local_id local ID of the cell currently being swept
+   * \param face_id local incoming face id on the current cell
+   * \param face_node_mapped mapped node index on the producer's outgoing face
    * \param as_ss_idx angle subset index within the angle set
    * \return pointer to the start of the group data for the specified node and angle
    */
-  double* UpwindPsi(std::uint32_t face_neighbor_local_id,
-                    unsigned int adj_cell_node,
+  double* UpwindPsi(std::uint32_t cell_local_id,
+                    unsigned int face_id,
+                    unsigned int face_node_mapped,
                     size_t as_ss_idx) const noexcept
   {
-    return LocalPsiBase(face_neighbor_local_id) +
-           static_cast<size_t>(adj_cell_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
+    return LocalFacePsiBase(cell_local_id, face_id) +
+           static_cast<size_t>(face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
   /**
-   * Return a pointer to the outgoing angular flux slot for a local cell node.
+   * Return a pointer to the outgoing angular flux slot for a local outgoing face node.
    *
    * The caller writes the just-solved angular fluxes at this location so that
    * downwind neighbors can read them via UpwindPsi.
    *
    * \param cell_local_id local ID of the cell being swept
-   * \param cell_node node index on the cell
+   * \param face_id outgoing face id on the current cell
+   * \param face_node face-local node index on the outgoing face
    * \param as_ss_idx angle subset index within the angle set
    * \return pointer to the start of the group data for the specified node and angle
    */
   double*
-  OutgoingPsi(std::uint32_t cell_local_id, unsigned int cell_node, size_t as_ss_idx) const noexcept
+  OutgoingPsi(std::uint32_t cell_local_id,
+              unsigned int face_id,
+              unsigned int face_node,
+              size_t as_ss_idx) const noexcept
   {
-    return LocalPsiBase(cell_local_id) + static_cast<size_t>(cell_node) * num_groups_and_angles_ +
+    return LocalFacePsiBase(cell_local_id, face_id) +
+           static_cast<size_t>(face_node) * num_groups_and_angles_ +
            as_ss_idx * num_groups_;
   }
 
@@ -166,10 +177,10 @@ protected:
   /// Allocate a zero-initialized, 64-byte-aligned double buffer.
   static AlignedDoubleBuffer AllocateAlignedBuffer(size_t num_values);
 
-  /// Return the slot base pointer for a local cell.
-  double* LocalPsiBase(std::uint32_t cell_local_id) const noexcept
+  /// Return the slot base pointer for a local cell face.
+  double* LocalFacePsiBase(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
   {
-    auto* const slot_base = cell_slot_bases_[cell_local_id];
+    auto* const slot_base = local_face_slot_bases_[common_data_.GetCellFaceOffset(cell_local_id) + face_id];
     assert(slot_base != nullptr);
     return slot_base;
   }
@@ -180,8 +191,8 @@ protected:
   size_t num_slots_;
   /// Size of each slot in doubles (cache-line-aligned).
   size_t slot_size_;
-  /// Per-cell base pointer into the local psi buffer (indexed by cell_local_id).
-  std::vector<double*> cell_slot_bases_;
+  /// Per-face-storage base pointer into the local psi buffer.
+  std::vector<double*> local_face_slot_bases_;
 
   /**
    * Contiguous local angular-flux buffer with \f$s^*\f$ slots.

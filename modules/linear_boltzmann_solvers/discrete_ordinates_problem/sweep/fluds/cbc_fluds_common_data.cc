@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mesh/cell/cell.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
@@ -15,9 +16,13 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   : FLUDSCommonData(spds, grid_nodal_mappings),
     num_incoming_nonlocal_faces_(0),
     num_incoming_nonlocal_face_nodes_(0),
-    num_outgoing_nonlocal_faces_(0)
+    num_outgoing_nonlocal_faces_(0),
+    num_local_faces_(0),
+    max_local_face_node_count_(0),
+    num_local_face_slots_(static_cast<const CBC_SPDS&>(spds).GetMaxNumLocalPsiSlots())
 {
   const auto& grid = *spds.GetGrid();
+  const auto& cbc_spds = static_cast<const CBC_SPDS&>(spds);
   const auto& face_orientations = spds.GetCellFaceOrientations();
   outgoing_nonlocal_face_counts_.assign(spds.GetLocationSuccessors().size(), 0);
   outgoing_nonlocal_face_node_counts_.assign(spds.GetLocationSuccessors().size(), 0);
@@ -29,6 +34,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
     total_num_faces += cell.faces.size();
   }
   cell_face_offsets_.back() = total_num_faces;
+  local_face_slot_ids_.assign(total_num_faces, CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
   incoming_nonlocal_face_info_.resize(total_num_faces);
   outgoing_nonlocal_face_info_.resize(total_num_faces);
 
@@ -43,7 +49,26 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       const size_t face_storage_index = face_offset + f;
 
       if ((not face.has_neighbor) or (face.IsNeighborLocal(&grid)))
+      {
+        if (face.has_neighbor)
+        {
+          max_local_face_node_count_ = std::max(max_local_face_node_count_, face.vertex_ids.size());
+          if (orientation == FaceOrientation::OUTGOING)
+          {
+            const auto task_id = cbc_spds.GetOutgoingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+            assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
+            local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
+            ++num_local_faces_;
+          }
+          else if (orientation == FaceOrientation::INCOMING)
+          {
+            const auto task_id = cbc_spds.GetIncomingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+            assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
+            local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
+          }
+        }
         continue;
+      }
 
       if (orientation == FaceOrientation::INCOMING)
       {

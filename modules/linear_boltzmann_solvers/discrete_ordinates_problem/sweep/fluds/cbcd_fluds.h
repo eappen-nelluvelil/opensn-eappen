@@ -154,7 +154,6 @@ private:
   /// Associated angleset's stream.
   crb::Stream stream_;
   crb::MappedHostVector<std::uint32_t> local_cell_ids_;
-  crb::MappedHostVector<std::uint32_t> local_slot_offsets_;
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.
   crb::DeviceMemory<double> local_psi_;

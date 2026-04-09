@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
@@ -18,8 +19,11 @@ void
 CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization& sdm)
 {
   const MeshContinuum& grid = *(spds_.GetGrid());
+  const auto& cbc_spds = static_cast<const CBC_SPDS&>(spds_);
   const size_t num_local_cells = grid.local_cells.size();
   const auto& face_orientations = spds_.GetCellFaceOrientations();
+  const auto local_face_slot_ids = cbc_spds.GetLocalFaceSlotIDs();
+  const auto max_local_face_nodes = cbc_spds.GetMaxLocalFaceNodeCount();
   std::uint64_t total_face_nodes = 0;
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
@@ -80,10 +84,16 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
         {
           if (is_local_face)
           {
-            std::uint32_t nbr_local_idx = face.GetNeighborLocalID(&grid);
-            std::uint32_t adj_cell_node = face_nodal_mapping.cell_node_mapping_[fn];
-            node_index = CBCD_NodeIndex(
-              nbr_local_idx, static_cast<std::uint16_t>(adj_cell_node), is_outgoing_face);
+            const auto task_id =
+              cbc_spds.GetIncomingLocalFaceTaskID(static_cast<std::uint32_t>(cell.local_id),
+                                                  static_cast<unsigned int>(f));
+            const auto slot_id = local_face_slot_ids[task_id];
+            const auto local_face_node = static_cast<std::uint64_t>(
+              face_nodal_mapping.face_node_mapping_[fn]);
+            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(slot_id) * max_local_face_nodes +
+                                          local_face_node,
+                                        is_outgoing_face,
+                                        true);
           }
           else if (not is_boundary_face)
           {
@@ -127,9 +137,14 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
         {
           if (is_local_face)
           {
-            const int cell_node = sdm.GetCellMapping(cell).MapFaceNode(f, fn);
-            node_index = CBCD_NodeIndex(
-              cell.local_id, static_cast<std::uint16_t>(cell_node), is_outgoing_face);
+            const auto task_id =
+              cbc_spds.GetOutgoingLocalFaceTaskID(static_cast<std::uint32_t>(cell.local_id),
+                                                  static_cast<unsigned int>(f));
+            const auto slot_id = local_face_slot_ids[task_id];
+            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(slot_id) * max_local_face_nodes +
+                                          static_cast<std::uint64_t>(fn),
+                                        is_outgoing_face,
+                                        true);
           }
           else if (not is_boundary_face)
           {

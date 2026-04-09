@@ -84,12 +84,6 @@ ComputeSurfaceIntegral(double* sweep_matrix,
       face_node_counter += face.num_face_nodes;
       continue;
     }
-    double* local_face_base = nullptr;
-    if constexpr (t == SweepType::CBC)
-    {
-      if (idx.IsLocal() and not idx.IsBoundary())
-        local_face_base = args.flud_data.GetLocalCellFluxBase(idx.GetCellLocalID());
-    }
     double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                 direction.omega[2] * face.normal[2];
     // compute surface integral
@@ -104,17 +98,7 @@ ComputeSurfaceIntegral(double* sweep_matrix,
         Ai[j] += mu_Nij;
         auto face_node_index = NodeIndexType<t>(cell_edge_data[face_node_counter + fj]);
         double* upwind_psi = nullptr;
-        if constexpr (t == SweepType::CBC)
-        {
-          if (local_face_base != nullptr and face_node_index.IsLocal() and
-              not face_node_index.IsBoundary() and not face_node_index.IsOutgoing())
-            upwind_psi =
-              args.flud_data.GetLocalFluxPointer(local_face_base, face_node_index.GetCellNode());
-          else
-            upwind_psi = args.flud_data.GetIncomingFluxPointer(face_node_index);
-        }
-        else
-          upwind_psi = args.flud_data.GetIncomingFluxPointer(face_node_index);
+        upwind_psi = args.flud_data.GetIncomingFluxPointer(face_node_index);
         psi[i] += upwind_psi[angle_group_idx] * mu_Nij;
       }
     }
@@ -192,12 +176,6 @@ WritePsiToFludsAndOutflow(double* psi,
       face_node_counter += face.num_face_nodes;
       continue;
     }
-    double* local_face_base = nullptr;
-    if constexpr (t == SweepType::CBC)
-    {
-      if (idx.IsLocal() and not idx.IsBoundary())
-        local_face_base = args.flud_data.GetLocalCellFluxBase(idx.GetCellLocalID());
-    }
     double mu = direction.omega[0] * face.normal[0] + direction.omega[1] * face.normal[1] +
                 direction.omega[2] * face.normal[2];
     // loop over each face node
@@ -207,17 +185,7 @@ WritePsiToFludsAndOutflow(double* psi,
       // put copy psi to FLUDS
       auto face_node_index = NodeIndexType<t>(cell_edge_data[face_node_counter + fi]);
       double* downwind_psi = nullptr;
-      if constexpr (t == SweepType::CBC)
-      {
-        if (local_face_base != nullptr and face_node_index.IsLocal() and
-            not face_node_index.IsBoundary() and face_node_index.IsOutgoing())
-          downwind_psi =
-            args.flud_data.GetLocalFluxPointer(local_face_base, face_node_index.GetCellNode());
-        else
-          downwind_psi = args.flud_data.GetOutgoingFluxPointer(face_node_index);
-      }
-      else
-        downwind_psi = args.flud_data.GetOutgoingFluxPointer(face_node_index);
+      downwind_psi = args.flud_data.GetOutgoingFluxPointer(face_node_index);
       downwind_psi[angle_group_idx] = psi[i];
       // compute ouflow for boundary face
       if (face.outflow != nullptr)
