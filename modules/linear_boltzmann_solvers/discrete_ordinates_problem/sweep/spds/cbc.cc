@@ -56,23 +56,29 @@ void
 CBC_SPDS::BuildLocalFaceTaskGraph()
 {
   const auto num_loc_cells = grid_->local_cells.size();
-  outgoing_local_face_task_ids_.clear();
-  incoming_local_face_task_ids_.clear();
-  outgoing_local_face_task_ids_.reserve(num_loc_cells);
-  incoming_local_face_task_ids_.reserve(num_loc_cells);
+  cell_face_offsets_.assign(num_loc_cells + 1, 0);
+  std::size_t total_num_faces = 0;
   for (const auto& cell : grid_->local_cells)
   {
-    outgoing_local_face_task_ids_.emplace_back(cell.faces.size(), INVALID_LOCAL_FACE_TASK_ID);
-    incoming_local_face_task_ids_.emplace_back(cell.faces.size(), INVALID_LOCAL_FACE_TASK_ID);
+    cell_face_offsets_[cell.local_id] = static_cast<std::uint32_t>(total_num_faces);
+    total_num_faces += cell.faces.size();
   }
+  cell_face_offsets_.back() = static_cast<std::uint32_t>(total_num_faces);
+  outgoing_local_face_task_ids_.assign(total_num_faces, INVALID_LOCAL_FACE_TASK_ID);
+  incoming_local_face_task_ids_.assign(total_num_faces, INVALID_LOCAL_FACE_TASK_ID);
+  std::vector<std::uint32_t> topo_rank(num_loc_cells, 0);
+  for (std::size_t rank = 0; rank < topo_order_.size(); ++rank)
+    topo_rank[topo_order_[rank]] = static_cast<std::uint32_t>(rank);
 
-  local_face_tasks_.clear();
   producer_cell_face_offsets_.assign(num_loc_cells + 1, 0);
+  local_face_producer_ranks_.clear();
+  local_face_consumer_ranks_.clear();
   max_local_face_node_count_ = 0;
 
   for (std::size_t producer_rank = 0; producer_rank < topo_order_.size(); ++producer_rank)
   {
-    producer_cell_face_offsets_[producer_rank] = static_cast<std::uint32_t>(local_face_tasks_.size());
+    producer_cell_face_offsets_[producer_rank] =
+      static_cast<std::uint32_t>(local_face_producer_ranks_.size());
 
     const auto producer_cell_local_id = topo_order_[producer_rank];
     const auto& cell = grid_->local_cells[producer_cell_local_id];
@@ -92,28 +98,18 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
       max_local_face_node_count_ = std::max(max_local_face_node_count_,
                                             static_cast<std::size_t>(num_face_nodes));
 
-      const auto face_task_id = static_cast<std::uint32_t>(local_face_tasks_.size());
-      local_face_tasks_.push_back(LocalFaceTask{static_cast<std::uint32_t>(producer_cell_local_id),
-                                                static_cast<std::uint32_t>(consumer_cell_local_id),
-                                                static_cast<std::uint16_t>(face_id),
-                                                consumer_face_id,
-                                                num_face_nodes});
-      outgoing_local_face_task_ids_[producer_cell_local_id][face_id] = face_task_id;
-      incoming_local_face_task_ids_[consumer_cell_local_id][consumer_face_id] = face_task_id;
+      const auto face_task_id = static_cast<std::uint32_t>(local_face_producer_ranks_.size());
+      local_face_producer_ranks_.push_back(static_cast<std::uint32_t>(producer_rank));
+      local_face_consumer_ranks_.push_back(topo_rank[consumer_cell_local_id]);
+      outgoing_local_face_task_ids_[cell_face_offsets_[producer_cell_local_id] + face_id] =
+        face_task_id;
+      incoming_local_face_task_ids_[cell_face_offsets_[consumer_cell_local_id] + consumer_face_id] =
+        face_task_id;
     }
   }
 
-  producer_cell_face_offsets_.back() = static_cast<std::uint32_t>(local_face_tasks_.size());
-
-  local_face_producers_.resize(local_face_tasks_.size());
-  local_face_consumers_.resize(local_face_tasks_.size());
-  for (std::size_t face_task_id = 0; face_task_id < local_face_tasks_.size(); ++face_task_id)
-  {
-    local_face_producers_[face_task_id] = local_face_tasks_[face_task_id].producer_cell_local_id;
-    local_face_consumers_[face_task_id] = local_face_tasks_[face_task_id].consumer_cell_local_id;
-  }
-
-  local_face_slot_ids_.resize(local_face_tasks_.size());
+  producer_cell_face_offsets_.back() = static_cast<std::uint32_t>(local_face_producer_ranks_.size());
+  local_face_slot_ids_.resize(local_face_producer_ranks_.size());
   std::iota(local_face_slot_ids_.begin(), local_face_slot_ids_.end(), std::uint32_t{0});
 }
 
@@ -168,7 +164,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   max_num_local_cell_psi_slots_ = num_loc_cells;
   task_slot_ids_.resize(num_loc_cells);
   std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), std::uint32_t{0});
-  max_num_local_psi_slots_ = local_face_tasks_.size();
+  max_num_local_psi_slots_ = local_face_producer_ranks_.size();
 }
 
 const std::vector<Task>&
@@ -200,8 +196,8 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
       << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: slot-assignment verifier rejected the planner "
       << "output; falling back to the identity assignment (one slot per local cell).";
 
-  detail::DenseLocalFaceHopcroftKarp face_allocator(local_face_producers_,
-                                                    local_face_consumers_,
+  detail::DenseLocalFaceHopcroftKarp face_allocator(local_face_producer_ranks_,
+                                                    local_face_consumer_ranks_,
                                                     producer_cell_face_offsets_,
                                                     local_face_slot_ids_,
                                                     workspace);
@@ -212,14 +208,14 @@ std::uint32_t
 CBC_SPDS::GetOutgoingLocalFaceTaskID(const std::uint32_t cell_local_id,
                                      const unsigned int face_id) const noexcept
 {
-  return outgoing_local_face_task_ids_[cell_local_id][face_id];
+  return outgoing_local_face_task_ids_[cell_face_offsets_[cell_local_id] + face_id];
 }
 
 std::uint32_t
 CBC_SPDS::GetIncomingLocalFaceTaskID(const std::uint32_t cell_local_id,
                                      const unsigned int face_id) const noexcept
 {
-  return incoming_local_face_task_ids_[cell_local_id][face_id];
+  return incoming_local_face_task_ids_[cell_face_offsets_[cell_local_id] + face_id];
 }
 
 } // namespace opensn

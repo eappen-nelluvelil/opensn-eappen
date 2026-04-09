@@ -281,14 +281,14 @@ struct ThreadLocalWorkspace
 class DenseLocalFaceHopcroftKarp
 {
 public:
-  DenseLocalFaceHopcroftKarp(const std::vector<std::uint32_t>& face_producers,
-                             const std::vector<std::uint32_t>& face_consumers,
+  DenseLocalFaceHopcroftKarp(const std::vector<std::uint32_t>& face_producer_ranks,
+                             const std::vector<std::uint32_t>& face_consumer_ranks,
                              const std::vector<std::uint32_t>& producer_cell_face_offsets,
                              std::vector<std::uint32_t>& face_slot_ids,
                              ThreadLocalWorkspace& ws)
-    : num_faces_(static_cast<std::uint32_t>(face_producers.size())),
-      face_producers_(face_producers),
-      face_consumers_(face_consumers),
+    : num_faces_(static_cast<std::uint32_t>(face_producer_ranks.size())),
+      face_producer_ranks_(face_producer_ranks),
+      face_consumer_ranks_(face_consumer_ranks),
       producer_cell_face_offsets_(producer_cell_face_offsets),
       face_slot_ids_(face_slot_ids),
       ws_(ws)
@@ -330,7 +330,7 @@ private:
   template <class F>
   void ForEachCandidate(const std::uint32_t u_face_rank, F&& fn) const
   {
-    const auto consumer_cell_rank = ws_.topo_rank[face_consumers_[u_face_rank]];
+    const auto consumer_cell_rank = face_consumer_ranks_[u_face_rank];
     for (std::size_t producer_cell_rank =
            ws_.reachability.FindFirstSet(consumer_cell_rank, consumer_cell_rank);
          producer_cell_rank < producer_cell_face_offsets_.size() - 1;
@@ -345,9 +345,8 @@ private:
 
   bool ReuseRelationHolds(const std::uint32_t u_face_rank, const std::uint32_t v_face_rank) const
   {
-    const auto consumer_cell_rank = ws_.topo_rank[face_consumers_[u_face_rank]];
-    const auto producer_cell_rank = ws_.topo_rank[face_producers_[v_face_rank]];
-    return ws_.reachability.TestBit(consumer_cell_rank, producer_cell_rank);
+    return ws_.reachability.TestBit(face_consumer_ranks_[u_face_rank],
+                                    face_producer_ranks_[v_face_rank]);
   }
 
   void ExtractSlotAssignment()
@@ -494,8 +493,8 @@ private:
   }
 
   std::uint32_t num_faces_ = 0;
-  const std::vector<std::uint32_t>& face_producers_;
-  const std::vector<std::uint32_t>& face_consumers_;
+  const std::vector<std::uint32_t>& face_producer_ranks_;
+  const std::vector<std::uint32_t>& face_consumer_ranks_;
   const std::vector<std::uint32_t>& producer_cell_face_offsets_;
   std::vector<std::uint32_t>& face_slot_ids_;
   ThreadLocalWorkspace& ws_;

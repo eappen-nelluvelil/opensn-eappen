@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/cbc.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/main.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/memory_pinner.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
@@ -126,7 +126,7 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells, size_t angle_set_id)
   auto& stream = angle_sets_[angle_set_id]->GetStream();
   const auto grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
   ::dim3 grid_size{ck.grid_size_x, grid_size_y};
-  gpu_kernel::SweepKernelCBC<<<grid_size, ck.block_size, 0, stream>>>(
+  gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
     ck.args, ck.fluds->GetLocalCellIDs().data(), num_ready_cells, ck.device_saved_psi);
 }
 

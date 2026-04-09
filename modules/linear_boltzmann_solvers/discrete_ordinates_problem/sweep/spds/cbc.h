@@ -45,15 +45,6 @@ namespace opensn
 class CBC_SPDS : public SPDS
 {
 public:
-  struct LocalFaceTask
-  {
-    std::uint32_t producer_cell_local_id = 0;
-    std::uint32_t consumer_cell_local_id = 0;
-    std::uint16_t producer_face_id = 0;
-    std::uint16_t consumer_face_id = 0;
-    std::uint16_t num_face_nodes = 0;
-  };
-
   static constexpr std::uint32_t INVALID_LOCAL_FACE_TASK_ID =
     std::numeric_limits<std::uint32_t>::max();
 
@@ -104,9 +95,6 @@ public:
     return local_face_slot_ids_;
   }
 
-  /// Return the local directed-face task list.
-  const std::vector<LocalFaceTask>& GetLocalFaceTasks() const noexcept { return local_face_tasks_; }
-
   /// Return the maximum number of nodes on any local directed face.
   std::size_t GetMaxLocalFaceNodeCount() const noexcept { return max_local_face_node_count_; }
 
@@ -135,18 +123,18 @@ private:
   std::vector<std::uint32_t> topo_order_;
   /// Per-cell task descriptors with predecessor/successor adjacency lists.
   std::vector<Task> task_list_;
-  /// Local directed-face tasks ordered by producer-cell topological rank.
-  std::vector<LocalFaceTask> local_face_tasks_;
-  /// Per-cell-face outgoing local-face task ids.
-  std::vector<std::vector<std::uint32_t>> outgoing_local_face_task_ids_;
-  /// Per-cell-face incoming local-face task ids.
-  std::vector<std::vector<std::uint32_t>> incoming_local_face_task_ids_;
+  /// Flat face-table offsets indexed by cell-local-id.
+  std::vector<std::uint32_t> cell_face_offsets_;
+  /// Flat outgoing local-face task ids indexed by face storage index.
+  std::vector<std::uint32_t> outgoing_local_face_task_ids_;
+  /// Flat incoming local-face task ids indexed by face storage index.
+  std::vector<std::uint32_t> incoming_local_face_task_ids_;
   /// Face-rank offsets grouped by producer-cell topological rank.
   std::vector<std::uint32_t> producer_cell_face_offsets_;
-  /// Producer cell local id for each local directed face.
-  std::vector<std::uint32_t> local_face_producers_;
-  /// Consumer cell local id for each local directed face.
-  std::vector<std::uint32_t> local_face_consumers_;
+  /// Producer-cell topological rank for each local directed face.
+  std::vector<std::uint32_t> local_face_producer_ranks_;
+  /// Consumer-cell topological rank for each local directed face.
+  std::vector<std::uint32_t> local_face_consumer_ranks_;
   /// Static slot assignment: \c task_slot_ids_[cell_local_id] = slot_id.
   std::vector<std::uint32_t> task_slot_ids_;
   /// Static slot assignment: \c local_face_slot_ids_[face_task_id] = slot_id.
