@@ -19,6 +19,12 @@ namespace opensn::detail
 /// Sentinel for unassigned matching or slot indices.
 constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
 
+struct SlotSolveResult
+{
+  std::size_t slot_count = 0;
+  bool verifier_rejected = false;
+};
+
 /**
  * Dense bit-matrix with cache-line-aligned rows for vectorized set operations.
  *
@@ -296,12 +302,12 @@ public:
     ws_.PrepareFaces(num_faces_);
   }
 
-  std::size_t Solve()
+  SlotSolveResult Solve()
   {
     if (num_faces_ == 0)
     {
       face_slot_ids_.clear();
-      return 0;
+      return {};
     }
 
     std::size_t matching_size = GreedyInit();
@@ -320,10 +326,10 @@ public:
     if (not VerifySlotAssignment(optimal_slot_count))
     {
       std::iota(face_slot_ids_.begin(), face_slot_ids_.end(), std::uint32_t{0});
-      return static_cast<std::size_t>(num_faces_);
+      return {static_cast<std::size_t>(num_faces_), true};
     }
 
-    return optimal_slot_count;
+    return {optimal_slot_count, false};
   }
 
 private:
@@ -584,7 +590,7 @@ public:
    *
    * \return the minimum number of slots \f$s^*\f$
    */
-  std::size_t Solve()
+  SlotSolveResult Solve()
   {
     BuildTransitiveClosure();
     BuildReuseTargets();
@@ -606,10 +612,10 @@ public:
     if (not VerifySlotAssignment(optimal_slot_count))
     {
       std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), std::uint32_t{0});
-      return static_cast<std::size_t>(num_tasks_);
+      return {static_cast<std::size_t>(num_tasks_), true};
     }
 
-    return optimal_slot_count;
+    return {optimal_slot_count, false};
   }
 
 private:

@@ -189,9 +189,10 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   thread_local detail::ThreadLocalWorkspace workspace;
 
   detail::DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
-  max_num_local_cell_psi_slots_ = allocator.Solve();
+  const auto cell_result = allocator.Solve();
+  max_num_local_cell_psi_slots_ = cell_result.slot_count;
 
-  if (max_num_local_cell_psi_slots_ == num_tasks)
+  if (cell_result.verifier_rejected)
     opensn::log.LogAllWarning()
       << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: slot-assignment verifier rejected the planner "
       << "output; falling back to the identity assignment (one slot per local cell).";
@@ -201,7 +202,13 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
                                                     producer_cell_face_offsets_,
                                                     local_face_slot_ids_,
                                                     workspace);
-  max_num_local_psi_slots_ = face_allocator.Solve();
+  const auto face_result = face_allocator.Solve();
+  max_num_local_psi_slots_ = face_result.slot_count;
+  if (face_result.verifier_rejected)
+    opensn::log.LogAllWarning()
+      << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: local-face slot-assignment verifier rejected "
+      << "the planner output; falling back to the identity assignment "
+         "(one slot per local directed face).";
 }
 
 std::uint32_t
