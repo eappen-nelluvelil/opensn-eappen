@@ -169,6 +169,8 @@ protected:
   std::atomic_size_t dependency_counter_ = 0;
   /// Following angle sets unblocked by this angle set.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
+  /// Reflecting boundaries touched by this angle set.
+  std::vector<SweepBoundary*> reflecting_boundaries_;
   /// Ready tasks waiting for the next batch launch.
   std::vector<std::uint32_t> ready_queue_;
   /// Tasks in the current in-flight kernel batch.
@@ -183,6 +185,8 @@ protected:
   std::size_t initial_reflecting_task_count_ = 0;
   /// Remaining number of tasks that still need to produce reflecting-boundary data.
   std::size_t pending_reflecting_tasks_ = 0;
+  /// Cached flag indicating whether any following angle sets actually wait on this set.
+  bool has_following_angle_sets_ = false;
   /// Flag indicating boundary data has been copied for this sweep.
   bool boundary_data_initialized_ = false;
   /// Flag indicating following angle sets have been notified.

@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/boundary/sweep_boundary.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
 #include <algorithm>
@@ -65,6 +66,7 @@ CBCD_AngleSet::UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets
     following_angle_sets_.push_back(cbcd_as);
     ++(cbcd_as->num_dependencies_);
   }
+  has_following_angle_sets_ = not following_angle_sets_.empty();
 }
 
 void
@@ -92,6 +94,11 @@ CBCD_AngleSet::InitializeReflectingTaskMask()
 {
   const auto& task_list = cbc_spds_.GetTaskList();
   task_has_outgoing_reflecting_boundary_.assign(task_list.size(), 0);
+  reflecting_boundaries_.clear();
+  reflecting_boundaries_.reserve(boundaries_.size());
+  for (auto& [_, boundary] : boundaries_)
+    if (boundary->IsReflecting())
+      reflecting_boundaries_.push_back(boundary.get());
 
   for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
   {
@@ -163,7 +170,7 @@ CBCD_AngleSet::InitializeTaskState()
   in_flight_task_indices_.clear();
   deferred_cell_ids_.clear();
   num_completed_tasks_ = 0;
-  pending_reflecting_tasks_ = initial_reflecting_task_count_;
+  pending_reflecting_tasks_ = has_following_angle_sets_ ? initial_reflecting_task_count_ : 0;
 }
 
 void
@@ -180,10 +187,19 @@ CBCD_AngleSet::NotifyFollowingAngleSets()
 void
 CBCD_AngleSet::TryNotifyFollowingAngleSets()
 {
-  if (following_angle_sets_notified_ or pending_reflecting_tasks_ != 0)
+  if (following_angle_sets_notified_)
     return;
 
-  for (auto& [bid, boundary] : boundaries_)
+  if (not has_following_angle_sets_)
+  {
+    following_angle_sets_notified_ = true;
+    return;
+  }
+
+  if (pending_reflecting_tasks_ != 0)
+    return;
+
+  for (auto* boundary : reflecting_boundaries_)
     boundary->UpdateAnglesReadyStatus(angles_);
   NotifyFollowingAngleSets();
   following_angle_sets_notified_ = true;
@@ -235,7 +251,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
           ready_queue_.push_back(successor_data_[succ_i]);
       }
 
-      if (not following_angle_sets_notified_ and
+      if (has_following_angle_sets_ and not following_angle_sets_notified_ and
           task_has_outgoing_reflecting_boundary_[task_idx] != 0)
       {
         assert(pending_reflecting_tasks_ > 0);
