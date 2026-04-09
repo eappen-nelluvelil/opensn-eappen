@@ -39,6 +39,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   }
 
   const size_t num_sources = sources.size();
+  recv_communicator_ = &comm_set_.LocICommunicator(my_rank_);
 
   outgoing_queues_.reserve(destinations.size());
   dest_to_queue_index_.reserve(destinations.size());
@@ -217,17 +218,16 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
     [this](ByteArray&& buf) { recv_buffer_reuse_cache_.push_back(std::move(buf)); });
 
   bool received_any = false;
-  const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
 
   mpi::Status status;
-  while (recv_comm.iprobe(ANY_SOURCE, mpi_tag_, status))
+  while (recv_communicator_->iprobe(ANY_SOURCE, mpi_tag_, status))
   {
     received_any = true;
     const int source_rank = status.source();
     const int num_bytes = status.count<std::byte>();
 
     auto recv_buffer = AcquireReceiveBuffer(num_bytes);
-    recv_comm.recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
+    recv_communicator_->recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
 
     const auto* ptr = recv_buffer->data.Data().data();
     const size_t num_sections = Wire::LoadSize(ptr);
@@ -237,17 +237,14 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       const size_t num_entries = Wire::LoadSize(ptr);
       assert(angle_set_id < num_angle_sets_);
 
-      const size_t section_start =
-        static_cast<size_t>(ptr - recv_buffer->data.Data().data()) - sizeof(size_t);
+      const auto* section_data = ptr;
       for (size_t e = 0; e < num_entries; ++e)
       {
         const auto entry_header = Wire::LoadEntryHeader(ptr);
         ptr += entry_header.data_size * sizeof(double);
       }
-
-      const size_t section_end = static_cast<size_t>(ptr - recv_buffer->data.Data().data());
       incoming_mailboxes_[angle_set_id].Push(
-        IncomingSection{recv_buffer, section_start, section_end - section_start});
+        IncomingSection{recv_buffer, section_data, num_entries});
     }
   }
   return received_any;

@@ -250,13 +250,12 @@ CBCD_AngleSet::TryAdvanceOneStep()
   }
 
   // 2. Drain incoming nonlocal data.
-  work_done = async_comm_->DrainIncoming(
+              work_done = async_comm_->DrainIncoming(
                 GetID(),
                 [this](const CBCD_AsynchronousCommunicator::IncomingSection& section)
                 {
-                  const auto* ptr = section.Data();
-                  const size_t num_entries = CBCD_AsynchronousCommunicator::Wire::LoadSize(ptr);
-                  for (size_t e = 0; e < num_entries; ++e)
+                  const auto* ptr = section.data;
+                  for (size_t e = 0; e < section.num_entries; ++e)
                   {
                     const auto entry_header =
                       CBCD_AsynchronousCommunicator::Wire::LoadEntryHeader(ptr);

@@ -121,10 +121,8 @@ public:
     };
 
     std::shared_ptr<IncomingBuffer> buffer;
-    size_t offset = 0;
-    size_t size = 0;
-
-    const std::byte* Data() const { return buffer->data.Data().data() + offset; }
+    const std::byte* data = nullptr;
+    size_t num_entries = 0;
   };
 
   /**
@@ -247,6 +245,8 @@ private:
   int mpi_tag_ = 0;
   /// Cached local MPI rank for receive operations.
   int my_rank_ = 0;
+  /// Communicator used to receive from all source localities.
+  const mpi::Communicator* recv_communicator_ = nullptr;
   /// Per-destination outgoing queues.
   std::vector<NeighborQueue> outgoing_queues_;
   /// Map from destination location to outgoing queue index.
