@@ -111,7 +111,7 @@ public:
                                  const std::vector<std::uint32_t>& cell_local_ids);
 
   /// Scatter one received nonlocal face payload directly into the mapped incoming buffer.
-  std::uint64_t ScatterReceivedFaceData(std::uint64_t cell_global_id,
+  std::uint32_t ScatterReceivedFaceData(std::uint64_t cell_global_id,
                                         unsigned int face_id,
                                         const double* psi_data);
 
@@ -137,15 +137,10 @@ private:
   const CBCD_FLUDSCommonData& common_data_;
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
-  size_t num_angles_in_gs_quadrature_;
-  size_t num_quadrature_local_dofs_;
   size_t num_local_spatial_dofs_;
-  size_t num_local_psi_slots_;
-  size_t local_psi_slot_stride_;
   size_t local_psi_data_size_;
   size_t saved_psi_data_size_;
   const MeshContinuum* grid_ptr_ = nullptr;
-  std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
   /// Mapped host vectors for boundary and non-local angular fluxes.
   crb::MappedHostVector<double> incoming_boundary_psi_;
   crb::MappedHostVector<double> outgoing_boundary_psi_;

@@ -33,16 +33,13 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     common_data_(common_data),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
-    num_angles_in_gs_quadrature_(psi_uk_man_.GetNumberOfUnknowns()),
-    num_quadrature_local_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_)),
-    num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
+    num_local_spatial_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_) / psi_uk_man_.GetNumberOfUnknowns() /
                             num_groups_),
-    num_local_psi_slots_(static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots()),
-    local_psi_slot_stride_(
-      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxLocalFaceNodeCount()),
-    local_psi_data_size_(num_local_psi_slots_ * local_psi_slot_stride_ * num_groups_and_angles_),
+    local_psi_data_size_(
+      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots() *
+      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxLocalFaceNodeCount() *
+      num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    incoming_boundary_node_map_(common_data_.GetIncomingBoundaryNodeMap()),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
@@ -215,7 +212,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
   const auto gs_gi = sweep_chunk.GetGroupsetGroupIndex();
   const bool surface_source_active = sweep_chunk.IsSurfaceSourceActive();
 
-  for (const auto& node : incoming_boundary_node_map_)
+  for (const auto& node : common_data_.GetIncomingBoundaryNodeMap())
   {
     for (size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
     {
@@ -388,7 +385,7 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
   }
 }
 
-std::uint64_t
+std::uint32_t
 CBCD_FLUDS::ScatterReceivedFaceData(std::uint64_t cell_global_id,
                                     unsigned int face_id,
                                     const double* psi_data)

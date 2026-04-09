@@ -116,13 +116,12 @@ CBCD_AngleSet::InitializeReflectingTaskMask()
 void
 CBCD_AngleSet::InitializeTaskGraphData()
 {
-  if (not reference_ids_.empty())
+  if (not initial_deps_.empty())
     return;
 
   const auto& task_list = cbc_spds_.GetTaskList();
   const auto num_tasks = task_list.size();
 
-  reference_ids_.resize(num_tasks);
   initial_deps_.resize(num_tasks);
   successor_offsets_.assign(num_tasks + 1, 0);
   initial_ready_tasks_.clear();
@@ -131,7 +130,6 @@ CBCD_AngleSet::InitializeTaskGraphData()
   for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
   {
     const auto& task = task_list[task_idx];
-    reference_ids_[task_idx] = static_cast<std::uint32_t>(task.reference_id);
     initial_deps_[task_idx] = static_cast<int>(task.num_dependencies);
     successor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.successors.size());
     if (task.num_dependencies == 0)
@@ -225,7 +223,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
     deferred_cell_ids_.clear();
     for (const auto task_idx : in_flight_task_indices_)
     {
-      deferred_cell_ids_.push_back(reference_ids_[task_idx]);
+      deferred_cell_ids_.push_back(task_idx);
 
       const auto succ_begin = successor_offsets_[task_idx];
       const auto succ_end = successor_offsets_[task_idx + 1];
@@ -279,7 +277,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
     for (const auto task_idx : ready_queue_)
     {
       in_flight_task_indices_.push_back(task_idx);
-      host_cell_ids[ready_count++] = reference_ids_[task_idx];
+      host_cell_ids[ready_count++] = task_idx;
     }
     ready_queue_.clear();
 
@@ -296,7 +294,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
   }
 
   // 5. Finalize once all tasks are done and no kernel is in flight.
-  if (num_completed_tasks_ == reference_ids_.size() and not kernel_in_flight_)
+  if (num_completed_tasks_ == initial_deps_.size() and not kernel_in_flight_)
   {
     async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();

@@ -153,8 +153,6 @@ protected:
   crb::Stream stream_;
   /// Angle indices on the device.
   crb::DeviceMemory<std::uint32_t> device_angle_indices_;
-  /// Cell local ID per task.
-  std::vector<std::uint32_t> reference_ids_;
   /// Flat successor offsets.
   std::vector<std::uint32_t> successor_offsets_;
   /// Flat successor task indices.
