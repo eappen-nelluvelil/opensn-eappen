@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
 #include <utility>
 
@@ -163,7 +164,7 @@ CBCD_FLUDS::InitializeReflectingBoundaryNodes(
       }
 
       reflecting_boundary_face_plans_.push_back(
-        {first_node.boundary_id,
+        {boundary_it->second.get(),
          static_cast<std::uint32_t>(first_node.cell_local_id),
          first_node.face_id,
          static_cast<std::uint16_t>(first_node.face_node),
@@ -277,11 +278,11 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           outgoing_boundary_psi_.data() + face_plan.src_base_offset + as_ss_idx * num_groups_;
         for (size_t n = 0; n < face_plan.num_nodes; ++n)
         {
-          double* dst = angle_set->PsiReflected(face_plan.boundary_id,
-                                                direction_num,
-                                                face_plan.cell_local_id,
-                                                face_plan.face_id,
-                                                static_cast<unsigned int>(face_plan.first_face_node + n));
+          double* dst = face_plan.boundary->PsiOutgoing(
+            face_plan.cell_local_id,
+            face_plan.face_id,
+            static_cast<unsigned int>(face_plan.first_face_node + n),
+            direction_num);
           std::memcpy(dst,
                       src_face + n * num_groups_and_angles_,
                       groups_bytes);

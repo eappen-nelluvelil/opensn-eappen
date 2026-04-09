@@ -11,6 +11,8 @@
 namespace opensn
 {
 
+class SweepBoundary;
+
 /**
  * Packed 64-bit angular-flux buffer index for CBCD FLUDS device kernels.
  *
@@ -233,7 +235,7 @@ struct GroupedOutgoingNonlocalFace
 /// Reflecting-boundary face copy plan.
 struct ReflectingBoundaryFacePlan
 {
-  std::uint64_t boundary_id = 0;
+  SweepBoundary* boundary = nullptr;
   std::uint32_t cell_local_id = 0;
   unsigned int face_id = 0;
   std::uint16_t first_face_node = 0;

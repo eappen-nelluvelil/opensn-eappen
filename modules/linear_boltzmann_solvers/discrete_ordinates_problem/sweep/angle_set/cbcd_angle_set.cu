@@ -10,6 +10,7 @@
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 
 namespace opensn
 {
@@ -220,10 +221,11 @@ CBCD_AngleSet::TryAdvanceOneStep()
   // 1. Retire completed kernel: update successors, defer outgoing data handling.
   if (kernel_in_flight_ and stream_.is_completed())
   {
-    deferred_cell_ids_.clear();
-    for (const auto task_idx : in_flight_task_indices_)
+    deferred_cell_ids_.resize(in_flight_task_indices_.size());
+    for (std::size_t i = 0; i < in_flight_task_indices_.size(); ++i)
     {
-      deferred_cell_ids_.push_back(task_idx);
+      const auto task_idx = in_flight_task_indices_[i];
+      deferred_cell_ids_[i] = task_idx;
 
       const auto succ_begin = successor_offsets_[task_idx];
       const auto succ_end = successor_offsets_[task_idx + 1];
@@ -272,13 +274,9 @@ CBCD_AngleSet::TryAdvanceOneStep()
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
     auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
-    std::uint32_t ready_count = 0;
-    in_flight_task_indices_.clear();
-    for (const auto task_idx : ready_queue_)
-    {
-      in_flight_task_indices_.push_back(task_idx);
-      host_cell_ids[ready_count++] = task_idx;
-    }
+    const auto ready_count = static_cast<std::uint32_t>(ready_queue_.size());
+    in_flight_task_indices_ = ready_queue_;
+    std::memcpy(host_cell_ids.data(), ready_queue_.data(), ready_queue_.size() * sizeof(std::uint32_t));
     ready_queue_.clear();
 
     cbcd_sweep_chunk.Sweep(ready_count, GetID());
