@@ -106,24 +106,68 @@ public:
   /// One per-angle-set section extracted from a received aggregate message.
   struct IncomingSection
   {
-    /// Reference-counted receive buffer with automatic recycling.
     struct IncomingBuffer
     {
       ByteArray data;
-      LockFreeTreiberStack<ByteArray>* recycler = nullptr;
-
-      ~IncomingBuffer()
-      {
-        if (recycler == nullptr)
-          return;
-        data.Data().clear();
-        recycler->Push(std::move(data));
-      }
+      std::atomic<std::uint32_t> ref_count{0};
+      LockFreeTreiberStack<std::unique_ptr<IncomingBuffer>>* recycler = nullptr;
     };
 
-    std::shared_ptr<IncomingBuffer> buffer;
+    IncomingBuffer* buffer = nullptr;
     const std::byte* data = nullptr;
     size_t num_entries = 0;
+
+    IncomingSection() = default;
+    IncomingSection(IncomingBuffer* incoming_buffer,
+                    const std::byte* section_data,
+                    size_t section_num_entries)
+      : buffer(incoming_buffer), data(section_data), num_entries(section_num_entries)
+    {
+    }
+
+    IncomingSection(const IncomingSection&) = delete;
+    IncomingSection& operator=(const IncomingSection&) = delete;
+
+    IncomingSection(IncomingSection&& other) noexcept
+      : buffer(other.buffer), data(other.data), num_entries(other.num_entries)
+    {
+      other.buffer = nullptr;
+      other.data = nullptr;
+      other.num_entries = 0;
+    }
+
+    IncomingSection& operator=(IncomingSection&& other) noexcept
+    {
+      if (this == &other)
+        return *this;
+      Release();
+      buffer = other.buffer;
+      data = other.data;
+      num_entries = other.num_entries;
+      other.buffer = nullptr;
+      other.data = nullptr;
+      other.num_entries = 0;
+      return *this;
+    }
+
+    ~IncomingSection() { Release(); }
+
+  private:
+    void Release()
+    {
+      if (buffer == nullptr)
+        return;
+      const auto old_count = buffer->ref_count.fetch_sub(1, std::memory_order_acq_rel);
+      assert(old_count > 0);
+      if (old_count == 1)
+      {
+        buffer->data.Data().clear();
+        buffer->recycler->Push(std::unique_ptr<IncomingBuffer>(buffer));
+      }
+      buffer = nullptr;
+      data = nullptr;
+      num_entries = 0;
+    }
   };
 
   /**
@@ -211,7 +255,9 @@ private:
   /// Check whether all angle sets are complete and all sends are retired.
   bool AllWorkComplete() const;
   /// Acquire a receive buffer (recycled or freshly allocated).
-  std::shared_ptr<IncomingSection::IncomingBuffer> AcquireReceiveBuffer(size_t num_bytes);
+  IncomingSection::IncomingBuffer* AcquireReceiveBuffer(size_t num_bytes);
+  /// Release all cached and recycled incoming buffers during communicator teardown.
+  void CleanupIncomingBuffers();
 
   /// Acquire a send buffer from the pool, or allocate a fresh one.
   ByteArray AcquireSendBuffer()
@@ -257,11 +303,11 @@ private:
   /// Map from destination location to outgoing queue index.
   std::unordered_map<int, int> dest_to_queue_index_;
   /// Lock-free recycler for receive buffers.
-  LockFreeTreiberStack<ByteArray> recv_buffer_recycler_;
+  LockFreeTreiberStack<std::unique_ptr<IncomingSection::IncomingBuffer>> recv_buffer_recycler_;
   /// Per-angle-set lock-free incoming mailboxes.
   std::vector<LockFreeTreiberStack<IncomingSection>> incoming_mailboxes_;
   /// Comm-thread-local cache of receive buffers awaiting recycling.
-  std::vector<ByteArray> recv_buffer_reuse_cache_;
+  std::vector<std::unique_ptr<IncomingSection::IncomingBuffer>> recv_buffer_reuse_cache_;
   /// In-flight sends awaiting completion.
   std::vector<InFlightSend> in_flight_sends_;
   /// Pool of reusable send buffers.

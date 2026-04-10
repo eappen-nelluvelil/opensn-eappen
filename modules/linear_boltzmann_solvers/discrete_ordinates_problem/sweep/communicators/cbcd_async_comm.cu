@@ -75,6 +75,7 @@ CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
 {
   if (comm_thread_.joinable())
     Stop();
+  CleanupIncomingBuffers();
 }
 
 int
@@ -151,17 +152,35 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
   }
 }
 
-std::shared_ptr<CBCD_AsynchronousCommunicator::IncomingSection::IncomingBuffer>
+void
+CBCD_AsynchronousCommunicator::CleanupIncomingBuffers()
+{
+  recv_buffer_reuse_cache_.clear();
+
+  recv_buffer_recycler_.DrainAndProcess(
+    [](std::unique_ptr<IncomingSection::IncomingBuffer>&& buffer)
+    {
+      (void)buffer;
+    });
+}
+
+CBCD_AsynchronousCommunicator::IncomingSection::IncomingBuffer*
 CBCD_AsynchronousCommunicator::AcquireReceiveBuffer(size_t num_bytes)
 {
-  auto recv_buffer = std::make_shared<IncomingSection::IncomingBuffer>();
-  recv_buffer->recycler = &recv_buffer_recycler_;
+  IncomingSection::IncomingBuffer* recv_buffer = nullptr;
   if (not recv_buffer_reuse_cache_.empty())
   {
-    recv_buffer->data = std::move(recv_buffer_reuse_cache_.back());
+    recv_buffer = recv_buffer_reuse_cache_.back().release();
     recv_buffer_reuse_cache_.pop_back();
   }
-  else if (max_message_bytes_ > 0)
+  else
+  {
+    recv_buffer = new IncomingSection::IncomingBuffer();
+    recv_buffer->recycler = &recv_buffer_recycler_;
+  }
+
+  recv_buffer->ref_count.store(0, std::memory_order_relaxed);
+  if (max_message_bytes_ > 0 and recv_buffer->data.Data().capacity() < max_message_bytes_)
     recv_buffer->data.Data().reserve(max_message_bytes_);
   recv_buffer->data.Data().resize(num_bytes);
   return recv_buffer;
@@ -215,7 +234,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
 
   recv_buffer_recycler_.DrainAndProcess(
-    [this](ByteArray&& buf) { recv_buffer_reuse_cache_.push_back(std::move(buf)); });
+    [this](std::unique_ptr<IncomingSection::IncomingBuffer>&& buffer)
+    { recv_buffer_reuse_cache_.push_back(std::move(buffer)); });
 
   bool received_any = false;
 
@@ -231,6 +251,13 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 
     const auto* ptr = recv_buffer->data.Data().data();
     const size_t num_sections = Wire::LoadSize(ptr);
+    recv_buffer->ref_count.store(static_cast<std::uint32_t>(num_sections), std::memory_order_release);
+    if (num_sections == 0)
+    {
+      recv_buffer->data.Data().clear();
+      recv_buffer_recycler_.Push(std::unique_ptr<IncomingSection::IncomingBuffer>(recv_buffer));
+      continue;
+    }
     for (size_t s = 0; s < num_sections; ++s)
     {
       const size_t angle_set_id = Wire::LoadSize(ptr);
@@ -243,8 +270,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto entry_header = Wire::LoadEntryHeader(ptr);
         ptr += entry_header.data_size * sizeof(double);
       }
-      incoming_mailboxes_[angle_set_id].Push(
-        IncomingSection{recv_buffer, section_data, num_entries});
+      incoming_mailboxes_[angle_set_id].Push(IncomingSection{recv_buffer, section_data, num_entries});
     }
   }
   return received_any;
