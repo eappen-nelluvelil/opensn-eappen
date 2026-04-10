@@ -40,18 +40,18 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
   const size_t num_sources = sources.size();
   recv_communicator_ = &comm_set_.LocICommunicator(my_rank_);
+  num_outgoing_stacks_per_queue_ = std::max<size_t>(1, num_angle_sets_);
 
   outgoing_queues_.reserve(destinations.size());
   dest_to_queue_index_.reserve(destinations.size());
+  outgoing_stacks_.resize(destinations.size() * num_outgoing_stacks_per_queue_);
   int queue_idx = 0;
   for (int dest : destinations)
   {
     NeighborQueue queue;
     queue.communicator = &comm_set_.LocICommunicator(dest);
     queue.dest_rank = comm_set_.MapIonJ(dest, dest);
-    queue.shards.reserve(std::max<size_t>(1, num_angle_sets_));
-    for (size_t shard = 0; shard < std::max<size_t>(1, num_angle_sets_); ++shard)
-      queue.shards.push_back(std::make_unique<LockFreeTreiberStack<ByteArray>>());
+    queue.shard_offset = static_cast<size_t>(queue_idx) * num_outgoing_stacks_per_queue_;
     outgoing_queues_.push_back(std::move(queue));
     dest_to_queue_index_[dest] = queue_idx++;
   }
@@ -59,9 +59,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (size_t i = 0; i < num_angle_sets_; ++i)
     angle_set_done_[i].store(false, std::memory_order_relaxed);
 
-  for (auto& queue : outgoing_queues_)
-    for (auto& shard : queue.shards)
-      shard->Preallocate(1);
+  for (auto& stack : outgoing_stacks_)
+    stack.Preallocate(1);
 
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);
@@ -93,8 +92,9 @@ CBCD_AsynchronousCommunicator::EnqueuePrepackedByIndex(int queue_index,
                                                        ByteArray&& data)
 {
   assert(queue_index >= 0 and queue_index < static_cast<int>(outgoing_queues_.size()));
-  const size_t shard_index = producer_id % outgoing_queues_[queue_index].shards.size();
-  outgoing_queues_[queue_index].shards[shard_index]->Push(std::move(data));
+  const auto& queue = outgoing_queues_[queue_index];
+  const size_t shard_index = std::min(producer_id, num_outgoing_stacks_per_queue_ - 1);
+  outgoing_stacks_[queue.shard_offset + shard_index].Push(std::move(data));
 }
 
 void
@@ -180,8 +180,8 @@ CBCD_AsynchronousCommunicator::FlushOutgoing()
     send_data.resize(Wire::AGGREGATE_HEADER_BYTES);
     size_t num_sections = 0;
 
-    for (auto& shard : queue.shards)
-      shard->DrainAndProcess(
+    for (size_t shard = 0; shard < num_outgoing_stacks_per_queue_; ++shard)
+      outgoing_stacks_[queue.shard_offset + shard].DrainAndProcess(
         [&](ByteArray&& section)
         {
           const auto& sec = section.Data();
@@ -277,8 +277,8 @@ CBCD_AsynchronousCommunicator::AllWorkComplete() const
       return false;
 
   for (const auto& queue : outgoing_queues_)
-    for (const auto& shard : queue.shards)
-      if (not shard->Empty())
+    for (size_t shard = 0; shard < num_outgoing_stacks_per_queue_; ++shard)
+      if (not outgoing_stacks_[queue.shard_offset + shard].Empty())
         return false;
 
   return true;

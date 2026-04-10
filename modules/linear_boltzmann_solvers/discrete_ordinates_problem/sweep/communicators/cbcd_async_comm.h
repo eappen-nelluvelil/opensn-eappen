@@ -15,6 +15,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <deque>
 
 namespace mpi = mpicpp_lite;
 
@@ -186,8 +187,8 @@ private:
     const mpi::Communicator* communicator = nullptr;
     /// Destination MPI rank.
     int dest_rank = 0;
-    /// Per-angle-set shards to reduce contention on concurrent enqueue.
-    std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> shards;
+    /// Offset into the flattened per-destination/per-angle-set outgoing stack array.
+    size_t shard_offset = 0;
   };
 
   /// In-flight MPI_Isend with associated data buffer.
@@ -249,6 +250,10 @@ private:
   const mpi::Communicator* recv_communicator_ = nullptr;
   /// Per-destination outgoing queues.
   std::vector<NeighborQueue> outgoing_queues_;
+  /// Number of per-destination stacks, currently one per angle set.
+  size_t num_outgoing_stacks_per_queue_ = 1;
+  /// Flattened per-destination/per-angle-set outgoing stacks.
+  std::deque<LockFreeTreiberStack<ByteArray>> outgoing_stacks_;
   /// Map from destination location to outgoing queue index.
   std::unordered_map<int, int> dest_to_queue_index_;
   /// Lock-free recycler for receive buffers.
