@@ -21,6 +21,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     num_angle_sets_(angle_sets.size()),
     max_message_bytes_(max_message_bytes),
     mpi_tag_(static_cast<int>(num_angle_sets_)),
+    recv_buffer_pool_state_(std::make_shared<ReceiveBufferPoolState>()),
     incoming_mailboxes_(num_angle_sets_),
     angle_set_done_(num_angle_sets_)
 {
@@ -65,7 +66,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (auto& mailbox : incoming_mailboxes_)
     mailbox.Preallocate(num_sources);
 
-  recv_buffer_recycler_.Preallocate(num_sources);
+  recv_buffer_pool_state_->Preallocate(num_sources);
   recv_buffer_reuse_cache_.reserve(num_sources);
   in_flight_sends_.reserve(outgoing_queues_.size());
   send_buffer_pool_.reserve(outgoing_queues_.size());
@@ -157,7 +158,7 @@ CBCD_AsynchronousCommunicator::CleanupIncomingBuffers()
 {
   recv_buffer_reuse_cache_.clear();
 
-  recv_buffer_recycler_.DrainAndProcess(
+  recv_buffer_pool_state_->DrainAndProcess(
     [](std::unique_ptr<IncomingSection::IncomingBuffer>&& buffer)
     {
       (void)buffer;
@@ -176,13 +177,13 @@ CBCD_AsynchronousCommunicator::AcquireReceiveBuffer(size_t num_bytes)
   else
     recv_buffer_owner = std::make_unique<IncomingSection::IncomingBuffer>();
 
-  auto* recycler = &recv_buffer_recycler_;
+  auto pool_state = recv_buffer_pool_state_;
   auto recv_buffer = std::shared_ptr<IncomingSection::IncomingBuffer>(
     recv_buffer_owner.release(),
-    [recycler](IncomingSection::IncomingBuffer* buffer)
+    [pool_state = std::move(pool_state)](IncomingSection::IncomingBuffer* buffer)
     {
       buffer->data.Data().clear();
-      recycler->Push(std::unique_ptr<IncomingSection::IncomingBuffer>(buffer));
+      pool_state->Push(std::unique_ptr<IncomingSection::IncomingBuffer>(buffer));
     });
 
   if (max_message_bytes_ > 0 and recv_buffer->data.Data().capacity() < max_message_bytes_)
@@ -238,7 +239,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
 
-  recv_buffer_recycler_.DrainAndProcess(
+  recv_buffer_pool_state_->DrainAndProcess(
     [this](std::unique_ptr<IncomingSection::IncomingBuffer>&& buffer)
     { recv_buffer_reuse_cache_.push_back(std::move(buffer)); });
 

@@ -266,25 +266,24 @@ CBCD_AngleSet::TryAdvanceOneStep()
   }
 
   // 2. Drain incoming nonlocal data.
-              work_done = async_comm_->DrainIncoming(
-                GetID(),
-                [this](const CBCD_AsynchronousCommunicator::IncomingSection& section)
-                {
-                  const auto* ptr = section.data;
-                  for (size_t e = 0; e < section.num_entries; ++e)
-                  {
-                    const auto entry_header =
-                      CBCD_AsynchronousCommunicator::Wire::LoadEntryHeader(ptr);
-                    const auto* psi_data = reinterpret_cast<const double*>(ptr);
-                    ptr += entry_header.data_size * sizeof(double);
+  work_done |= async_comm_->DrainIncoming(
+    GetID(),
+    [this](const CBCD_AsynchronousCommunicator::IncomingSection& section)
+    {
+      const auto* ptr = section.data;
+      for (size_t e = 0; e < section.num_entries; ++e)
+      {
+        const auto entry_header =
+          CBCD_AsynchronousCommunicator::Wire::LoadEntryHeader(ptr);
+        const auto* psi_data = reinterpret_cast<const double*>(ptr);
+        ptr += entry_header.data_size * sizeof(double);
 
-                    const auto task_id = cbcd_fluds_.ScatterReceivedFaceData(
-                      entry_header.cell_global_id, entry_header.face_id, psi_data);
-                    if (--remaining_deps_[task_id] == 0)
-                      ready_queue_.push_back(static_cast<std::uint32_t>(task_id));
-                  }
-                }) ||
-              work_done;
+        const auto task_id = cbcd_fluds_.ScatterReceivedFaceData(
+          entry_header.cell_global_id, entry_header.face_id, psi_data);
+        if (--remaining_deps_[task_id] == 0)
+          ready_queue_.push_back(static_cast<std::uint32_t>(task_id));
+      }
+    });
 
   // 3. Launch next kernel: write cell IDs directly into the mapped host vector.
   if (not kernel_in_flight_ and not ready_queue_.empty())

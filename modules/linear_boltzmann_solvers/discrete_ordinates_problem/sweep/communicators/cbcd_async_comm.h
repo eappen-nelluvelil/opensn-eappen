@@ -127,9 +127,8 @@ public:
     IncomingSection& operator=(const IncomingSection&) = delete;
 
     IncomingSection(IncomingSection&& other) noexcept
-      : buffer(other.buffer), data(other.data), num_entries(other.num_entries)
+      : buffer(std::move(other.buffer)), data(other.data), num_entries(other.num_entries)
     {
-      other.buffer = nullptr;
       other.data = nullptr;
       other.num_entries = 0;
     }
@@ -139,10 +138,9 @@ public:
       if (this == &other)
         return *this;
       Release();
-      buffer = other.buffer;
+      buffer = std::move(other.buffer);
       data = other.data;
       num_entries = other.num_entries;
-      other.buffer = nullptr;
       other.data = nullptr;
       other.num_entries = 0;
       return *this;
@@ -215,6 +213,10 @@ public:
   ~CBCD_AsynchronousCommunicator();
 
 private:
+  /// Shared receive-buffer recycler state that may outlive the communicator briefly.
+  using ReceiveBufferPoolState =
+    LockFreeTreiberStack<std::unique_ptr<IncomingSection::IncomingBuffer>>;
+
   /// Per-destination outgoing queue with sharded lock-free stacks.
   struct NeighborQueue
   {
@@ -293,8 +295,8 @@ private:
   std::deque<LockFreeTreiberStack<ByteArray>> outgoing_stacks_;
   /// Map from destination location to outgoing queue index.
   std::unordered_map<int, int> dest_to_queue_index_;
-  /// Lock-free recycler for receive buffers.
-  LockFreeTreiberStack<std::unique_ptr<IncomingSection::IncomingBuffer>> recv_buffer_recycler_;
+  /// Shared recycler state for receive buffers.
+  std::shared_ptr<ReceiveBufferPoolState> recv_buffer_pool_state_;
   /// Per-angle-set lock-free incoming mailboxes.
   std::vector<LockFreeTreiberStack<IncomingSection>> incoming_mailboxes_;
   /// Comm-thread-local cache of receive buffers awaiting recycling.
