@@ -155,15 +155,15 @@ protected:
   crb::DeviceMemory<std::uint32_t> device_angle_indices_;
   /// Flat successor offsets.
   std::vector<std::uint32_t> successor_offsets_;
-  /// Flat successor task indices.
+  /// Flat successor local cell IDs.
   std::vector<std::uint32_t> successor_data_;
-  /// Initial dependency counts per task.
+  /// Initial dependency counts per local cell.
   std::vector<int> initial_deps_;
-  /// Per-sweep dependency counts per task.
+  /// Per-sweep dependency counts per local cell.
   std::vector<int> remaining_deps_;
-  /// Task indices with zero initial dependencies.
-  std::vector<std::uint32_t> initial_ready_tasks_;
-  /// Cached total number of local tasks in the CBC graph.
+  /// Local cell IDs with zero initial dependencies.
+  std::vector<std::uint32_t> initial_ready_cell_ids_;
+  /// Cached total number of local cells/tasks in the CBC graph.
   std::size_t num_tasks_ = 0;
   /// Number of unresolved angle-set dependencies at startup.
   std::size_t num_dependencies_ = 0;
@@ -173,19 +173,19 @@ protected:
   std::vector<CBCD_AngleSet*> following_angle_sets_;
   /// Reflecting boundaries touched by this angle set.
   std::vector<SweepBoundary*> reflecting_boundaries_;
-  /// Ready tasks waiting for the next batch launch.
-  std::vector<std::uint32_t> ready_queue_;
-  /// Tasks in the current in-flight kernel batch.
-  std::vector<std::uint32_t> in_flight_task_indices_;
+  /// Ready local cell IDs waiting for the next batch launch.
+  std::vector<std::uint32_t> ready_cell_ids_;
+  /// Local cell IDs in the current in-flight kernel batch.
+  std::vector<std::uint32_t> in_flight_cell_ids_;
   /// Completed cell IDs awaiting deferred outgoing-data handling.
   std::vector<std::uint32_t> deferred_cell_ids_;
-  /// Cached reflecting-boundary task mask.
-  std::vector<std::uint8_t> task_has_outgoing_reflecting_boundary_;
+  /// Cached reflecting-boundary producer mask by local cell ID.
+  std::vector<std::uint8_t> cell_has_outgoing_reflecting_boundary_;
   /// Number of completed local tasks.
   std::size_t num_completed_tasks_ = 0;
-  /// Initial number of tasks that produce reflecting-boundary data.
+  /// Initial number of local cells that produce reflecting-boundary data.
   std::size_t initial_reflecting_task_count_ = 0;
-  /// Remaining number of tasks that still need to produce reflecting-boundary data.
+  /// Remaining number of local cells that still need to produce reflecting-boundary data.
   std::size_t pending_reflecting_tasks_ = 0;
   /// Cached flag indicating whether any following angle sets actually wait on this set.
   bool has_following_angle_sets_ = false;

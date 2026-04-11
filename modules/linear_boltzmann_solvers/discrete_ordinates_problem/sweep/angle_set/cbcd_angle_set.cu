@@ -93,7 +93,7 @@ void
 CBCD_AngleSet::InitializeReflectingTaskMask()
 {
   const auto& task_list = cbc_spds_.GetTaskList();
-  task_has_outgoing_reflecting_boundary_.assign(task_list.size(), 0);
+  cell_has_outgoing_reflecting_boundary_.assign(task_list.size(), 0);
   reflecting_boundaries_.clear();
   reflecting_boundaries_.reserve(boundaries_.size());
   for (auto& [_, boundary] : boundaries_)
@@ -115,7 +115,7 @@ CBCD_AngleSet::InitializeReflectingTaskMask()
 
     if (has_outgoing_reflecting_face)
     {
-      task_has_outgoing_reflecting_boundary_[task_idx] = 1;
+      cell_has_outgoing_reflecting_boundary_[task_idx] = 1;
       ++initial_reflecting_task_count_;
     }
   }
@@ -133,8 +133,8 @@ CBCD_AngleSet::InitializeTaskGraphData()
   initial_deps_.resize(num_tasks_);
   remaining_deps_.resize(num_tasks_);
   successor_offsets_.assign(num_tasks_ + 1, 0);
-  initial_ready_tasks_.clear();
-  initial_ready_tasks_.reserve(num_tasks_);
+  initial_ready_cell_ids_.clear();
+  initial_ready_cell_ids_.reserve(num_tasks_);
 
   for (std::size_t task_idx = 0; task_idx < num_tasks_; ++task_idx)
   {
@@ -142,7 +142,7 @@ CBCD_AngleSet::InitializeTaskGraphData()
     initial_deps_[task_idx] = static_cast<int>(task.num_dependencies);
     successor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.successors.size());
     if (task.num_dependencies == 0)
-      initial_ready_tasks_.push_back(static_cast<std::uint32_t>(task_idx));
+      initial_ready_cell_ids_.push_back(static_cast<std::uint32_t>(task_idx));
   }
 
   for (std::size_t task_idx = 0; task_idx < num_tasks_; ++task_idx)
@@ -158,8 +158,8 @@ CBCD_AngleSet::InitializeTaskGraphData()
   }
 
   // Pre-reserve hot-loop vectors to prevent reallocation during sweeps.
-  ready_queue_.reserve(num_tasks_);
-  in_flight_task_indices_.reserve(num_tasks_);
+  ready_cell_ids_.reserve(num_tasks_);
+  in_flight_cell_ids_.reserve(num_tasks_);
   deferred_cell_ids_.reserve(num_tasks_);
 }
 
@@ -167,8 +167,8 @@ void
 CBCD_AngleSet::InitializeTaskState()
 {
   std::copy(initial_deps_.begin(), initial_deps_.end(), remaining_deps_.begin());
-  ready_queue_.assign(initial_ready_tasks_.begin(), initial_ready_tasks_.end());
-  in_flight_task_indices_.clear();
+  ready_cell_ids_.assign(initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end());
+  in_flight_cell_ids_.clear();
   deferred_cell_ids_.clear();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = has_following_angle_sets_ ? initial_reflecting_task_count_ : 0;
@@ -237,29 +237,25 @@ CBCD_AngleSet::TryAdvanceOneStep()
   // 1. Retire completed kernel: update successors, defer outgoing data handling.
   if (kernel_in_flight_ and stream_.is_completed())
   {
-    deferred_cell_ids_.resize(in_flight_task_indices_.size());
-    for (std::size_t i = 0; i < in_flight_task_indices_.size(); ++i)
+    deferred_cell_ids_.swap(in_flight_cell_ids_);
+    for (const auto cell_local_id : deferred_cell_ids_)
     {
-      const auto task_idx = in_flight_task_indices_[i];
-      deferred_cell_ids_[i] = task_idx;
-
-      const auto succ_begin = successor_offsets_[task_idx];
-      const auto succ_end = successor_offsets_[task_idx + 1];
+      const auto succ_begin = successor_offsets_[cell_local_id];
+      const auto succ_end = successor_offsets_[cell_local_id + 1];
       for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
       {
         if (--remaining_deps_[successor_data_[succ_i]] == 0)
-          ready_queue_.push_back(successor_data_[succ_i]);
+          ready_cell_ids_.push_back(successor_data_[succ_i]);
       }
 
       if (has_following_angle_sets_ and not following_angle_sets_notified_ and
-          task_has_outgoing_reflecting_boundary_[task_idx] != 0)
+          cell_has_outgoing_reflecting_boundary_[cell_local_id] != 0)
       {
         assert(pending_reflecting_tasks_ > 0);
         --pending_reflecting_tasks_;
       }
     }
-    num_completed_tasks_ += in_flight_task_indices_.size();
-    in_flight_task_indices_.clear();
+    num_completed_tasks_ += deferred_cell_ids_.size();
     kernel_in_flight_ = false;
     has_deferred_outgoing = true;
     work_done = true;
@@ -278,22 +274,22 @@ CBCD_AngleSet::TryAdvanceOneStep()
         const auto* psi_data = reinterpret_cast<const double*>(ptr);
         ptr += entry_header.data_size * sizeof(double);
 
-        const auto task_id = cbcd_fluds_.ScatterReceivedFaceData(
+        const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
           entry_header.cell_global_id, entry_header.face_id, psi_data);
-        if (--remaining_deps_[task_id] == 0)
-          ready_queue_.push_back(static_cast<std::uint32_t>(task_id));
+        if (--remaining_deps_[cell_local_id] == 0)
+          ready_cell_ids_.push_back(static_cast<std::uint32_t>(cell_local_id));
       }
     });
 
   // 3. Launch next kernel: write cell IDs directly into the mapped host vector.
-  if (not kernel_in_flight_ and not ready_queue_.empty())
+  if (not kernel_in_flight_ and not ready_cell_ids_.empty())
   {
     auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
-    in_flight_task_indices_.swap(ready_queue_);
-    const auto ready_count = static_cast<std::uint32_t>(in_flight_task_indices_.size());
+    in_flight_cell_ids_.swap(ready_cell_ids_);
+    const auto ready_count = static_cast<std::uint32_t>(in_flight_cell_ids_.size());
     std::memcpy(host_cell_ids.data(),
-                in_flight_task_indices_.data(),
-                in_flight_task_indices_.size() * sizeof(std::uint32_t));
+                in_flight_cell_ids_.data(),
+                in_flight_cell_ids_.size() * sizeof(std::uint32_t));
 
     cbcd_sweep_chunk.Sweep(ready_count, GetID());
     kernel_in_flight_ = true;
@@ -304,6 +300,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
   if (has_deferred_outgoing)
   {
     cbcd_fluds_.CopyOutgoingPsiBackToHost(cbcd_sweep_chunk, this, deferred_cell_ids_);
+    deferred_cell_ids_.clear();
     TryNotifyFollowingAngleSets();
   }
 
@@ -337,8 +334,8 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 void
 CBCD_AngleSet::ResetSweepBuffers()
 {
-  ready_queue_.clear();
-  in_flight_task_indices_.clear();
+  ready_cell_ids_.clear();
+  in_flight_cell_ids_.clear();
   deferred_cell_ids_.clear();
   cbcd_fluds_.ClearLocalAndReceivePsi();
   num_completed_tasks_ = 0;
