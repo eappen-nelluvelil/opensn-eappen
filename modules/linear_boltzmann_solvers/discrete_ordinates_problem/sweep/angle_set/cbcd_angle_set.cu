@@ -128,14 +128,15 @@ CBCD_AngleSet::InitializeTaskGraphData()
     return;
 
   const auto& task_list = cbc_spds_.GetTaskList();
-  const auto num_tasks = task_list.size();
+  num_tasks_ = task_list.size();
 
-  initial_deps_.resize(num_tasks);
-  successor_offsets_.assign(num_tasks + 1, 0);
+  initial_deps_.resize(num_tasks_);
+  remaining_deps_.resize(num_tasks_);
+  successor_offsets_.assign(num_tasks_ + 1, 0);
   initial_ready_tasks_.clear();
-  initial_ready_tasks_.reserve(num_tasks);
+  initial_ready_tasks_.reserve(num_tasks_);
 
-  for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
+  for (std::size_t task_idx = 0; task_idx < num_tasks_; ++task_idx)
   {
     const auto& task = task_list[task_idx];
     initial_deps_[task_idx] = static_cast<int>(task.num_dependencies);
@@ -144,11 +145,11 @@ CBCD_AngleSet::InitializeTaskGraphData()
       initial_ready_tasks_.push_back(static_cast<std::uint32_t>(task_idx));
   }
 
-  for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
+  for (std::size_t task_idx = 0; task_idx < num_tasks_; ++task_idx)
     successor_offsets_[task_idx + 1] += successor_offsets_[task_idx];
 
   successor_data_.resize(successor_offsets_.back());
-  for (std::size_t task_idx = 0; task_idx < num_tasks; ++task_idx)
+  for (std::size_t task_idx = 0; task_idx < num_tasks_; ++task_idx)
   {
     const auto& task = task_list[task_idx];
     std::copy(task.successors.begin(),
@@ -157,16 +158,16 @@ CBCD_AngleSet::InitializeTaskGraphData()
   }
 
   // Pre-reserve hot-loop vectors to prevent reallocation during sweeps.
-  ready_queue_.reserve(num_tasks);
-  in_flight_task_indices_.reserve(num_tasks);
-  deferred_cell_ids_.reserve(num_tasks);
+  ready_queue_.reserve(num_tasks_);
+  in_flight_task_indices_.reserve(num_tasks_);
+  deferred_cell_ids_.reserve(num_tasks_);
 }
 
 void
 CBCD_AngleSet::InitializeTaskState()
 {
-  remaining_deps_ = initial_deps_;
-  ready_queue_ = initial_ready_tasks_;
+  std::copy(initial_deps_.begin(), initial_deps_.end(), remaining_deps_.begin());
+  ready_queue_.assign(initial_ready_tasks_.begin(), initial_ready_tasks_.end());
   in_flight_task_indices_.clear();
   deferred_cell_ids_.clear();
   num_completed_tasks_ = 0;
@@ -214,7 +215,6 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
     return false;
 
   sweep_chunk_ = &sweep_chunk;
-  InitializeTaskGraphData();
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
   boundary_data_initialized_ = true;
@@ -289,10 +289,11 @@ CBCD_AngleSet::TryAdvanceOneStep()
   if (not kernel_in_flight_ and not ready_queue_.empty())
   {
     auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
-    const auto ready_count = static_cast<std::uint32_t>(ready_queue_.size());
-    in_flight_task_indices_ = ready_queue_;
-    std::memcpy(host_cell_ids.data(), ready_queue_.data(), ready_queue_.size() * sizeof(std::uint32_t));
-    ready_queue_.clear();
+    in_flight_task_indices_.swap(ready_queue_);
+    const auto ready_count = static_cast<std::uint32_t>(in_flight_task_indices_.size());
+    std::memcpy(host_cell_ids.data(),
+                in_flight_task_indices_.data(),
+                in_flight_task_indices_.size() * sizeof(std::uint32_t));
 
     cbcd_sweep_chunk.Sweep(ready_count, GetID());
     kernel_in_flight_ = true;
@@ -307,7 +308,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
   }
 
   // 5. Finalize once all tasks are done and no kernel is in flight.
-  if (num_completed_tasks_ == initial_deps_.size() and not kernel_in_flight_)
+  if (num_completed_tasks_ == num_tasks_ and not kernel_in_flight_)
   {
     async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();

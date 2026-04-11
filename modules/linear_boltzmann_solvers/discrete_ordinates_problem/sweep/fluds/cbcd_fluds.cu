@@ -32,14 +32,13 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
                        bool save_angular_flux)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
+    cbc_spds_(static_cast<const CBC_SPDS&>(common_data.GetSPDS())),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
     num_local_spatial_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_) / psi_uk_man_.GetNumberOfUnknowns() /
                             num_groups_),
-    local_psi_data_size_(
-      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxNumLocalPsiSlots() *
-      static_cast<const CBC_SPDS&>(common_data.GetSPDS()).GetMaxLocalFaceNodeCount() *
-      num_groups_and_angles_),
+    local_psi_data_size_(cbc_spds_.GetMaxNumLocalPsiSlots() * cbc_spds_.GetMaxLocalFaceNodeCount() *
+                         num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
@@ -59,11 +58,21 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
   constexpr size_t entry_header_size =
     sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t);
 
+  const size_t num_dests = outgoing_destinations_.size();
+  scratch_dest_face_counts_.resize(num_dests, 0);
+  scratch_dest_touched_.resize(num_dests, 0);
+  active_dest_indices_.reserve(num_dests);
+  dest_buffers_.resize(num_dests);
+  dest_buffer_capacities_.assign(num_dests, section_header_size);
+
   outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
   for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
   {
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
+      dest_buffer_capacities_[face_info.dest_slot] +=
+        entry_header_size +
+        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_ * sizeof(double);
       for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
       {
         outgoing_node_memcpy_plan_.push_back(
@@ -73,21 +82,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
     }
   }
 
-  const size_t num_dests = outgoing_destinations_.size();
-  scratch_dest_face_counts_.resize(num_dests, 0);
-  scratch_dest_touched_.resize(num_dests, 0);
-  active_dest_indices_.reserve(num_dests);
-  dest_buffers_.resize(num_dests);
-  dest_buffer_capacities_.assign(num_dests, section_header_size);
-  for (size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells(); ++cell_local_id)
-  {
-    for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
-    {
-      dest_buffer_capacities_[face_info.dest_slot] +=
-        entry_header_size +
-        static_cast<size_t>(face_info.num_face_nodes) * num_groups_and_angles_ * sizeof(double);
-    }
-  }
   for (size_t dest_index = 0; dest_index < num_dests; ++dest_index)
     dest_buffers_[dest_index].Data().reserve(dest_buffer_capacities_[dest_index]);
 }

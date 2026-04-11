@@ -25,6 +25,7 @@ class SpatialDiscretization;
 class CBCDSweepChunk;
 class SweepBoundary;
 class MeshContinuum;
+class CBC_SPDS;
 
 /**
  * Device-side flux data structures for the cell-by-cell (CBCD) sweep algorithm.
@@ -138,6 +139,7 @@ public:
 private:
   /// Reference to the common data.
   const CBCD_FLUDSCommonData& common_data_;
+  const CBC_SPDS& cbc_spds_;
   const UnknownManager& psi_uk_man_;
   const SpatialDiscretization& sdm_;
   size_t num_local_spatial_dofs_;

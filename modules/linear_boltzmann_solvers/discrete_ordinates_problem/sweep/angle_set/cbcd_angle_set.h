@@ -163,6 +163,8 @@ protected:
   std::vector<int> remaining_deps_;
   /// Task indices with zero initial dependencies.
   std::vector<std::uint32_t> initial_ready_tasks_;
+  /// Cached total number of local tasks in the CBC graph.
+  std::size_t num_tasks_ = 0;
   /// Number of unresolved angle-set dependencies at startup.
   std::size_t num_dependencies_ = 0;
   /// Atomic counter for unresolved angle-set dependencies.
