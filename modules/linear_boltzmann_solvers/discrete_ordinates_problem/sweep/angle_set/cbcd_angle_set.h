@@ -8,6 +8,7 @@
 #include "caribou/main.hpp"
 #include <atomic>
 #include <set>
+#include <unordered_map>
 
 namespace crb = caribou;
 
@@ -49,6 +50,26 @@ class CellFace;
 class CBCD_AngleSet : public AngleSet
 {
 public:
+  struct BatchState
+  {
+    std::vector<std::uint32_t> launch_cell_ids;
+    std::vector<std::uint32_t> completed_cell_ids;
+    bool kernel_in_flight = false;
+
+    void Reserve(const std::size_t num_tasks)
+    {
+      launch_cell_ids.reserve(num_tasks);
+      completed_cell_ids.reserve(num_tasks);
+    }
+
+    void Reset()
+    {
+      launch_cell_ids.clear();
+      completed_cell_ids.clear();
+      kernel_in_flight = false;
+    }
+  };
+
   /**
    * Construct a device CBC angle set.
    *
@@ -171,14 +192,14 @@ protected:
   std::atomic_size_t dependency_counter_ = 0;
   /// Following angle sets unblocked by this angle set.
   std::vector<CBCD_AngleSet*> following_angle_sets_;
+  /// Cached boundary lookup table to avoid repeated ordered-map access.
+  std::unordered_map<std::uint64_t, SweepBoundary*> boundary_ptrs_;
   /// Reflecting boundaries touched by this angle set.
   std::vector<SweepBoundary*> reflecting_boundaries_;
   /// Ready local cell IDs waiting for the next batch launch.
   std::vector<std::uint32_t> ready_cell_ids_;
-  /// Local cell IDs in the current in-flight kernel batch.
-  std::vector<std::uint32_t> in_flight_cell_ids_;
-  /// Completed cell IDs awaiting deferred outgoing-data handling.
-  std::vector<std::uint32_t> deferred_cell_ids_;
+  /// Explicit launch/completion state for the current sweep batch pipeline.
+  BatchState batch_state_;
   /// Cached reflecting-boundary producer mask by local cell ID.
   std::vector<std::uint8_t> cell_has_outgoing_reflecting_boundary_;
   /// Number of completed local tasks.
@@ -193,8 +214,6 @@ protected:
   bool boundary_data_initialized_ = false;
   /// Flag indicating following angle sets have been notified.
   bool following_angle_sets_notified_ = false;
-  /// Flag indicating a kernel batch is in flight.
-  bool kernel_in_flight_ = false;
 
 private:
   /// Initialize the immutable reflecting-boundary task mask.
@@ -207,6 +226,12 @@ private:
                                 std::size_t face_id) const;
   /// Initialize mutable task state for a new sweep.
   void InitializeTaskState();
+  /// Retire the completed kernel batch and update successor/deferred state.
+  bool TryRetireCompletedBatch();
+  /// Launch the next ready-cell batch if the stream is idle.
+  bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
+  /// Pack and send deferred outgoing data for the completed batch.
+  void FlushCompletedBatch(CBCDSweepChunk& sweep_chunk);
   /// Decrement following angle-set dependency counters once all reflecting data is ready.
   void NotifyFollowingAngleSets();
   /// Notify following angle sets once all reflecting-boundary producers have completed.

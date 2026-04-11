@@ -30,6 +30,10 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
     stream_(crb::Stream::create()),
     device_angle_indices_(angles_.size(), stream_)
 {
+  boundary_ptrs_.reserve(boundaries_.size());
+  for (auto& [boundary_id, boundary] : boundaries_)
+    boundary_ptrs_.emplace(boundary_id, boundary.get());
+
   crb::MemoryPinningManager angle_indices_pinner_(angles_);
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
   cbcd_fluds_.GetStream() = stream_;
@@ -85,8 +89,8 @@ CBCD_AngleSet::IsOutgoingReflectingFace(const CellFace& face,
   if (cbc_spds_.GetCellFaceOrientations()[cell_local_id][face_id] != FaceOrientation::OUTGOING)
     return false;
 
-  const auto boundary_it = boundaries_.find(face.neighbor_id);
-  return boundary_it != boundaries_.end() and boundary_it->second->IsReflecting();
+  const auto boundary_it = boundary_ptrs_.find(face.neighbor_id);
+  return boundary_it != boundary_ptrs_.end() and boundary_it->second->IsReflecting();
 }
 
 void
@@ -159,8 +163,7 @@ CBCD_AngleSet::InitializeTaskGraphData()
 
   // Pre-reserve hot-loop vectors to prevent reallocation during sweeps.
   ready_cell_ids_.reserve(num_tasks_);
-  in_flight_cell_ids_.reserve(num_tasks_);
-  deferred_cell_ids_.reserve(num_tasks_);
+  batch_state_.Reserve(num_tasks_);
 }
 
 void
@@ -168,10 +171,68 @@ CBCD_AngleSet::InitializeTaskState()
 {
   std::copy(initial_deps_.begin(), initial_deps_.end(), remaining_deps_.begin());
   ready_cell_ids_.assign(initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end());
-  in_flight_cell_ids_.clear();
-  deferred_cell_ids_.clear();
+  batch_state_.Reset();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = has_following_angle_sets_ ? initial_reflecting_task_count_ : 0;
+}
+
+bool
+CBCD_AngleSet::TryRetireCompletedBatch()
+{
+  if (not batch_state_.kernel_in_flight or not stream_.is_completed())
+    return false;
+
+  batch_state_.completed_cell_ids.swap(batch_state_.launch_cell_ids);
+  for (const auto cell_local_id : batch_state_.completed_cell_ids)
+  {
+    const auto succ_begin = successor_offsets_[cell_local_id];
+    const auto succ_end = successor_offsets_[cell_local_id + 1];
+    for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
+    {
+      if (--remaining_deps_[successor_data_[succ_i]] == 0)
+        ready_cell_ids_.push_back(successor_data_[succ_i]);
+    }
+
+    if (has_following_angle_sets_ and not following_angle_sets_notified_ and
+        cell_has_outgoing_reflecting_boundary_[cell_local_id] != 0)
+    {
+      assert(pending_reflecting_tasks_ > 0);
+      --pending_reflecting_tasks_;
+    }
+  }
+
+  num_completed_tasks_ += batch_state_.completed_cell_ids.size();
+  batch_state_.kernel_in_flight = false;
+  return true;
+}
+
+bool
+CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
+{
+  if (batch_state_.kernel_in_flight or ready_cell_ids_.empty())
+    return false;
+
+  auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
+  batch_state_.launch_cell_ids.swap(ready_cell_ids_);
+  const auto launch_count = static_cast<std::uint32_t>(batch_state_.launch_cell_ids.size());
+  std::memcpy(host_cell_ids.data(),
+              batch_state_.launch_cell_ids.data(),
+              batch_state_.launch_cell_ids.size() * sizeof(std::uint32_t));
+
+  sweep_chunk.Sweep(launch_count, GetID());
+  batch_state_.kernel_in_flight = true;
+  return true;
+}
+
+void
+CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
+{
+  if (batch_state_.completed_cell_ids.empty())
+    return;
+
+  cbcd_fluds_.CopyOutgoingPsiBackToHost(sweep_chunk, this, batch_state_.completed_cell_ids);
+  batch_state_.completed_cell_ids.clear();
+  TryNotifyFollowingAngleSets();
 }
 
 void
@@ -232,34 +293,7 @@ CBCD_AngleSet::TryAdvanceOneStep()
   auto& cbcd_sweep_chunk = *sweep_chunk_;
 
   bool work_done = false;
-  bool has_deferred_outgoing = false;
-
-  // 1. Retire completed kernel: update successors, defer outgoing data handling.
-  if (kernel_in_flight_ and stream_.is_completed())
-  {
-    deferred_cell_ids_.swap(in_flight_cell_ids_);
-    for (const auto cell_local_id : deferred_cell_ids_)
-    {
-      const auto succ_begin = successor_offsets_[cell_local_id];
-      const auto succ_end = successor_offsets_[cell_local_id + 1];
-      for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
-      {
-        if (--remaining_deps_[successor_data_[succ_i]] == 0)
-          ready_cell_ids_.push_back(successor_data_[succ_i]);
-      }
-
-      if (has_following_angle_sets_ and not following_angle_sets_notified_ and
-          cell_has_outgoing_reflecting_boundary_[cell_local_id] != 0)
-      {
-        assert(pending_reflecting_tasks_ > 0);
-        --pending_reflecting_tasks_;
-      }
-    }
-    num_completed_tasks_ += deferred_cell_ids_.size();
-    kernel_in_flight_ = false;
-    has_deferred_outgoing = true;
-    work_done = true;
-  }
+  work_done |= TryRetireCompletedBatch();
 
   // 2. Drain incoming nonlocal data.
   work_done |= async_comm_->DrainIncoming(
@@ -282,30 +316,13 @@ CBCD_AngleSet::TryAdvanceOneStep()
     });
 
   // 3. Launch next kernel: write cell IDs directly into the mapped host vector.
-  if (not kernel_in_flight_ and not ready_cell_ids_.empty())
-  {
-    auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
-    in_flight_cell_ids_.swap(ready_cell_ids_);
-    const auto ready_count = static_cast<std::uint32_t>(in_flight_cell_ids_.size());
-    std::memcpy(host_cell_ids.data(),
-                in_flight_cell_ids_.data(),
-                in_flight_cell_ids_.size() * sizeof(std::uint32_t));
-
-    cbcd_sweep_chunk.Sweep(ready_count, GetID());
-    kernel_in_flight_ = true;
-    work_done = true;
-  }
+  work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
 
   // 4. Deferred outgoing: pack and send while the GPU works on the next batch.
-  if (has_deferred_outgoing)
-  {
-    cbcd_fluds_.CopyOutgoingPsiBackToHost(cbcd_sweep_chunk, this, deferred_cell_ids_);
-    deferred_cell_ids_.clear();
-    TryNotifyFollowingAngleSets();
-  }
+  FlushCompletedBatch(cbcd_sweep_chunk);
 
   // 5. Finalize once all tasks are done and no kernel is in flight.
-  if (num_completed_tasks_ == num_tasks_ and not kernel_in_flight_)
+  if (num_completed_tasks_ == num_tasks_ and not batch_state_.kernel_in_flight)
   {
     async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
@@ -335,14 +352,12 @@ void
 CBCD_AngleSet::ResetSweepBuffers()
 {
   ready_cell_ids_.clear();
-  in_flight_cell_ids_.clear();
-  deferred_cell_ids_.clear();
+  batch_state_.Reset();
   cbcd_fluds_.ClearLocalAndReceivePsi();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = 0;
   boundary_data_initialized_ = false;
   following_angle_sets_notified_ = false;
-  kernel_in_flight_ = false;
   ResetDependencyCounter();
   executed_ = false;
 }
@@ -356,10 +371,13 @@ CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
                            unsigned int g,
                            bool surface_source_active)
 {
-  if (not boundaries_[boundary_id]->IsReflecting() and not surface_source_active)
-    return boundaries_[boundary_id]->ZeroFlux(g);
+  const auto boundary_it = boundary_ptrs_.find(boundary_id);
+  assert(boundary_it != boundary_ptrs_.end());
+  auto* boundary = boundary_it->second;
+  if (not boundary->IsReflecting() and not surface_source_active)
+    return boundary->ZeroFlux(g);
 
-  return boundaries_[boundary_id]->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
+  return boundary->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
 }
 
 double*
@@ -369,7 +387,9 @@ CBCD_AngleSet::PsiReflected(uint64_t boundary_id,
                             unsigned int face_num,
                             unsigned int fi)
 {
-  return boundaries_[boundary_id]->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
+  const auto boundary_it = boundary_ptrs_.find(boundary_id);
+  assert(boundary_it != boundary_ptrs_.end());
+  return boundary_it->second->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
 }
 
 } // namespace opensn
