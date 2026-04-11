@@ -65,6 +65,9 @@ public:
   /// Stride in doubles between consecutive angle slots (= num_groups).
   size_t GetStrideSize() const noexcept { return num_groups_and_angles_; }
 
+  /// Bytes in the local psi backing buffer for this FLUDS instance.
+  size_t GetLocalPsiBytes() const noexcept { return num_slots_ * slot_size_ * sizeof(double); }
+
   /// Return the slot base pointer for a local cell face.
   double* GetLocalFacePsiBase(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
   {
@@ -161,12 +164,12 @@ public:
    *
    * \param cell_global_id global ID of the neighbor cell that produced the data
    * \param face_id face index on the neighbor cell
-   * \param psi_data pointer to the received angular flux payload
+   * \param psi_data_bytes pointer to the received angular flux payload bytes
    * \param data_size number of doubles in the payload
    */
   uint64_t StoreIncomingFaceData(uint64_t cell_global_id,
                                 unsigned int face_id,
-                                const double* psi_data,
+                                const std::byte* psi_data_bytes,
                                 size_t data_size);
 
   /// Reset received nonlocal angular fluxes.

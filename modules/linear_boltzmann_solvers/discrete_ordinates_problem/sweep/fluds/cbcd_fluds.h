@@ -74,6 +74,9 @@ public:
   /// Get reference to stream.
   crb::Stream& GetStream() { return stream_; }
 
+  /// Bytes in the local psi backing buffer for this FLUDS instance.
+  size_t GetLocalPsiBytes() const noexcept { return local_psi_data_size_ * sizeof(double); }
+
   /// Allocate buffers asynchronously on the associated stream.
   void AllocateLocalAndSavedPsi();
 

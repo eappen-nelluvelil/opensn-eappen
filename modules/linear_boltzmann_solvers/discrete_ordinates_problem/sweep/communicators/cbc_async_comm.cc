@@ -190,10 +190,7 @@ CBC_AsynchronousCommunicator::ReceiveData()
 
       const size_t num_bytes = data_size * sizeof(double);
       const auto cell_local_id = cbc_fluds_.StoreIncomingFaceData(
-        cell_global_id,
-        face_id,
-        reinterpret_cast<const double*>(data_array.data() + offset),
-        data_size);
+        cell_global_id, face_id, data_array.data() + offset, data_size);
       offset += num_bytes;
 
       cells_who_received_data.push_back(cell_local_id);

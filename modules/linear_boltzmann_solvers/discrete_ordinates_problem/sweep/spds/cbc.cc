@@ -159,11 +159,8 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   BuildTaskGraph();
   BuildLocalFaceTaskGraph();
 
-  // Safe identity assignment: one slot per cell. ComputeMaxNumLocalPsiSlots()
-  // refines this to the optimal counts if called subsequently.
-  max_num_local_cell_psi_slots_ = num_loc_cells;
-  task_slot_ids_.resize(num_loc_cells);
-  std::iota(task_slot_ids_.begin(), task_slot_ids_.end(), std::uint32_t{0});
+  // Safe identity assignment: one slot per local directed face. ComputeMaxNumLocalPsiSlots()
+  // refines this to the optimal face-slot count if called subsequently.
   max_num_local_psi_slots_ = local_face_producer_ranks_.size();
 }
 
@@ -181,21 +178,13 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   const auto num_tasks = static_cast<std::uint32_t>(task_list_.size());
   if (num_tasks == 0)
   {
-    max_num_local_cell_psi_slots_ = 0;
     max_num_local_psi_slots_ = 0;
+    local_face_slot_ids_.clear();
     return;
   }
 
   thread_local detail::ThreadLocalWorkspace workspace;
-
-  detail::DenseHopcroftKarp allocator(num_tasks, task_list_, topo_order_, task_slot_ids_, workspace);
-  const auto cell_result = allocator.Solve();
-  max_num_local_cell_psi_slots_ = cell_result.slot_count;
-
-  if (cell_result.verifier_rejected)
-    opensn::log.LogAllWarning()
-      << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: slot-assignment verifier rejected the planner "
-      << "output; falling back to the identity assignment (one slot per local cell).";
+  detail::BuildCBCReachability(num_tasks, task_list_, topo_order_, workspace);
 
   detail::DenseLocalFaceHopcroftKarp face_allocator(local_face_producer_ranks_,
                                                     local_face_consumer_ranks_,

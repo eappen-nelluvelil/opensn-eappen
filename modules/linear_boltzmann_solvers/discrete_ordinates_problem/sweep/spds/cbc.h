@@ -16,11 +16,11 @@ namespace opensn
 /**
  * Cell-by-cell (CBC) sweep-plane data structure.
  *
- * Extends SPDS with a per-cell task graph and a static slot assignment that
- * maps each local cell to one of \f$s^*\f$ angular-flux storage slots, where
- * \f$s^*\f$ is the provably minimum number computed via Hopcroft-Karp maximum
- * bipartite matching on the task DAG's reuse graph
- * (see detail::DenseHopcroftKarp in cbc_slot_planner.h).
+ * Extends SPDS with a per-cell task graph together with a static local-face
+ * slot assignment that maps each local directed face to one of \f$s^*\f$
+ * angular-flux storage slots, where \f$s^*\f$ is the provably minimum number
+ * computed via Hopcroft-Karp maximum bipartite matching on the local-face
+ * reuse graph (see detail::DenseLocalFaceHopcroftKarp in cbc_slot_planner.h).
  *
  * The task graph encodes the local dependency structure for the given sweep
  * direction \f$\hat\Omega\f$: each task corresponds to one local cell, with
@@ -31,15 +31,16 @@ namespace opensn
  *
  * ## Slot assignment and memory reduction
  *
- * Without slot optimization, each of the \f$n\f$ local cells requires its own
- * angular-flux buffer, yielding \f$O(n \cdot N_{\text{dof}} \cdot G \cdot A)\f$
+ * Without slot optimization, each local directed face requires its own
+ * angular-flux buffer, yielding \f$O(n_f \cdot N_{\text{face-dof}} \cdot G \cdot A)\f$
  * memory. The static slot assignment exploits the observation that once a
- * cell's angular flux has been consumed by all of its successors, the buffer
- * can be reused by a later cell in topological order. The optimal slot count
- * \f$s^* \ll n\f$ yields a proportional reduction in FLUDS memory footprint
- * and improved cache utilization.
+ * face's upwind data has been consumed by its downwind cell, the slot can be
+ * reused by a later local directed face in topological order. The optimal slot
+ * count \f$s^* \ll n_f\f$ yields a proportional reduction in FLUDS memory
+ * footprint and improved cache utilization.
  *
- * The constructor initializes a safe identity assignment (one slot per cell).
+ * The constructor initializes a safe identity assignment (one slot per local
+ * directed face).
  * Calling ComputeMaxNumLocalPsiSlots refines this to the optimal \f$s^*\f$.
  */
 class CBC_SPDS : public SPDS
@@ -53,8 +54,8 @@ public:
    *
    * Build the local dependency graph from face orientations, remove cyclic
    * dependencies if permitted, compute the topological ordering, and
-   * construct the task graph. Initializes the slot assignment to the
-   * identity (one slot per cell); call ComputeMaxNumLocalPsiSlots to
+   * construct the task graph. Initializes the local-face slot assignment to the
+   * identity (one slot per local directed face); call ComputeMaxNumLocalPsiSlots to
    * compute the optimal assignment.
    *
    * \param omega sweep direction vector \f$\hat\Omega\f$
@@ -69,11 +70,11 @@ public:
   /**
    * Compute the optimal slot count and static slot assignment.
    *
-   * Invoke the dense Hopcroft-Karp maximum bipartite matching solver
-   * (detail::DenseHopcroftKarp) on the task DAG to find the minimum
-   * number of angular-flux storage slots \f$s^*\f$ and a conflict-free
-   * mapping \f$\sigma : \text{task} \to \{0, \ldots, s^*{-}1\}\f$.
-   * Updates both max_num_local_psi_slots_ and task_slot_ids_.
+   * Invoke the dense local-face Hopcroft-Karp maximum bipartite matching solver
+   * (detail::DenseLocalFaceHopcroftKarp) on the local directed-face reuse graph
+   * to find the minimum number of angular-flux storage slots \f$s^*\f$ and a
+   * conflict-free mapping \f$\sigma : \text{face-task} \to \{0, \ldots, s^*{-}1\}\f$.
+   * Updates max_num_local_psi_slots_ and local_face_slot_ids_.
    *
    * Uses thread-local scratch buffers to avoid heap allocation on
    * repeated invocations from the same thread.
@@ -82,12 +83,6 @@ public:
 
   /// Optimal number of local-face angular-flux storage slots for this SPDS instance.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
-
-  /// Optimal number of cell-slot angular-flux storage slots for this SPDS instance.
-  std::size_t GetMaxNumLocalCellPsiSlots() const noexcept { return max_num_local_cell_psi_slots_; }
-
-  /// Static cell-slot assignment: \c task_slot_ids_[cell_local_id] = slot index.
-  const std::vector<std::uint32_t>& GetTaskSlotIDs() const noexcept { return task_slot_ids_; }
 
   /// Static local-face slot assignment: \c local_face_slot_ids_[face_task_id] = slot index.
   const std::vector<std::uint32_t>& GetLocalFaceSlotIDs() const noexcept
@@ -135,12 +130,8 @@ private:
   std::vector<std::uint32_t> local_face_producer_ranks_;
   /// Consumer-cell topological rank for each local directed face.
   std::vector<std::uint32_t> local_face_consumer_ranks_;
-  /// Static slot assignment: \c task_slot_ids_[cell_local_id] = slot_id.
-  std::vector<std::uint32_t> task_slot_ids_;
   /// Static slot assignment: \c local_face_slot_ids_[face_task_id] = slot_id.
   std::vector<std::uint32_t> local_face_slot_ids_;
-  /// Minimum number of cell-slot angular-flux storage slots.
-  std::size_t max_num_local_cell_psi_slots_ = 0;
   /// Minimum number of local-face angular-flux storage slots.
   std::size_t max_num_local_psi_slots_ = 0;
   /// Maximum number of nodes on any local directed face.

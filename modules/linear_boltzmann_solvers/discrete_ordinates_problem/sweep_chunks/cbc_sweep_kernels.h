@@ -320,8 +320,8 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
           if (face_data.psi_base != nullptr)
             psi = face_data.psi_base +
                   static_cast<size_t>(face_nodal_mapping->face_node_mapping_[fj]) *
-                    data.groupset_angle_group_stride +
-                  as_ss_idx * data.groupset_group_stride;
+                    data.group_angle_stride +
+                  as_ss_idx * data.group_stride;
           else
             psi = angle_set.PsiBoundary(face.neighbor_id,
                                         direction_num,
@@ -461,8 +461,7 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
 
         double* psi = nullptr;
         if (face_data.psi_base != nullptr)
-          psi = face_data.psi_base + fi * data.groupset_angle_group_stride +
-                as_ss_idx * data.groupset_group_stride;
+          psi = face_data.psi_base + fi * data.group_angle_stride + as_ss_idx * data.group_stride;
         else if (face_data.outgoing_nonlocal_face_info != nullptr)
           psi = data.fluds.NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)
