@@ -109,19 +109,17 @@ public:
     struct IncomingBuffer
     {
       ByteArray data;
-      std::atomic<std::uint32_t> ref_count{0};
-      LockFreeTreiberStack<std::unique_ptr<IncomingBuffer>>* recycler = nullptr;
     };
 
-    IncomingBuffer* buffer = nullptr;
+    std::shared_ptr<IncomingBuffer> buffer;
     const std::byte* data = nullptr;
     size_t num_entries = 0;
 
     IncomingSection() = default;
-    IncomingSection(IncomingBuffer* incoming_buffer,
+    IncomingSection(std::shared_ptr<IncomingBuffer> incoming_buffer,
                     const std::byte* section_data,
                     size_t section_num_entries)
-      : buffer(incoming_buffer), data(section_data), num_entries(section_num_entries)
+      : buffer(std::move(incoming_buffer)), data(section_data), num_entries(section_num_entries)
     {
     }
 
@@ -155,16 +153,9 @@ public:
   private:
     void Release()
     {
-      if (buffer == nullptr)
+      if (not buffer)
         return;
-      const auto old_count = buffer->ref_count.fetch_sub(1, std::memory_order_acq_rel);
-      assert(old_count > 0);
-      if (old_count == 1)
-      {
-        buffer->data.Data().clear();
-        buffer->recycler->Push(std::unique_ptr<IncomingBuffer>(buffer));
-      }
-      buffer = nullptr;
+      buffer.reset();
       data = nullptr;
       num_entries = 0;
     }
@@ -255,7 +246,7 @@ private:
   /// Check whether all angle sets are complete and all sends are retired.
   bool AllWorkComplete() const;
   /// Acquire a receive buffer (recycled or freshly allocated).
-  IncomingSection::IncomingBuffer* AcquireReceiveBuffer(size_t num_bytes);
+  std::shared_ptr<IncomingSection::IncomingBuffer> AcquireReceiveBuffer(size_t num_bytes);
   /// Release all cached and recycled incoming buffers during communicator teardown.
   void CleanupIncomingBuffers();
 

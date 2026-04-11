@@ -164,22 +164,27 @@ CBCD_AsynchronousCommunicator::CleanupIncomingBuffers()
     });
 }
 
-CBCD_AsynchronousCommunicator::IncomingSection::IncomingBuffer*
+std::shared_ptr<CBCD_AsynchronousCommunicator::IncomingSection::IncomingBuffer>
 CBCD_AsynchronousCommunicator::AcquireReceiveBuffer(size_t num_bytes)
 {
-  IncomingSection::IncomingBuffer* recv_buffer = nullptr;
+  std::unique_ptr<IncomingSection::IncomingBuffer> recv_buffer_owner;
   if (not recv_buffer_reuse_cache_.empty())
   {
-    recv_buffer = recv_buffer_reuse_cache_.back().release();
+    recv_buffer_owner = std::move(recv_buffer_reuse_cache_.back());
     recv_buffer_reuse_cache_.pop_back();
   }
   else
-  {
-    recv_buffer = new IncomingSection::IncomingBuffer();
-    recv_buffer->recycler = &recv_buffer_recycler_;
-  }
+    recv_buffer_owner = std::make_unique<IncomingSection::IncomingBuffer>();
 
-  recv_buffer->ref_count.store(0, std::memory_order_relaxed);
+  auto* recycler = &recv_buffer_recycler_;
+  auto recv_buffer = std::shared_ptr<IncomingSection::IncomingBuffer>(
+    recv_buffer_owner.release(),
+    [recycler](IncomingSection::IncomingBuffer* buffer)
+    {
+      buffer->data.Data().clear();
+      recycler->Push(std::unique_ptr<IncomingSection::IncomingBuffer>(buffer));
+    });
+
   if (max_message_bytes_ > 0 and recv_buffer->data.Data().capacity() < max_message_bytes_)
     recv_buffer->data.Data().reserve(max_message_bytes_);
   recv_buffer->data.Data().resize(num_bytes);
@@ -251,11 +256,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 
     const auto* ptr = recv_buffer->data.Data().data();
     const size_t num_sections = Wire::LoadSize(ptr);
-    recv_buffer->ref_count.store(static_cast<std::uint32_t>(num_sections), std::memory_order_release);
     if (num_sections == 0)
     {
-      recv_buffer->data.Data().clear();
-      recv_buffer_recycler_.Push(std::unique_ptr<IncomingSection::IncomingBuffer>(recv_buffer));
       continue;
     }
     for (size_t s = 0; s < num_sections; ++s)
@@ -270,7 +272,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto entry_header = Wire::LoadEntryHeader(ptr);
         ptr += entry_header.data_size * sizeof(double);
       }
-      incoming_mailboxes_[angle_set_id].Push(IncomingSection{recv_buffer, section_data, num_entries});
+      incoming_mailboxes_[angle_set_id].Push(
+        IncomingSection{recv_buffer, section_data, num_entries});
     }
   }
   return received_any;
