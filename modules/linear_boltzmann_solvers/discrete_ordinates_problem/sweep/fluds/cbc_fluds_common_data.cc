@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mesh/cell/cell.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_utils.h"
 #include "framework/utils/error.h"
-#include <boost/unordered/unordered_flat_map.hpp>
 #include <cassert>
 #include <limits>
 #include <map>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -29,9 +30,11 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   const SPDS& spds, const std::vector<CellFaceNodalMapping>& grid_nodal_mappings)
   : FLUDSCommonData(spds, grid_nodal_mappings),
     num_incoming_nonlocal_faces_(0),
-    num_outgoing_nonlocal_faces_(0)
+    num_outgoing_nonlocal_faces_(0),
+    total_local_face_slot_nodes_(dynamic_cast<const CBC_SPDS&>(spds).GetTotalLocalFaceSlotNodes())
 {
   const auto& grid = *spds.GetGrid();
+  const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(spds);
   const auto& face_orientations = spds.GetCellFaceOrientations();
   local_face_slot_offsets_.resize(grid.local_cells.size(), 0);
 
@@ -58,11 +61,14 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   }
 
   incoming_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
+  local_face_slot_node_offsets_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
   incoming_nonlocal_face_local_cells_.reserve(num_incoming_nonlocal_faces);
+  incoming_nonlocal_face_node_offsets_.reserve(num_incoming_nonlocal_faces + 1);
+  incoming_nonlocal_face_node_offsets_.push_back(0);
   outgoing_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
   outgoing_nonlocal_face_peer_indices_by_local_face_.assign(num_local_faces, INVALID_PEER_INDEX);
 
-  boost::unordered_flat_map<int, std::size_t> outgoing_peer_index_by_location;
+  std::unordered_map<int, std::size_t> outgoing_peer_index_by_location;
   const auto& location_successors = spds.GetLocationSuccessors();
   outgoing_peer_index_by_location.reserve(location_successors.size());
   for (std::size_t i = 0; i < location_successors.size(); ++i)
@@ -78,13 +84,32 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       const auto orientation = face_orientations[cell.local_id][f];
 
       if ((not face.has_neighbor) or (face.IsNeighborLocal(&grid)))
+      {
+        if (face.has_neighbor)
+        {
+          const std::uint32_t task_id =
+            (orientation == FaceOrientation::OUTGOING)
+              ? cbc_spds.GetOutgoingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f))
+              : cbc_spds.GetIncomingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+          if (task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID)
+          {
+            const auto slot_id = cbc_spds.GetLocalFaceSlotIDs()[task_id];
+            local_face_slot_node_offsets_by_local_face_[local_face_slot_offset + f] =
+              cbc_spds.GetLocalFaceSlotNodeOffsets()[slot_id];
+          }
+        }
         continue;
+      }
 
       if (orientation == FaceOrientation::INCOMING)
       {
         const auto slot = num_incoming_nonlocal_faces_;
         incoming_nonlocal_face_slots_by_local_face_[local_face_slot_offset + f] = slot;
         incoming_nonlocal_face_local_cells_.push_back(cell.local_id);
+        incoming_nonlocal_face_node_offsets_.push_back(
+          incoming_nonlocal_face_node_offsets_.back() +
+          GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f))
+            .face_node_mapping_.size());
         auto& records =
           incoming_slot_records_by_upstream_location[face.GetNeighborPartitionID(&grid)];
         records.push_back(cell.global_id);
@@ -96,8 +121,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   }
 
   const auto downstream_slot_records = MapAllToAll(incoming_slot_records_by_upstream_location);
-  boost::unordered_flat_map<CellFaceKey, std::size_t, std::hash<CellFaceKey>>
-    downstream_slot_by_face;
+  std::unordered_map<CellFaceKey, std::size_t, std::hash<CellFaceKey>> downstream_slot_by_face;
   downstream_slot_by_face.reserve(num_outgoing_nonlocal_faces_);
   for (const auto& location_records : downstream_slot_records)
   {
@@ -159,6 +183,16 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 }
 
 size_t
+CBC_FLUDSCommonData::GetLocalFaceSlotNodeOffsetByLocalFace(std::uint32_t cell_local_id,
+                                                           unsigned int face_id) const
+{
+  assert(cell_local_id < local_face_slot_offsets_.size());
+  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
+  assert(slot_offset < local_face_slot_node_offsets_by_local_face_.size());
+  return local_face_slot_node_offsets_by_local_face_[slot_offset];
+}
+
+size_t
 CBC_FLUDSCommonData::GetIncomingNonlocalFaceSlotByLocalFace(std::uint32_t cell_local_id,
                                                             unsigned int face_id) const
 {
@@ -193,6 +227,13 @@ CBC_FLUDSCommonData::GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot)
 {
   assert(incoming_face_slot < incoming_nonlocal_face_local_cells_.size());
   return incoming_nonlocal_face_local_cells_[incoming_face_slot];
+}
+
+size_t
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceNodeOffset(size_t incoming_face_slot) const
+{
+  assert(incoming_face_slot < incoming_nonlocal_face_node_offsets_.size());
+  return incoming_nonlocal_face_node_offsets_[incoming_face_slot];
 }
 
 } // namespace opensn
