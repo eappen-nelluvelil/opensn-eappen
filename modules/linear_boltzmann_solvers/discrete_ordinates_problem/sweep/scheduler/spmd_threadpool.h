@@ -9,7 +9,6 @@
 #include <memory>
 #include <mutex>
 #include <new>
-#include <semaphore>
 #include <thread>
 #include <vector>
 
@@ -90,12 +89,17 @@ public:
   {
     AssignTask(std::forward<F>(task));
     const std::size_t n = worker_threads_.size();
-    outstanding_ += n;
     {
+      // outstanding_ must be incremented under the scoped lock
+      // to prevent a race condition where a worker could check the outstanding_
+      // count before it is incremented and then wait indefinitely.
       std::scoped_lock<std::mutex> lock(mutex_);
+      outstanding_ += n;
       for (std::size_t i = 0; i < n; ++i)
         ++epoch_states_[i].request;
     }
+    // Notify all workers that a new epoch has started
+    cv_start_.notify_all();
     WaitAll();
   }
 
