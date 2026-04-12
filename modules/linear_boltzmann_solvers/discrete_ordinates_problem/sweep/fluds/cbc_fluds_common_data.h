@@ -20,6 +20,17 @@ public:
 
   size_t GetNumIncomingNonlocalFaces() const { return num_incoming_nonlocal_faces_; }
 
+  size_t GetTotalLocalFaceSlotNodes() const { return total_local_face_slot_nodes_; }
+
+  size_t GetTotalIncomingNonlocalFaceNodes() const
+  {
+    return incoming_nonlocal_face_node_offsets_.back();
+  }
+
+  /// Return the local-face slot node offset for a local cell-face pair.
+  size_t GetLocalFaceSlotNodeOffsetByLocalFace(std::uint32_t cell_local_id,
+                                               unsigned int face_id) const;
+
   /// Return the incoming nonlocal face slot for a local cell-face pair.
   size_t GetIncomingNonlocalFaceSlotByLocalFace(std::uint32_t cell_local_id,
                                                 unsigned int face_id) const;
@@ -35,6 +46,9 @@ public:
   /// Return the local cell whose task becomes ready by an incoming nonlocal face slot.
   std::uint32_t GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot) const;
 
+  /// Return the incoming nonlocal face node offset for an incoming face slot.
+  size_t GetIncomingNonlocalFaceNodeOffset(size_t incoming_face_slot) const;
+
   /// Marker for cell faces without a nonlocal slot.
   static constexpr size_t INVALID_FACE_SLOT = std::numeric_limits<size_t>::max();
 
@@ -44,12 +58,17 @@ public:
 private:
   size_t num_incoming_nonlocal_faces_;
   size_t num_outgoing_nonlocal_faces_;
+  size_t total_local_face_slot_nodes_;
   /// Prefix offsets into local-face-indexed slot arrays.
   std::vector<size_t> local_face_slot_offsets_;
+  /// Local-face-indexed local face slot node offsets.
+  std::vector<size_t> local_face_slot_node_offsets_by_local_face_;
   /// Local-face-indexed incoming slots.
   std::vector<size_t> incoming_nonlocal_face_slots_by_local_face_;
   /// Slot-indexed local cells unlocked by received payloads.
   std::vector<std::uint32_t> incoming_nonlocal_face_local_cells_;
+  /// Slot-indexed incoming nonlocal face node offsets.
+  std::vector<size_t> incoming_nonlocal_face_node_offsets_;
   /// Local-face-indexed downstream incoming slots.
   std::vector<size_t> outgoing_nonlocal_face_slots_by_local_face_;
   /// Local-face-indexed SPDS-successor peer indices.

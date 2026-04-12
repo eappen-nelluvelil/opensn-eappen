@@ -15,7 +15,6 @@ namespace opensn
 
 class UnknownManager;
 class SpatialDiscretization;
-class Cell;
 
 /// CBC FLUDS.
 class CBC_FLUDS : public FLUDS
@@ -30,15 +29,17 @@ public:
 
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
-            const CBC_FLUDSCommonData& common_data,
-            const UnknownManager& psi_uk_man,
-            const SpatialDiscretization& sdm);
+            const CBC_FLUDSCommonData& common_data);
 
   const CBC_FLUDSCommonData& GetCommonData() const;
 
-  double* UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
+  double* UpwindPsi(std::uint32_t cell_local_id,
+                    unsigned int face_id,
+                    unsigned int face_node_mapped,
+                    size_t as_ss_idx);
 
-  double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
+  double*
+  OutgoingPsi(std::uint32_t cell_local_id, unsigned int face_id, size_t face_node, size_t as_ss_idx);
 
   double* NLUpwindPsi(size_t incoming_face_slot, unsigned int face_node_mapped, size_t as_ss_idx);
 
@@ -52,19 +53,12 @@ public:
 
 protected:
   const CBC_FLUDSCommonData& common_data_;
-  const UnknownManager& psi_uk_man_;
-  const SpatialDiscretization& sdm_;
-  size_t num_angles_in_gs_quadrature_;
-  size_t num_quadrature_local_dofs_;
-  size_t num_local_spatial_dofs_;
   size_t local_psi_data_size_;
-  /// Spatial DOF -> angle-set subset -> group angular-flux storage.
+  /// Local face slot -> face node -> angle-set subset -> group angular-flux storage.
   std::vector<double> local_psi_data_;
   std::vector<double> incoming_nonlocal_psi_;
-  std::vector<size_t> incoming_nonlocal_psi_offsets_;
   std::vector<std::uint32_t> incoming_nonlocal_psi_generation_;
   std::uint32_t incoming_nonlocal_psi_current_generation_ = 1;
-  std::vector<size_t> cell_psi_start_;
 };
 
 } // namespace opensn

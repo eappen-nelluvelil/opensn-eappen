@@ -129,8 +129,9 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
         const double* psi = nullptr;
         if (is_local_face)
-          psi = data.fluds.UpwindPsi(*data.cell_transport_view.FaceNeighbor(f),
-                                     face_nodal_mapping->cell_node_mapping_[fj],
+          psi = data.fluds.UpwindPsi(data.cell_local_id,
+                                     static_cast<unsigned int>(f),
+                                     face_nodal_mapping->face_node_mapping_[fj],
                                      as_ss_idx);
         else if (not is_boundary_face)
           psi = data.fluds.NLUpwindPsi(
@@ -345,7 +346,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
         double* psi = nullptr;
         if (is_local_face)
-          psi = data.fluds.OutgoingPsi(data.cell, i, as_ss_idx);
+          psi = data.fluds.OutgoingPsi(data.cell_local_id, static_cast<unsigned int>(f), fi, as_ss_idx);
         else if (not is_boundary_face)
           psi = data.fluds.NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)
