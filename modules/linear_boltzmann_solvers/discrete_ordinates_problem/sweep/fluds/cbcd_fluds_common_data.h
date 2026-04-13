@@ -6,17 +6,32 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <cstdint>
-#include <map>
+#include <span>
+#include <unordered_map>
+#include <vector>
 
 namespace opensn
 {
 
 class SpatialDiscretization;
 
-/// Common data for CBCD_FLUDS
+/**
+ * Shared CBCD FLUDS metadata.
+ *
+ * Builds and owns the flattened indexing tables used by every CBCD FLUDS instance
+ * associated with one SPDS. The tables translate cell-face-node accesses into
+ * compact local, boundary, and non-local storage indices on both the host and device.
+ */
 class CBCD_FLUDSCommonData : public FLUDSCommonData
 {
 public:
+  /**
+   * Construct the shared CBCD FLUDS metadata for one SPDS.
+   *
+   * \param spds Sweep plane data structure providing the CBC cell and face ordering.
+   * \param grid_nodal_mappings Per-cell face-node mappings from the spatial discretization.
+   * \param sdm Spatial discretization used to enumerate face nodes.
+   */
   CBCD_FLUDSCommonData(const SPDS& spds,
                        const std::vector<CellFaceNodalMapping>& grid_nodal_mappings,
                        const SpatialDiscretization& sdm);
@@ -41,28 +56,63 @@ public:
   /// Get number of outgoing non-local faces.
   std::size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
 
-  /// Get incoming boundary node map.
-  const std::vector<BoundaryNodeInfo>& GetIncomingBoundaryNodeMap() const
+  /// Return grouped incoming-boundary faces.
+  const std::vector<IncomingBoundaryFacePlan>& GetIncomingBoundaryFaces() const
   {
-    return incoming_boundary_node_map_;
+    return incoming_boundary_face_plans_;
   }
 
-  /// Get outgoing boundary node map.
-  const std::map<std::uint64_t, std::vector<BoundaryNodeInfo>>& GetOutgoingBoundaryNodeMap() const
+  /// Return outgoing-boundary nodes for one cell.
+  std::span<const BoundaryNodeInfo> GetOutgoingBoundaryNodes(std::uint64_t cell_local_id) const
   {
-    return cell_to_outgoing_boundary_nodes_;
+    const auto begin = cell_to_outgoing_boundary_node_offsets_[cell_local_id];
+    const auto end = cell_to_outgoing_boundary_node_offsets_[cell_local_id + 1];
+    return {outgoing_boundary_nodes_.data() + begin, end - begin};
   }
 
-  /// Get incoming nonlocal node map.
-  const std::map<std::uint64_t, std::vector<NonlocalNodeInfo>>& GetIncomingNonlocalNodeMap() const
+  /// Return grouped outgoing non-local faces for one cell.
+  std::span<const GroupedOutgoingNonlocalFace>
+  GetOutgoingNonlocalFaces(std::uint64_t cell_local_id) const
   {
-    return cell_to_incoming_nonlocal_nodes_;
+    const auto begin = cell_to_outgoing_nonlocal_face_offsets_[cell_local_id];
+    const auto end = cell_to_outgoing_nonlocal_face_offsets_[cell_local_id + 1];
+    return {outgoing_nonlocal_faces_.data() + begin, end - begin};
   }
 
-  /// Get outgoing nonlocal node map.
-  const std::map<std::uint64_t, std::vector<NonlocalNodeInfo>>& GetOutgoingNonlocalNodeMap() const
+  /// Return grouped incoming non-local faces for one cell.
+  std::span<const GroupedIncomingNonlocalFace>
+  GetIncomingNonlocalFaces(std::uint64_t cell_local_id) const
   {
-    return cell_to_outgoing_nonlocal_nodes_;
+    const auto begin = cell_to_incoming_nonlocal_face_offsets_[cell_local_id];
+    const auto end = cell_to_incoming_nonlocal_face_offsets_[cell_local_id + 1];
+    return {incoming_nonlocal_faces_.data() + begin, end - begin};
+  }
+
+  /// Return the number of local cells represented in the grouped-face tables.
+  std::size_t GetNumLocalCells() const
+  {
+    return cell_to_outgoing_nonlocal_face_offsets_.size() - 1;
+  }
+
+  /// Return the ordered outgoing-locality table used to build communicator queue indices.
+  const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
+
+  /**
+   * Resolve one grouped incoming non-local face from wire identifiers.
+   *
+   * \param cell_global_id Destination cell global ID carried on the wire.
+   * \param face_id Destination face ID carried on the wire.
+   * \return Grouped incoming-face descriptor for the received payload.
+   */
+  const GroupedIncomingNonlocalFace& FindIncomingNonlocalFace(std::uint64_t cell_global_id,
+                                                              unsigned int face_id) const;
+
+  /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
+  std::span<const OutgoingNodeCopy>
+  GetOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
+  {
+    return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset,
+            face.num_node_copies};
   }
 
   /// Get pointer to cell-face-node map on device.
@@ -83,18 +133,31 @@ private:
   size_t num_outgoing_nonlocal_nodes_;
   /// Device pointer to cell-face-node map for angular flux buffer access.
   std::uint64_t* device_cell_face_node_map_;
-  /// Map from incoming face boundary node to indexing metadata.
-  std::vector<BoundaryNodeInfo> incoming_boundary_node_map_;
-  /// Map from cell to outgoing boundary nodes.
-  std::map<std::uint64_t, std::vector<BoundaryNodeInfo>> cell_to_outgoing_boundary_nodes_;
-  /// Map from cell to incoming nonlocal nodes.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_incoming_nonlocal_nodes_;
-  /// Map from cell to outgoing nonlocal nodes.
-  std::map<std::uint64_t, std::vector<NonlocalNodeInfo>> cell_to_outgoing_nonlocal_nodes_;
+  /// Flat grouped incoming-boundary face copy plans.
+  std::vector<IncomingBoundaryFacePlan> incoming_boundary_face_plans_;
+  /// Cell-to-outgoing-boundary-node offset table.
+  std::vector<std::uint32_t> cell_to_outgoing_boundary_node_offsets_;
+  /// Flat outgoing-boundary node list.
+  std::vector<BoundaryNodeInfo> outgoing_boundary_nodes_;
+  /// Cell-to-incoming-face offset table.
+  std::vector<std::uint32_t> cell_to_incoming_nonlocal_face_offsets_;
+  /// Cell-to-outgoing-face offset table.
+  std::vector<std::uint32_t> cell_to_outgoing_nonlocal_face_offsets_;
+  /// Flat grouped incoming nonlocal faces.
+  std::vector<GroupedIncomingNonlocalFace> incoming_nonlocal_faces_;
+  /// Flat grouped outgoing nonlocal faces.
+  std::vector<GroupedOutgoingNonlocalFace> outgoing_nonlocal_faces_;
+  /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
+  std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
+  /// Incoming wire-format face key to grouped-face descriptor lookup.
+  std::unordered_map<IncomingFaceKey, std::uint32_t, IncomingFaceKeyHash> incoming_face_map_;
+  /// Ordered table of distinct outgoing localities.
+  std::vector<int> outgoing_localities_;
 
   /**
-   * Compute cell-face-node map for device angular flux buffer access, and
-   * create auxiliary indexing maps for boundary and non-local nodes for host access.
+   * Build and upload the flattened cell-face-node index map.
+   *
+   * \param sdm Spatial discretization used to enumerate face nodes.
    */
   void CopyFlattenedNodeIndexToDevice(const SpatialDiscretization& sdm);
   /// Deallocate device memory for cell-face-node map.

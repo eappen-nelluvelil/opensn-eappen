@@ -4,13 +4,92 @@
 #pragma once
 
 #include "framework/runtime.h"
+#include "framework/utils/error.h"
 #include <map>
-#include <vector>
-#include <type_traits>
 #include <set>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 namespace opensn
 {
+
+namespace mpi_utils
+{
+
+inline std::string
+MpiErrorMessage(const int ierr)
+{
+  char error_string[MPI_MAX_ERROR_STRING];
+  int error_len = 0;
+  MPI_Error_string(ierr, error_string, &error_len);
+  return {error_string, static_cast<std::size_t>(error_len)};
+}
+
+inline int
+TestSome(std::vector<mpi::Request>& requests, std::vector<int>& indices)
+{
+  if (requests.empty())
+  {
+    indices.clear();
+    return MPI_UNDEFINED;
+  }
+
+  // mpi::Request is a thin MPI_Request wrapper with matching storage.
+  // MPI_Testsome requires a mutable contiguous MPI_Request array.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* reqs = reinterpret_cast<MPI_Request*>(requests.data());
+  indices.resize(requests.size());
+  int outcount = MPI_UNDEFINED;
+  const int ierr = MPI_Testsome(
+    static_cast<int>(requests.size()), reqs, &outcount, indices.data(), MPI_STATUSES_IGNORE);
+  OpenSnLogicalErrorIf(ierr != MPI_SUCCESS, "MPI_Testsome failed: " + MpiErrorMessage(ierr));
+  if (outcount == MPI_UNDEFINED)
+    indices.clear();
+  else
+    indices.resize(static_cast<std::size_t>(outcount));
+  return outcount;
+}
+
+inline int
+TestSome(std::vector<mpi::Request>& requests,
+         std::vector<int>& indices,
+         std::vector<mpi::Status>& statuses)
+{
+  if (requests.empty())
+  {
+    indices.clear();
+    statuses.clear();
+    return MPI_UNDEFINED;
+  }
+
+  // mpi::Request is a thin MPI_Request wrapper with matching storage.
+  // MPI_Testsome requires a mutable contiguous MPI_Request array.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  auto* reqs = reinterpret_cast<MPI_Request*>(requests.data());
+  indices.resize(requests.size());
+  std::vector<MPI_Status> mpi_statuses(requests.size());
+  int outcount = MPI_UNDEFINED;
+  const int ierr = MPI_Testsome(
+    static_cast<int>(requests.size()), reqs, &outcount, indices.data(), mpi_statuses.data());
+  OpenSnLogicalErrorIf(ierr != MPI_SUCCESS, "MPI_Testsome failed: " + MpiErrorMessage(ierr));
+  if (outcount == MPI_UNDEFINED)
+  {
+    indices.clear();
+    statuses.clear();
+  }
+  else
+  {
+    indices.resize(static_cast<std::size_t>(outcount));
+    statuses.clear();
+    statuses.reserve(static_cast<std::size_t>(outcount));
+    for (int i = 0; i < outcount; ++i)
+      statuses.emplace_back(mpi_statuses[static_cast<std::size_t>(i)]);
+  }
+  return outcount;
+}
+
+} // namespace mpi_utils
 
 /**
  * Given each location's local size (of items), builds a vector (dimension comm-size plus 1) of

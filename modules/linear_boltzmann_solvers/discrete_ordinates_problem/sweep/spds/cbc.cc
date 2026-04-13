@@ -190,7 +190,7 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
     return;
   }
 
-  thread_local detail::ThreadLocalWorkspace workspace;
+  static thread_local detail::ThreadLocalWorkspace workspace;
   detail::BuildReachability(num_tasks, task_list_, topo_order_, workspace);
 
   detail::LocalFaceHopcroftKarp face_slot_allocator(local_face_producer_ranks_,

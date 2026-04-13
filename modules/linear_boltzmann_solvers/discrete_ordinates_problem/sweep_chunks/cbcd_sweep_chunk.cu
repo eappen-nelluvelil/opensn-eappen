@@ -8,6 +8,8 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <set>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -27,43 +29,131 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetMinCellDOFCount()),
     problem_(problem)
 {
+  std::vector<CBCD_FLUDS*> fluds_list;
   for (auto& as : *(groupset.angle_agg))
   {
     auto* angle_set = static_cast<CBCD_AngleSet*>(as.get());
     auto* fluds = static_cast<CBCD_FLUDS*>(&(angle_set->GetFLUDS()));
     angle_sets_.push_back(angle_set);
-    fluds_list_.push_back(fluds);
-    streams_list_.push_back(angle_set->GetStream());
+    fluds_list.push_back(fluds);
+
     gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(problem_, groupset_, *angle_set, *fluds);
-    kernel_args_list_.push_back(args);
-    unsigned int stride_size =
+    const auto stride_size =
       gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
-    unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);
-    unsigned int block_size_y = gpu_kernel::threshold / block_size_x;
-    unsigned int grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
-    block_sizes_.push_back(::dim3(block_size_x, block_size_y));
-    grid_size_x_list_.push_back(grid_size_x);
+    const auto block_size_x = std::min(stride_size, gpu_kernel::threshold);
+    const auto block_size_y = gpu_kernel::threshold / block_size_x;
+    const auto grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
+    cached_params_.push_back({args,
+                              ::dim3{block_size_x, block_size_y},
+                              grid_size_x,
+                              fluds,
+                              fluds->GetSavedAngularFluxDevicePointer()});
+  }
+
+  if (not angle_sets_.empty())
+  {
+    std::set<int> outgoing_dest_set;
+    for (const auto* fluds : fluds_list)
+    {
+      const auto& outgoing_localities = fluds->GetCommonData().GetOutgoingLocalities();
+      outgoing_dest_set.insert(outgoing_localities.begin(), outgoing_localities.end());
+    }
+    std::vector<int> outgoing_dest_localities(outgoing_dest_set.begin(), outgoing_dest_set.end());
+    std::unordered_map<int, std::size_t> dest_to_queue_index;
+    dest_to_queue_index.reserve(outgoing_dest_localities.size());
+    for (std::size_t queue_index = 0; queue_index < outgoing_dest_localities.size(); ++queue_index)
+      dest_to_queue_index.emplace(outgoing_dest_localities[queue_index], queue_index);
+
+    std::vector<std::size_t> outgoing_shard_capacities(
+      outgoing_dest_localities.size() * angle_sets_.size(), 0);
+    std::vector<std::size_t> incoming_mailbox_capacities(angle_sets_.size(), 0);
+    std::unordered_map<int, std::vector<std::size_t>> source_as_section_bytes;
+    for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
+    {
+      const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
+      const auto& common_data = fluds_list[as_ss_idx]->GetCommonData();
+      for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
+           ++cell_local_id)
+      {
+        for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
+        {
+          const auto locality = common_data.GetOutgoingLocalities()[face_info.dest_slot];
+          const auto queue_index = dest_to_queue_index.at(locality);
+          ++outgoing_shard_capacities[queue_index * angle_sets_.size() + as_ss_idx];
+        }
+        for (const auto& face_info : common_data.GetIncomingNonlocalFaces(cell_local_id))
+        {
+          if (face_info.num_nodes == 0)
+            continue;
+          ++incoming_mailbox_capacities[as_ss_idx];
+          auto& per_as_bytes = source_as_section_bytes[face_info.source_partition];
+          if (per_as_bytes.empty())
+            per_as_bytes.assign(angle_sets_.size(), 0);
+          per_as_bytes[as_ss_idx] +=
+            sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t) +
+            static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
+        }
+      }
+    }
+
+    std::size_t max_message_bytes = 0;
+    for (const auto& [_, per_as_bytes] : source_as_section_bytes)
+    {
+      std::size_t msg_size_in_bytes = sizeof(std::size_t);
+      for (const auto& section_bytes : per_as_bytes)
+      {
+        if (section_bytes == 0)
+          continue;
+        msg_size_in_bytes += 2 * sizeof(std::size_t) + section_bytes;
+      }
+      max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
+    }
+
+    std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
+    async_comm_ =
+      std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
+                                                      angle_sets_.front()->GetCommunicatorSet(),
+                                                      outgoing_dest_localities,
+                                                      outgoing_shard_capacities,
+                                                      incoming_mailbox_capacities,
+                                                      max_message_bytes);
+    for (auto* angle_set : angle_sets_)
+      angle_set->SetCommunicator(*async_comm_);
+    for (auto* fluds : fluds_list)
+      fluds->InitializeQueueIndices(*async_comm_);
   }
 }
 
+CBCDSweepChunk::~CBCDSweepChunk()
+{
+  StopCommunicator();
+}
+
 void
-CBCDSweepChunk::Sweep(const std::vector<std::uint32_t>& cell_local_ids, size_t angle_set_id)
+CBCDSweepChunk::StartCommunicator()
+{
+  if (async_comm_)
+    async_comm_->Start();
+}
+
+void
+CBCDSweepChunk::StopCommunicator()
+{
+  if (async_comm_)
+    async_comm_->Stop();
+}
+
+void
+CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id)
 {
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
-  auto* fluds = fluds_list_[angle_set_id];
-  auto* device_saved_psi = fluds->GetSavedAngularFluxDevicePointer();
-  const auto& stream = streams_list_[angle_set_id];
-  auto& host_cell_local_ids = fluds->GetLocalCellIDs();
-  std::copy(cell_local_ids.begin(), cell_local_ids.end(), host_cell_local_ids.begin());
-  const auto& args = kernel_args_list_[angle_set_id];
-  ::dim3 block_size = block_sizes_[angle_set_id];
-  unsigned int num_ready_cells = static_cast<unsigned int>(cell_local_ids.size());
-  unsigned int grid_size_x = grid_size_x_list_[angle_set_id];
-  unsigned int grid_size_y = (num_ready_cells + block_size.y - 1) / block_size.y;
-  ::dim3 grid_size{grid_size_x, grid_size_y};
-  gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, block_size, 0, stream>>>(
-    args, host_cell_local_ids.data(), num_ready_cells, device_saved_psi);
+  auto& ck = cached_params_[angle_set_id];
+  auto& stream = angle_sets_[angle_set_id]->GetStream();
+  const auto grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
+  ::dim3 grid_size{ck.grid_size_x, grid_size_y};
+  gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
+    ck.args, ck.fluds->GetLocalCellIDs().data(), num_ready_cells, ck.device_saved_psi);
 }
 
 } // namespace opensn

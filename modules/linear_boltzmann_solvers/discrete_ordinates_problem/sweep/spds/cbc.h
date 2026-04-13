@@ -13,43 +13,73 @@
 namespace opensn
 {
 
+/**
+ * Cell-by-cell sweep plane data structure.
+ *
+ * Stores the local CBC task graph together with the precomputed metadata needed to
+ * allocate and index minimally sized local-face angular-flux storage.
+ * Each local cell contributes one task. Local directed faces are numbered separately
+ * so that incoming and outgoing local-face accesses can be mapped onto a compact slot bank.
+ */
 class CBC_SPDS : public SPDS
 {
 public:
+  /// Value returned when a local face does not participate in the requested face-task map.
   static constexpr std::uint32_t INVALID_LOCAL_FACE_TASK_ID =
     std::numeric_limits<std::uint32_t>::max();
 
   /**
-   * Constructs a cell-by-cell sweep-plane data strcture (SPDS) with the given direction and grid.
+   * Construct the CBC sweep plane data structure for one angular direction.
    *
-   * \param omega The angular direction vector.
-   * \param grid Reference to the grid.
-   * \param allow_cycles Whether cycles are allowed in the local sweep dependency graph.
+   * \param omega Angular sweep direction.
+   * \param grid Grid on which the local sweep graph is built.
+   * \param allow_cycles Allow cycles in the local dependency graph when the mesh or
+   * sweep ordering requires them.
    */
   CBC_SPDS(const Vector3& omega, const std::shared_ptr<MeshContinuum>& grid, bool allow_cycles);
 
-  /// Returns the cell-by-cell task list.
+  /// Return the local CBC task list.
   const std::vector<Task>& GetTaskList() const noexcept;
 
   /**
-   * Compute the maximum number of local cell-face psi slots and static cell-face slot assignment.
+   * Compute the minimum number of reusable local-face psi slots and assign faces to slots.
+   *
+   * Builds the local-face reuse relation implied by the task DAG and records a
+   * static slot assignment that is safe for every admissible CBC sweep execution.
    */
   void ComputeMaxNumLocalPsiSlots();
 
+  /// Return the number of local-face psi slots required by the static assignment.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
 
+  /// Return the per-local-face slot assignment indexed by local face-task ID.
   const std::vector<std::uint32_t>& GetLocalFaceSlotIDs() const noexcept
   {
     return local_face_slot_ids_;
   }
 
+  /// Return the maximum number of nodes over all local directed faces.
   std::size_t GetMaxLocalFaceNodeCount() const noexcept { return max_local_face_node_count_; }
 
-  /// Returns the local directed-face task ID for an outgoing local face.
+  /**
+   * Return the local directed-face task ID for an outgoing local face.
+   *
+   * \param cell_local_id Local cell ID.
+   * \param face_id Local face ID on the cell.
+   * \return Local face-task ID, or INVALID_LOCAL_FACE_TASK_ID when the face is not
+   * an outgoing local face in the CBC ordering.
+   */
   std::uint32_t GetOutgoingLocalFaceTaskID(std::uint32_t cell_local_id,
                                            unsigned int face_id) const noexcept;
 
-  /// Returns the local directed-face task ID for an incoming local face.
+  /**
+   * Return the local directed-face task ID for an incoming local face.
+   *
+   * \param cell_local_id Local cell ID.
+   * \param face_id Local face ID on the cell.
+   * \return Local face-task ID, or INVALID_LOCAL_FACE_TASK_ID when the face is not
+   * an incoming local face in the CBC ordering.
+   */
   std::uint32_t GetIncomingLocalFaceTaskID(std::uint32_t cell_local_id,
                                            unsigned int face_id) const noexcept;
 
@@ -57,12 +87,16 @@ public:
 
 private:
   /**
-   * Buid the task graph from mesh face orientations.
-   *
-   * Populate task_list_ with one Task per local cell, recording successor
-   * relationships based on face orientation relative to the sweep direction.
+   * Build the per-cell CBC task graph from the face orientations.
    */
   void BuildTaskGraph();
+
+  /**
+   * Build the local directed-face indexing used by CBC and CBCD FLUDS.
+   *
+   * Enumerates incoming and outgoing local faces, records their producer/consumer
+   * task ranks, and prepares the compact metadata consumed by the slot planner.
+   */
   void BuildLocalFaceTaskGraph();
 
   /// Topological ordering of local cell IDs: topo_order_[rank] = cell_local_id.
