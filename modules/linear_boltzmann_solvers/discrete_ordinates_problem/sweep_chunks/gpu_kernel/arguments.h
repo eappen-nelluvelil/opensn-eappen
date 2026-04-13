@@ -75,8 +75,7 @@ struct Arguments
     // Copy angleset data to GPU
     directions = angle_set.GetDeviceAngleIndices();
     angleset_size = angle_set.GetNumAngles();
-    if constexpr (t == SweepType::AAH)
-      boundary_offset = angle_set.GetDeviceBoudnaryOffset();
+    boundary_offset = angle_set.GetDeviceBoudnaryOffset();
     // Copy FLUDS data to GPU and retrieve the pointer set
     flud_data = fluds.GetDevicePointerSet();
     flud_index = fluds.GetCommonData().GetDeviceIndex();
