@@ -111,7 +111,8 @@ DiscreteOrdinatesProblem::CreateCBCD_FLUDSCommonData()
     for (const auto& spds : spds_list)
     {
       quadrature_fluds_commondata_map_[quadrature].push_back(
-        std::make_unique<CBCD_FLUDSCommonData>(*spds, grid_nodal_mappings_, *discretization_));
+        std::make_unique<CBCD_FLUDSCommonData>(
+          *spds, grid_nodal_mappings_, *discretization_, sweep_boundaries_));
     }
   }
 }

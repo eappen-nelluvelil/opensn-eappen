@@ -54,7 +54,7 @@ public:
   bool HasAngleIndex(std::uint32_t angle_index) const;
 
   /// Update following angle sets.
-  void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets);
+  virtual void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets);
 
   virtual AsynchronousCommunicator* GetCommunicator()
   {
