@@ -7,7 +7,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <cstdint>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace opensn
@@ -62,6 +61,15 @@ public:
     return incoming_boundary_face_plans_;
   }
 
+  /// Return grouped incoming non-local face lookup records for one source locality slot.
+  std::span<const IncomingFaceLookup> GetIncomingFaceLookupsBySource(
+    std::size_t source_slot) const
+  {
+    const auto begin = source_to_incoming_face_offsets_[source_slot];
+    const auto end = source_to_incoming_face_offsets_[source_slot + 1];
+    return {incoming_face_lookups_by_source_.data() + begin, end - begin};
+  }
+
   /// Return outgoing-boundary nodes for one cell.
   std::span<const BoundaryNodeInfo> GetOutgoingBoundaryNodes(std::uint64_t cell_local_id) const
   {
@@ -97,14 +105,19 @@ public:
   /// Return the ordered outgoing-locality table used to build communicator queue indices.
   const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
 
+  /// Return the ordered incoming source-locality table.
+  const std::vector<int>& GetIncomingSourcePartitions() const { return incoming_source_partitions_; }
+
   /**
    * Resolve one grouped incoming non-local face from wire identifiers.
    *
+   * \param source_slot Source-locality slot for the sending partition.
    * \param cell_global_id Destination cell global ID carried on the wire.
    * \param face_id Destination face ID carried on the wire.
    * \return Grouped incoming-face descriptor for the received payload.
    */
-  const GroupedIncomingNonlocalFace& FindIncomingNonlocalFace(std::uint64_t cell_global_id,
+  const GroupedIncomingNonlocalFace& FindIncomingNonlocalFace(std::uint32_t source_slot,
+                                                              std::uint64_t cell_global_id,
                                                               unsigned int face_id) const;
 
   /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
@@ -149,10 +162,13 @@ private:
   std::vector<GroupedOutgoingNonlocalFace> outgoing_nonlocal_faces_;
   /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
   std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
-  /// Incoming wire-format face key to grouped-face descriptor lookup.
-  std::unordered_map<IncomingFaceKey, std::uint32_t, IncomingFaceKeyHash> incoming_face_map_;
   /// Ordered table of distinct outgoing localities.
   std::vector<int> outgoing_localities_;
+  /// Ordered table of incoming source localities.
+  std::vector<int> incoming_source_partitions_;
+  /// Source-major incoming grouped-face lookup spans.
+  std::vector<std::uint32_t> source_to_incoming_face_offsets_;
+  std::vector<IncomingFaceLookup> incoming_face_lookups_by_source_;
 
   /**
    * Build and upload the flattened cell-face-node index map.

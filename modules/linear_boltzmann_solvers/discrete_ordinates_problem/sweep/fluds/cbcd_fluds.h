@@ -141,12 +141,14 @@ public:
   /**
    * Scatter one received non-local face payload into the mapped incoming buffer.
    *
+   * \param source_slot Source-locality slot for the sending partition.
    * \param cell_global_id Destination cell global ID carried on the wire.
    * \param face_id Destination face ID carried on the wire.
    * \param psi_data Packed payload bytes.
    * \return Local cell ID whose dependency count should be updated.
    */
-  std::uint32_t ScatterReceivedFaceData(std::uint64_t cell_global_id,
+  std::uint32_t ScatterReceivedFaceData(std::uint32_t source_slot,
+                                        std::uint64_t cell_global_id,
                                         unsigned int face_id,
                                         const std::byte* psi_data);
 

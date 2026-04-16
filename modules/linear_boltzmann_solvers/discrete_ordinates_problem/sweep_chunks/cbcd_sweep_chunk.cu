@@ -59,11 +59,14 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       outgoing_dest_set.insert(outgoing_localities.begin(), outgoing_localities.end());
     }
     std::vector<int> outgoing_dest_localities(outgoing_dest_set.begin(), outgoing_dest_set.end());
+    std::vector<std::vector<int>> incoming_source_partitions_by_angle_set;
+    incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     std::unordered_map<int, std::vector<std::size_t>> source_as_section_bytes;
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
     {
       const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
       const auto& common_data = fluds_list[as_ss_idx]->GetCommonData();
+      incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -71,7 +74,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
         {
           if (face_info.num_nodes == 0)
             continue;
-          auto& per_as_bytes = source_as_section_bytes[face_info.source_partition];
+          const auto source_partition =
+            common_data.GetIncomingSourcePartitions()[face_info.source_slot];
+          auto& per_as_bytes = source_as_section_bytes[source_partition];
           if (per_as_bytes.empty())
             per_as_bytes.assign(angle_sets_.size(), 0);
           per_as_bytes[as_ss_idx] +=
@@ -98,6 +103,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     async_comm_ =
       std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
                                                       angle_sets_.front()->GetCommunicatorSet(),
+                                                      incoming_source_partitions_by_angle_set,
                                                       outgoing_dest_localities,
                                                       max_message_bytes);
     for (auto* angle_set : angle_sets_)

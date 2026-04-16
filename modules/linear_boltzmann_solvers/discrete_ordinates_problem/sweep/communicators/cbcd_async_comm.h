@@ -129,6 +129,8 @@ public:
 
     /// Shared owning buffer for the aggregate message.
     std::shared_ptr<IncomingBuffer> buffer;
+    /// Source-slot index for the receiving angle set.
+    std::uint32_t source_slot = 0;
     /// First byte of the section payload within `buffer`.
     const std::byte* data = nullptr;
     /// Number of packed face entries in this section.
@@ -138,14 +140,19 @@ public:
      * Construct one received section view.
      *
      * \param incoming_buffer Shared backing buffer for the full aggregate message.
+     * \param incoming_source_slot Source-slot for the sending partition.
      * \param section_data First byte of the section payload.
      * \param section_num_entries Number of packed face entries in the section.
      */
     IncomingSection() = default;
     IncomingSection(std::shared_ptr<IncomingBuffer> incoming_buffer,
+                    std::uint32_t incoming_source_slot,
                     const std::byte* section_data,
                     std::size_t section_num_entries)
-      : buffer(std::move(incoming_buffer)), data(section_data), num_entries(section_num_entries)
+      : buffer(std::move(incoming_buffer)),
+        source_slot(incoming_source_slot),
+        data(section_data),
+        num_entries(section_num_entries)
     {
     }
 
@@ -161,11 +168,13 @@ public:
    *
    * \param angle_sets Pointers to all anglesets serviced by this communicator.
    * \param comm_set MPI communicator set for tag allocation.
+   * \param incoming_source_partitions Per-angle-set ordered incoming source-locality tables.
    * \param outgoing_dest_localities Ordered outgoing destination-locality table.
    * \param max_message_bytes Maximum bytes for aggregate send message.
    */
   CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
                                 const MPICommunicatorSet& comm_set,
+                                const std::vector<std::vector<int>>& incoming_source_partitions,
                                 const std::vector<int>& outgoing_dest_localities,
                                 std::size_t max_message_bytes);
 

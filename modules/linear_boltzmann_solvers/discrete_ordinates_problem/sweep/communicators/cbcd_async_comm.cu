@@ -71,7 +71,9 @@ struct CBCD_AsynchronousCommunicator::Impl
   int mpi_tag;
   int my_rank = 0;
   const mpi::Communicator* recv_comm = nullptr;
+  std::vector<int> source_partitions;
   std::vector<int> source_ranks;
+  std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set;
   std::vector<NeighborQueue> outgoing_queues;
   std::size_t num_outgoing_stacks_per_queue = 1;
   std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> outgoing_stacks;
@@ -95,10 +97,12 @@ struct CBCD_AsynchronousCommunicator::Impl
 CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
   const MPICommunicatorSet& comm_set,
+  const std::vector<std::vector<int>>& incoming_source_partitions,
   const std::vector<int>& outgoing_dest_localities,
   const size_t max_message_bytes)
   : impl_(std::make_unique<Impl>(comm_set, angle_sets.size(), max_message_bytes))
 {
+  assert(incoming_source_partitions.size() == angle_sets.size());
   impl_->my_rank = opensn::mpi_comm.rank();
   std::set<int> sources;
   for (std::size_t i = 0; i < impl_->num_angle_sets; ++i)
@@ -110,9 +114,23 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   }
   const std::size_t num_sources = sources.size();
   impl_->recv_comm = &impl_->comm_set.LocICommunicator(impl_->my_rank);
+  impl_->source_partitions.reserve(num_sources);
   impl_->source_ranks.reserve(num_sources);
   for (const int source : sources)
+  {
+    impl_->source_partitions.push_back(source);
     impl_->source_ranks.push_back(impl_->comm_set.MapIonJ(source, impl_->my_rank));
+  }
+  impl_->source_partition_to_slot_by_angle_set.resize(angle_sets.size());
+  for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
+  {
+    auto& source_partition_to_slot = impl_->source_partition_to_slot_by_angle_set[angle_set_id];
+    const auto& source_partitions = incoming_source_partitions[angle_set_id];
+    source_partition_to_slot.reserve(source_partitions.size());
+    for (std::size_t source_slot = 0; source_slot < source_partitions.size(); ++source_slot)
+      source_partition_to_slot.emplace(source_partitions[source_slot],
+                                       static_cast<std::uint32_t>(source_slot));
+  }
   impl_->num_outgoing_stacks_per_queue = std::max<std::size_t>(1, impl_->num_angle_sets);
   impl_->recv_buffer_pool_state = std::make_shared<Impl::ReceiveBufferPoolState>();
 
@@ -406,8 +424,10 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
 
   bool received_any = false;
-  for (const int source_rank : impl_->source_ranks)
+  for (std::size_t source_index = 0; source_index < impl_->source_ranks.size(); ++source_index)
   {
+    const int source_rank = impl_->source_ranks[source_index];
+    const int source_partition = impl_->source_partitions[source_index];
     mpi::Status status;
     while (impl_->recv_comm->iprobe(source_rank, impl_->mpi_tag, status))
     {
@@ -425,6 +445,10 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto angle_set_id = Wire::LoadSize(ptr);
         const auto num_entries = Wire::LoadSize(ptr);
         assert(angle_set_id < impl_->num_angle_sets);
+        const auto source_slot_it =
+          impl_->source_partition_to_slot_by_angle_set[angle_set_id].find(source_partition);
+        assert(source_slot_it !=
+               impl_->source_partition_to_slot_by_angle_set[angle_set_id].end());
 
         const auto* section_data = ptr;
         for (std::size_t e = 0; e < num_entries; ++e)
@@ -433,7 +457,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
           ptr += entry_header.data_size * sizeof(double);
         }
         impl_->incoming_mailboxes[angle_set_id]->Push(
-          IncomingSection{recv_buffer, section_data, num_entries});
+          IncomingSection{recv_buffer, source_slot_it->second, section_data, num_entries});
       }
     }
   }

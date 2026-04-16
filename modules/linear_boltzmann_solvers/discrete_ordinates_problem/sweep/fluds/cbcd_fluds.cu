@@ -372,11 +372,12 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 }
 
 std::uint32_t
-CBCD_FLUDS::ScatterReceivedFaceData(std::uint64_t cell_global_id,
+CBCD_FLUDS::ScatterReceivedFaceData(const std::uint32_t source_slot,
+                                    std::uint64_t cell_global_id,
                                     unsigned int face_id,
                                     const std::byte* psi_data)
 {
-  const auto& face_info = common_data_.FindIncomingNonlocalFace(cell_global_id, face_id);
+  const auto& face_info = common_data_.FindIncomingNonlocalFace(source_slot, cell_global_id, face_id);
   double* dst = incoming_nonlocal_psi_.data() +
                 static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   const std::size_t face_bytes =

@@ -305,7 +305,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
         const auto entry_header = CBCD_AsynchronousCommunicator::Wire::LoadEntryHeader(ptr);
 
         const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-          entry_header.cell_global_id, entry_header.face_id, ptr);
+          section.source_slot, entry_header.cell_global_id, entry_header.face_id, ptr);
         ptr += entry_header.data_size * sizeof(double);
         if (--remaining_deps_[cell_local_id] == 0)
           cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)

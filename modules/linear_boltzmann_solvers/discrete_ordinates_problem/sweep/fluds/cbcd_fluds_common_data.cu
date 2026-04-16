@@ -7,6 +7,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caribou/main.hpp"
+#include <algorithm>
 #include <cstring>
 #include <unordered_map>
 
@@ -42,10 +43,18 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   cell_to_outgoing_nonlocal_face_offsets_.assign(num_local_cells + 1, 0);
 
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
-  incoming_face_map_.reserve(total_face_nodes);
+  std::unordered_map<int, std::uint32_t> source_partition_to_slot;
   outgoing_localities_.reserve(num_local_cells);
+  incoming_source_partitions_.reserve(num_local_cells);
   outgoing_boundary_nodes_.reserve(total_face_nodes);
   outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
+  struct SourceLookupBuild
+  {
+    std::uint32_t source_slot = 0;
+    IncomingFaceLookup lookup;
+  };
+  std::vector<SourceLookupBuild> incoming_lookup_build;
+  incoming_lookup_build.reserve(total_face_nodes);
 
   const auto update_cell_offsets = [this](const std::uint64_t cell_local_id)
   {
@@ -105,14 +114,20 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
                 static_cast<int>(incoming_nonlocal_faces_.size() -
                                  cell_to_incoming_nonlocal_face_offsets_[cell.local_id]);
               auto& grouped_face = incoming_nonlocal_faces_.emplace_back();
+              const int source_partition = grid.cells[face.neighbor_id].partition_id;
+              auto [source_it, inserted] = source_partition_to_slot.try_emplace(
+                source_partition, static_cast<std::uint32_t>(incoming_source_partitions_.size()));
+              if (inserted)
+                incoming_source_partitions_.push_back(source_partition);
               grouped_face.cell_local_id = static_cast<std::uint32_t>(cell.local_id);
               grouped_face.base_storage_index =
                 static_cast<std::uint32_t>(num_incoming_nonlocal_nodes_);
-              grouped_face.source_partition = grid.cells[face.neighbor_id].partition_id;
-              incoming_face_map_.emplace(
-                IncomingFaceKey{cell.global_id, static_cast<unsigned int>(f)},
-                static_cast<std::uint32_t>(cell_to_incoming_nonlocal_face_offsets_[cell.local_id] +
-                                           grouped_face_index));
+              grouped_face.source_slot = source_it->second;
+              incoming_lookup_build.push_back(
+                {grouped_face.source_slot,
+                 {cell.global_id,
+                  static_cast<unsigned int>(f),
+                  static_cast<std::uint32_t>(incoming_nonlocal_faces_.size() - 1)}});
               ++num_incoming_nonlocal_faces_;
             }
 
@@ -200,11 +215,11 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             node_index = CBCD_NodeIndex(num_outgoing_boundary_nodes_, is_outgoing_face);
             outgoing_boundary_nodes_.emplace_back(
-              BoundaryNodeInfo{cell.local_id,
+              BoundaryNodeInfo{face.neighbor_id,
+                               static_cast<std::uint32_t>(cell.local_id),
                                static_cast<unsigned int>(f),
-                               fn,
-                               static_cast<std::uint64_t>(num_outgoing_boundary_nodes_),
-                               face.neighbor_id});
+                               static_cast<std::uint32_t>(num_outgoing_boundary_nodes_),
+                               static_cast<std::uint16_t>(fn)});
             ++num_outgoing_boundary_nodes_;
           }
         }
@@ -220,6 +235,29 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
     cell_offsets_ptr[2 * cell.local_id + 1] = num_cell_nodes;
     current_index_offset += num_cell_nodes;
   }
+
+  source_to_incoming_face_offsets_.assign(incoming_source_partitions_.size() + 1, 0);
+  for (const auto& build : incoming_lookup_build)
+    ++source_to_incoming_face_offsets_[build.source_slot + 1];
+  for (std::size_t i = 0; i < incoming_source_partitions_.size(); ++i)
+    source_to_incoming_face_offsets_[i + 1] += source_to_incoming_face_offsets_[i];
+  incoming_face_lookups_by_source_.resize(incoming_lookup_build.size());
+  auto source_write_offsets = source_to_incoming_face_offsets_;
+  for (const auto& build : incoming_lookup_build)
+    incoming_face_lookups_by_source_[source_write_offsets[build.source_slot]++] = build.lookup;
+  for (std::size_t source_slot = 0; source_slot < incoming_source_partitions_.size(); ++source_slot)
+  {
+    const auto begin = source_to_incoming_face_offsets_[source_slot];
+    const auto end = source_to_incoming_face_offsets_[source_slot + 1];
+    std::sort(incoming_face_lookups_by_source_.begin() + begin,
+              incoming_face_lookups_by_source_.begin() + end,
+              [](const IncomingFaceLookup& lhs, const IncomingFaceLookup& rhs)
+              {
+                return std::pair<std::uint64_t, unsigned int>{lhs.cell_global_id, lhs.face_id} <
+                       std::pair<std::uint64_t, unsigned int>{rhs.cell_global_id, rhs.face_id};
+              });
+  }
+
   if (local_map.empty())
     return;
   crb::HostVector<std::uint64_t> host_mem(local_map.begin(), local_map.end());

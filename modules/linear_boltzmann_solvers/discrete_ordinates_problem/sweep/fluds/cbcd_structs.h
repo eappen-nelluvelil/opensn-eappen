@@ -176,11 +176,11 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
  */
 struct BoundaryNodeInfo
 {
-  std::uint64_t cell_local_id;
-  unsigned int face_id;
-  size_t face_node;
-  std::uint64_t storage_index;
-  std::uint64_t boundary_id;
+  std::uint64_t boundary_id = 0;
+  std::uint32_t cell_local_id = 0;
+  unsigned int face_id = 0;
+  std::uint32_t storage_index = 0;
+  std::uint16_t face_node = 0;
 };
 
 /// Grouped incoming-boundary face copy plan.
@@ -194,35 +194,21 @@ struct IncomingBoundaryFacePlan
   std::uint16_t num_nodes = 0;
 };
 
-/**
- * Receive-side key for one incoming non-local face.
- */
-struct IncomingFaceKey
-{
-  std::uint64_t cell_global_id = 0;
-  unsigned int face_id = 0;
-
-  bool operator==(const IncomingFaceKey& other) const = default;
-};
-
-/// Hash for IncomingFaceKey
-struct IncomingFaceKeyHash
-{
-  std::size_t operator()(const IncomingFaceKey& key) const noexcept
-  {
-    const auto h0 = std::hash<std::uint64_t>{}(key.cell_global_id);
-    const auto h1 = std::hash<unsigned int>{}(key.face_id);
-    return h0 ^ (h1 + 0x9e3779b97f4a7c15ULL + (h0 << 6) + (h0 >> 2));
-  }
-};
-
 /// Grouped incoming non-local face.
 struct GroupedIncomingNonlocalFace
 {
   std::uint32_t cell_local_id = 0;
   std::uint32_t base_storage_index = 0;
-  int source_partition = 0;
+  std::uint32_t source_slot = 0;
   std::uint16_t num_nodes = 0;
+};
+
+/// Source-partition-local incoming face lookup record.
+struct IncomingFaceLookup
+{
+  std::uint64_t cell_global_id = 0;
+  unsigned int face_id = 0;
+  std::uint32_t face_index = 0;
 };
 
 /// Outgoing node-copy descriptor
