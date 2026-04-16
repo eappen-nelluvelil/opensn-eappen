@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
-#include <cstring>
 
 namespace opensn
 {
@@ -152,7 +151,6 @@ CBCD_AngleSet::InitializeTaskGraphData()
               successor_data_.begin() + successor_offsets_[task_idx]);
   }
 
-  ready_cell_ids_.reserve(num_tasks_);
   batch_state_.Reserve(num_tasks_);
 }
 
@@ -160,8 +158,11 @@ void
 CBCD_AngleSet::InitializeTaskState()
 {
   std::copy(initial_deps_.begin(), initial_deps_.end(), remaining_deps_.begin());
-  ready_cell_ids_.assign(initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end());
   batch_state_.Reset();
+  auto& ready_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index);
+  ready_cell_ids.clear();
+  ready_cell_ids.insert(
+    ready_cell_ids.end(), initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end());
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = following_angle_sets_.empty() ? 0 : initial_reflecting_task_count_;
 }
@@ -172,15 +173,17 @@ CBCD_AngleSet::TryRetireCompletedBatch()
   if ((not batch_state_.kernel_in_flight) or (not stream_.is_completed()))
     return false;
 
-  batch_state_.completed_cell_ids.swap(batch_state_.launch_cell_ids);
-  for (const auto& cell_local_id : batch_state_.completed_cell_ids)
+  auto& completed_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.launch_buffer_index);
+  for (std::uint32_t i = 0; i < batch_state_.launch_count; ++i)
   {
+    const auto cell_local_id = completed_cell_ids[i];
     const auto succ_begin = successor_offsets_[cell_local_id];
     const auto succ_end = successor_offsets_[cell_local_id + 1];
     for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
     {
       if (--remaining_deps_[successor_data_[succ_i]] == 0)
-        ready_cell_ids_.push_back(successor_data_[succ_i]);
+        cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+          .push_back(successor_data_[succ_i]);
     }
 
     if ((not following_angle_sets_.empty()) and (not following_angle_sets_notified_) and
@@ -191,7 +194,11 @@ CBCD_AngleSet::TryRetireCompletedBatch()
     }
   }
 
-  num_completed_tasks_ += batch_state_.completed_cell_ids.size();
+  num_completed_tasks_ += batch_state_.launch_count;
+  batch_state_.completed_buffer_index = batch_state_.launch_buffer_index;
+  batch_state_.completed_count = batch_state_.launch_count;
+  batch_state_.completed_batch_pending = true;
+  batch_state_.launch_count = 0;
   batch_state_.kernel_in_flight = false;
   return true;
 }
@@ -199,16 +206,16 @@ CBCD_AngleSet::TryRetireCompletedBatch()
 bool
 CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
 {
-  if (batch_state_.kernel_in_flight or ready_cell_ids_.empty())
+  auto& ready_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index);
+  if (batch_state_.kernel_in_flight or ready_cell_ids.empty())
     return false;
 
-  auto& host_cell_ids = cbcd_fluds_.GetLocalCellIDs();
-  batch_state_.launch_cell_ids.swap(ready_cell_ids_);
-  const auto launch_count = static_cast<std::uint32_t>(batch_state_.launch_cell_ids.size());
-  std::memcpy(host_cell_ids.data(),
-              batch_state_.launch_cell_ids.data(),
-              launch_count * sizeof(std::uint32_t));
-  sweep_chunk.Sweep(launch_count, GetID());
+  const auto launch_count = static_cast<std::uint32_t>(ready_cell_ids.size());
+  batch_state_.launch_buffer_index = batch_state_.ready_buffer_index;
+  batch_state_.launch_count = launch_count;
+  batch_state_.ready_buffer_index = batch_state_.AcquireFreeBuffer();
+  cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index).clear();
+  sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data());
   batch_state_.kernel_in_flight = true;
   return true;
 }
@@ -216,12 +223,21 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
 void
 CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
 {
-  if (batch_state_.completed_cell_ids.empty())
+  if (not batch_state_.completed_batch_pending)
     return;
 
+  auto& completed_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.completed_buffer_index);
   cbcd_fluds_.CopyOutgoingPsiBackToHost(
-    sweep_chunk, *async_comm_, GetID(), GetAngleIndices(), batch_state_.completed_cell_ids);
-  batch_state_.completed_cell_ids.clear();
+    sweep_chunk,
+    *async_comm_,
+    GetID(),
+    GetAngleIndices(),
+    {completed_cell_ids.data(), static_cast<std::size_t>(batch_state_.completed_count)});
+  completed_cell_ids.clear();
+  batch_state_.ReleaseBuffer(batch_state_.completed_buffer_index);
+  batch_state_.completed_buffer_index = 0;
+  batch_state_.completed_count = 0;
+  batch_state_.completed_batch_pending = false;
   TryNotifyFollowingAngleSets();
 }
 
@@ -291,15 +307,16 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
           entry_header.cell_global_id, entry_header.face_id, ptr);
         ptr += entry_header.data_size * sizeof(double);
         if (--remaining_deps_[cell_local_id] == 0)
-          ready_cell_ids_.push_back(static_cast<std::uint32_t>(cell_local_id));
+          cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+            .push_back(static_cast<std::uint32_t>(cell_local_id));
       }
     });
 
+  // Flush the completed batch before reusing its mapped launch buffer.
+  FlushCompletedBatch(cbcd_sweep_chunk);
+
   // Launch the next batch once the stream is idle.
   work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
-
-  // Flush the completed batch to overlap communication and sweeps.
-  FlushCompletedBatch(cbcd_sweep_chunk);
 
   // Finalize once all tasks are done and no kernel is in flight.
   if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight))
@@ -322,19 +339,30 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 
   if (executed_)
     return AngleSetStatus::FINISHED;
-  if (not boundary_data_initialized_)
-    return AngleSetStatus::NOT_FINISHED;
 
-  return TryAdvanceOneStep(static_cast<CBCDSweepChunk&>(sweep_chunk))
-           ? AngleSetStatus::READY_TO_EXECUTE
-           : AngleSetStatus::NOT_FINISHED;
+  auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
+  bool progressed = false;
+  if (not boundary_data_initialized_)
+  {
+    if (not TryInitialize(cbcd_sweep_chunk))
+      return AngleSetStatus::NOT_FINISHED;
+    progressed = true;
+  }
+
+  while (TryAdvanceOneStep(cbcd_sweep_chunk))
+    progressed = true;
+
+  if (executed_)
+    return AngleSetStatus::FINISHED;
+  return progressed ? AngleSetStatus::READY_TO_EXECUTE : AngleSetStatus::NOT_FINISHED;
 }
 
 void
 CBCD_AngleSet::ResetSweepBuffers()
 {
-  ready_cell_ids_.clear();
   batch_state_.Reset();
+  for (std::size_t i = 0; i < 3; ++i)
+    cbcd_fluds_.GetLocalCellIDs(i).clear();
   cbcd_fluds_.ClearLocalAndReceivePsi();
   num_completed_tasks_ = 0;
   pending_reflecting_tasks_ = 0;

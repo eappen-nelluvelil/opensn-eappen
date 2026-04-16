@@ -64,8 +64,9 @@ public:
    *
    * \param num_ready_cells Number of local cells in the batch.
    * \param angle_set_id Producing angle-set ID.
+   * \param local_cell_ids Pointer to the mapped host cell-ID buffer for the batch.
    */
-  void Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id);
+  void Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id, const std::uint32_t* local_cell_ids);
 
 private:
   /// Cached launch data for one angle set.

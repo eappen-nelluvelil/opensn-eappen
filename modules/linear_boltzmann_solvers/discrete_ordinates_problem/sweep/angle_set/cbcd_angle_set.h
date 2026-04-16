@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "caribou/main.hpp"
+#include <array>
 #include <atomic>
 #include <set>
 #include <unordered_map>
@@ -34,30 +35,56 @@ public:
   /// Per-sweep launch/completion state for the current kernel batch.
   struct BatchState
   {
-    /// Local cell IDs submitted to the currently running kernel launch.
-    std::vector<std::uint32_t> launch_cell_ids;
-    /// Local cell IDs from the most recently completed kernel launch.
-    std::vector<std::uint32_t> completed_cell_ids;
+    /// Buffer receiving newly ready local cell IDs.
+    std::uint8_t ready_buffer_index = 0;
+    /// Buffer backing the currently running kernel launch.
+    std::uint8_t launch_buffer_index = 0;
+    /// Buffer holding the most recently completed kernel batch until it is flushed.
+    std::uint8_t completed_buffer_index = 0;
+    /// Indices of currently free mapped-host cell-ID buffers.
+    std::array<std::uint8_t, 3> free_buffer_indices = {1, 2, 0};
+    /// Number of free mapped-host cell-ID buffers.
+    std::uint8_t num_free_buffers = 2;
+    /// Number of local cells in the currently running kernel launch.
+    std::uint32_t launch_count = 0;
+    /// Number of local cells in the completed batch waiting to be flushed.
+    std::uint32_t completed_count = 0;
     /// Flag indicating whether a kernel launch is currently outstanding.
     bool kernel_in_flight = false;
+    /// Flag indicating whether a completed batch is waiting to be flushed.
+    bool completed_batch_pending = false;
 
     /**
      * Reserve storage for one sweep.
      *
      * \param max_batch_size Safe upper bound on one launched ready-cell batch.
      */
-    void Reserve(const std::size_t max_batch_size)
-    {
-      launch_cell_ids.reserve(max_batch_size);
-      completed_cell_ids.reserve(max_batch_size);
-    }
+    void Reserve(const std::size_t) {}
 
     /// Reset the batch state between sweeps.
     void Reset()
     {
-      launch_cell_ids.clear();
-      completed_cell_ids.clear();
+      ready_buffer_index = 0;
+      launch_buffer_index = 0;
+      completed_buffer_index = 0;
+      free_buffer_indices = {1, 2, 0};
+      num_free_buffers = 2;
+      launch_count = 0;
+      completed_count = 0;
       kernel_in_flight = false;
+      completed_batch_pending = false;
+    }
+
+    std::uint8_t AcquireFreeBuffer()
+    {
+      assert(num_free_buffers > 0);
+      return free_buffer_indices[--num_free_buffers];
+    }
+
+    void ReleaseBuffer(const std::uint8_t buffer_index)
+    {
+      assert(num_free_buffers < free_buffer_indices.size());
+      free_buffer_indices[num_free_buffers++] = buffer_index;
     }
   };
 
@@ -189,8 +216,6 @@ private:
   std::unordered_map<std::uint64_t, SweepBoundary*> boundary_ptrs_;
   /// Reflecting boundaries touched by this angleset.
   std::vector<SweepBoundary*> reflecting_boundaries_;
-  /// Ready local cell IDs waiting for the next batch launch.
-  std::vector<std::uint32_t> ready_cell_ids_;
   /// Explicit launch/completion state for the current sweep batch.
   BatchState batch_state_;
   /// Cached reflecting-boundary producer mask by local cell ID.

@@ -8,6 +8,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/storage.h"
 #include "caribou/main.hpp"
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <unordered_map>
@@ -87,8 +88,11 @@ public:
   /// Get the stride size for each face node's angular flux data.
   inline std::size_t GetStrideSize() const { return num_groups_and_angles_; }
 
-  /// Return the mapped host vector of local cells to be swept in the next batch.
-  crb::MappedHostVector<std::uint32_t>& GetLocalCellIDs() { return local_cell_ids_; }
+  /// Return one mapped host vector of local cells used by the CBCD launch pipeline.
+  crb::MappedHostVector<std::uint32_t>& GetLocalCellIDs(const std::size_t buffer_index)
+  {
+    return local_cell_ids_[buffer_index];
+  }
 
   /// Return the device pointer to the saved angular flux buffer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
@@ -132,7 +136,7 @@ public:
                                  CBCD_AsynchronousCommunicator& async_comm,
                                  std::size_t angle_set_id,
                                  const std::vector<std::uint32_t>& angle_indices,
-                                 const std::vector<std::uint32_t>& cell_local_ids);
+                                 std::span<const std::uint32_t> cell_local_ids);
 
   /**
    * Scatter one received non-local face payload into the mapped incoming buffer.
@@ -187,7 +191,7 @@ private:
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
   /// Associated angleset's stream.
   crb::Stream stream_;
-  crb::MappedHostVector<std::uint32_t> local_cell_ids_;
+  std::array<crb::MappedHostVector<std::uint32_t>, 3> local_cell_ids_;
   /// Flag indicating whether angular fluxes are saved after the sweep.
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.

@@ -44,10 +44,11 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
-    local_cell_ids_(num_local_cells),
     save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
+  for (auto& local_cell_ids : local_cell_ids_)
+    local_cell_ids.reserve(num_local_cells);
 
   const auto& outgoing_localities = common_data_.GetOutgoingLocalities();
   outgoing_queue_indices_.assign(outgoing_localities.size(), -1);
@@ -81,7 +82,8 @@ CBCD_FLUDS::~CBCD_FLUDS()
     host_saved_psi_.clear();
     device_saved_psi_.async_free(stream_);
   }
-  local_cell_ids_.clear();
+  for (auto& local_cell_ids : local_cell_ids_)
+    local_cell_ids.clear();
   incoming_boundary_psi_.clear();
   outgoing_boundary_psi_.clear();
   incoming_nonlocal_psi_.clear();
@@ -224,7 +226,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AsynchronousCommunicator& async_comm,
                                       const std::size_t angle_set_id,
                                       const std::vector<std::uint32_t>& angle_indices,
-                                      const std::vector<std::uint32_t>& cell_local_ids)
+                                      std::span<const std::uint32_t> cell_local_ids)
 {
   (void)sweep_chunk;
 

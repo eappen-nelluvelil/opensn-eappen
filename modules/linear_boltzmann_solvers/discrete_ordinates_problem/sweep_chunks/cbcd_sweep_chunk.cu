@@ -127,7 +127,9 @@ CBCDSweepChunk::StopCommunicator()
 }
 
 void
-CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id)
+CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
+                     std::size_t angle_set_id,
+                     const std::uint32_t* local_cell_ids)
 {
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
@@ -136,7 +138,7 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id)
   const auto grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
   ::dim3 grid_size{ck.grid_size_x, grid_size_y};
   gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
-    ck.args, ck.fluds->GetLocalCellIDs().data(), num_ready_cells, ck.device_saved_psi);
+    ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
 }
 
 } // namespace opensn
