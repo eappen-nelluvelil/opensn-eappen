@@ -71,6 +71,7 @@ struct CBCD_AsynchronousCommunicator::Impl
   int mpi_tag;
   int my_rank = 0;
   const mpi::Communicator* recv_comm = nullptr;
+  std::vector<int> source_ranks;
   std::vector<NeighborQueue> outgoing_queues;
   std::size_t num_outgoing_stacks_per_queue = 1;
   std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> outgoing_stacks;
@@ -109,6 +110,9 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   }
   const std::size_t num_sources = sources.size();
   impl_->recv_comm = &impl_->comm_set.LocICommunicator(impl_->my_rank);
+  impl_->source_ranks.reserve(num_sources);
+  for (const int source : sources)
+    impl_->source_ranks.push_back(impl_->comm_set.MapIonJ(source, impl_->my_rank));
   impl_->num_outgoing_stacks_per_queue = std::max<std::size_t>(1, impl_->num_angle_sets);
   impl_->recv_buffer_pool_state = std::make_shared<Impl::ReceiveBufferPoolState>();
 
@@ -347,60 +351,53 @@ bool
 CBCD_AsynchronousCommunicator::FlushActiveOutgoingQueue(const std::size_t queue_index)
 {
   const auto& queue = impl_->outgoing_queues[queue_index];
-  bool any_sent = false;
+  std::size_t num_sections = 0;
+  std::size_t total_bytes = Wire::AGGREGATE_HEADER_BYTES;
+  impl_->drained_sections.clear();
 
-  while (true)
+  for (std::size_t shard = 0; shard < impl_->num_outgoing_stacks_per_queue; ++shard)
+    impl_->outgoing_stacks[queue.shard_offset + shard]->DrainAndProcess(
+      [this, &num_sections, &total_bytes](ByteArray&& section)
+      {
+        total_bytes += section.Size() - Wire::AGGREGATE_HEADER_BYTES;
+        ++num_sections;
+        impl_->drained_sections.push_back(std::move(section));
+      });
+
+  if (num_sections == 0)
+    return false;
+
+  if (num_sections == 1)
   {
-    std::size_t num_sections = 0;
-    std::size_t total_bytes = Wire::AGGREGATE_HEADER_BYTES;
-    impl_->drained_sections.clear();
-
-    for (std::size_t shard = 0; shard < impl_->num_outgoing_stacks_per_queue; ++shard)
-      impl_->outgoing_stacks[queue.shard_offset + shard]->DrainAndProcess(
-        [this, &num_sections, &total_bytes](ByteArray&& section)
-        {
-          total_bytes += section.Size() - Wire::AGGREGATE_HEADER_BYTES;
-          ++num_sections;
-          impl_->drained_sections.push_back(std::move(section));
-        });
-
-    if (num_sections == 0)
-      break;
-
-    any_sent = true;
-    if (num_sections == 1)
-    {
-      auto& first_section = impl_->drained_sections.front();
-      Wire::StoreSize(first_section.Data().data(), 1);
-      Impl::InFlightSend send;
-      send.data = std::move(first_section);
-      impl_->in_flight_send_requests.push_back(
-        queue.comm->isend(queue.dest_rank, impl_->mpi_tag, send.data.Data()));
-      impl_->in_flight_sends.push_back(std::move(send));
-      continue;
-    }
-
-    ByteArray send_buffer = AcquireSendBuffer();
-    auto& send_data = send_buffer.Data();
-    send_data.resize(total_bytes);
-    Wire::StoreSize(send_data.data(), num_sections);
-    auto* dst = send_data.data() + Wire::AGGREGATE_HEADER_BYTES;
-    for (auto& section : impl_->drained_sections)
-    {
-      const auto& section_data = section.Data();
-      const auto payload_bytes = section_data.size() - Wire::AGGREGATE_HEADER_BYTES;
-      std::memcpy(dst, section_data.data() + Wire::AGGREGATE_HEADER_BYTES, payload_bytes);
-      dst += payload_bytes;
-    }
-
+    auto& first_section = impl_->drained_sections.front();
+    Wire::StoreSize(first_section.Data().data(), 1);
     Impl::InFlightSend send;
-    send.data = std::move(send_buffer);
+    send.data = std::move(first_section);
     impl_->in_flight_send_requests.push_back(
       queue.comm->isend(queue.dest_rank, impl_->mpi_tag, send.data.Data()));
     impl_->in_flight_sends.push_back(std::move(send));
+    return true;
   }
 
-  return any_sent;
+  ByteArray send_buffer = AcquireSendBuffer();
+  auto& send_data = send_buffer.Data();
+  send_data.resize(total_bytes);
+  Wire::StoreSize(send_data.data(), num_sections);
+  auto* dst = send_data.data() + Wire::AGGREGATE_HEADER_BYTES;
+  for (auto& section : impl_->drained_sections)
+  {
+    const auto& section_data = section.Data();
+    const auto payload_bytes = section_data.size() - Wire::AGGREGATE_HEADER_BYTES;
+    std::memcpy(dst, section_data.data() + Wire::AGGREGATE_HEADER_BYTES, payload_bytes);
+    dst += payload_bytes;
+  }
+
+  Impl::InFlightSend send;
+  send.data = std::move(send_buffer);
+  impl_->in_flight_send_requests.push_back(
+    queue.comm->isend(queue.dest_rank, impl_->mpi_tag, send.data.Data()));
+  impl_->in_flight_sends.push_back(std::move(send));
+  return true;
 }
 
 bool
@@ -409,33 +406,35 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
 
   bool received_any = false;
-  mpi::Status status;
-  while (impl_->recv_comm->iprobe(ANY_SOURCE, impl_->mpi_tag, status))
+  for (const int source_rank : impl_->source_ranks)
   {
-    received_any = true;
-    const int source_rank = status.source();
-    const int num_bytes = status.count<std::byte>();
-    auto recv_buffer = AcquireReceiveBuffer(static_cast<std::size_t>(num_bytes));
-    impl_->recv_comm->recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
-
-    const auto* ptr = recv_buffer->data.Data().data();
-    const auto num_sections = Wire::LoadSize(ptr);
-    if (num_sections == 0)
-      continue;
-    for (std::size_t s = 0; s < num_sections; ++s)
+    mpi::Status status;
+    while (impl_->recv_comm->iprobe(source_rank, impl_->mpi_tag, status))
     {
-      const auto angle_set_id = Wire::LoadSize(ptr);
-      const auto num_entries = Wire::LoadSize(ptr);
-      assert(angle_set_id < impl_->num_angle_sets);
+      received_any = true;
+      const int num_bytes = status.count<std::byte>();
+      auto recv_buffer = AcquireReceiveBuffer(static_cast<std::size_t>(num_bytes));
+      impl_->recv_comm->recv(source_rank, status.tag(), recv_buffer->data.Data().data(), num_bytes);
 
-      const auto* section_data = ptr;
-      for (std::size_t e = 0; e < num_entries; ++e)
+      const auto* ptr = recv_buffer->data.Data().data();
+      const auto num_sections = Wire::LoadSize(ptr);
+      if (num_sections == 0)
+        continue;
+      for (std::size_t s = 0; s < num_sections; ++s)
       {
-        const auto& entry_header = Wire::LoadEntryHeader(ptr);
-        ptr += entry_header.data_size * sizeof(double);
+        const auto angle_set_id = Wire::LoadSize(ptr);
+        const auto num_entries = Wire::LoadSize(ptr);
+        assert(angle_set_id < impl_->num_angle_sets);
+
+        const auto* section_data = ptr;
+        for (std::size_t e = 0; e < num_entries; ++e)
+        {
+          const auto& entry_header = Wire::LoadEntryHeader(ptr);
+          ptr += entry_header.data_size * sizeof(double);
+        }
+        impl_->incoming_mailboxes[angle_set_id]->Push(
+          IncomingSection{recv_buffer, section_data, num_entries});
       }
-      impl_->incoming_mailboxes[angle_set_id]->Push(
-        IncomingSection{recv_buffer, section_data, num_entries});
     }
   }
   return received_any;

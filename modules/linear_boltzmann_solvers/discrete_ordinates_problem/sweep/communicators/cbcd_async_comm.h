@@ -226,7 +226,7 @@ private:
                          IncomingSectionCallback callback);
   /// Drain all active outgoing destinations and issue aggregated sends.
   bool FlushOutgoing();
-  /// Drain one active outgoing queue until no more immediately pending work remains.
+  /// Drain one active outgoing queue once and issue at most one aggregated send.
   bool FlushActiveOutgoingQueue(std::size_t queue_index);
   /// Probe for incoming MPI messages and dispatch sections to mailboxes.
   bool ProbeAndReceive();
