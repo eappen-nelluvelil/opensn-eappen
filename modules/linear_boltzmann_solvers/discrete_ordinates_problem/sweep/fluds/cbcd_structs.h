@@ -221,10 +221,11 @@ struct OutgoingNodeCopy
 /// Grouped outgoing non-local face.
 struct GroupedOutgoingNonlocalFace
 {
-  std::array<std::byte, sizeof(std::uint64_t) + sizeof(unsigned int)> entry_header_prefix{};
+  std::uint64_t cell_global_id = 0;
   std::uint32_t dest_slot = 0;
-  std::uint16_t num_face_nodes = 0;
   std::uint32_t node_copy_offset = 0;
+  unsigned int face_id = 0;
+  std::uint16_t num_face_nodes = 0;
   std::uint16_t num_node_copies = 0;
 };
 

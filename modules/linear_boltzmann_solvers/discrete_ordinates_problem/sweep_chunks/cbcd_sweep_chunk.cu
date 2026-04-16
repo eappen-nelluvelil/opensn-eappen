@@ -52,21 +52,17 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
 
   if (not angle_sets_.empty())
   {
-    std::set<int> outgoing_dest_set;
-    for (const auto* fluds : fluds_list)
-    {
-      const auto& outgoing_localities = fluds->GetCommonData().GetOutgoingLocalities();
-      outgoing_dest_set.insert(outgoing_localities.begin(), outgoing_localities.end());
-    }
-    std::vector<int> outgoing_dest_localities(outgoing_dest_set.begin(), outgoing_dest_set.end());
     std::vector<std::vector<int>> incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     std::unordered_map<int, std::vector<std::size_t>> source_as_section_bytes;
+    std::vector<AngleSetCapacity> capacities(angle_sets_.size());
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
     {
       const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
       const auto& common_data = fluds_list[as_ss_idx]->GetCommonData();
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
+      capacities[as_ss_idx].outgoing_faces = common_data.GetNumOutgoingNonlocalFaces();
+      capacities[as_ss_idx].incoming_faces = common_data.GetNumIncomingNonlocalFaces();
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -104,12 +100,10 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
                                                       angle_sets_.front()->GetCommunicatorSet(),
                                                       incoming_source_partitions_by_angle_set,
-                                                      outgoing_dest_localities,
-                                                      max_message_bytes);
+                                                      max_message_bytes,
+                                                      capacities);
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);
-    for (auto* fluds : fluds_list)
-      fluds->InitializeQueueIndices(*async_comm_);
   }
 }
 

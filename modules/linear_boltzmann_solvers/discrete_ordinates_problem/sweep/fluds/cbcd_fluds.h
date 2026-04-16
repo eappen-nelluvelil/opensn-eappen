@@ -71,13 +71,6 @@ public:
   void AllocateLocalAndSavedPsi();
 
   /**
-   * Resolve outgoing queue indices once the aggregated communicator exists.
-   *
-   * \param async_comm Aggregated communicator serving this groupset.
-   */
-  void InitializeQueueIndices(const CBCD_AsynchronousCommunicator& async_comm);
-
-  /**
    * Build reflecting-boundary copy plans for this angle set.
    *
    * \param boundaries Sweep-boundary table indexed by boundary ID.
@@ -123,11 +116,10 @@ public:
    * Copy completed outgoing angular flux data into host-visible destinations.
    *
    * Reflecting boundary data is written back to the owning boundary objects. Outgoing
-   * non-local face data is packed into reusable destination buffers and handed to the
-   * aggregated communicator for asynchronous send progress.
+   * non-local face data is enqueued directly into the aggregated communicator.
    *
    * \param sweep_chunk Owning CBCD sweep chunk.
-   * \param async_comm Aggregated communicator used to enqueue packed non-local sections.
+   * \param async_comm Aggregated communicator used to enqueue non-local face payloads.
    * \param angle_set_id Producing angle-set ID.
    * \param angle_indices Global angle indices carried by this angle set.
    * \param cell_local_ids Local cells in the just-completed batch.
@@ -144,13 +136,13 @@ public:
    * \param source_slot Source-locality slot for the sending partition.
    * \param cell_global_id Destination cell global ID carried on the wire.
    * \param face_id Destination face ID carried on the wire.
-   * \param psi_data Packed payload bytes.
+   * \param psi_data Packed payload doubles.
    * \return Local cell ID whose dependency count should be updated.
    */
   std::uint32_t ScatterReceivedFaceData(std::uint32_t source_slot,
                                         std::uint64_t cell_global_id,
                                         unsigned int face_id,
-                                        const std::byte* psi_data);
+                                        const double* psi_data);
 
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
@@ -203,14 +195,6 @@ private:
   crb::HostVector<double> host_saved_psi_;
   /// Pointer set used by the CBCD sweep kernel.
   CBCD_FLUDSPointerSet pointer_set_;
-  /// Ordered outgoing communicator queue indices.
-  std::vector<int> outgoing_queue_indices_;
-  /// Per-destination face counts for the current pack pass.
-  std::vector<std::size_t> scratch_dest_face_counts_;
-  /// Destinations touched during the current pack pass.
-  std::vector<std::uint32_t> active_dest_indices_;
-  /// Reusable destination buffers for outgoing wire-format sections.
-  std::vector<ByteArray> dest_buffers_;
   /// Cell-to-reflecting-face offset table.
   std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
   /// Flat reflecting-boundary face plans.

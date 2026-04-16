@@ -295,18 +295,14 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
   work_done |= TryRetireCompletedBatch();
 
   // Consume any newly received non-local face data and release newly ready cells.
-  work_done |= async_comm_->DrainIncoming(
+  work_done |= async_comm_->ProcessIncoming(
     GetID(),
-    [this](const CBCD_AsynchronousCommunicator::IncomingSection& section)
+    [this](const std::vector<IncomingFaceData>& batch)
     {
-      const auto* ptr = section.data;
-      for (size_t e = 0; e < section.num_entries; ++e)
+      for (const auto& entry : batch)
       {
-        const auto entry_header = CBCD_AsynchronousCommunicator::Wire::LoadEntryHeader(ptr);
-
         const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-          section.source_slot, entry_header.cell_global_id, entry_header.face_id, ptr);
-        ptr += entry_header.data_size * sizeof(double);
+          entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
         if (--remaining_deps_[cell_local_id] == 0)
           cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
             .push_back(static_cast<std::uint32_t>(cell_local_id));

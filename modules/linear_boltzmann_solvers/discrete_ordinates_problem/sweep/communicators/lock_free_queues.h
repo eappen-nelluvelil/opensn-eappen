@@ -5,12 +5,106 @@
 
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/lockfree/stack.hpp>
+#include <atomic>
 #include <cstddef>
 #include <memory>
+#include <new>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace opensn
 {
+
+/**
+ * Bounded lock-free multi-producer, single-consumer ring buffer.
+ *
+ * Producers reserve slots through an atomic head counter and publish them with
+ * a per-slot ready flag. The single consumer drains in FIFO order.
+ */
+template <typename T>
+class LockFreeRingBuffer
+{
+public:
+  struct Slot
+  {
+    T payload;
+    std::atomic<bool> ready{false};
+  };
+
+  void Preallocate(const std::size_t capacity)
+  {
+    buffer_ = std::vector<Slot>(capacity);
+  }
+
+  Slot& ReserveSlot()
+  {
+    const auto idx = head_.fetch_add(1, std::memory_order_relaxed) % buffer_.size();
+    while (buffer_[idx].ready.load(std::memory_order_acquire))
+      std::this_thread::yield();
+    return buffer_[idx];
+  }
+
+  void PublishSlot(Slot& slot) { slot.ready.store(true, std::memory_order_release); }
+
+  void GetReadySlots(std::vector<Slot*>& out)
+  {
+    out.clear();
+    if (buffer_.empty())
+      return;
+
+    const auto capacity = buffer_.size();
+    auto current_tail = tail_;
+    while (buffer_[current_tail % capacity].ready.load(std::memory_order_acquire))
+    {
+      out.push_back(&buffer_[current_tail % capacity]);
+      ++current_tail;
+    }
+  }
+
+  void FreeSlots(const std::size_t count)
+  {
+    const auto capacity = buffer_.size();
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      buffer_[tail_ % capacity].ready.store(false, std::memory_order_release);
+      ++tail_;
+    }
+  }
+
+  template <typename Callback>
+  std::size_t ProcessReady(Callback&& cb)
+  {
+    if (buffer_.empty())
+      return 0;
+
+    const auto capacity = buffer_.size();
+    std::size_t count = 0;
+    while (true)
+    {
+      auto& slot = buffer_[tail_ % capacity];
+      if (not slot.ready.load(std::memory_order_acquire))
+        break;
+      cb(slot.payload);
+      slot.ready.store(false, std::memory_order_release);
+      ++tail_;
+      ++count;
+    }
+    return count;
+  }
+
+  bool Empty() const
+  {
+    if (buffer_.empty())
+      return true;
+    return not buffer_[tail_ % buffer_.size()].ready.load(std::memory_order_acquire);
+  }
+
+private:
+  std::vector<Slot> buffer_;
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> head_{0};
+  alignas(std::hardware_destructive_interference_size) std::size_t tail_{0};
+};
 
 /**
  * Recyclable lock-free Treiber stack.

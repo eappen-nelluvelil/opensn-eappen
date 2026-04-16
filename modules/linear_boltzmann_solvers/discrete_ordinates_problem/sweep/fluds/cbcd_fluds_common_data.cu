@@ -188,17 +188,12 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
                 static_cast<int>(outgoing_nonlocal_faces_.size() -
                                  cell_to_outgoing_nonlocal_face_offsets_[cell.local_id]);
               auto& grouped_face = outgoing_nonlocal_faces_.emplace_back();
+              grouped_face.cell_global_id = face.neighbor_id;
               grouped_face.dest_slot = dest_slot;
+              grouped_face.face_id = static_cast<unsigned int>(face_nodal_mapping.associated_face_);
               grouped_face.num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
               grouped_face.node_copy_offset =
                 static_cast<std::uint32_t>(outgoing_nonlocal_face_node_copies_.size());
-              std::memcpy(
-                grouped_face.entry_header_prefix.data(), &face.neighbor_id, sizeof(std::uint64_t));
-              const auto associated_face =
-                static_cast<unsigned int>(face_nodal_mapping.associated_face_);
-              std::memcpy(grouped_face.entry_header_prefix.data() + sizeof(std::uint64_t),
-                          &associated_face,
-                          sizeof(unsigned int));
               ++num_outgoing_nonlocal_faces_;
             }
 
