@@ -85,6 +85,7 @@ struct CBCD_AsynchronousCommunicator::Impl
   std::vector<int> completed_send_indices;
   std::vector<std::uint8_t> completed_send_mask;
   std::vector<ByteArray> send_buffer_pool;
+  std::vector<ByteArray> drained_sections;
   std::atomic<bool> stop_requested{false};
   std::vector<std::atomic<bool>> angle_sets_done;
   std::thread comm_thread;
@@ -154,6 +155,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   impl_->in_flight_sends.reserve(impl_->outgoing_queues.size());
   impl_->completed_send_indices.reserve(impl_->outgoing_queues.size());
   impl_->send_buffer_pool.reserve(impl_->outgoing_queues.size());
+  impl_->drained_sections.reserve(impl_->outgoing_queues.size());
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -349,39 +351,17 @@ CBCD_AsynchronousCommunicator::FlushActiveOutgoingQueue(const std::size_t queue_
 
   while (true)
   {
-    ByteArray first_section;
-    bool have_first_section = false;
-    ByteArray send_buffer;
-    auto* send_data = static_cast<std::vector<std::byte>*>(nullptr);
     std::size_t num_sections = 0;
+    std::size_t total_bytes = Wire::AGGREGATE_HEADER_BYTES;
+    impl_->drained_sections.clear();
 
     for (std::size_t shard = 0; shard < impl_->num_outgoing_stacks_per_queue; ++shard)
       impl_->outgoing_stacks[queue.shard_offset + shard]->DrainAndProcess(
-        [&first_section, &have_first_section, &send_buffer, &send_data, &num_sections](
-          ByteArray&& section)
+        [this, &num_sections, &total_bytes](ByteArray&& section)
         {
-          const auto& section_data = section.Data();
-          if (not have_first_section)
-          {
-            first_section = std::move(section);
-            have_first_section = true;
-            num_sections = 1;
-            return;
-          }
-
-          if (num_sections == 1)
-          {
-            send_buffer = std::move(first_section);
-            send_data = &send_buffer.Data();
-          }
-
-          const auto payload_bytes = section_data.size() - Wire::AGGREGATE_HEADER_BYTES;
-          const auto old_size = send_data->size();
-          send_data->resize(old_size + payload_bytes);
-          std::memcpy(send_data->data() + old_size,
-                      section_data.data() + Wire::AGGREGATE_HEADER_BYTES,
-                      payload_bytes);
+          total_bytes += section.Size() - Wire::AGGREGATE_HEADER_BYTES;
           ++num_sections;
+          impl_->drained_sections.push_back(std::move(section));
         });
 
     if (num_sections == 0)
@@ -390,6 +370,7 @@ CBCD_AsynchronousCommunicator::FlushActiveOutgoingQueue(const std::size_t queue_
     any_sent = true;
     if (num_sections == 1)
     {
+      auto& first_section = impl_->drained_sections.front();
       Wire::StoreSize(first_section.Data().data(), 1);
       Impl::InFlightSend send;
       send.data = std::move(first_section);
@@ -399,7 +380,19 @@ CBCD_AsynchronousCommunicator::FlushActiveOutgoingQueue(const std::size_t queue_
       continue;
     }
 
-    Wire::StoreSize(send_data->data(), num_sections);
+    ByteArray send_buffer = AcquireSendBuffer();
+    auto& send_data = send_buffer.Data();
+    send_data.resize(total_bytes);
+    Wire::StoreSize(send_data.data(), num_sections);
+    auto* dst = send_data.data() + Wire::AGGREGATE_HEADER_BYTES;
+    for (auto& section : impl_->drained_sections)
+    {
+      const auto& section_data = section.Data();
+      const auto payload_bytes = section_data.size() - Wire::AGGREGATE_HEADER_BYTES;
+      std::memcpy(dst, section_data.data() + Wire::AGGREGATE_HEADER_BYTES, payload_bytes);
+      dst += payload_bytes;
+    }
+
     Impl::InFlightSend send;
     send.data = std::move(send_buffer);
     impl_->in_flight_send_requests.push_back(
