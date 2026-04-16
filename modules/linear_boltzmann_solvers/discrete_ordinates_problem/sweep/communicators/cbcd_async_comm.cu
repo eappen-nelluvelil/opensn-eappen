@@ -73,12 +73,12 @@ struct CBCD_AsynchronousCommunicator::Impl
   const mpi::Communicator* recv_comm = nullptr;
   std::vector<NeighborQueue> outgoing_queues;
   std::size_t num_outgoing_stacks_per_queue = 1;
-  std::vector<LockFreeSPSCQueue<ByteArray>> outgoing_stacks;
+  std::vector<std::unique_ptr<LockFreeTreiberStack<ByteArray>>> outgoing_stacks;
   std::size_t num_active_queue_words = 0;
   std::unique_ptr<std::atomic<std::uint64_t>[]> active_outgoing_queue_bits;
   std::unordered_map<int, int> dest_to_queue_index;
   std::shared_ptr<ReceiveBufferPoolState> recv_buffer_pool_state;
-  std::vector<LockFreeSPSCQueue<IncomingSection>> incoming_mailboxes;
+  std::vector<std::unique_ptr<LockFreeTreiberStack<IncomingSection>>> incoming_mailboxes;
   std::vector<std::shared_ptr<IncomingSection::IncomingBuffer>> recv_buffer_reuse_cache;
   std::vector<mpi::Request> in_flight_send_requests;
   std::vector<InFlightSend> in_flight_sends;
@@ -94,12 +94,9 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
   const MPICommunicatorSet& comm_set,
   const std::vector<int>& outgoing_dest_localities,
-  const std::vector<std::size_t>& outgoing_shard_capacities,
-  const std::vector<std::size_t>& incoming_mailbox_capacities,
   const size_t max_message_bytes)
   : impl_(std::make_unique<Impl>(comm_set, angle_sets.size(), max_message_bytes))
 {
-  assert(incoming_mailbox_capacities.size() == impl_->num_angle_sets);
   impl_->my_rank = opensn::mpi_comm.rank();
   std::set<int> sources;
   for (std::size_t i = 0; i < impl_->num_angle_sets; ++i)
@@ -115,8 +112,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   impl_->recv_buffer_pool_state = std::make_shared<Impl::ReceiveBufferPoolState>();
 
   impl_->incoming_mailboxes.reserve(impl_->num_angle_sets);
-  for (const auto capacity : incoming_mailbox_capacities)
-    impl_->incoming_mailboxes.emplace_back(capacity);
+  for (std::size_t i = 0; i < impl_->num_angle_sets; ++i)
+    impl_->incoming_mailboxes.push_back(std::make_unique<LockFreeTreiberStack<IncomingSection>>());
 
   impl_->outgoing_queues.reserve(outgoing_dest_localities.size());
   impl_->dest_to_queue_index.reserve(outgoing_dest_localities.size());
@@ -125,9 +122,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   impl_->num_active_queue_words = (outgoing_dest_localities.size() + 63) / 64;
   impl_->active_outgoing_queue_bits =
     std::make_unique<std::atomic<std::uint64_t>[]>(impl_->num_active_queue_words);
-  assert(outgoing_shard_capacities.size() ==
-         outgoing_dest_localities.size() * impl_->num_outgoing_stacks_per_queue);
-
   int queue_idx = 0;
   for (const auto& dest : outgoing_dest_localities)
   {
@@ -139,8 +133,11 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     impl_->dest_to_queue_index[dest] = queue_idx++;
   }
 
-  for (const auto capacity : outgoing_shard_capacities)
-    impl_->outgoing_stacks.emplace_back(capacity);
+  const auto num_outgoing_stacks =
+    outgoing_dest_localities.size() * impl_->num_outgoing_stacks_per_queue;
+  impl_->outgoing_stacks.reserve(num_outgoing_stacks);
+  for (std::size_t i = 0; i < num_outgoing_stacks; ++i)
+    impl_->outgoing_stacks.push_back(std::make_unique<LockFreeTreiberStack<ByteArray>>());
 
   for (std::size_t i = 0; i < impl_->num_angle_sets; ++i)
     impl_->angle_sets_done[i].store(false, std::memory_order_relaxed);
@@ -148,6 +145,10 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     impl_->active_outgoing_queue_bits[i].store(0, std::memory_order_relaxed);
 
   impl_->recv_buffer_pool_state->Preallocate(num_sources);
+  for (auto& mailbox : impl_->incoming_mailboxes)
+    mailbox->Preallocate(num_sources);
+  for (auto& outgoing_stack : impl_->outgoing_stacks)
+    outgoing_stack->Preallocate(1);
   impl_->recv_buffer_reuse_cache.reserve(num_sources);
   impl_->in_flight_send_requests.reserve(impl_->outgoing_queues.size());
   impl_->in_flight_sends.reserve(impl_->outgoing_queues.size());
@@ -184,7 +185,7 @@ CBCD_AsynchronousCommunicator::EnqueuePrepackedByIndex(const int queue_index,
   assert(queue_index >= 0 and queue_index < static_cast<int>(impl_->outgoing_queues.size()));
   const auto& queue = impl_->outgoing_queues[queue_index];
   const auto shard_index = std::min(producer_id, impl_->num_outgoing_stacks_per_queue - 1);
-  assert(impl_->outgoing_stacks[queue.shard_offset + shard_index].Push(std::move(data)));
+  impl_->outgoing_stacks[queue.shard_offset + shard_index]->Push(std::move(data));
   const auto word_index = static_cast<std::size_t>(queue_index) / 64;
   const auto bit_index = static_cast<std::size_t>(queue_index) % 64;
   impl_->active_outgoing_queue_bits[word_index].fetch_or(std::uint64_t{1} << bit_index,
@@ -197,7 +198,7 @@ CBCD_AsynchronousCommunicator::DrainIncomingImpl(const std::size_t angle_set_id,
                                                  IncomingSectionCallback callback)
 {
   assert(angle_set_id < impl_->num_angle_sets);
-  return impl_->incoming_mailboxes[angle_set_id].DrainAndProcess(
+  return impl_->incoming_mailboxes[angle_set_id]->DrainAndProcess(
     [this, callback_context, callback](IncomingSection&& section)
     {
       callback(callback_context, std::move(section));
@@ -268,8 +269,8 @@ CBCD_AsynchronousCommunicator::AcquireReceiveBuffer(const std::size_t num_bytes)
 {
   if (impl_->recv_buffer_reuse_cache.empty())
     impl_->recv_buffer_pool_state->DrainAndProcess(
-      [this](const std::shared_ptr<IncomingSection::IncomingBuffer>& buffer)
-      { impl_->recv_buffer_reuse_cache.push_back(buffer); });
+      [this](std::shared_ptr<IncomingSection::IncomingBuffer>&& buffer)
+      { impl_->recv_buffer_reuse_cache.push_back(std::move(buffer)); });
 
   std::shared_ptr<IncomingSection::IncomingBuffer> recv_buffer;
   if (not impl_->recv_buffer_reuse_cache.empty())
@@ -308,8 +309,6 @@ CBCD_AsynchronousCommunicator::AcquireSendBuffer()
   }
 
   ByteArray buf;
-  if (impl_->max_message_bytes > 0)
-    buf.Data().reserve(impl_->max_message_bytes);
   return buf;
 }
 
@@ -357,8 +356,8 @@ CBCD_AsynchronousCommunicator::FlushActiveOutgoingQueue(const std::size_t queue_
     std::size_t num_sections = 0;
 
     for (std::size_t shard = 0; shard < impl_->num_outgoing_stacks_per_queue; ++shard)
-      impl_->outgoing_stacks[queue.shard_offset + shard].DrainAndProcess(
-        [this, &first_section, &have_first_section, &send_buffer, &send_data, &num_sections](
+      impl_->outgoing_stacks[queue.shard_offset + shard]->DrainAndProcess(
+        [&first_section, &have_first_section, &send_buffer, &send_data, &num_sections](
           ByteArray&& section)
         {
           const auto& section_data = section.Data();
@@ -374,8 +373,6 @@ CBCD_AsynchronousCommunicator::FlushActiveOutgoingQueue(const std::size_t queue_
           {
             send_buffer = std::move(first_section);
             send_data = &send_buffer.Data();
-            if (impl_->max_message_bytes > 0 && send_data->capacity() < impl_->max_message_bytes)
-              send_data->reserve(impl_->max_message_bytes);
           }
 
           const auto payload_bytes = section_data.size() - Wire::AGGREGATE_HEADER_BYTES;
@@ -444,8 +441,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto& entry_header = Wire::LoadEntryHeader(ptr);
         ptr += entry_header.data_size * sizeof(double);
       }
-      assert(impl_->incoming_mailboxes[angle_set_id].Push(
-        IncomingSection{recv_buffer, section_data, num_entries}));
+      impl_->incoming_mailboxes[angle_set_id]->Push(
+        IncomingSection{recv_buffer, section_data, num_entries});
     }
   }
   return received_any;
@@ -501,7 +498,7 @@ CBCD_AsynchronousCommunicator::AllWorkComplete() const
 
   for (const auto& queue : impl_->outgoing_queues)
     for (std::size_t shard = 0; shard < impl_->num_outgoing_stacks_per_queue; ++shard)
-      if (not impl_->outgoing_stacks[queue.shard_offset + shard].Empty())
+      if (not impl_->outgoing_stacks[queue.shard_offset + shard]->Empty())
         return false;
 
   return true;

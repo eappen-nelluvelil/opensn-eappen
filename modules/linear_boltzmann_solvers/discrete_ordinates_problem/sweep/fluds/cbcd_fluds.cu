@@ -52,16 +52,10 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
   const auto& outgoing_localities = common_data_.GetOutgoingLocalities();
   outgoing_queue_indices_.assign(outgoing_localities.size(), -1);
 
-  constexpr std::size_t aggregate_header_size = sizeof(std::size_t);
-  constexpr std::size_t section_header_size = 2 * sizeof(std::size_t);
-  constexpr std::size_t entry_header_size =
-    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t);
-
   const std::size_t num_dests = outgoing_queue_indices_.size();
   scratch_dest_face_counts_.resize(num_dests, 0);
   active_dest_indices_.reserve(num_dests);
   dest_buffers_.resize(num_dests);
-  dest_buffer_capacities_.assign(num_dests, aggregate_header_size + section_header_size);
 
   outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
   for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
@@ -69,9 +63,6 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
   {
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
-      dest_buffer_capacities_[face_info.dest_slot] +=
-        entry_header_size + static_cast<std::size_t>(face_info.num_face_nodes) *
-                              num_groups_and_angles_ * sizeof(double);
       for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
       {
         outgoing_node_memcpy_plan_.push_back(
@@ -80,9 +71,6 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
       }
     }
   }
-
-  for (std::size_t dest_index = 0; dest_index < num_dests; ++dest_index)
-    dest_buffers_[dest_index].Data().reserve(dest_buffer_capacities_[dest_index]);
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -327,7 +315,6 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                 sizeof(std::size_t));
     ByteArray send_buffer;
     std::swap(send_buffer, dest_buffers_[dest_index]);
-    dest_buffers_[dest_index].Data().reserve(dest_buffer_capacities_[dest_index]);
     const auto queue_index = outgoing_queue_indices_[dest_index];
     assert(queue_index >= 0);
     async_comm.EnqueuePrepackedByIndex(queue_index, angle_set_id, std::move(send_buffer));

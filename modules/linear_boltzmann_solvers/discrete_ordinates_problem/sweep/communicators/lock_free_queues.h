@@ -53,7 +53,14 @@ public:
   template <class F>
   bool DrainAndProcess(F callback)
   {
-    return stack_.consume_all_atomic([&callback](const T& payload) { callback(payload); }) > 0;
+    bool drained_any = false;
+    T payload;
+    while (stack_.pop(payload))
+    {
+      drained_any = true;
+      callback(std::move(payload));
+    }
+    return drained_any;
   }
 
   /**
@@ -63,7 +70,11 @@ public:
    */
   bool DrainAndDiscard()
   {
-    return stack_.consume_all_atomic([](const T&) {}) > 0;
+    bool drained_any = false;
+    T payload;
+    while (stack_.pop(payload))
+      drained_any = true;
+    return drained_any;
   }
 
   /// Check whether the stack is currently empty.

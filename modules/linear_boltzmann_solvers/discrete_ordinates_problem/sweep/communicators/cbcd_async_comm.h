@@ -29,7 +29,7 @@ class MPICommunicatorSet;
  *
  * Owns one communication thread for a groupset and handles all MPI communication
  * traffic for the angle sets in that groupset. Outgoing sections are produced by
- * sweep threads, pushed into sharded lock-free SPSC queues, activated by a
+ * sweep threads, pushed into sharded lock-free Treiber stacks, activated by a
  * destination bitset, aggregated by destination locality, and sent asynchronously.
  * Incoming aggregate messages are received once, split into per-angle-set sections,
  * and pushed into lock-free mailboxes that the sweep threads drain on demand.
@@ -162,15 +162,11 @@ public:
    * \param angle_sets Pointers to all anglesets serviced by this communicator.
    * \param comm_set MPI communicator set for tag allocation.
    * \param outgoing_dest_localities Ordered outgoing destination-locality table.
-   * \param outgoing_shard_capacities Per-shard SPSC queue capacities for outgoing sections.
-   * \param incoming_mailbox_capacities Per-angle-set SPSC mailbox capacities.
    * \param max_message_bytes Maximum bytes for aggregate send message.
    */
   CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
                                 const MPICommunicatorSet& comm_set,
                                 const std::vector<int>& outgoing_dest_localities,
-                                const std::vector<std::size_t>& outgoing_shard_capacities,
-                                const std::vector<std::size_t>& incoming_mailbox_capacities,
                                 std::size_t max_message_bytes);
 
   /**

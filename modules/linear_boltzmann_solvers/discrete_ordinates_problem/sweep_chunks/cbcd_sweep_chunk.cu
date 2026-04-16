@@ -59,14 +59,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       outgoing_dest_set.insert(outgoing_localities.begin(), outgoing_localities.end());
     }
     std::vector<int> outgoing_dest_localities(outgoing_dest_set.begin(), outgoing_dest_set.end());
-    std::unordered_map<int, std::size_t> dest_to_queue_index;
-    dest_to_queue_index.reserve(outgoing_dest_localities.size());
-    for (std::size_t queue_index = 0; queue_index < outgoing_dest_localities.size(); ++queue_index)
-      dest_to_queue_index.emplace(outgoing_dest_localities[queue_index], queue_index);
-
-    std::vector<std::size_t> outgoing_shard_capacities(
-      outgoing_dest_localities.size() * angle_sets_.size(), 0);
-    std::vector<std::size_t> incoming_mailbox_capacities(angle_sets_.size(), 0);
     std::unordered_map<int, std::vector<std::size_t>> source_as_section_bytes;
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
     {
@@ -75,17 +67,10 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
-        for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
-        {
-          const auto locality = common_data.GetOutgoingLocalities()[face_info.dest_slot];
-          const auto queue_index = dest_to_queue_index.at(locality);
-          ++outgoing_shard_capacities[queue_index * angle_sets_.size() + as_ss_idx];
-        }
         for (const auto& face_info : common_data.GetIncomingNonlocalFaces(cell_local_id))
         {
           if (face_info.num_nodes == 0)
             continue;
-          ++incoming_mailbox_capacities[as_ss_idx];
           auto& per_as_bytes = source_as_section_bytes[face_info.source_partition];
           if (per_as_bytes.empty())
             per_as_bytes.assign(angle_sets_.size(), 0);
@@ -114,8 +99,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
                                                       angle_sets_.front()->GetCommunicatorSet(),
                                                       outgoing_dest_localities,
-                                                      outgoing_shard_capacities,
-                                                      incoming_mailbox_capacities,
                                                       max_message_bytes);
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);
