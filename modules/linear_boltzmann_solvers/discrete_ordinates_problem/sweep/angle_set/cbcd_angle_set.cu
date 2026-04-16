@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <thread>
 
 namespace opensn
 {
@@ -312,11 +313,12 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
       }
     });
 
-  // Flush the completed batch before reusing its mapped launch buffer.
-  FlushCompletedBatch(cbcd_sweep_chunk);
-
   // Launch the next batch once the stream is idle.
   work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
+
+  // Flush the completed batch after launching the next one so host packing
+  // overlaps with device execution when another batch is ready.
+  FlushCompletedBatch(cbcd_sweep_chunk);
 
   // Finalize once all tasks are done and no kernel is in flight.
   if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight))
@@ -341,20 +343,20 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
     return AngleSetStatus::FINISHED;
 
   auto& cbcd_sweep_chunk = static_cast<CBCDSweepChunk&>(sweep_chunk);
-  bool progressed = false;
   if (not boundary_data_initialized_)
   {
     if (not TryInitialize(cbcd_sweep_chunk))
       return AngleSetStatus::NOT_FINISHED;
-    progressed = true;
   }
 
-  while (TryAdvanceOneStep(cbcd_sweep_chunk))
-    progressed = true;
+  while (not executed_)
+  {
+    if (TryAdvanceOneStep(cbcd_sweep_chunk))
+      continue;
+    std::this_thread::yield();
+  }
 
-  if (executed_)
-    return AngleSetStatus::FINISHED;
-  return progressed ? AngleSetStatus::READY_TO_EXECUTE : AngleSetStatus::NOT_FINISHED;
+  return AngleSetStatus::FINISHED;
 }
 
 void
