@@ -37,8 +37,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     sdm_(sdm),
     num_local_spatial_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_) / psi_uk_man_.GetNumberOfUnknowns() /
                             num_groups_),
-    local_psi_data_size_(cbc_spds_.GetMaxNumLocalPsiSlots() * cbc_spds_.GetMaxLocalFaceNodeCount() *
-                         num_groups_and_angles_),
+    local_psi_data_size_(cbc_spds_.GetTotalLocalFaceSlotNodes() * num_groups_and_angles_),
     saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
     incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),

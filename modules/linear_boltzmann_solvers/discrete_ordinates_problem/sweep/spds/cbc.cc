@@ -68,6 +68,7 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
   producer_cell_face_offsets_.assign(num_loc_cells + 1, 0);
   local_face_producer_ranks_.clear();
   local_face_consumer_ranks_.clear();
+  local_face_node_counts_.clear();
   max_local_face_node_count_ = 0;
 
   for (std::size_t producer_rank = 0; producer_rank < topo_order_.size(); ++producer_rank)
@@ -96,6 +97,7 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
       const auto face_task_id = static_cast<std::uint32_t>(local_face_producer_ranks_.size());
       local_face_producer_ranks_.push_back(static_cast<std::uint32_t>(producer_rank));
       local_face_consumer_ranks_.push_back(topo_rank[consumer_cell_local_id]);
+      local_face_node_counts_.push_back(static_cast<std::uint16_t>(num_face_nodes));
       outgoing_local_face_task_ids_[cell_face_offsets_[producer_cell_local_id] + f] = face_task_id;
       incoming_local_face_task_ids_[cell_face_offsets_[consumer_cell_local_id] + consumer_face_id] =
         face_task_id;
@@ -106,6 +108,29 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
     static_cast<std::uint32_t>(local_face_producer_ranks_.size());
   local_face_slot_ids_.resize(local_face_producer_ranks_.size());
   std::iota(local_face_slot_ids_.begin(), local_face_slot_ids_.end(), std::uint32_t{0});
+}
+
+void
+CBC_SPDS::UpdateLocalFaceSlotLayout()
+{
+  local_face_slot_node_counts_.assign(max_num_local_psi_slots_, std::uint16_t{0});
+  local_face_slot_node_offsets_.assign(max_num_local_psi_slots_ + 1, std::uint32_t{0});
+  total_local_face_slot_nodes_ = 0;
+
+  for (std::size_t face_task_id = 0; face_task_id < local_face_slot_ids_.size(); ++face_task_id)
+  {
+    const auto slot_id = local_face_slot_ids_[face_task_id];
+    assert(slot_id < local_face_slot_node_counts_.size());
+    local_face_slot_node_counts_[slot_id] =
+      std::max(local_face_slot_node_counts_[slot_id], local_face_node_counts_[face_task_id]);
+  }
+
+  for (std::size_t slot_id = 0; slot_id < local_face_slot_node_counts_.size(); ++slot_id)
+  {
+    local_face_slot_node_offsets_[slot_id] = static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+    total_local_face_slot_nodes_ += local_face_slot_node_counts_[slot_id];
+  }
+  local_face_slot_node_offsets_.back() = static_cast<std::uint32_t>(total_local_face_slot_nodes_);
 }
 
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
@@ -169,6 +194,7 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   // One slot per local directed face, which is refined by
   // ComputeMaxNumLocalPsiSlots() if called subsequently.
   max_num_local_psi_slots_ = local_face_producer_ranks_.size();
+  UpdateLocalFaceSlotLayout();
 }
 
 const std::vector<Task>&
@@ -201,6 +227,7 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
 
   const auto result = face_slot_allocator.Solve();
   max_num_local_psi_slots_ = result.slot_count;
+  UpdateLocalFaceSlotLayout();
   if (result.verifier_rejected)
     opensn::log.LogAllWarning()
       << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: local cell-face slot assignment verifier rejected "

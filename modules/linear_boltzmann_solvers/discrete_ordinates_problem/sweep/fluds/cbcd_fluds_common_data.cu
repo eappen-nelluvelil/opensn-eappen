@@ -24,7 +24,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   const size_t num_local_cells = grid.local_cells.size();
   const auto& face_orientations = spds_.GetCellFaceOrientations();
   const auto local_face_slot_ids = cbc_spds.GetLocalFaceSlotIDs();
-  const auto max_local_face_nodes = cbc_spds.GetMaxLocalFaceNodeCount();
+  const auto local_face_slot_node_offsets = cbc_spds.GetLocalFaceSlotNodeOffsets();
   std::uint64_t total_face_nodes = 0;
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
@@ -98,7 +98,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
             const auto slot_id = local_face_slot_ids[task_id];
             const auto local_face_node =
               static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
-            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(slot_id) * max_local_face_nodes +
+            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
                                           local_face_node,
                                         is_outgoing_face,
                                         true);
@@ -160,7 +160,7 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
             const auto task_id = cbc_spds.GetOutgoingLocalFaceTaskID(
               static_cast<std::uint32_t>(cell.local_id), static_cast<unsigned int>(f));
             const auto slot_id = local_face_slot_ids[task_id];
-            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(slot_id) * max_local_face_nodes +
+            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
                                           static_cast<std::uint64_t>(fn),
                                         is_outgoing_face,
                                         true);

@@ -58,6 +58,21 @@ public:
     return local_face_slot_ids_;
   }
 
+  /// Return the base node offset of each local-face slot in the compact bank.
+  const std::vector<std::uint32_t>& GetLocalFaceSlotNodeOffsets() const noexcept
+  {
+    return local_face_slot_node_offsets_;
+  }
+
+  /// Return the node extent of each local-face slot.
+  const std::vector<std::uint16_t>& GetLocalFaceSlotNodeCounts() const noexcept
+  {
+    return local_face_slot_node_counts_;
+  }
+
+  /// Return the total number of local-face nodes stored in the compact slot bank.
+  std::size_t GetTotalLocalFaceSlotNodes() const noexcept { return total_local_face_slot_nodes_; }
+
   /// Return the maximum number of nodes over all local directed faces.
   std::size_t GetMaxLocalFaceNodeCount() const noexcept { return max_local_face_node_count_; }
 
@@ -115,12 +130,23 @@ private:
   std::vector<std::uint32_t> local_face_producer_ranks_;
   /// Consumer-cell topological rank for each local directed face.
   std::vector<std::uint32_t> local_face_consumer_ranks_;
+  /// Number of nodes for each local directed face task.
+  std::vector<std::uint16_t> local_face_node_counts_;
   /// Static slot assignment: local_face_slot_ids_[face_task_id] = slot_id.
   std::vector<std::uint32_t> local_face_slot_ids_;
+  /// Slot-local node extents: local_face_slot_node_counts_[slot_id] = max nodes in that slot.
+  std::vector<std::uint16_t> local_face_slot_node_counts_;
+  /// Prefix offsets into the compact local-face slot bank.
+  std::vector<std::uint32_t> local_face_slot_node_offsets_;
   /// Minimum number of local-face angular flux storage slots.
   std::size_t max_num_local_psi_slots_ = 0;
+  /// Total number of local-face nodes in the compact slot bank.
+  std::size_t total_local_face_slot_nodes_ = 0;
   /// Maximum number of nodes across all local directed faces.
   std::size_t max_local_face_node_count_ = 0;
+
+  /// Recompute slot-local node extents and prefix offsets from the current slot assignment.
+  void UpdateLocalFaceSlotLayout();
 };
 
 } // namespace opensn
