@@ -33,6 +33,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   std::set<int> sources;
   std::set<int> destinations;
   std::size_t total_outgoing_faces = 0;
+  std::size_t max_outgoing_face_values = 0;
 
   for (std::size_t i = 0; i < angle_sets.size(); ++i)
   {
@@ -44,10 +45,21 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
       destinations.insert(succ);
 
     total_outgoing_faces += capacities[i].outgoing_faces;
+    max_outgoing_face_values =
+      std::max(max_outgoing_face_values, capacities[i].max_outgoing_face_values);
     if (capacities[i].incoming_faces > 0)
     {
       auto mailbox = std::make_unique<LockFreeRingBuffer<std::vector<IncomingFaceData>>>();
       mailbox->Preallocate(capacities[i].incoming_faces + 1);
+      mailbox->InitializeSlots(
+        [&](std::vector<IncomingFaceData>& batch)
+        {
+          batch.reserve(capacities[i].max_incoming_batch_entries);
+          batch.resize(capacities[i].max_incoming_batch_entries);
+          for (auto& entry : batch)
+            entry.psi_data.reserve(capacities[i].max_incoming_face_values);
+          batch.clear();
+        });
       incoming_mailboxes_.push_back(std::move(mailbox));
     }
     else
@@ -82,6 +94,9 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     queue->queue = std::make_unique<LockFreeRingBuffer<OutgoingFaceData>>();
     if (total_outgoing_faces > 0)
       queue->queue->Preallocate(total_outgoing_faces + 1);
+    queue->queue->InitializeSlots(
+      [max_outgoing_face_values](OutgoingFaceData& payload)
+      { payload.psi_data.reserve(max_outgoing_face_values); });
     outgoing_queues_.push_back(std::move(queue));
     dest_to_queue_index_[dest_rank] = queue_index++;
   }

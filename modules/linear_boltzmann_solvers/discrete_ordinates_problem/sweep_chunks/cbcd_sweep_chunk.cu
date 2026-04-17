@@ -66,10 +66,26 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
+        for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
+        {
+          capacities[as_ss_idx].max_outgoing_face_values =
+            std::max(capacities[as_ss_idx].max_outgoing_face_values,
+                     static_cast<std::size_t>(face_info.num_face_nodes) * stride);
+        }
+      }
+
+      std::unordered_map<std::uint32_t, std::size_t> incoming_entries_by_source_slot;
+      for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
+           ++cell_local_id)
+      {
         for (const auto& face_info : common_data.GetIncomingNonlocalFaces(cell_local_id))
         {
           if (face_info.num_nodes == 0)
             continue;
+          capacities[as_ss_idx].max_incoming_face_values =
+            std::max(capacities[as_ss_idx].max_incoming_face_values,
+                     static_cast<std::size_t>(face_info.num_nodes) * stride);
+          ++incoming_entries_by_source_slot[face_info.source_slot];
           const auto source_partition =
             common_data.GetIncomingSourcePartitions()[face_info.source_slot];
           auto& per_as_bytes = source_as_section_bytes[source_partition];
@@ -80,6 +96,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
         }
       }
+      for (const auto& [_, count] : incoming_entries_by_source_slot)
+        capacities[as_ss_idx].max_incoming_batch_entries =
+          std::max(capacities[as_ss_idx].max_incoming_batch_entries, count);
     }
 
     std::size_t max_message_bytes = 0;

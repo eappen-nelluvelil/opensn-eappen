@@ -42,6 +42,9 @@ struct AngleSetCapacity
 {
   std::size_t outgoing_faces = 0;
   std::size_t incoming_faces = 0;
+  std::size_t max_outgoing_face_values = 0;
+  std::size_t max_incoming_face_values = 0;
+  std::size_t max_incoming_batch_entries = 0;
 };
 
 class CBCD_AsynchronousCommunicator

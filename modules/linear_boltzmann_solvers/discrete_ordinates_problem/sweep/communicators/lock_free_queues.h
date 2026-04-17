@@ -37,6 +37,13 @@ public:
     buffer_ = std::vector<Slot>(capacity);
   }
 
+  template <typename Callback>
+  void InitializeSlots(Callback&& cb)
+  {
+    for (auto& slot : buffer_)
+      cb(slot.payload);
+  }
+
   Slot& ReserveSlot()
   {
     const auto idx = head_.fetch_add(1, std::memory_order_relaxed) % buffer_.size();
