@@ -39,6 +39,12 @@ public:
   /// Update the starting latch and following angle sets.
   void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
+  void ResetSweepDependencies() override
+  {
+    following_angle_sets_.clear();
+    num_dependencies_ = 0;
+  }
+
   /// Set the latch value to wait on before starting the sweep.
   void ResetDependencyCounter();
 

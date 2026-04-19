@@ -38,15 +38,17 @@ public:
 
   const std::vector<crb::Stream>& GetStreams() const { return streams_list_; }
 
+  bool IsTimeDependent() const override { return time_dependent_; }
+
   using SweepChunk::Sweep;
   void Sweep(const std::vector<std::uint32_t>& cell_local_ids, size_t angle_set_id);
 
 private:
   DiscreteOrdinatesProblem& problem_;
+  bool time_dependent_;
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<CBCD_FLUDS*> fluds_list_;
   std::vector<crb::Stream> streams_list_;
-  std::vector<gpu_kernel::Arguments<gpu_kernel::SweepType::CBC>> kernel_args_list_;
   std::vector<::dim3> block_sizes_;
   std::vector<unsigned int> grid_size_x_list_;
 };

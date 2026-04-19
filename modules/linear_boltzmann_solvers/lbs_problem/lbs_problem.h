@@ -315,6 +315,8 @@ protected:
                                   double power_normalization_target);
   virtual bool ReadProblemRestartData(hid_t file_id);
   virtual bool WriteProblemRestartData(hid_t file_id) const;
+  /// Rebuild GPU carriers and pinners after runtime state changes affecting device-side data.
+  void RefreshGPUExtras();
 
   LBSOptions options_;
   double time_ = 0.0;

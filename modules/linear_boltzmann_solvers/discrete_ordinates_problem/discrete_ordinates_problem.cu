@@ -133,4 +133,24 @@ DiscreteOrdinatesProblem::CopyPhiAndOutflowBackToHost()
   outflow->Reset();
 }
 
+void
+DiscreteOrdinatesProblem::InvalidateDevicePsiOld()
+{
+  if (!use_gpus_)
+    return;
+
+  for (auto& groupset : groupsets_)
+  {
+    if (!groupset.angle_agg)
+      continue;
+    for (auto& angle_set : groupset.angle_agg->GetAngleSetGroups())
+    {
+      if (auto* aahd_fluds = dynamic_cast<AAHD_FLUDS*>(&angle_set->GetFLUDS()))
+        aahd_fluds->InvalidateDevicePsiOld();
+      if (auto* cbcd_fluds = dynamic_cast<CBCD_FLUDS*>(&angle_set->GetFLUDS()))
+        cbcd_fluds->InvalidateDevicePsiOld();
+    }
+  }
+}
+
 } // namespace opensn

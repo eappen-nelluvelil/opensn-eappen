@@ -48,6 +48,11 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
 CBCD_FLUDS::~CBCD_FLUDS()
 {
   local_psi_.async_free(stream_);
+  if (not host_psi_old_.empty())
+  {
+    host_psi_old_.clear();
+    device_psi_old_.async_free(stream_);
+  }
   if (not host_saved_psi_.empty())
   {
     host_saved_psi_.clear();
@@ -64,12 +69,61 @@ void
 CBCD_FLUDS::AllocateLocalAndSavedPsi()
 {
   local_psi_ = crb::DeviceMemory<double>(local_psi_data_size_, stream_);
+  if (host_psi_old_.empty())
+  {
+    host_psi_old_ = crb::HostVector<double>(local_psi_data_size_);
+    device_psi_old_ = crb::DeviceMemory<double>(local_psi_data_size_, stream_);
+  }
   if (save_angular_flux_ and host_saved_psi_.empty())
   {
     host_saved_psi_ = crb::HostVector<double>(local_psi_data_size_);
     device_saved_psi_ = crb::DeviceMemory<double>(local_psi_data_size_, stream_);
   }
   CreatePointerSet();
+}
+
+void
+CBCD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                               const LBSGroupset& groupset,
+                               CBCD_AngleSet* angle_set)
+{
+  if (psi_old_on_device_)
+    return;
+
+  const auto& psi_old_host = problem.GetPsiOldLocal()[groupset.id];
+  if (psi_old_host.empty())
+    return;
+
+  auto* mesh = problem.GetMeshCarrier();
+  auto grid = problem.GetGrid();
+  const auto& discretization = problem.GetSpatialDiscretization();
+  const std::size_t groupset_angle_group_stride =
+    groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
+  const auto& angle_indices = angle_set->GetAngleIndices();
+  const auto num_angles = angle_set->GetNumAngles();
+
+  for (const auto& cell : grid->local_cells)
+  {
+    const double* src_psi = &psi_old_host[discretization.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0)];
+    double* dst_psi =
+      host_psi_old_.data() + mesh->saved_psi_offset[cell.local_id] * GetStrideSize();
+    const std::uint32_t cell_num_nodes = discretization.GetCellMapping(cell).GetNumNodes();
+    for (std::uint32_t i = 0; i < cell_num_nodes; ++i)
+    {
+      for (std::uint32_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
+      {
+        const auto direction_num = angle_indices[as_ss_idx];
+        const double* src = src_psi + direction_num * num_groups_;
+        double* dst = dst_psi + as_ss_idx * num_groups_;
+        std::copy(src, src + num_groups_, dst);
+      }
+      src_psi += groupset_angle_group_stride;
+      dst_psi += num_groups_and_angles_;
+    }
+  }
+
+  crb::copy(device_psi_old_, host_psi_old_, host_psi_old_.size(), 0, 0, stream_);
+  psi_old_on_device_ = true;
 }
 
 void

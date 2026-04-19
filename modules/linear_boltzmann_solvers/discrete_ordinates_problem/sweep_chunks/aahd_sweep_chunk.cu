@@ -31,7 +31,8 @@ AAHDSweepChunk::AAHDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetNumMoments(),
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
-    problem_(problem)
+    problem_(problem),
+    time_dependent_(problem.IsTimeDependent())
 {
 }
 
@@ -43,7 +44,7 @@ AAHDSweepChunk::Sweep(AngleSet& angle_set)
   auto& fluds = static_cast<AAHD_FLUDS&>(aahd_angle_set.GetFLUDS());
   auto& stream = aahd_angle_set.GetStream();
   gpu_kernel::Arguments<gpu_kernel::SweepType::AAH> args(
-    problem_, groupset_, aahd_angle_set, fluds);
+    problem_, groupset_, aahd_angle_set, fluds, time_dependent_, include_rhs_time_term_);
   double* saved_psi = fluds.GetSavedAngularFluxDevicePointer();
   // retrieve SPDS levels
   const auto& spds = static_cast<const AAH_SPDS&>(aahd_angle_set.GetSPDS());

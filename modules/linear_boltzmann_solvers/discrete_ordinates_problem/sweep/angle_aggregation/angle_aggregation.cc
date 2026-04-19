@@ -91,6 +91,9 @@ AngleAggregation::SetupAngleSetDependencies()
   std::unordered_map<AngleSet*, std::set<AngleSet*>> extra_following;
   following_angle_sets_map_.clear();
 
+  for (auto& angle_set : angle_set_groups_)
+    angle_set->ResetSweepDependencies();
+
   // Build angleset dependencies for RZ
   const auto* curvi_quad = dynamic_cast<const CurvilinearProductQuadrature*>(quadrature_.get());
   const auto* product_quad = dynamic_cast<const ProductQuadrature*>(quadrature_.get());

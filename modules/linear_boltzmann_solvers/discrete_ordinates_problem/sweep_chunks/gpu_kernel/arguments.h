@@ -52,7 +52,9 @@ struct Arguments
   Arguments(DiscreteOrdinatesProblem& problem,
             const LBSGroupset& groupset,
             AngleSetType& angle_set,
-            FLUDSType& fluds)
+            FLUDSType& fluds,
+            bool time_dependent = false,
+            bool include_rhs_time_term = true)
   {
     // Get mesh and quadrature data
     auto* mesh = problem.GetMeshCarrier();
@@ -74,6 +76,23 @@ struct Arguments
     // Copy FLUDS data to GPU and retrieve the pointer set
     flud_data = fluds.GetDevicePointerSet();
     flud_index = fluds.GetCommonData().GetDeviceIndex();
+    // Transient data
+    this->time_dependent = time_dependent;
+    this->include_rhs_time_term = include_rhs_time_term;
+    if (time_dependent)
+    {
+      theta = problem.GetTheta();
+      inv_theta = 1.0 / theta;
+      inv_dt = 1.0 / problem.GetTimeStep();
+      psi_old = fluds.GetPsiOldDevicePointer();
+    }
+    else
+    {
+      theta = 1.0;
+      inv_theta = 1.0;
+      inv_dt = 0.0;
+      psi_old = nullptr;
+    }
   }
 
   // Mesh and quadrature
@@ -92,6 +111,13 @@ struct Arguments
   // FLUDS
   const std::uint64_t* __restrict__ flud_index;
   FLUDSPointerSetType flud_data;
+  // Transient
+  bool time_dependent;
+  bool include_rhs_time_term;
+  double theta;
+  double inv_theta;
+  double inv_dt;
+  const double* __restrict__ psi_old;
 };
 
 } // namespace opensn::gpu_kernel

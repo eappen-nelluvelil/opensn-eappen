@@ -23,11 +23,13 @@ public:
   DiscreteOrdinatesProblem& GetProblem() { return problem_; }
   MeshContinuum& GetGrid() { return *grid_; }
   const LBSGroupset& GetGroupset() const { return groupset_; }
+  bool IsTimeDependent() const override { return time_dependent_; }
 
   void Sweep(AngleSet& angle_set) override;
 
 protected:
   DiscreteOrdinatesProblem& problem_;
+  bool time_dependent_;
 };
 
 } // namespace opensn

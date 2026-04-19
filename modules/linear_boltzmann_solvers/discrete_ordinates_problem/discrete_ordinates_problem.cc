@@ -132,8 +132,6 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
 {
   if (params.GetParamValue<bool>("time_dependent"))
   {
-    if (UseGPUs())
-      throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
     if (options_.adjoint)
       throw std::runtime_error(GetName() + ": Time-dependent adjoint problems are not supported.");
     if (geometry_type_ == GeometryType::TWOD_CYLINDRICAL)
@@ -786,8 +784,6 @@ DiscreteOrdinatesProblem::ResetMode(SweepChunkMode target_mode)
 
   if (switching_to_transient)
   {
-    if (UseGPUs())
-      throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
     if (options_.adjoint)
       throw std::runtime_error(GetName() + ": Time-dependent adjoint problems are not supported.");
     if (geometry_type_ == GeometryType::TWOD_CYLINDRICAL)
@@ -877,6 +873,9 @@ DiscreteOrdinatesProblem::SetBlockID2XSMap(const BlockID2XSMap& xs_map)
 
   if (not initialized_)
     return;
+
+  if (use_gpus_)
+    RefreshGPUExtras();
 
   for (auto& groupset : groupsets_)
   {
@@ -1510,6 +1509,11 @@ DiscreteOrdinatesProblem::CopyPhiAndOutflowBackToHost()
 }
 
 void
+DiscreteOrdinatesProblem::InvalidateDevicePsiOld()
+{
+}
+
+void
 DiscreteOrdinatesProblem::CreateCBCD_FLUDSCommonData()
 {
   throw std::runtime_error(
@@ -1882,16 +1886,12 @@ DiscreteOrdinatesProblem::SetSweepChunk(LBSGroupset& groupset)
 
   const bool use_time_dependent_chunk = (mode == SweepChunkMode::TIME_DEPENDENT);
 
-  if (use_time_dependent_chunk && sweep_type_ != "AAH")
-    throw std::invalid_argument(GetName() +
-                                ": Time dependent is only supported with sweep_type='AAH'.");
-
   if (sweep_type_ == "AAH")
   {
-    if (use_time_dependent_chunk)
-      return std::make_shared<AAHSweepChunkTD>(*this, groupset);
     if (use_gpus_)
       return CreateAAHD_SweepChunk(groupset);
+    if (use_time_dependent_chunk)
+      return std::make_shared<AAHSweepChunkTD>(*this, groupset);
     return std::make_shared<AAHSweepChunk>(*this, groupset);
   }
   else if (sweep_type_ == "CBC")
@@ -1912,6 +1912,8 @@ DiscreteOrdinatesProblem::ZeroPsi()
 
   for (auto& psi : psi_old_local_)
     psi.assign(psi.size(), 0.0);
+
+  InvalidateDevicePsiOld();
 }
 
 void
@@ -1928,6 +1930,8 @@ DiscreteOrdinatesProblem::UpdatePsiOld()
     assert(psi_old_local_[gs].size() == psi_new_local_[gs].size());
     std::copy(psi_new_local_[gs].begin(), psi_new_local_[gs].end(), psi_old_local_[gs].begin());
   }
+
+  InvalidateDevicePsiOld();
 }
 
 bool

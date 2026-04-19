@@ -63,6 +63,10 @@ struct CellView
     const double* const* total_xs_data = reinterpret_cast<const double* const*>(cell_data);
     total_xs = *(total_xs_data++);
     cell_data = reinterpret_cast<const char*>(total_xs_data);
+    // inverse velocity pointer
+    const double* const* inv_vel_data = reinterpret_cast<const double* const*>(cell_data);
+    inv_velocity = *(inv_vel_data++);
+    cell_data = reinterpret_cast<const char*>(inv_vel_data);
     // phi address
     const std::uint64_t* phi_address_data = reinterpret_cast<const std::uint64_t*>(cell_data);
     phi_address = *(phi_address_data++);
@@ -87,6 +91,7 @@ struct CellView
   std::uint32_t num_nodes;
   std::uint32_t num_faces;
   const double* total_xs;
+  const double* inv_velocity;
   std::uint64_t phi_address;
   std::uint64_t save_psi_index;
   const double* GM_data;

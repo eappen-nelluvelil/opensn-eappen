@@ -46,6 +46,13 @@ LBSProblem::ResetGPUCarriers()
 }
 
 void
+LBSProblem::RefreshGPUExtras()
+{
+  ResetGPUCarriers();
+  InitializeGPUExtras();
+}
+
+void
 LBSProblem::CheckCapableDevices()
 {
   std::uint32_t num_gpus = crb::get_num_gpus();

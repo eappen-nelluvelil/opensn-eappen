@@ -18,6 +18,8 @@ namespace opensn
 {
 
 class CBCD_AngleSet;
+class DiscreteOrdinatesProblem;
+class LBSGroupset;
 class UnknownManager;
 class SpatialDiscretization;
 class Cell;
@@ -55,8 +57,19 @@ public:
   /// Get saved angular flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
 
+  /// Get previous time-step angular flux device pointer.
+  double* GetPsiOldDevicePointer() { return device_psi_old_.get(); }
+
   /// Copy saved psi from device to host.
   void CopySavedPsiFromDevice();
+
+  /// Copy previous time-step angular flux from host to device.
+  void CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                          const LBSGroupset& groupset,
+                          CBCD_AngleSet* angle_set);
+
+  /// Invalidate cached device psi_old data.
+  void InvalidateDevicePsiOld() { psi_old_on_device_ = false; }
 
   /// Copy saved psi from host to destination psi host buffer.
   void CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set);
@@ -131,6 +144,10 @@ private:
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
   crb::HostVector<double> host_saved_psi_;
+  /// Device buffer for previous time-step angular fluxes.
+  crb::DeviceMemory<double> device_psi_old_;
+  crb::HostVector<double> host_psi_old_;
+  bool psi_old_on_device_ = false;
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;
 

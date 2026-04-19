@@ -135,6 +135,7 @@ public:
 
   void CopyPhiAndSrcToDevice();
   void CopyPhiAndOutflowBackToHost();
+  void InvalidateDevicePsiOld();
 
 protected:
   /// Factory-only constructor.

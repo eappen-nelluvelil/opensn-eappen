@@ -61,6 +61,8 @@ public:
    */
   virtual void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) {}
 
+  virtual void ResetSweepDependencies() {}
+
   virtual AsynchronousCommunicator* GetCommunicator()
   {
     OpenSnLogicalError("Method not implemented");

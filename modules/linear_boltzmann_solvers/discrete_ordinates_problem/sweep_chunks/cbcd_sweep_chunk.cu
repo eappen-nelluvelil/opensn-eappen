@@ -25,7 +25,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetNumMoments(),
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
-    problem_(problem)
+    problem_(problem),
+    time_dependent_(problem.IsTimeDependent())
 {
   for (auto& as : *(groupset.angle_agg))
   {
@@ -34,8 +35,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     angle_sets_.push_back(angle_set);
     fluds_list_.push_back(fluds);
     streams_list_.push_back(angle_set->GetStream());
-    gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(problem_, groupset_, *angle_set, *fluds);
-    kernel_args_list_.push_back(args);
+    gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(
+      problem_, groupset_, *angle_set, *fluds, time_dependent_, include_rhs_time_term_);
     unsigned int stride_size =
       gpu_kernel::RoundUp(static_cast<unsigned int>(args.flud_data.stride_size));
     unsigned int block_size_x = std::min(stride_size, gpu_kernel::threshold);
@@ -52,11 +53,15 @@ CBCDSweepChunk::Sweep(const std::vector<std::uint32_t>& cell_local_ids, size_t a
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
   auto* fluds = fluds_list_[angle_set_id];
+  auto* angle_set = angle_sets_[angle_set_id];
+  if (time_dependent_)
+    fluds->CopyPsiOldToDevice(problem_, groupset_, angle_set);
   auto* device_saved_psi = fluds->GetSavedAngularFluxDevicePointer();
   const auto& stream = streams_list_[angle_set_id];
   auto& host_cell_local_ids = fluds->GetLocalCellIDs();
   std::copy(cell_local_ids.begin(), cell_local_ids.end(), host_cell_local_ids.begin());
-  const auto& args = kernel_args_list_[angle_set_id];
+  gpu_kernel::Arguments<gpu_kernel::SweepType::CBC> args(
+    problem_, groupset_, *angle_set, *fluds, time_dependent_, include_rhs_time_term_);
   ::dim3 block_size = block_sizes_[angle_set_id];
   unsigned int num_ready_cells = static_cast<unsigned int>(cell_local_ids.size());
   unsigned int grid_size_x = grid_size_x_list_[angle_set_id];
