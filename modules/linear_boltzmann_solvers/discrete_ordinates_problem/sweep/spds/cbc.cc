@@ -23,13 +23,21 @@ CBC_SPDS::BuildTaskGraph()
 
   const auto num_loc_cells = grid_->local_cells.size();
   task_list_.assign(num_loc_cells, Task{});
+  task_successor_rank_offsets_.assign(num_loc_cells + 1, 0);
+  task_successor_ranks_.clear();
+  task_successor_ranks_.reserve(num_loc_cells * 4);
+  std::vector<std::uint32_t> topo_rank(num_loc_cells, 0);
+  for (std::size_t rank = 0; rank < topo_order_.size(); ++rank)
+    topo_rank[topo_order_[rank]] = static_cast<std::uint32_t>(rank);
 
-  for (const auto& cell : grid_->local_cells)
+  for (std::size_t rank = 0; rank < topo_order_.size(); ++rank)
   {
+    const auto& cell = grid_->local_cells[topo_order_[rank]];
     unsigned int num_dependencies = 0;
     std::vector<std::uint32_t> successors;
 
     successors.reserve(cell.faces.size());
+    task_successor_rank_offsets_[rank] = static_cast<std::uint32_t>(task_successor_ranks_.size());
     for (std::size_t f = 0; f < cell.faces.size(); ++f)
     {
       const auto& face = cell.faces[f];
@@ -39,12 +47,17 @@ CBC_SPDS::BuildTaskGraph()
         ++num_dependencies;
       else if ((orientation == OUTGOING) and (face.has_neighbor) and
                (face.IsNeighborLocal(grid_.get())))
-        successors.push_back(grid_->cells[face.neighbor_id].local_id);
+      {
+        const auto successor_local_id = grid_->cells[face.neighbor_id].local_id;
+        successors.push_back(successor_local_id);
+        task_successor_ranks_.push_back(topo_rank[successor_local_id]);
+      }
     }
 
     task_list_[cell.local_id] =
       Task{num_dependencies, std::move(successors), cell.local_id, &cell, false};
   }
+  task_successor_rank_offsets_.back() = static_cast<std::uint32_t>(task_successor_ranks_.size());
 }
 
 void
@@ -116,6 +129,24 @@ CBC_SPDS::UpdateLocalFaceSlotLayout()
   local_face_slot_node_counts_.assign(max_num_local_psi_slots_, std::uint16_t{0});
   local_face_slot_node_offsets_.assign(max_num_local_psi_slots_ + 1, std::uint32_t{0});
   total_local_face_slot_nodes_ = 0;
+
+  bool is_identity_layout = max_num_local_psi_slots_ == local_face_slot_ids_.size();
+  for (std::size_t face_task_id = 0; is_identity_layout and face_task_id < local_face_slot_ids_.size();
+       ++face_task_id)
+    is_identity_layout = local_face_slot_ids_[face_task_id] == face_task_id;
+
+  if (is_identity_layout)
+  {
+    for (std::size_t slot_id = 0; slot_id < local_face_node_counts_.size(); ++slot_id)
+    {
+      local_face_slot_node_counts_[slot_id] = local_face_node_counts_[slot_id];
+      local_face_slot_node_offsets_[slot_id] =
+        static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+      total_local_face_slot_nodes_ += local_face_node_counts_[slot_id];
+    }
+    local_face_slot_node_offsets_.back() = static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+    return;
+  }
 
   for (std::size_t face_task_id = 0; face_task_id < local_face_slot_ids_.size(); ++face_task_id)
   {
@@ -217,7 +248,7 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   }
 
   static thread_local detail::ThreadLocalWorkspace workspace;
-  detail::BuildReachability(num_tasks, task_list_, topo_order_, workspace);
+  detail::BuildReachability(num_tasks, task_successor_rank_offsets_, task_successor_ranks_, workspace);
 
   detail::LocalFaceHopcroftKarp face_slot_allocator(local_face_producer_ranks_,
                                                     local_face_consumer_ranks_,

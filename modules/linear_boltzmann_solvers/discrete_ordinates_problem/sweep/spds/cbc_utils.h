@@ -110,7 +110,14 @@ public:
                std::size_t src_row,
                std::size_t start_pos = 0) noexcept
   {
-    const std::size_t start_word = start_pos / 64;
+    CopyRowFromWord(dst, src_mat, src_row, start_pos / 64);
+  }
+
+  void CopyRowFromWord(std::size_t dst,
+                       const BitMatrix& src_mat,
+                       std::size_t src_row,
+                       std::size_t start_word) noexcept
+  {
     const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
     if (start_word >= src_active_words)
     {
@@ -137,7 +144,14 @@ public:
               std::size_t src_row,
               std::size_t start_pos = 0) noexcept
   {
-    const std::size_t start_word = start_pos / 64;
+    OrRowsFromWord(dst, src_mat, src_row, start_pos / 64);
+  }
+
+  void OrRowsFromWord(std::size_t dst,
+                      const BitMatrix& src_mat,
+                      std::size_t src_row,
+                      std::size_t start_word) noexcept
+  {
     const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
     if (start_word >= src_active_words)
       return;
@@ -237,8 +251,6 @@ struct ThreadLocalWorkspace
 {
   /// Transitive closure of the task DAG (R[i][j] = 1 <==> task i reaches task j).
   BitMatrix reachability;
-  /// Inverse topological-order map: topo_rank[task_id] = rank.
-  std::vector<std::uint32_t> topo_rank;
   /// U-side matching for the local cell-face slots.
   std::vector<std::uint32_t> face_mate_u;
   /// V-side matching for the local cell-face slots.
@@ -258,8 +270,6 @@ struct ThreadLocalWorkspace
   void PrepareReachability(std::size_t n)
   {
     reachability.ResizeAndClear(n);
-    if (topo_rank.size() < n)
-      topo_rank.resize(n);
   }
 
   /// Prepare the local-face matching buffers for `n` directed faces.
@@ -277,29 +287,28 @@ struct ThreadLocalWorkspace
 
 inline void
 BuildReachability(const std::uint32_t num_tasks,
-                  const std::vector<Task>& task_list,
-                  const std::vector<std::uint32_t>& topo_order,
+                  const std::vector<std::uint32_t>& successor_rank_offsets,
+                  const std::vector<std::uint32_t>& successor_ranks,
                   ThreadLocalWorkspace& ws)
 {
   // Process tasks in forward topological order so each row can OR in successor rows
   // that have already been finalized in the transitive closure.
   ws.PrepareReachability(num_tasks);
   for (std::uint32_t i = 0; i < num_tasks; ++i)
-    ws.topo_rank[topo_order[i]] = i;
-  for (std::uint32_t i = 0; i < num_tasks; ++i)
   {
-    const std::uint32_t u = topo_order[i];
-    const auto& successors = task_list[u].successors;
+    const auto successor_begin = successor_ranks.begin() + successor_rank_offsets[i];
+    const auto successor_end = successor_ranks.begin() + successor_rank_offsets[i + 1];
+    const auto start_word = static_cast<std::size_t>(i / 64);
 
     // Each task reaches itself.
     ws.reachability.SetBit(i, i);
 
-    if (not successors.empty())
+    if (successor_begin != successor_end)
     {
-      ws.reachability.CopyRow(i, ws.reachability, ws.topo_rank[successors[0]], i);
+      ws.reachability.CopyRowFromWord(i, ws.reachability, *successor_begin, start_word);
       // Skip bits below the current topological rank because they are guaranteed to be zero.
-      for (std::size_t j = 1; j < successors.size(); ++j)
-        ws.reachability.OrRows(i, ws.reachability, ws.topo_rank[successors[j]], i);
+      for (auto it = successor_begin + 1; it != successor_end; ++it)
+        ws.reachability.OrRowsFromWord(i, ws.reachability, *it, start_word);
     }
   }
 }

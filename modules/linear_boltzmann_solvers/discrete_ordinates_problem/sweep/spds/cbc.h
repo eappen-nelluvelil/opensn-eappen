@@ -118,6 +118,10 @@ private:
   std::vector<std::uint32_t> topo_order_;
   /// Per-cell task descriptors with successor adjacency lists.
   std::vector<Task> task_list_;
+  /// Offsets into the flat successor-rank array indexed by topological task rank.
+  std::vector<std::uint32_t> task_successor_rank_offsets_;
+  /// Flat successor topological ranks grouped by producer task rank.
+  std::vector<std::uint32_t> task_successor_ranks_;
   /// Flat face-table offsets indexed by cell local IDs.
   std::vector<std::uint32_t> cell_face_offsets_;
   /// Flat outgoing local-face task IDs indexed by face storage index.
