@@ -49,29 +49,40 @@ public:
   void ResizeAndClear(std::size_t n)
   {
     n_ = n;
+    active_words_per_row_ = (n + 63) / 64;
     // Pad to a multiple of 8 words (512 bits) for alignment and vectorization.
-    words_per_row_ = (((n + 63) / 64) + 7) & ~std::size_t{7};
-    const std::size_t required_words = n_ * words_per_row_;
+    padded_words_per_row_ = (active_words_per_row_ + 7) & ~std::size_t{7};
+    const std::size_t required_words = n_ * padded_words_per_row_;
     // Grow when needed; the unconditional fill below clears the active region.
     if (data_.size() < required_words)
       data_.resize(required_words);
+    if (row_active_word_counts_.size() < n_)
+      row_active_word_counts_.resize(n_);
     std::fill_n(data_.begin(), required_words, 0ULL);
+    std::fill_n(row_active_word_counts_.begin(), n_, std::size_t{0});
   }
 
   /// Return the number of 64-bit words in each padded row.
-  std::size_t WordsPerRow() const noexcept { return words_per_row_; }
+  std::size_t WordsPerRow() const noexcept { return padded_words_per_row_; }
+
+  /// Return the number of logical 64-bit words required by each row.
+  std::size_t ActiveWordsPerRow() const noexcept { return active_words_per_row_; }
 
   /// Return a mutable pointer to the beginning of row `i`.
-  std::uint64_t* Row(std::size_t i) noexcept { return data_.data() + i * words_per_row_; }
+  std::uint64_t* Row(std::size_t i) noexcept { return data_.data() + i * padded_words_per_row_; }
 
   /// Return a const pointer to the beginning of row `i`.
   const std::uint64_t* Row(std::size_t i) const noexcept
   {
-    return data_.data() + i * words_per_row_;
+    return data_.data() + i * padded_words_per_row_;
   }
 
   /// Set the bit at `(i, j)`.
-  void SetBit(std::size_t i, std::size_t j) noexcept { Row(i)[j / 64] |= (1ULL << (j % 64)); }
+  void SetBit(std::size_t i, std::size_t j) noexcept
+  {
+    Row(i)[j / 64] |= (1ULL << (j % 64));
+    row_active_word_counts_[i] = std::max(row_active_word_counts_[i], (j / 64) + 1);
+  }
 
   /// Clear the bit at `(i, j)`.
   void ClearBit(std::size_t i, std::size_t j) noexcept { Row(i)[j / 64] &= ~(1ULL << (j % 64)); }
@@ -100,10 +111,17 @@ public:
                std::size_t start_pos = 0) noexcept
   {
     const std::size_t start_word = start_pos / 64;
+    const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
+    if (start_word >= src_active_words)
+    {
+      row_active_word_counts_[dst] = std::max(row_active_word_counts_[dst], std::min(start_word, active_words_per_row_));
+      return;
+    }
     std::uint64_t* __restrict__ d = Row(dst) + start_word;
     const std::uint64_t* __restrict__ s = src_mat.Row(src_row) + start_word;
-    const std::size_t words_to_copy = words_per_row_ - start_word;
+    const std::size_t words_to_copy = src_active_words - start_word;
     std::memcpy(d, s, words_to_copy * sizeof(std::uint64_t));
+    row_active_word_counts_[dst] = src_active_words;
   }
 
   /**
@@ -120,11 +138,15 @@ public:
               std::size_t start_pos = 0) noexcept
   {
     const std::size_t start_word = start_pos / 64;
+    const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
+    if (start_word >= src_active_words)
+      return;
     std::uint64_t* __restrict__ d = Row(dst) + start_word;
     const std::uint64_t* __restrict__ s = src_mat.Row(src_row) + start_word;
-    const std::size_t words_to_process = words_per_row_ - start_word;
+    const std::size_t words_to_process = src_active_words - start_word;
     for (std::size_t w = 0; w < words_to_process; ++w)
       d[w] |= s[w];
+    row_active_word_counts_[dst] = std::max(row_active_word_counts_[dst], src_active_words);
   }
 
   /**
@@ -141,11 +163,20 @@ public:
                std::size_t start_pos = 0) noexcept
   {
     const std::size_t start_word = start_pos / 64;
+    const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
+    const std::size_t dst_active_words = row_active_word_counts_[dst];
+    if (start_word >= dst_active_words)
+      return;
     std::uint64_t* __restrict__ d = Row(dst) + start_word;
     const std::uint64_t* __restrict__ s = src_mat.Row(src_row) + start_word;
-    const std::size_t words_to_process = words_per_row_ - start_word;
+    const std::size_t words_to_process =
+      (start_word < src_active_words) ? (std::min(dst_active_words, src_active_words) - start_word)
+                                      : 0;
     for (std::size_t w = 0; w < words_to_process; ++w)
       d[w] &= s[w];
+    for (std::size_t w = start_word + words_to_process; w < dst_active_words; ++w)
+      Row(dst)[w] = 0ULL;
+    row_active_word_counts_[dst] = std::min(dst_active_words, src_active_words);
   }
 
   /**
@@ -159,12 +190,13 @@ public:
   {
     const std::uint64_t* __restrict__ r = Row(row);
     std::size_t w = start_pos / 64;
-    if (w >= words_per_row_)
+    const std::size_t active_words = row_active_word_counts_[row];
+    if (w >= active_words)
       return n_;
     std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
     if (masked)
       return w * 64 + static_cast<std::size_t>(std::countr_zero(masked));
-    for (++w; w < words_per_row_; ++w)
+    for (++w; w < active_words; ++w)
     {
       if (r[w])
         return w * 64 + static_cast<std::size_t>(std::countr_zero(r[w]));
@@ -185,8 +217,12 @@ public:
 private:
   /// Matrix dimension.
   std::size_t n_ = 0;
-  /// Number of 64-bit words per row (padded for alignment).
-  std::size_t words_per_row_ = 0;
+  /// Number of logical 64-bit words required to cover one row.
+  std::size_t active_words_per_row_ = 0;
+  /// Number of 64-bit words per row after alignment padding.
+  std::size_t padded_words_per_row_ = 0;
+  /// Per-row exclusive high-water mark in words.
+  std::vector<std::size_t> row_active_word_counts_;
   /// Flat storage for the bit matrix, row-major with padding.
   std::vector<std::uint64_t> data_;
 };
@@ -255,12 +291,12 @@ BuildReachability(const std::uint32_t num_tasks,
     const std::uint32_t u = topo_order[i];
     const auto& successors = task_list[u].successors;
 
-    if (successors.empty())
-      ws.reachability.SetBit(i, i); // Each task reaches itself.
-    else
+    // Each task reaches itself.
+    ws.reachability.SetBit(i, i);
+
+    if (not successors.empty())
     {
       ws.reachability.CopyRow(i, ws.reachability, ws.topo_rank[successors[0]], i);
-      ws.reachability.SetBit(i, i); // Each task reaches itself.
       // Skip bits below the current topological rank because they are guaranteed to be zero.
       for (std::size_t j = 1; j < successors.size(); ++j)
         ws.reachability.OrRows(i, ws.reachability, ws.topo_rank[successors[j]], i);
