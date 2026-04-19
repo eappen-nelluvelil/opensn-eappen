@@ -14,6 +14,36 @@
     ]
   },
   {
+    "file": "transient_keigen_1d_theta_precursor_scaling_gpu.py",
+    "comment": "1D delayed fission source scales with theta (TransientSourceFunction check) [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "DELAYED_THETA_RATIO",
+        "wordnum": 1,
+        "gold": 2,
+        "abs_tol": 0.01
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_1d_theta_precursor_scaling_cbc_gpu.py",
+    "comment": "1D delayed fission source scales with theta (TransientSourceFunction check) [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "DELAYED_THETA_RATIO",
+        "wordnum": 1,
+        "gold": 2,
+        "abs_tol": 0.01
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_init_zero_absorber_source.py",
     "comment": "Zero-init transient: 1D absorber with constant source",
     "num_procs": 4,
@@ -26,6 +56,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_init_zero_absorber_source_gpu.py",
+    "comment": "Zero-init transient: 1D absorber with constant source [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "ZERO_INIT_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_init_zero_absorber_source_cbc_gpu.py",
+    "comment": "Zero-init transient: 1D absorber with constant source [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "ZERO_INIT_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_init_steady_state_source.py",
@@ -42,6 +102,36 @@
     ]
   },
   {
+    "file": "transient_init_steady_state_source_gpu.py",
+    "comment": "Steady-state source init: 1D absorber consistency [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "STEADY_INIT_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_init_steady_state_source_cbc_gpu.py",
+    "comment": "Steady-state source init: 1D absorber consistency [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "STEADY_INIT_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_zero_1d_restart.py",
     "comment": "1D 2-group scattered transient restart reproduces a continuous four-step solve",
     "num_procs": 4,
@@ -54,6 +144,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_zero_1d_restart_gpu.py",
+    "comment": "1D 2-group scattered transient restart reproduces a continuous four-step solve [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_RESTART_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_1d_restart_cbc_gpu.py",
+    "comment": "1D 2-group scattered transient restart reproduces a continuous four-step solve [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_RESTART_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_init_time_dependent_source.py",
@@ -70,6 +190,36 @@
     ]
   },
   {
+    "file": "transient_init_time_dependent_source_gpu.py",
+    "comment": "Time-dependent source init: 1D absorber step consistency [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TD_INIT_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_init_time_dependent_source_cbc_gpu.py",
+    "comment": "Time-dependent source init: 1D absorber step consistency [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TD_INIT_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_init_precursor_decay.py",
     "comment": "Delayed precursor decay check with source removal",
     "num_procs": 4,
@@ -82,6 +232,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_init_precursor_decay_gpu.py",
+    "comment": "Delayed precursor decay check with source removal [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRECURSOR_DECAY_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_init_precursor_decay_cbc_gpu.py",
+    "comment": "Delayed precursor decay check with source removal [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRECURSOR_DECAY_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_init_leakage_pulse_decay.py",
@@ -98,6 +278,36 @@
     ]
   },
   {
+    "file": "transient_init_leakage_pulse_decay_gpu.py",
+    "comment": "Leakage sanity: vacuum boundaries with source removal [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "LEAKAGE_DECAY_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_init_leakage_pulse_decay_cbc_gpu.py",
+    "comment": "Leakage sanity: vacuum boundaries with source removal [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "LEAKAGE_DECAY_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_zero_3d_1g_pulse_inf_med.py",
     "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient pulse",
     "num_procs": 4,
@@ -106,9 +316,37 @@
         "type": "KeyValuePair",
         "key": "Max phi(3s) = ",
         "goldvalue": 5.104477,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_1g_pulse_inf_med_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient pulse [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(3s) = ",
+        "goldvalue": 5.104477,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_1g_pulse_inf_med_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient pulse [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(3s) = ",
+        "goldvalue": 5.104477,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_1g_v1_inf_med.py",
@@ -119,9 +357,37 @@
         "type": "KeyValuePair",
         "key": "Max phi(1s) = ",
         "goldvalue": 2.330956,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_1g_v1_inf_med_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 2.330956,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_1g_v1_inf_med_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 2.330956,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_2g_inf_med_downscatter.py",
@@ -132,15 +398,55 @@
         "type": "KeyValuePair",
         "key": "Max phi0(2s) = ",
         "goldvalue": 3.658193,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "KeyValuePair",
         "key": "Max phi1(2s) = ",
         "goldvalue": 1.027354,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_downscatter_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0(2s) = ",
+        "goldvalue": 3.658193,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1(2s) = ",
+        "goldvalue": 1.027354,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_downscatter_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0(2s) = ",
+        "goldvalue": 3.658193,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1(2s) = ",
+        "goldvalue": 1.027354,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_1g_v0.5_inf_med.py",
@@ -151,9 +457,37 @@
         "type": "KeyValuePair",
         "key": "Max phi(2s) = ",
         "goldvalue": 0.889725,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_1g_v0.5_inf_med_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 0.5, zero-init transient [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(2s) = ",
+        "goldvalue": 0.889725,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_1g_v0.5_inf_med_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 0.5, zero-init transient [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(2s) = ",
+        "goldvalue": 0.889725,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_1g_v1_inf_med_swap.py",
@@ -164,9 +498,37 @@
         "type": "KeyValuePair",
         "key": "Max phi(1s) = ",
         "goldvalue": 1.736077,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_1g_v1_inf_med_swap_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient, swap xs at 0.5s [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 1.736077,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_1g_v1_inf_med_swap_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 1.0, zero-init transient, swap xs at 0.5s [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 1.736077,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_1g_v2_inf_med.py",
@@ -177,9 +539,37 @@
         "type": "KeyValuePair",
         "key": "Max phi(1s) = ",
         "goldvalue": 3.184793,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_1g_v2_inf_med_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 2.0, zero-init transient [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 3.184793,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_1g_v2_inf_med_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 1 group, vel = 2.0, zero-init transient [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(1s) = ",
+        "goldvalue": 3.184793,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_2g_inf_med_downscatter_swap.py",
@@ -190,15 +580,55 @@
         "type": "KeyValuePair",
         "key": "Max phi0(1s) = ",
         "goldvalue": 1.978816,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "KeyValuePair",
         "key": "Max phi1(1s) = ",
         "goldvalue": 0.394171,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_downscatter_swap_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, swap xs at 0.5s [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0(1s) = ",
+        "goldvalue": 1.978816,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1(1s) = ",
+        "goldvalue": 0.394171,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_downscatter_swap_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, swap xs at 0.5s [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0(1s) = ",
+        "goldvalue": 1.978816,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1(1s) = ",
+        "goldvalue": 0.394171,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_2g_inf_med_pydrvr.py",
@@ -209,15 +639,55 @@
         "type": "KeyValuePair",
         "key": "Max phi0 = ",
         "goldvalue": 3.672537,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "KeyValuePair",
         "key": "Max phi1 = ",
         "goldvalue": 1.035548,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_pydrvr_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0 = ",
+        "goldvalue": 3.672537,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1 = ",
+        "goldvalue": 1.035548,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_pydrvr_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0 = ",
+        "goldvalue": 3.672537,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1 = ",
+        "goldvalue": 1.035548,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_2g_inf_med_pydrvr_ramp_dt.py",
@@ -228,15 +698,55 @@
         "type": "KeyValuePair",
         "key": "Max phi0 = ",
         "goldvalue": 3.674989,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "KeyValuePair",
         "key": "Max phi1 = ",
         "goldvalue": 1.035541,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_pydrvr_ramp_dt_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop, ramp dt [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0 = ",
+        "goldvalue": 3.674989,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1 = ",
+        "goldvalue": 1.035541,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_2g_inf_med_pydrvr_ramp_dt_cbc_gpu.py",
+    "comment": "3D unstructured mesh, 2 group, downscatter, zero-init transient, Python time step loop, ramp dt [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi0 = ",
+        "goldvalue": 3.674989,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi1 = ",
+        "goldvalue": 1.035541,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_zero_3d_openmc_xs.py",
@@ -250,6 +760,34 @@
         "abs_tol": 0.0001
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_openmc_xs_gpu.py",
+    "comment": "3D orthogonal mesh, 30 group, zero-init transient, OpenMC cross sections [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(0.1s) = ",
+        "goldvalue": 51.057722,
+        "abs_tol": 0.0001
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_openmc_xs_cbc_gpu.py",
+    "comment": "3D orthogonal mesh, 30 group, zero-init transient, OpenMC cross sections [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max phi(0.1s) = ",
+        "goldvalue": 51.057722,
+        "abs_tol": 0.0001
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_3d_prompt_analytic.py",
@@ -266,6 +804,36 @@
     ]
   },
   {
+    "file": "transient_keigen_3d_prompt_analytic_gpu.py",
+    "comment": "3D prompt-only analytic exponential check [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "ANALYTIC_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_prompt_analytic_cbc_gpu.py",
+    "comment": "3D prompt-only analytic exponential check [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "ANALYTIC_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_3d_delayed_analytic.py",
     "comment": "3D delayed analytic point-kinetics check",
     "num_procs": 4,
@@ -278,6 +846,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_keigen_3d_delayed_analytic_gpu.py",
+    "comment": "3D delayed analytic point-kinetics check [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "ANALYTIC_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_delayed_analytic_cbc_gpu.py",
+    "comment": "3D delayed analytic point-kinetics check [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "ANALYTIC_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_1d_delayed_prke_vs_stk.py",
@@ -294,6 +892,36 @@
     ]
   },
   {
+    "file": "transient_keigen_1d_delayed_prke_vs_stk_gpu.py",
+    "comment": "1D delayed homogeneous step: PRKE vs space-time kinetics [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_1d_delayed_prke_vs_stk_cbc_gpu.py",
+    "comment": "1D delayed homogeneous step: PRKE vs space-time kinetics [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_1d_delayed_fission_prod_count.py",
     "comment": "1D delayed fission production invariant to precursor count (1p vs 2p)",
     "num_procs": 4,
@@ -306,6 +934,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_keigen_1d_delayed_fission_prod_count_gpu.py",
+    "comment": "1D delayed fission production invariant to precursor count (1p vs 2p) [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "K_PRECURSOR_FPROD_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_1d_delayed_fission_prod_count_cbc_gpu.py",
+    "comment": "1D delayed fission production invariant to precursor count (1p vs 2p) [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "K_PRECURSOR_FPROD_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_1d_precursor_count_xs_swap.py",
@@ -322,6 +980,36 @@
     ]
   },
   {
+    "file": "transient_keigen_1d_precursor_count_xs_swap_gpu.py",
+    "comment": "1D delayed transient XS swap across fissionability and precursor counts [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRECURSOR_SWAP_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_1d_precursor_count_xs_swap_cbc_gpu.py",
+    "comment": "1D delayed transient XS swap across fissionability and precursor counts [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRECURSOR_SWAP_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_init_precursor_count_xs_swap.py",
     "comment": "1D prompt-to-delayed transient XS swap from 0 to 2 precursor families",
     "num_procs": 4,
@@ -334,6 +1022,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_init_precursor_count_xs_swap_gpu.py",
+    "comment": "1D prompt-to-delayed transient XS swap from 0 to 2 precursor families [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRECURSOR_INTRO_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_init_precursor_count_xs_swap_cbc_gpu.py",
+    "comment": "1D prompt-to-delayed transient XS swap from 0 to 2 precursor families [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRECURSOR_INTRO_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_2d_delayed_prke_vs_stk_2p.py",
@@ -350,6 +1068,36 @@
     ]
   },
   {
+    "file": "transient_keigen_2d_delayed_prke_vs_stk_2p_gpu.py",
+    "comment": "2D delayed homogeneous step: PRKE vs space-time kinetics [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_2d_delayed_prke_vs_stk_2p_cbc_gpu.py",
+    "comment": "2D delayed homogeneous step: PRKE vs space-time kinetics [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_3d_delayed_prke_vs_stk_2p.py",
     "comment": "3D delayed homogeneous step: PRKE vs space-time kinetics",
     "num_procs": 4,
@@ -362,6 +1110,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_keigen_3d_delayed_prke_vs_stk_2p_gpu.py",
+    "comment": "3D delayed homogeneous step: PRKE vs space-time kinetics [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_delayed_prke_vs_stk_2p_cbc_gpu.py",
+    "comment": "3D delayed homogeneous step: PRKE vs space-time kinetics [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_3d_delayed_prke_vs_stk_2p_callbacks.py",
@@ -378,6 +1156,36 @@
     ]
   },
   {
+    "file": "transient_keigen_3d_delayed_prke_vs_stk_2p_callbacks_gpu.py",
+    "comment": "3D delayed homogeneous step: PRKE vs space-time kinetics [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_delayed_prke_vs_stk_2p_callbacks_cbc_gpu.py",
+    "comment": "3D delayed homogeneous step: PRKE vs space-time kinetics [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "PRKE_STK_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_3d_6g_delayed_step_nu_sigma_f.py",
     "comment": "3D 6g, 2-precursor delayed step nu_sigma_f",
     "num_procs": 4,
@@ -387,7 +1195,7 @@
         "key": "FP_RATIO_ACTUAL",
         "wordnum": 1,
         "gold": 1.2,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "FloatCompare",
@@ -397,6 +1205,50 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_keigen_3d_6g_delayed_step_nu_sigma_f_gpu.py",
+    "comment": "3D 6g, 2-precursor delayed step nu_sigma_f [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_6g_delayed_step_nu_sigma_f_cbc_gpu.py",
+    "comment": "3D 6g, 2-precursor delayed step nu_sigma_f [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_3d_2g_prompt_step_xs.py",
@@ -408,7 +1260,7 @@
         "key": "FP_RATIO_ACTUAL",
         "wordnum": 1,
         "gold": 1.2,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "FloatCompare",
@@ -420,6 +1272,50 @@
     ]
   },
   {
+    "file": "transient_keigen_3d_2g_prompt_step_xs_gpu.py",
+    "comment": "3D 2g prompt-only step xs swap [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_2g_prompt_step_xs_cbc_gpu.py",
+    "comment": "3D 2g prompt-only step xs swap [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_2d_2g_prompt_combine_velocities.py",
     "comment": "2D 2g prompt combine xs with group-wise velocities",
     "num_procs": 4,
@@ -429,7 +1325,7 @@
         "key": "FP_RATIO_ACTUAL",
         "wordnum": 1,
         "gold": 2.2,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "FloatCompare",
@@ -439,6 +1335,50 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_keigen_2d_2g_prompt_combine_velocities_gpu.py",
+    "comment": "2D 2g prompt combine xs with group-wise velocities [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 2.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_2d_2g_prompt_combine_velocities_cbc_gpu.py",
+    "comment": "2D 2g prompt combine xs with group-wise velocities [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 2.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_2d_prompt_ramp_xs.py",
@@ -455,6 +1395,36 @@
     ]
   },
   {
+    "file": "transient_keigen_2d_prompt_ramp_xs_gpu.py",
+    "comment": "2D prompt-only ramp xs [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_2d_prompt_ramp_xs_cbc_gpu.py",
+    "comment": "2D prompt-only ramp xs [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_3d_delayed_ramp_xs.py",
     "comment": "3D delayed ramp xs with point-kinetics reference",
     "num_procs": 4,
@@ -467,6 +1437,36 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_keigen_3d_delayed_ramp_xs_gpu.py",
+    "comment": "3D delayed ramp xs with point-kinetics reference [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_delayed_ramp_xs_cbc_gpu.py",
+    "comment": "3D delayed ramp xs with point-kinetics reference [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_3d_delayed_stiff_dt_sensitivity.py",
@@ -483,6 +1483,36 @@
     ]
   },
   {
+    "file": "transient_keigen_3d_delayed_stiff_dt_sensitivity_gpu.py",
+    "comment": "3D delayed stiff precursor dt [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_delayed_stiff_dt_sensitivity_cbc_gpu.py",
+    "comment": "3D delayed stiff precursor dt [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_2d_2g_delayed_step.py",
     "comment": "2D 2g delayed xs step (ratio)",
     "num_procs": 4,
@@ -492,7 +1522,7 @@
         "key": "FP_RATIO_ACTUAL",
         "wordnum": 1,
         "gold": 1.2,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       },
       {
         "type": "FloatCompare",
@@ -504,6 +1534,50 @@
     ]
   },
   {
+    "file": "transient_keigen_2d_2g_delayed_step_gpu.py",
+    "comment": "2D 2g delayed xs step (ratio) [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_2d_2g_delayed_step_cbc_gpu.py",
+    "comment": "2D 2g delayed xs step (ratio) [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_1d_prompt_step.py",
     "comment": "1D prompt-only xs step",
     "num_procs": 4,
@@ -513,9 +1587,39 @@
         "key": "FP_RATIO_ACTUAL",
         "wordnum": 1,
         "gold": 1.2,
-        "abs_tol": 0.000001
+        "abs_tol": 1e-06
       }
     ]
+  },
+  {
+    "file": "transient_keigen_1d_prompt_step_gpu.py",
+    "comment": "1D prompt-only xs step [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_1d_prompt_step_cbc_gpu.py",
+    "comment": "1D prompt-only xs step [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_ACTUAL",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 1e-06
+      }
+    ],
+    "requires_gpu": "True"
   },
   {
     "file": "transient_keigen_3d_prompt_mid_step_swap.py",
@@ -546,6 +1650,64 @@
     ]
   },
   {
+    "file": "transient_keigen_3d_prompt_mid_step_swap_gpu.py",
+    "comment": "3D prompt mid-step XS swap [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TIME_AT_SWAP",
+        "wordnum": 1,
+        "gold": 0.07,
+        "abs_tol": 1e-10
+      },
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_AT_SWAP",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_prompt_mid_step_swap_cbc_gpu.py",
+    "comment": "3D prompt mid-step XS swap [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TIME_AT_SWAP",
+        "wordnum": 1,
+        "gold": 0.07,
+        "abs_tol": 1e-10
+      },
+      {
+        "type": "FloatCompare",
+        "key": "FP_RATIO_AT_SWAP",
+        "wordnum": 1,
+        "gold": 1.2,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_keigen_3d_prompt_bc_leakage.py",
     "comment": "3D prompt leakage vs reflecting boundary",
     "num_procs": 4,
@@ -560,6 +1722,36 @@
     ]
   },
   {
+    "file": "transient_keigen_3d_prompt_bc_leakage_gpu.py",
+    "comment": "3D prompt leakage vs reflecting boundary [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_keigen_3d_prompt_bc_leakage_cbc_gpu.py",
+    "comment": "3D prompt leakage vs reflecting boundary [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "TRANSIENT_OK",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
     "file": "transient_zero_3d_1g_ramp_source_analytic.py",
     "comment": "Zero-mode transient with ramped source and analytic check",
     "num_procs": 4,
@@ -572,5 +1764,35 @@
         "abs_tol": 1e-12
       }
     ]
+  },
+  {
+    "file": "transient_zero_3d_1g_ramp_source_analytic_gpu.py",
+    "comment": "Zero-mode transient with ramped source and analytic check [AAHD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "RAMP_SOURCE_ANALYTIC_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
+  },
+  {
+    "file": "transient_zero_3d_1g_ramp_source_analytic_cbc_gpu.py",
+    "comment": "Zero-mode transient with ramped source and analytic check [CBCD GPU]",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "FloatCompare",
+        "key": "RAMP_SOURCE_ANALYTIC_PASS",
+        "wordnum": 1,
+        "gold": 1,
+        "abs_tol": 1e-12
+      }
+    ],
+    "requires_gpu": "True"
   }
 ]
