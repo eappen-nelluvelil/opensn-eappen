@@ -134,6 +134,10 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
         continue;
 
       const auto consumer_cell_local_id = face.GetNeighborLocalID(grid_.get());
+      if (delayed_local_dependency_set_.contains(
+            PackEdge(producer_cell_local_id, consumer_cell_local_id)))
+        continue;
+
       const auto consumer_face_id =
         static_cast<std::uint16_t>(face.GetNeighborAdjacentFaceIndex(grid_.get()));
       const auto num_face_nodes = static_cast<std::uint32_t>(face.vertex_ids.size());

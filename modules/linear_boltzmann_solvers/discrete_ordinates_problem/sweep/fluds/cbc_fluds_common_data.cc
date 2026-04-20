@@ -100,20 +100,19 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 
           if (orientation == FaceOrientation::OUTGOING)
           {
-            const auto task_id =
-              cbc_spds.GetOutgoingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
-            assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
-            local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
-            ++num_local_faces_;
             if (is_delayed_local_outgoing)
               delayed_local_outgoing_faces_[cell.local_id][f] = 1;
+            else
+            {
+              const auto task_id =
+                cbc_spds.GetOutgoingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+              assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
+              local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
+              ++num_local_faces_;
+            }
           }
           else if (orientation == FaceOrientation::INCOMING)
           {
-            const auto task_id =
-              cbc_spds.GetIncomingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
-            assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
-            local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
             if (is_delayed_local_incoming)
             {
               delayed_local_incoming_faces_[cell.local_id][f] = 1;
@@ -122,6 +121,13 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
                 DelayedLocalFaceInfo{static_cast<std::uint32_t>(delayed_local_face_node_count_),
                                      static_cast<std::uint16_t>(num_face_nodes)});
               delayed_local_face_node_count_ += num_face_nodes;
+            }
+            else
+            {
+              const auto task_id =
+                cbc_spds.GetIncomingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+              assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
+              local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
             }
           }
         }
