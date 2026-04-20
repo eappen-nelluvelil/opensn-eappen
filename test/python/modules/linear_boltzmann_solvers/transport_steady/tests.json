@@ -1019,6 +1019,26 @@
     ]
   },
   {
+    "file": "transport_3d_4_cycles_1_cbc_gpu.py",
+    "comment": "3D LinearBSolver Test Extruded-Unstructured Mesh - PWLD (CBC)",
+    "requires_gpu": "True",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value1=",
+        "goldvalue": 5.55349e-01,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value2=",
+        "goldvalue": 4.08422e-10,
+        "abs_tol": 0.0001
+      }
+    ]
+  },
+  {
     "file": "transport_3d_6a_split_mesh.py",
     "comment": "3D LinearBSolver Test Split mesh configuration A",
     "num_procs": 4,
