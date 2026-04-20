@@ -42,9 +42,12 @@ struct AngleSetCapacity
 {
   std::size_t outgoing_faces = 0;
   std::size_t incoming_faces = 0;
+  std::size_t delayed_incoming_faces = 0;
   std::size_t max_outgoing_face_values = 0;
   std::size_t max_incoming_face_values = 0;
+  std::size_t max_delayed_incoming_face_values = 0;
   std::size_t max_incoming_batch_entries = 0;
+  std::size_t max_delayed_incoming_batch_entries = 0;
 };
 
 class CBCD_AsynchronousCommunicator
@@ -53,6 +56,7 @@ public:
   CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
                                 const MPICommunicatorSet& comm_set,
                                 const std::vector<std::vector<int>>& incoming_source_partitions,
+                                const std::vector<std::vector<int>>& delayed_source_partitions,
                                 std::size_t max_message_bytes,
                                 const std::vector<AngleSetCapacity>& capacities);
 
@@ -85,6 +89,36 @@ public:
     return incoming_mailboxes_[angle_set_id]->ProcessReady(std::forward<Callback>(callback)) > 0;
   }
 
+  template <typename Callback>
+  bool ProcessDelayedIncoming(std::size_t angle_set_id, Callback&& callback)
+  {
+    assert(angle_set_id < num_angle_sets_);
+    return delayed_incoming_mailboxes_[angle_set_id]->ProcessReady(
+             std::forward<Callback>(callback)) > 0;
+  }
+
+  template <typename FillCallback>
+  void EnqueueDelayedOutgoing(int dest_rank,
+                              std::size_t angle_set_id,
+                              std::uint64_t cell_global_id,
+                              unsigned int face_id,
+                              std::size_t data_size,
+                              FillCallback&& fill)
+  {
+    const auto it = delayed_dest_to_queue_index_.find(dest_rank);
+    assert(it != delayed_dest_to_queue_index_.end());
+    auto& queue = *delayed_outgoing_queues_[it->second]->queue;
+    auto& slot = queue.ReserveSlot();
+    slot.payload.angle_set_id = angle_set_id;
+    slot.payload.cell_global_id = cell_global_id;
+    slot.payload.face_id = face_id;
+    slot.payload.psi_data.resize(data_size);
+    fill(slot.payload.psi_data.data());
+    queue.PublishSlot(slot);
+  }
+
+  void EnqueueDelayedCompletionMarkers(std::size_t angle_set_id);
+
   void SignalAngleSetComplete(std::size_t angle_set_id);
   void Start();
   void Stop();
@@ -111,15 +145,27 @@ private:
   const MPICommunicatorSet& comm_set_;
   std::size_t num_angle_sets_;
   int mpi_tag_;
+  int delayed_mpi_tag_;
   std::size_t max_message_bytes_;
   int my_rank_ = 0;
   std::vector<int> source_partitions_;
   std::vector<int> source_ranks_;
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set_;
+  std::vector<int> delayed_source_partitions_;
+  std::vector<int> delayed_source_ranks_;
+  std::vector<std::unordered_map<int, std::uint32_t>>
+    delayed_source_partition_to_slot_by_angle_set_;
+  std::vector<std::vector<int>> delayed_destinations_by_angle_set_;
   std::vector<std::unique_ptr<DestinationQueue>> outgoing_queues_;
+  std::vector<std::unique_ptr<DestinationQueue>> delayed_outgoing_queues_;
   std::unordered_map<int, int> dest_to_queue_index_;
-  std::vector<std::unique_ptr<LockFreeRingBuffer<std::vector<IncomingFaceData>>>> incoming_mailboxes_;
+  std::unordered_map<int, int> delayed_dest_to_queue_index_;
+  std::vector<std::unique_ptr<LockFreeRingBuffer<std::vector<IncomingFaceData>>>>
+    incoming_mailboxes_;
+  std::vector<std::unique_ptr<LockFreeRingBuffer<std::vector<IncomingFaceData>>>>
+    delayed_incoming_mailboxes_;
   std::vector<std::vector<const OutgoingFaceData*>> send_batch_by_angle_set_;
+  std::vector<std::vector<const OutgoingFaceData*>> delayed_send_batch_by_angle_set_;
   ByteArray recv_buffer_;
   std::vector<InFlightSend> in_flight_sends_;
   std::atomic<bool> stop_requested_{false};

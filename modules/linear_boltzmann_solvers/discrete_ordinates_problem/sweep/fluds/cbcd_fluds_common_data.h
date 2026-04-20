@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <cstdint>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace opensn
@@ -24,6 +25,20 @@ class SpatialDiscretization;
 class CBCD_FLUDSCommonData : public FLUDSCommonData
 {
 public:
+  struct DelayedLocalFaceInfo
+  {
+    std::uint32_t base_storage_index = 0;
+    std::uint16_t num_nodes = 0;
+  };
+
+  struct DelayedNonlocalFaceInfo
+  {
+    std::uint32_t cell_local_id = 0;
+    std::uint32_t source_slot = 0;
+    std::uint32_t base_storage_index = 0;
+    std::uint16_t num_nodes = 0;
+  };
+
   /**
    * Construct the shared CBCD FLUDS metadata for one SPDS.
    *
@@ -55,6 +70,32 @@ public:
   /// Get number of outgoing non-local faces.
   std::size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
 
+  /// Get number of delayed incoming non-local faces.
+  std::size_t GetNumDelayedIncomingNonlocalFaces() const
+  {
+    return num_delayed_incoming_nonlocal_faces_;
+  }
+
+  /// Get number of delayed-local face nodes.
+  std::size_t GetNumDelayedLocalNodes() const { return num_delayed_local_nodes_; }
+
+  /// Get delayed incoming non-local node count for one delayed source slot.
+  std::size_t GetNumDelayedIncomingNonlocalNodes(std::size_t source_slot) const
+  {
+    return delayed_incoming_nonlocal_node_counts_[source_slot];
+  }
+
+  /// Get all delayed incoming non-local node counts.
+  const std::vector<std::uint32_t>& GetDelayedIncomingNonlocalNodeCounts() const
+  {
+    return delayed_incoming_nonlocal_node_counts_;
+  }
+
+  const std::vector<std::uint32_t>& GetDelayedIncomingNonlocalNodeOffsets() const
+  {
+    return delayed_incoming_nonlocal_node_offsets_;
+  }
+
   /// Return grouped incoming-boundary faces.
   const std::vector<IncomingBoundaryFacePlan>& GetIncomingBoundaryFaces() const
   {
@@ -62,8 +103,7 @@ public:
   }
 
   /// Return grouped incoming non-local face lookup records for one source locality slot.
-  std::span<const IncomingFaceLookup> GetIncomingFaceLookupsBySource(
-    std::size_t source_slot) const
+  std::span<const IncomingFaceLookup> GetIncomingFaceLookupsBySource(std::size_t source_slot) const
   {
     const auto begin = source_to_incoming_face_offsets_[source_slot];
     const auto end = source_to_incoming_face_offsets_[source_slot + 1];
@@ -106,7 +146,10 @@ public:
   const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
 
   /// Return the ordered incoming source-locality table.
-  const std::vector<int>& GetIncomingSourcePartitions() const { return incoming_source_partitions_; }
+  const std::vector<int>& GetIncomingSourcePartitions() const
+  {
+    return incoming_source_partitions_;
+  }
 
   /**
    * Resolve one grouped incoming non-local face from wire identifiers.
@@ -119,6 +162,16 @@ public:
   const GroupedIncomingNonlocalFace& FindIncomingNonlocalFace(std::uint32_t source_slot,
                                                               std::uint64_t cell_global_id,
                                                               unsigned int face_id) const;
+
+  const DelayedLocalFaceInfo& GetDelayedLocalFace(std::uint32_t cell_local_id,
+                                                  unsigned int face_id) const;
+
+  const DelayedNonlocalFaceInfo& GetDelayedIncomingNonlocalFace(std::uint32_t cell_local_id,
+                                                                unsigned int face_id) const;
+
+  bool TryFindDelayedIncomingNonlocalFace(std::uint64_t cell_global_id,
+                                          unsigned int face_id,
+                                          DelayedNonlocalFaceInfo& info) const;
 
   /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
   std::span<const OutgoingNodeCopy>
@@ -144,8 +197,24 @@ private:
   size_t num_outgoing_nonlocal_faces_;
   /// Number of outgoing non-local face nodes.
   size_t num_outgoing_nonlocal_nodes_;
+  /// Number of delayed incoming non-local faces.
+  size_t num_delayed_incoming_nonlocal_faces_ = 0;
   /// Device pointer to cell-face-node map for angular flux buffer access.
   std::uint64_t* device_cell_face_node_map_;
+  /// Number of delayed-local face nodes.
+  std::uint32_t num_delayed_local_nodes_ = 0;
+  /// Delayed incoming non-local node counts per delayed source slot.
+  std::vector<std::uint32_t> delayed_incoming_nonlocal_node_counts_;
+  /// Delayed incoming non-local node offsets per delayed source slot.
+  std::vector<std::uint32_t> delayed_incoming_nonlocal_node_offsets_;
+  /// Flat cell-face offsets.
+  std::vector<std::uint32_t> cell_face_offsets_;
+  /// Flat delayed-local face metadata indexed by cell-face storage index.
+  std::vector<DelayedLocalFaceInfo> delayed_local_faces_;
+  /// Flat delayed incoming non-local metadata indexed by cell-face storage index.
+  std::vector<DelayedNonlocalFaceInfo> delayed_incoming_nonlocal_faces_;
+  /// Keyed delayed incoming non-local metadata lookup.
+  std::unordered_map<std::uint64_t, DelayedNonlocalFaceInfo> delayed_incoming_face_lookup_;
   /// Flat grouped incoming-boundary face copy plans.
   std::vector<IncomingBoundaryFacePlan> incoming_boundary_face_plans_;
   /// Cell-to-outgoing-boundary-node offset table.
@@ -169,6 +238,8 @@ private:
   /// Source-major incoming grouped-face lookup spans.
   std::vector<std::uint32_t> source_to_incoming_face_offsets_;
   std::vector<IncomingFaceLookup> incoming_face_lookups_by_source_;
+
+  static std::uint64_t PackCellFaceKey(std::uint64_t cell_global_id, unsigned int face_id) noexcept;
 
   /**
    * Build and upload the flattened cell-face-node index map.

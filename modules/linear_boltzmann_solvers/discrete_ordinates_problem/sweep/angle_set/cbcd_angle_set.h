@@ -123,7 +123,7 @@ public:
   /// Return the communicator set used to construct the aggregated communicator.
   const MPICommunicatorSet& GetCommunicatorSet() const { return comm_set_; }
 
-  void InitializeDelayedUpstreamData() override {}
+  void InitializeDelayedUpstreamData() override;
 
   int GetMaxBufferMessages() const override { return 0; }
 
@@ -157,7 +157,7 @@ public:
 
   void ResetSweepBuffers() override;
 
-  bool ReceiveDelayedData() override { return true; }
+  bool ReceiveDelayedData() override;
 
   const double* PsiBoundary(uint64_t boundary_id,
                             unsigned int angle_num,
@@ -230,6 +230,10 @@ private:
   bool boundary_data_initialized_ = false;
   /// Flag indicating if following anglesets have been notified of completion.
   bool following_angle_sets_notified_ = false;
+  /// Flag indicating if delayed outgoing data/markers were queued.
+  bool delayed_phase_queued_ = false;
+  /// Delayed receive completion flags by delayed source slot.
+  std::vector<std::uint8_t> delayed_recv_done_;
 
   /// Build the reflecting-boundary producer mask from the CBC task graph.
   void InitializeReflectingTaskMask();

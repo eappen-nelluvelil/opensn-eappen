@@ -72,6 +72,13 @@ CBCD_AngleSet::ResetDependencyCounter()
   dependency_counter_.store(num_dependencies_, std::memory_order_relaxed);
 }
 
+void
+CBCD_AngleSet::InitializeDelayedUpstreamData()
+{
+  cbcd_fluds_.AllocateDelayedLocalPsi();
+  cbcd_fluds_.AllocateDelayedPrelocIOutgoingPsi();
+}
+
 bool
 CBCD_AngleSet::IsOutgoingReflectingFace(const CellFace& face,
                                         const std::uint64_t cell_local_id,
@@ -278,6 +285,8 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
+  delayed_recv_done_.assign(cbc_spds_.GetDelayedLocationDependencies().size(), 0);
+  delayed_phase_queued_ = false;
   boundary_data_initialized_ = true;
   return true;
 }
@@ -319,6 +328,39 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
   // Finalize once all tasks are done and no kernel is in flight.
   if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight))
   {
+    if (not delayed_phase_queued_)
+    {
+      cbcd_fluds_.CopyDelayedOutgoingPsiBackToHost(*async_comm_, GetID());
+      async_comm_->EnqueueDelayedCompletionMarkers(GetID());
+      delayed_phase_queued_ = true;
+      work_done = true;
+    }
+
+    if (not delayed_recv_done_.empty())
+    {
+      work_done |= async_comm_->ProcessDelayedIncoming(
+        GetID(),
+        [this](const std::vector<IncomingFaceData>& batch)
+        {
+          for (const auto& entry : batch)
+          {
+            if (entry.cell_global_id == std::numeric_limits<std::uint64_t>::max() &&
+                entry.face_id == std::numeric_limits<unsigned int>::max())
+            {
+              delayed_recv_done_[entry.source_slot] = 1;
+              continue;
+            }
+            cbcd_fluds_.ScatterDelayedReceivedFaceData(
+              entry.cell_global_id, entry.face_id, entry.psi_data.data());
+          }
+        });
+    }
+
+    if (std::any_of(delayed_recv_done_.begin(),
+                    delayed_recv_done_.end(),
+                    [](const auto done) { return done == 0; }))
+      return work_done;
+
     async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
     executed_ = true;
@@ -366,8 +408,38 @@ CBCD_AngleSet::ResetSweepBuffers()
   pending_reflecting_tasks_ = 0;
   boundary_data_initialized_ = false;
   following_angle_sets_notified_ = false;
+  delayed_phase_queued_ = false;
+  delayed_recv_done_.clear();
   ResetDependencyCounter();
   executed_ = false;
+}
+
+bool
+CBCD_AngleSet::ReceiveDelayedData()
+{
+  if (delayed_recv_done_.empty())
+    return true;
+
+  async_comm_->ProcessDelayedIncoming(
+    GetID(),
+    [this](const std::vector<IncomingFaceData>& batch)
+    {
+      for (const auto& entry : batch)
+      {
+        if (entry.cell_global_id == std::numeric_limits<std::uint64_t>::max() &&
+            entry.face_id == std::numeric_limits<unsigned int>::max())
+        {
+          delayed_recv_done_[entry.source_slot] = 1;
+          continue;
+        }
+        cbcd_fluds_.ScatterDelayedReceivedFaceData(
+          entry.cell_global_id, entry.face_id, entry.psi_data.data());
+      }
+    });
+
+  return std::all_of(delayed_recv_done_.begin(),
+                     delayed_recv_done_.end(),
+                     [](const auto done) { return done != 0; });
 }
 
 const double*

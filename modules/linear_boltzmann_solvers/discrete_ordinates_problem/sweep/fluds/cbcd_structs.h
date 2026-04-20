@@ -16,19 +16,15 @@ class SweepBoundary;
 /**
  * Packed 64-bit angular flux buffer index for CBCD FLUDS.
  *
- * Encodes the buffer type (local/boundary/non-lcaol, incoming/outgoing) and
- * address into a single 64-bit value.
- * Does not support delayed nodes. Reclaims the delayed bit for indices.
+ * Encodes the buffer type (local/boundary/non-local, incoming/outgoing, delayed)
+ * and address into a single 64-bit value.
  *
  * Bit layout:
  * - Bit 63: incoming (0) / outgoing (1).
  * - Bit 62: boundary (1) / non-boundary (0).
- * - Bit 61: local (1) / non-local (0).
- * - For local non-boundary nodes:
- *   - Bits 0-60: flat local-face-slot node bank index.
- * - For boundary or non-local nodes:
- *   - Bits 0-60: flat bank index.
- * - Bits 0-60: Index bits (capacity ~2.3e18).
+ * - Bit 61: delayed (1) / non-delayed (0).
+ * - Bit 60: local (1) / non-local (0).
+ * - Bits 0-59: bank index.
  */
 class CBCD_NodeIndex : public NodeIndex
 {
@@ -41,34 +37,43 @@ public:
 
   /**
    * Construct a non-boundary node index.
-   * \param index Index into the corresponding bank. Cannot exceed 2^61 - 1.
+   * \param index Index into the corresponding bank. Cannot exceed 2^60 - 1.
    * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
    * \param is_local Flag indicating if the index is in a local bank.
+   * \param is_delayed Flag indicating if the index is in a delayed bank.
    */
-  CBCD_NodeIndex(std::uint64_t index, bool is_outgoing, bool is_local)
+  CBCD_NodeIndex(std::uint64_t index, bool is_outgoing, bool is_local, bool is_delayed)
   {
-    if (index >= (std::uint64_t(1) << 61) - 1)
-      throw std::runtime_error("Cannot hold an index greater than 2^61.");
+    if (index >= (std::uint64_t(1) << 60) - 1)
+      throw std::runtime_error("Cannot hold an index greater than 2^60.");
     SetInOut(is_outgoing);
+    SetDelayed(is_delayed);
     SetLocal(is_local);
     SetBoundary(false);
     SetIndex(index);
+    if (is_delayed && is_outgoing && !is_local)
+      throw std::runtime_error(
+        "Non-local outgoing nodes cannot be stored in delayed banks for CBCD FLUDS.");
   }
 
   /**
    * Construct a boundary node index.
-   * \param index Index into the corresponding bank. Cannot exceed 2^61 - 1.
+   * \param index Index into the corresponding bank. Cannot exceed 2^60 - 1.
    * \param is_outgoing Flag indicating if the node corresponds to an outgoing face.
    */
   CBCD_NodeIndex(std::uint64_t index, bool is_outgoing)
   {
-    if (index >= (std::uint64_t(1) << 61) - 1)
-      throw std::runtime_error("Cannot hold an index greater than 2^61.");
+    if (index >= (std::uint64_t(1) << 60) - 1)
+      throw std::runtime_error("Cannot hold an index greater than 2^60.");
     SetInOut(is_outgoing);
+    SetDelayed(false);
     SetLocal(true);
     SetBoundary(true);
     SetIndex(index);
   }
+
+  /// Check if the current index corresponds to a delayed bank.
+  constexpr bool IsDelayed() const noexcept { return (value_ & delayed_bit_mask) != 0; }
 
   /// Check if the current index corresponds to a local bank.
   constexpr bool IsLocal() const noexcept { return (value_ & local_bit_mask) != 0; }
@@ -77,10 +82,22 @@ public:
   constexpr std::uint64_t GetIndex() const noexcept { return value_ & index_bit_mask; }
 
 private:
+  /// \name Delayed bit
+  /// \{
+  static constexpr std::uint64_t delayed_bit_mask = std::uint64_t(1) << (64 - 3);
+  constexpr void SetDelayed(bool is_delayed) noexcept
+  {
+    if (is_delayed)
+      value_ |= delayed_bit_mask;
+    else
+      value_ &= ~delayed_bit_mask;
+  }
+  /// \}
+
   /// \name Local bit
   /// \{
-  /// Third bit mask (``001`` followed by 61 zeros) - Bit 61.
-  static constexpr std::uint64_t local_bit_mask = std::uint64_t(1) << (64 - 3);
+  /// Fourth bit mask (``0001`` followed by 60 zeros) - Bit 60.
+  static constexpr std::uint64_t local_bit_mask = std::uint64_t(1) << (64 - 4);
   /// Encode the value as local.
   constexpr void SetLocal(bool is_local) noexcept
   {
@@ -93,8 +110,8 @@ private:
 
   /// \name Index bits
   /// \{
-  /// Index bit mask (``1`` at the last 61 bits).
-  static constexpr std::uint64_t index_bit_mask = (std::uint64_t(1) << (64 - 3)) - 1;
+  /// Index bit mask (``1`` at the last 60 bits).
+  static constexpr std::uint64_t index_bit_mask = (std::uint64_t(1) << (64 - 4)) - 1;
   /// Encode the index.
   constexpr void SetIndex(std::uint64_t index) noexcept
   {
@@ -109,10 +126,16 @@ private:
  */
 struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
+  /// Pointer to delayed local angular fluxes.
+  double* __restrict__ delayed_local_psi = nullptr;
+  /// Pointer to old delayed local angular fluxes.
+  double* __restrict__ delayed_local_psi_old = nullptr;
   /// Pointer to incoming boundary angular fluxes.
   double* __restrict__ incoming_boundary_psi = nullptr;
   /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
+  /// Pointer to old delayed incoming non-local angular fluxes.
+  double* __restrict__ nonlocal_delayed_incoming_psi_old = nullptr;
 
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index) const noexcept
@@ -133,12 +156,14 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Incoming local case
     if (node_index.IsLocal())
     {
-      return local_psi + node_index.GetIndex() * stride_size;
+      return (node_index.IsDelayed() ? delayed_local_psi_old : local_psi) +
+             node_index.GetIndex() * stride_size;
     }
     // Incoming non-local case
     else
     {
-      return nonlocal_incoming_psi + node_index.GetIndex() * stride_size;
+      return (node_index.IsDelayed() ? nonlocal_delayed_incoming_psi_old : nonlocal_incoming_psi) +
+             node_index.GetIndex() * stride_size;
     }
   }
 
@@ -161,7 +186,8 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     // Outgoing local case
     if (node_index.IsLocal())
     {
-      return local_psi + node_index.GetIndex() * stride_size;
+      return (node_index.IsDelayed() ? delayed_local_psi : local_psi) +
+             node_index.GetIndex() * stride_size;
     }
     // Outgoing non-local case
     else

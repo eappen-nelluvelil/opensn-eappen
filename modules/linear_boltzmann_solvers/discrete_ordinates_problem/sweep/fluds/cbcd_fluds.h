@@ -130,6 +130,9 @@ public:
                                  const std::vector<std::uint32_t>& angle_indices,
                                  std::span<const std::uint32_t> cell_local_ids);
 
+  void CopyDelayedOutgoingPsiBackToHost(CBCD_AsynchronousCommunicator& async_comm,
+                                        std::size_t angle_set_id);
+
   /**
    * Scatter one received non-local face payload into the mapped incoming buffer.
    *
@@ -149,9 +152,17 @@ public:
   void AllocateInternalLocalPsi() override {}
   void AllocateOutgoingPsi() override {}
 
-  void AllocateDelayedLocalPsi() override {}
+  void AllocateDelayedLocalPsi() override;
   void AllocatePrelocIOutgoingPsi() override {}
-  void AllocateDelayedPrelocIOutgoingPsi() override {}
+  void AllocateDelayedPrelocIOutgoingPsi() override;
+  void SetDelayedLocalPsiOldToNew() override;
+  void SetDelayedLocalPsiNewToOld() override;
+  void SetDelayedOutgoingPsiOldToNew() override;
+  void SetDelayedOutgoingPsiNewToOld() override;
+
+  std::uint32_t ScatterDelayedReceivedFaceData(std::uint64_t cell_global_id,
+                                               unsigned int face_id,
+                                               const double* psi_data);
 
   std::span<const ReflectingBoundaryFacePlan>
   GetReflectingOutgoingBoundaryFaces(const std::uint64_t cell_local_id) const
@@ -193,6 +204,12 @@ private:
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
   crb::HostVector<double> host_saved_psi_;
+  /// Mapped delayed-local buffers.
+  crb::MappedHostVector<double> delayed_local_psi_;
+  crb::MappedHostVector<double> delayed_local_psi_old_;
+  /// Flat mapped delayed incoming non-local buffers.
+  crb::MappedHostVector<double> delayed_preloc_outgoing_storage_;
+  crb::MappedHostVector<double> delayed_preloc_outgoing_old_storage_;
   /// Pointer set used by the CBCD sweep kernel.
   CBCD_FLUDSPointerSet pointer_set_;
   /// Cell-to-reflecting-face offset table.
