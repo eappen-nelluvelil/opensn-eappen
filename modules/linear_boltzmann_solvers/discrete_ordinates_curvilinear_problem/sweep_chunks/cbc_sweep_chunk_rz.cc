@@ -5,54 +5,15 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_curvilinear_problem/sweep_chunks/cbc_sweep_chunk_rz.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
-#include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
-#include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/math/quadratures/angular/curvilinear_product_quadrature.h"
-#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include <stdexcept>
 
 namespace opensn
 {
 
 CBCSweepChunkRZ::CBCSweepChunkRZ(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset)
-  : SweepChunk(problem.GetPhiNewLocal(),
-               problem.GetPsiNewLocal()[groupset.id],
-               problem.GetGrid(),
-               problem.GetSpatialDiscretization(),
-               problem.GetUnitCellMatrices(),
-               problem.GetCellTransportViews(),
-               problem.GetQMomentsLocal(),
-               groupset,
-               problem.GetBlockID2XSMap(),
-               problem.GetNumMoments(),
-               problem.GetMaxCellDOFCount(),
-               problem.GetMinCellDOFCount()),
-    secondary_unit_cell_matrices_(dynamic_cast<const DiscreteOrdinatesCurvilinearProblem&>(problem)
-                                    .GetSecondaryUnitCellMatrices()),
-    unknown_manager_(),
-    psi_sweep_(),
-    normal_vector_boundary_()
+  : SweepChunkRZ(problem, groupset)
 {
-  const auto curvilinear_product_quadrature =
-    std::dynamic_pointer_cast<CurvilinearProductQuadrature>(groupset_.quadrature);
-
-  if (curvilinear_product_quadrature == nullptr)
-    throw std::invalid_argument("CBCSweepChunkRZ: invalid angular quadrature");
-
-  const size_t dir_map_size = curvilinear_product_quadrature->GetDirectionMap().size();
-  for (size_t m = 0; m < dir_map_size; ++m)
-    unknown_manager_.AddUnknown(UnknownType::VECTOR_N, groupset_.GetNumGroups());
-
-  const auto n_dof = discretization_.GetNumLocalDOFs(unknown_manager_);
-  psi_sweep_.resize(n_dof);
-
-  for (const auto& dir_set : curvilinear_product_quadrature->GetDirectionMap())
-    for (const auto& dir_idx : dir_set.second)
-      map_polar_level_.emplace(dir_idx, dir_set.first);
-
-  const auto d = (grid_->GetDimension() == 1) ? 2 : 0;
-  normal_vector_boundary_ = Vector3(0.0, 0.0, 0.0);
-  normal_vector_boundary_(d) = 1.0;
 }
 
 void
@@ -82,14 +43,6 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
   const auto& m2d_op = groupset_.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset_.quadrature->GetDiscreteToMomentOperator();
 
-  DenseMatrix<double> Amat(max_num_cell_dofs_, max_num_cell_dofs_);
-  DenseMatrix<double> Atemp(max_num_cell_dofs_, max_num_cell_dofs_);
-  std::vector<Vector<double>> b(groupset_.GetNumGroups(), Vector<double>(max_num_cell_dofs_));
-  std::vector<double> source(max_num_cell_dofs_);
-
-  const auto curvilinear_product_quadrature =
-    std::dynamic_pointer_cast<CurvilinearProductQuadrature>(groupset_.quadrature);
-
   const auto& spds = angle_set.GetSPDS();
   const auto cell_local_id = current_cell_->local_id;
   const auto& cell = *current_cell_;
@@ -114,14 +67,15 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
     const auto omega = groupset_.quadrature->omegas[direction_num];
     const auto wt = groupset_.quadrature->weights[direction_num];
 
-    const auto polar_level = map_polar_level_.at(direction_num);
+    const auto polar_level = PolarLevel(direction_num);
     const auto fac_diamond_difference =
-      curvilinear_product_quadrature->GetDiamondDifferenceFactor()[direction_num];
+      curvilinear_product_quadrature_->GetDiamondDifferenceFactor()[direction_num];
     const auto fac_streaming_operator =
-      curvilinear_product_quadrature->GetStreamingOperatorFactor()[direction_num];
+      curvilinear_product_quadrature_->GetStreamingOperatorFactor()[direction_num];
 
     for (size_t gsg = 0; gsg < gs_size; ++gsg)
-      b[gsg] = Vector<double>(cell_num_nodes, 0.0);
+      for (size_t i = 0; i < cell_num_nodes; ++i)
+        b_[gsg](i) = 0.0;
 
     for (size_t i = 0; i < cell_num_nodes; ++i)
     {
@@ -129,13 +83,13 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
       {
         const auto jr = discretization_.MapDOFLocal(cell, j, unknown_manager_, polar_level, gs_gi);
         for (size_t gsg = 0; gsg < gs_size; ++gsg)
-          b[gsg](i) += fac_streaming_operator * Maux(i, j) * psi_sweep_[jr + gsg];
+          b_[gsg](i) += fac_streaming_operator * Maux(i, j) * psi_sweep_[jr + gsg];
       }
     }
 
     for (size_t i = 0; i < cell_num_nodes; ++i)
       for (size_t j = 0; j < cell_num_nodes; ++j)
-        Amat(i, j) = omega.Dot(G(i, j)) + fac_streaming_operator * Maux(i, j);
+        Amat_(i, j) = omega.Dot(G(i, j)) + fac_streaming_operator * Maux(i, j);
 
     for (size_t f = 0; f < cell_num_faces; ++f)
       face_mu_values[f] = omega.Dot(cell.faces[f].normal);
@@ -172,7 +126,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
         {
           const int j = cell_mapping.MapFaceNode(f, fj);
           const double mu_Nij = -face_mu_values[f] * M_surf[f](i, j);
-          Amat(i, j) += mu_Nij;
+          Amat_(i, j) += mu_Nij;
 
           const double* psi = nullptr;
           if (is_delayed_local_face)
@@ -215,7 +169,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
             continue;
 
           for (size_t gsg = 0; gsg < gs_size; ++gsg)
-            b[gsg](i) += psi[gsg] * mu_Nij;
+            b_[gsg](i) += psi[gsg] * mu_Nij;
         }
       }
     }
@@ -236,7 +190,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
           const auto ir = cell_transport_view.MapDOF(i, m, gs_gi + gsg);
           temp_src += m2d_row[m] * source_moments_[ir];
         }
-        source[i] = temp_src;
+        source_[i] = temp_src;
       }
 
       for (size_t i = 0; i < cell_num_nodes; ++i)
@@ -245,13 +199,13 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
         for (size_t j = 0; j < cell_num_nodes; ++j)
         {
           const double Mij = M(i, j);
-          Atemp(i, j) = Amat(i, j) + Mij * sigma_tg;
-          temp += Mij * source[j];
+          Atemp_(i, j) = Amat_(i, j) + Mij * sigma_tg;
+          temp += Mij * source_[j];
         }
-        b[gsg](i) += temp;
+        b_[gsg](i) += temp;
       }
 
-      GaussElimination(Atemp, b[gsg], static_cast<int>(cell_num_nodes));
+      GaussElimination(Atemp_, b_[gsg], static_cast<int>(cell_num_nodes));
     }
 
     for (unsigned int m = 0; m < num_moments_; ++m)
@@ -261,7 +215,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
       {
         const auto ir = cell_transport_view.MapDOF(i, m, gs_gi);
         for (size_t gsg = 0; gsg < gs_size; ++gsg)
-          destination_phi_[ir + gsg] += wn_d2m * b[gsg](i);
+          destination_phi_[ir + gsg] += wn_d2m * b_[gsg](i);
       }
     }
 
@@ -275,7 +229,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
         const size_t imap =
           i * groupset_angle_group_stride_ + direction_num * groupset_group_stride_;
         for (size_t gsg = 0; gsg < gs_size; ++gsg)
-          cell_psi_data[imap + gsg] = b[gsg](i);
+          cell_psi_data[imap + gsg] = b_[gsg](i);
       }
     }
 
@@ -322,7 +276,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
         {
           for (size_t gsg = 0; gsg < gs_size; ++gsg)
             cell_transport_view.AddOutflow(
-              f, gs_gi + gsg, wt * face_mu_values[f] * b[gsg](i) * IntF_shapeI(i));
+              f, gs_gi + gsg, wt * face_mu_values[f] * b_[gsg](i) * IntF_shapeI(i));
         }
 
         double* psi = nullptr;
@@ -346,7 +300,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
         if ((not is_boundary_face or is_reflecting_boundary_face) and psi != nullptr)
         {
           for (size_t gsg = 0; gsg < gs_size; ++gsg)
-            psi[gsg] = b[gsg](i);
+            psi[gsg] = b_[gsg](i);
         }
       }
     }
@@ -355,7 +309,7 @@ CBCSweepChunkRZ::Sweep(AngleSet& angle_set)
     {
       const auto ir = discretization_.MapDOFLocal(cell, i, unknown_manager_, polar_level, gs_gi);
       for (size_t gsg = 0; gsg < gs_size; ++gsg)
-        psi_sweep_[ir + gsg] = f0 * b[gsg](i) - f1 * psi_sweep_[ir + gsg];
+        psi_sweep_[ir + gsg] = f0 * b_[gsg](i) - f1 * psi_sweep_[ir + gsg];
     }
   }
 }
