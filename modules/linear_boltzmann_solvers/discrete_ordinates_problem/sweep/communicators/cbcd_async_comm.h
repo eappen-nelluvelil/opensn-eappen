@@ -85,6 +85,12 @@ public:
     return incoming_mailboxes_[angle_set_id]->ProcessReady(std::forward<Callback>(callback)) > 0;
   }
 
+  bool HasIncoming(std::size_t angle_set_id) const
+  {
+    assert(angle_set_id < num_angle_sets_);
+    return not incoming_mailboxes_[angle_set_id]->Empty();
+  }
+
   void SignalAngleSetComplete(std::size_t angle_set_id);
   void Start();
   void Stop();
@@ -118,7 +124,8 @@ private:
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set_;
   std::vector<std::unique_ptr<DestinationQueue>> outgoing_queues_;
   std::unordered_map<int, int> dest_to_queue_index_;
-  std::vector<std::unique_ptr<LockFreeRingBuffer<std::vector<IncomingFaceData>>>> incoming_mailboxes_;
+  std::vector<std::unique_ptr<LockFreeRingBuffer<std::vector<IncomingFaceData>>>>
+    incoming_mailboxes_;
   std::vector<std::vector<const OutgoingFaceData*>> send_batch_by_angle_set_;
   ByteArray recv_buffer_;
   std::vector<InFlightSend> in_flight_sends_;

@@ -276,6 +276,8 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
   if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
+
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
   boundary_data_initialized_ = true;
@@ -290,35 +292,66 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
   if (executed_ or (not boundary_data_initialized_))
     return false;
 
-  // Retire a completed kernel batch before processing new arrivals.
+  auto& ready_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index);
+  const bool kernel_completed = batch_state_.kernel_in_flight and stream_.is_completed();
+  const bool has_incoming = async_comm_->HasIncoming(GetID());
+  const bool can_finalize = (num_completed_tasks_ == num_tasks_) and
+                            (not batch_state_.kernel_in_flight) and
+                            (not batch_state_.completed_batch_pending);
+
+  if ((not kernel_completed) and (not batch_state_.completed_batch_pending) and
+      ready_cell_ids.empty() and (not has_incoming) and (not can_finalize))
+    return false;
+
   bool work_done = false;
-  work_done |= TryRetireCompletedBatch();
+
+  // Retire a completed kernel batch before processing new arrivals.
+  if (kernel_completed)
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
+    work_done |= TryRetireCompletedBatch();
+  }
 
   // Consume any newly received non-local face data and release newly ready cells.
-  work_done |= async_comm_->ProcessIncoming(
-    GetID(),
-    [this](const std::vector<IncomingFaceData>& batch)
-    {
-      for (const auto& entry : batch)
+  if (has_incoming)
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
+    work_done |= async_comm_->ProcessIncoming(
+      GetID(),
+      [this](const std::vector<IncomingFaceData>& batch)
       {
-        const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-          entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
-        if (--remaining_deps_[cell_local_id] == 0)
-          cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
-            .push_back(static_cast<std::uint32_t>(cell_local_id));
-      }
-    });
+        for (const auto& entry : batch)
+        {
+          const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
+            entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
+          if (--remaining_deps_[cell_local_id] == 0)
+            cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+              .push_back(static_cast<std::uint32_t>(cell_local_id));
+        }
+      });
+  }
 
   // Launch the next batch once the stream is idle.
-  work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
+  if ((not batch_state_.kernel_in_flight) and (not ready_cell_ids.empty()))
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::LaunchBatch");
+    work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
+  }
 
   // Flush the completed batch after launching the next one so host packing
   // overlaps with device execution when another batch is ready.
-  FlushCompletedBatch(cbcd_sweep_chunk);
+  if (batch_state_.completed_batch_pending)
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
+    FlushCompletedBatch(cbcd_sweep_chunk);
+    work_done = true;
+  }
 
   // Finalize once all tasks are done and no kernel is in flight.
-  if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight))
+  if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight) and
+      (not batch_state_.completed_batch_pending))
   {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
     async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
     executed_ = true;
