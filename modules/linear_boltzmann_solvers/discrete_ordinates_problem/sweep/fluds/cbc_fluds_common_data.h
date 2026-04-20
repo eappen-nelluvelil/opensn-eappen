@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include <cinttypes>
 #include <cstddef>
+#include <map>
 #include <unordered_map>
 
 namespace opensn
@@ -58,6 +59,26 @@ public:
     std::uint32_t num_face_nodes = 0;
   };
 
+  /// Metadata for one delayed-local face stored in the sparse lagged bank.
+  struct DelayedLocalFaceInfo
+  {
+    /// Offset in face-node units into the delayed-local bank.
+    std::uint32_t slot_address = 0;
+    /// Number of face nodes.
+    std::uint16_t num_face_nodes = 0;
+  };
+
+  /// Metadata for one delayed incoming non-local face stored in the sparse lagged bank.
+  struct DelayedNonlocalFaceInfo
+  {
+    /// Delayed dependency slot index.
+    std::uint32_t prelocI = 0;
+    /// Offset in face-node units within the delayed dependency bank.
+    std::uint32_t slot_address = 0;
+    /// Number of face nodes.
+    std::uint16_t num_face_nodes = 0;
+  };
+
   /**
    * Construct common data from the SPDS and grid nodal mappings.
    *
@@ -84,6 +105,15 @@ public:
 
   /// Return the number of reusable local-face slots.
   size_t GetNumLocalFaceSlots() const { return num_local_face_slots_; }
+
+  bool HasDelayedLocalDependencies() const noexcept { return has_delayed_local_dependencies_; }
+
+  bool IsDelayedLocalIncomingFace(std::uint32_t cell_local_id, unsigned int face_id) const noexcept;
+
+  bool IsDelayedLocalOutgoingFace(std::uint32_t cell_local_id, unsigned int face_id) const noexcept;
+
+  bool IsDelayedNonlocalIncomingFace(std::uint32_t cell_local_id,
+                                     unsigned int face_id) const noexcept;
 
   /// Get number of outgoing non-local faces for dependent locality `deplocI`.
   size_t GetDeplocIFaceCount(std::size_t deplocI) const noexcept
@@ -121,6 +151,26 @@ public:
   const OutgoingNonlocalFaceInfo& GetOutgoingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
 
+  const DelayedLocalFaceInfo& GetDelayedLocalFaceInfo(std::uint64_t cell_global_id,
+                                                      unsigned int face_id) const noexcept;
+
+  const DelayedNonlocalFaceInfo& GetDelayedNonlocalFaceInfo(std::uint32_t cell_local_id,
+                                                            unsigned int face_id) const noexcept;
+
+  bool TryGetDelayedNonlocalFaceInfo(std::uint64_t cell_global_id,
+                                     unsigned int face_id,
+                                     DelayedNonlocalFaceInfo& info) const noexcept;
+
+  std::size_t GetDelayedLocalFaceNodeCount() const noexcept
+  {
+    return delayed_local_face_node_count_;
+  }
+
+  std::size_t GetDelayedPrelocIFaceNodeCount(std::size_t prelocI) const noexcept
+  {
+    return delayed_preloc_face_node_count_[prelocI];
+  }
+
   /// Look up the static local-face slot id by cell local ID and face index.
   std::uint32_t GetLocalFaceSlotID(std::uint32_t cell_local_id, unsigned int face_id) const noexcept
   {
@@ -155,20 +205,39 @@ private:
   size_t max_local_face_node_count_;
   /// Number of reusable local-face storage slots.
   size_t num_local_face_slots_;
+  /// Flag indicating whether this SPDS has delayed local dependencies.
+  bool has_delayed_local_dependencies_ = false;
+  /// Total number of delayed-local face nodes.
+  size_t delayed_local_face_node_count_ = 0;
   /// Prefix-sum offsets into the flat face tables, indexed by cell local ID.
   std::vector<size_t> cell_face_offsets_;
   /// Flat local-face slot IDs, indexed by face storage index.
   std::vector<std::uint32_t> local_face_slot_ids_;
+  /// Per-face delayed-local incoming flags.
+  std::vector<std::vector<std::uint8_t>> delayed_local_incoming_faces_;
+  /// Per-face delayed-local outgoing flags.
+  std::vector<std::vector<std::uint8_t>> delayed_local_outgoing_faces_;
+  /// Per-face delayed incoming non-local flags.
+  std::vector<std::vector<std::uint8_t>> delayed_nonlocal_incoming_faces_;
   /// Flat incoming non-local face metadata, indexed by face storage index.
   std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
   /// Flat outgoing non-local face metadata, indexed by face storage index.
   std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
+  /// Per-face delayed non-local face metadata, indexed by [cell_local_id][face_id].
+  std::vector<std::vector<DelayedNonlocalFaceInfo>> delayed_nonlocal_face_info_by_cell_;
   /// Per-dependent locality outgoing face counts.
   std::vector<size_t> outgoing_nonlocal_face_counts_;
   /// Per-dependent locality outgoing face node counts.
   std::vector<size_t> outgoing_nonlocal_face_node_counts_;
+  /// Per-delayed-dependency delayed incoming face node counts.
+  std::vector<size_t> delayed_preloc_face_node_count_;
   /// Map from (cell_global_id, face_id) to flat storage index for incoming non-local faces.
   std::unordered_map<CellFaceKey, std::size_t, CellFaceKeyHas> incoming_nonlocal_face_info_by_key_;
+  /// Map from delayed-local incoming face key to sparse lagged-bank metadata.
+  std::unordered_map<CellFaceKey, DelayedLocalFaceInfo, CellFaceKeyHas> delayed_local_face_info_;
+  /// Map from delayed incoming non-local face key to sparse lagged-bank metadata.
+  std::unordered_map<CellFaceKey, DelayedNonlocalFaceInfo, CellFaceKeyHas>
+    delayed_nonlocal_face_info_by_key_;
 };
 
 } // namespace opensn

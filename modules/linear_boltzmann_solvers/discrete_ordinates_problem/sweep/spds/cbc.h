@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <vector>
 
 namespace opensn
@@ -38,8 +39,35 @@ public:
    */
   CBC_SPDS(const Vector3& omega, const std::shared_ptr<MeshContinuum>& grid, bool allow_cycles);
 
+  /// Returns the id of this SPDS.
+  int GetId() const noexcept { return id_; }
+
+  /// Sets the id of this SPDS.
+  void SetId(int id) noexcept { id_ = id; }
+
   /// Return the local CBC task list.
   const std::vector<Task>& GetTaskList() const noexcept;
+
+  /// Returns the global sweep FAS as a vector of edges.
+  std::vector<int> GetGlobalSweepFAS() const { return global_sweep_fas_; }
+
+  /// Sets the global sweep FAS.
+  void SetGlobalSweepFAS(std::vector<int>& edges) { global_sweep_fas_ = edges; }
+
+  /// Builds the Feedback Arc Set (FAS) for the global sweep.
+  void BuildGlobalSweepFAS();
+
+  /// Builds the Task Dependency Graph (TDG) for the global sweep.
+  void BuildGlobalSweepTDG();
+
+  /// Returns the locally accumulated location-to-location edge weights.
+  std::vector<double> ComputeLocalLocationEdgeWeights() const;
+
+  /// Sets the global location-to-location edge weights.
+  void SetGlobalEdgeWeights(std::vector<double>& weights)
+  {
+    global_edge_weights_ = std::move(weights);
+  }
 
   /**
    * Compute the minimum number of reusable local-face psi slots and assign faces to slots.
@@ -116,8 +144,20 @@ private:
 
   /// Topological ordering of local cell IDs: topo_order_[rank] = cell_local_id.
   std::vector<std::uint32_t> topo_order_;
+  /// Unique identifier for this SPDS.
+  int id_ = 0;
+  /// Flag indicating whether cycles are allowed in the dependency graphs.
+  bool allow_cycles_ = false;
   /// Per-cell task descriptors with successor adjacency lists.
   std::vector<Task> task_list_;
+  /// Location-to-location global sweep dependencies.
+  std::vector<std::vector<int>> global_dependencies_;
+  /// Vector of edges representing the FAS used to break cycles in the global sweep graph.
+  std::vector<int> global_sweep_fas_;
+  /// Flattened comm_size x comm_size matrix of global edge weights.
+  std::vector<double> global_edge_weights_;
+  /// Set of local delayed dependency edges encoded as packed (upwind, downwind) pairs.
+  std::set<std::uint64_t> delayed_local_dependency_set_;
   /// Offsets into the flat successor-rank array indexed by topological task rank.
   std::vector<std::uint32_t> task_successor_rank_offsets_;
   /// Flat successor topological ranks grouped by producer task rank.

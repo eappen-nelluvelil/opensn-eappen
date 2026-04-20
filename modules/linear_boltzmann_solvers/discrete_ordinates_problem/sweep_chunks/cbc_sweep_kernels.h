@@ -99,6 +99,12 @@ struct CBCIncomingFaceData
   const FaceNodalMapping* face_nodal_mapping = nullptr;
   /// Base pointer for local/nonlocal incoming face psi; null only for boundary faces.
   double* psi_base = nullptr;
+  /// Whether the incoming face reads from delayed local storage.
+  bool is_delayed_local_face = false;
+  /// Whether the incoming face reads from delayed non-local storage.
+  bool is_delayed_nonlocal_face = false;
+  /// Delayed non-local face metadata, valid when `is_delayed_nonlocal_face` is true.
+  CBC_FLUDSCommonData::DelayedNonlocalFaceInfo delayed_nonlocal_face_info{};
 };
 
 /// Pre-resolved metadata for one outgoing face of the current cell.
@@ -108,6 +114,11 @@ struct CBCOutgoingFaceData
   bool is_reflecting_boundary_face = false;
   /// Base pointer for local outgoing face psi, when applicable.
   double* psi_base = nullptr;
+  /// Whether the outgoing face writes to delayed local storage.
+  bool is_delayed_local_outgoing = false;
+  /// Downwind delayed-local face key pieces, valid when `is_delayed_local_outgoing` is true.
+  std::uint64_t delayed_local_cell_global_id = 0;
+  unsigned int delayed_local_face_id = 0;
   /// Nonlocal face info for MPI send staging; null for local/boundary faces.
   const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo* outgoing_nonlocal_face_info = nullptr;
 };
@@ -225,6 +236,7 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
   for (size_t f = 0; f < data.cell_num_faces; ++f)
   {
     incoming_face_data[f] = CBCIncomingFaceData{};
+    outgoing_face_data[f] = CBCOutgoingFaceData{};
     const auto& face = data.cell.faces[f];
     const bool is_local_face = data.cell_transport_view.IsFaceLocal(f);
     const bool is_boundary_face = not face.has_neighbor;
@@ -235,10 +247,20 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
     {
       auto& face_data = incoming_face_data[f];
       face_data.face_nodal_mapping = face_nodal_mapping;
-      if (is_local_face)
+      face_data.is_delayed_local_face =
+        is_local_face and
+        cbc_common.IsDelayedLocalIncomingFace(data.cell_local_id, static_cast<unsigned int>(f));
+      face_data.is_delayed_nonlocal_face =
+        (not is_local_face) and (not is_boundary_face) and
+        cbc_common.IsDelayedNonlocalIncomingFace(data.cell_local_id, static_cast<unsigned int>(f));
+      if (face_data.is_delayed_nonlocal_face)
+        face_data.delayed_nonlocal_face_info =
+          cbc_common.GetDelayedNonlocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
+      if (is_local_face and not face_data.is_delayed_local_face)
         face_data.psi_base =
           data.fluds.GetLocalFacePsiPointer(data.cell_local_id, static_cast<unsigned int>(f));
-      else if (not is_boundary_face)
+      else if ((not is_local_face) and (not is_boundary_face) and
+               (not face_data.is_delayed_nonlocal_face))
         face_data.psi_base = data.fluds.GetIncomingNonlocalFacePsiPointer(
           data.cell_local_id, static_cast<unsigned int>(f));
     }
@@ -248,7 +270,16 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
       auto& face_data = outgoing_face_data[f];
       face_data.is_reflecting_boundary_face =
         is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting();
-      if (is_local_face)
+      face_data.is_delayed_local_outgoing =
+        is_local_face and
+        cbc_common.IsDelayedLocalOutgoingFace(data.cell_local_id, static_cast<unsigned int>(f));
+      if (face_data.is_delayed_local_outgoing)
+      {
+        face_data.delayed_local_cell_global_id = face.neighbor_id;
+        face_data.delayed_local_face_id =
+          static_cast<unsigned int>(face_nodal_mapping->associated_face_);
+      }
+      if (is_local_face and not face_data.is_delayed_local_outgoing)
         face_data.psi_base =
           data.fluds.GetLocalFacePsiPointer(data.cell_local_id, static_cast<unsigned int>(f));
       if (not is_local_face and not is_boundary_face)
@@ -317,7 +348,16 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
 
           const double* psi = nullptr;
 
-          if (face_data.psi_base != nullptr)
+          if (face_data.is_delayed_local_face)
+            psi = data.fluds.DelayedLocalUpwindPsi(data.cell.global_id,
+                                                   static_cast<unsigned int>(f),
+                                                   face_nodal_mapping->face_node_mapping_[fj],
+                                                   as_ss_idx);
+          else if (face_data.is_delayed_nonlocal_face)
+            psi = data.fluds.DelayedNLUpwindPsi(face_data.delayed_nonlocal_face_info,
+                                                face_nodal_mapping->face_node_mapping_[fj],
+                                                as_ss_idx);
+          else if (face_data.psi_base != nullptr)
             psi = face_data.psi_base +
                   static_cast<size_t>(face_nodal_mapping->face_node_mapping_[fj]) *
                     data.group_angle_stride +
@@ -460,7 +500,12 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
         }
 
         double* psi = nullptr;
-        if (face_data.psi_base != nullptr)
+        if (face_data.is_delayed_local_outgoing)
+          psi = data.fluds.DelayedLocalOutgoingPsi(face_data.delayed_local_cell_global_id,
+                                                   face_data.delayed_local_face_id,
+                                                   static_cast<unsigned int>(fi),
+                                                   as_ss_idx);
+        else if (face_data.psi_base != nullptr)
           psi = face_data.psi_base + fi * data.group_angle_stride + as_ss_idx * data.group_stride;
         else if (face_data.outgoing_nonlocal_face_info != nullptr)
           psi = data.fluds.NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);

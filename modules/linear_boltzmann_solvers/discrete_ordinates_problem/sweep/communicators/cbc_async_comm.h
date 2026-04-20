@@ -7,8 +7,10 @@
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
+#include <limits>
+#include <set>
 #include <vector>
+#include <unordered_map>
 
 namespace mpi = mpicpp_lite;
 
@@ -54,17 +56,26 @@ public:
                                                   size_t angle_set_id,
                                                   size_t data_size);
 
+  void InitializeDelayedUpstreamData();
+
   /// Send all currently queued outgoing messages.
   bool SendData();
 
+  bool FlushSendBuffers();
+
   /// Receive all currently available upwind messages.
   std::vector<uint64_t> ReceiveData();
+
+  bool ReceiveDelayedData();
 
   /// Clear all queued outgoing state.
   void Reset()
   {
     outgoing_message_queue_.clear();
+    delayed_outgoing_message_queue_.clear();
     send_buffer_.clear();
+    std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), false);
+    delayed_completion_markers_queued_ = false;
   }
 
 protected:
@@ -88,6 +99,8 @@ protected:
 
   /// Outgoing face payloads grouped by destination key.
   std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
+  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>
+    delayed_outgoing_message_queue_;
 
   /// In-flight send buffer record.
   struct BufferItem
@@ -113,10 +126,23 @@ protected:
   std::vector<size_t> destination_buffer_bytes_;
   /// Send-buffer indices grouped by destination locality.
   std::vector<size_t> destination_buffer_indices_;
+  /// Delayed-successor localities for this angle set.
+  std::set<int> delayed_successor_set_;
+  /// Completion flags for delayed dependency receives.
+  std::vector<bool> delayed_recv_done_;
+  /// Whether completion markers were queued for delayed-successor sends.
+  bool delayed_completion_markers_queued_ = false;
+  static constexpr std::uint64_t delayed_done_cell_id_ = std::numeric_limits<std::uint64_t>::max();
+  static constexpr unsigned int delayed_done_face_id_ = std::numeric_limits<unsigned int>::max();
 
 private:
   /// Pack the queued outgoing face payloads into send buffers.
-  void QueueOutgoingMessages();
+  void QueueOutgoingMessages(
+    std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>& message_queue);
+
+  bool AllBufferedSendsCompleted();
+
+  void QueueDelayedCompletionMarkers();
 };
 
 } // namespace opensn

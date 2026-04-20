@@ -126,6 +126,20 @@ public:
     return psi_nonlocal_outgoing + face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
+  double* DelayedLocalUpwindPsi(std::uint64_t cell_global_id,
+                                unsigned int face_id,
+                                unsigned int face_node_mapped,
+                                size_t as_ss_idx) noexcept;
+
+  double* DelayedLocalOutgoingPsi(std::uint64_t cell_global_id,
+                                  unsigned int face_id,
+                                  unsigned int face_node,
+                                  size_t as_ss_idx) noexcept;
+
+  double* DelayedNLUpwindPsi(const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo& info,
+                             unsigned int face_node_mapped,
+                             size_t as_ss_idx) noexcept;
+
   /**
    * Store received nonlocal face angular flux into the incoming buffer.
    *
@@ -144,9 +158,19 @@ public:
   void AllocateInternalLocalPsi() override {}
   void AllocateOutgoingPsi() override {}
 
-  void AllocateDelayedLocalPsi() override {}
+  void AllocateDelayedLocalPsi() override;
   void AllocatePrelocIOutgoingPsi() override {}
-  void AllocateDelayedPrelocIOutgoingPsi() override {}
+  void AllocateDelayedPrelocIOutgoingPsi() override;
+
+  void SetDelayedLocalPsiOldToNew() override;
+  void SetDelayedLocalPsiNewToOld() override;
+  void SetDelayedOutgoingPsiOldToNew() override;
+  void SetDelayedOutgoingPsiNewToOld() override;
+
+  void StoreDelayedIncomingFaceData(std::uint64_t cell_global_id,
+                                    unsigned int face_id,
+                                    const double* psi_data,
+                                    size_t data_size);
 
 protected:
   /// Custom deleter for 64-byte aligned double arrays.
@@ -185,6 +209,13 @@ protected:
   std::vector<double*> incoming_nonlocal_face_bases_;
   /// Flat buffer holding received non-local angular fluxes.
   AlignedDoubleBuffer incoming_nonlocal_psi_buffer_;
+
+  /// Sparse delayed-local lagged-angular-flux storage.
+  std::vector<double> delayed_local_psi_buffer_;
+  std::vector<double> delayed_local_psi_old_buffer_;
+  /// Sparse delayed incoming non-local lagged-angular-flux storage.
+  std::vector<std::vector<double>> delayed_preloc_outgoing_psi_;
+  std::vector<std::vector<double>> delayed_preloc_outgoing_psi_old_;
 
   /// Per-boundary incoming angular flux storage.
   std::vector<std::vector<double>> boundryI_incoming_psi_;

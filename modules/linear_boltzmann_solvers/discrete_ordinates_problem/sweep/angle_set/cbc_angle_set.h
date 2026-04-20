@@ -43,7 +43,7 @@ public:
   /// Return the delayed-data communicator for this angle set.
   AsynchronousCommunicator* GetCommunicator() override;
 
-  void InitializeDelayedUpstreamData() override {}
+  void InitializeDelayedUpstreamData() override;
 
   int GetMaxBufferMessages() const override { return 0; }
 
@@ -53,13 +53,13 @@ public:
 
   AngleSetStatus FlushSendBuffers() override
   {
-    const bool all_messages_sent = async_comm_.SendData();
+    const bool all_messages_sent = async_comm_.FlushSendBuffers();
     return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
   }
 
   void ResetSweepBuffers() override;
 
-  bool ReceiveDelayedData() override { return true; }
+  bool ReceiveDelayedData() override;
 
   /**
    * Return the incoming boundary angular flux for one boundary face node.
@@ -109,6 +109,8 @@ protected:
   std::vector<std::uint32_t> initial_ready_tasks_;
   /// Mutable predecessor counts for the current sweep.
   std::vector<unsigned int> remaining_dependencies_;
+  /// Per-task execution flags for the current sweep.
+  std::vector<std::uint8_t> task_completed_;
   /// Local tasks ready to execute.
   std::vector<std::uint32_t> ready_tasks_;
   /// Number of completed local tasks.

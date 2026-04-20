@@ -8,8 +8,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/data_types/range.h"
-#include "framework/logging/log.h"
-#include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <cassert>
 
@@ -34,6 +32,7 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
   const auto num_tasks = task_list.size();
   initial_dependencies_.resize(num_tasks);
   remaining_dependencies_.resize(num_tasks);
+  task_completed_.resize(num_tasks, 0);
   initial_ready_tasks_.reserve(num_tasks);
   ready_tasks_.reserve(num_tasks);
 
@@ -53,6 +52,12 @@ AsynchronousCommunicator*
 CBC_AngleSet::GetCommunicator()
 {
   return static_cast<AsynchronousCommunicator*>(&async_comm_);
+}
+
+void
+CBC_AngleSet::InitializeDelayedUpstreamData()
+{
+  async_comm_.InitializeDelayedUpstreamData();
 }
 
 AngleSetStatus
@@ -86,6 +91,8 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   {
     const auto task_idx = ready_tasks_.back();
     ready_tasks_.pop_back();
+    if (task_completed_[task_idx] != 0)
+      continue;
     const auto& cell_task = task_list[task_idx];
 
     sweep_chunk.SetCell(cell_task.cell_ptr, *this);
@@ -98,6 +105,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         ready_tasks_.push_back(local_task_num);
     }
 
+    task_completed_[task_idx] = 1;
     ++num_completed_tasks_;
     async_comm_.SendData();
   }
@@ -132,7 +140,14 @@ CBC_AngleSet::ResetTaskState()
   std::copy(
     initial_dependencies_.begin(), initial_dependencies_.end(), remaining_dependencies_.begin());
   ready_tasks_ = initial_ready_tasks_;
+  std::fill(task_completed_.begin(), task_completed_.end(), 0);
   num_completed_tasks_ = 0;
+}
+
+bool
+CBC_AngleSet::ReceiveDelayedData()
+{
+  return async_comm_.ReceiveDelayedData();
 }
 
 const double*
