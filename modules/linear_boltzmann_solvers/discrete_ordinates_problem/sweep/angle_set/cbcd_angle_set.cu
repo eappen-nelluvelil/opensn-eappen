@@ -283,6 +283,8 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
   if (dependency_counter_.load(std::memory_order_acquire) != 0)
     return false;
 
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
+
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
   delayed_recv_done_.assign(cbc_spds_.GetDelayedLocationDependencies().size(), 0);
@@ -301,35 +303,50 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
 
   // Retire a completed kernel batch before processing new arrivals.
   bool work_done = false;
-  work_done |= TryRetireCompletedBatch();
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
+    work_done |= TryRetireCompletedBatch();
+  }
 
   // Consume any newly received non-local face data and release newly ready cells.
-  work_done |= async_comm_->ProcessIncoming(
-    GetID(),
-    [this](const std::vector<IncomingFaceData>& batch)
-    {
-      for (const auto& entry : batch)
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
+    work_done |= async_comm_->ProcessIncoming(
+      GetID(),
+      [this](const std::vector<IncomingFaceData>& batch)
       {
-        const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-          entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
-        if (--remaining_deps_[cell_local_id] == 0)
-          cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
-            .push_back(static_cast<std::uint32_t>(cell_local_id));
-      }
-    });
+        for (const auto& entry : batch)
+        {
+          const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
+            entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
+          if (--remaining_deps_[cell_local_id] == 0)
+            cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+              .push_back(static_cast<std::uint32_t>(cell_local_id));
+        }
+      });
+  }
 
   // Launch the next batch once the stream is idle.
-  work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::LaunchBatch");
+    work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
+  }
 
   // Flush the completed batch after launching the next one so host packing
   // overlaps with device execution when another batch is ready.
-  FlushCompletedBatch(cbcd_sweep_chunk);
+  {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
+    FlushCompletedBatch(cbcd_sweep_chunk);
+  }
 
   // Finalize once all tasks are done and no kernel is in flight.
   if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight))
   {
+    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::Finalize");
+
     if (not delayed_phase_queued_)
     {
+      CALI_CXX_MARK_SCOPE("CBCD_AngleSet::DelayedPhaseQueue");
       cbcd_fluds_.CopyDelayedOutgoingPsiBackToHost(*async_comm_, GetID());
       async_comm_->EnqueueDelayedCompletionMarkers(GetID());
       delayed_phase_queued_ = true;
@@ -338,6 +355,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
 
     if (not delayed_recv_done_.empty())
     {
+      CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessDelayedIncoming");
       work_done |= async_comm_->ProcessDelayedIncoming(
         GetID(),
         [this](const std::vector<IncomingFaceData>& batch)
@@ -361,11 +379,14 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
                     [](const auto done) { return done == 0; }))
       return work_done;
 
-    async_comm_->SignalAngleSetComplete(GetID());
-    TryNotifyFollowingAngleSets();
-    executed_ = true;
-    cbcd_fluds_.CopySavedPsiFromDevice();
-    cbcd_fluds_.CopySavedPsiToDestinationPsi(cbcd_sweep_chunk, this);
+    {
+      CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
+      async_comm_->SignalAngleSetComplete(GetID());
+      TryNotifyFollowingAngleSets();
+      executed_ = true;
+      cbcd_fluds_.CopySavedPsiFromDevice();
+      cbcd_fluds_.CopySavedPsiToDestinationPsi(cbcd_sweep_chunk, this);
+    }
     return true;
   }
 

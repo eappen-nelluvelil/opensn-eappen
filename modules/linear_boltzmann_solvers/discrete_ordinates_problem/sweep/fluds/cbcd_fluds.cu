@@ -13,6 +13,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -252,6 +253,8 @@ CBCD_FLUDS::CreatePointerSet()
 void
 CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
 {
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice");
+
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto num_angles = angle_indices.size();
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
@@ -296,6 +299,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and
       common_data_.GetNumOutgoingNonlocalFaces() == 0)
     return;
+
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyOutgoingPsiBackToHost");
 
   const auto num_angles = angle_indices.size();
   const auto& grid = *(GetSPDS().GetGrid());
@@ -361,6 +366,8 @@ CBCD_FLUDS::CopyDelayedOutgoingPsiBackToHost(CBCD_AsynchronousCommunicator& asyn
   if (delayed_successors.empty() || common_data_.GetNumOutgoingNonlocalFaces() == 0)
     return;
 
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyDelayedOutgoingPsiBackToHost");
+
   const std::size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
   for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
        ++cell_local_id)
@@ -400,6 +407,7 @@ CBCD_FLUDS::CopySavedPsiFromDevice()
 {
   if (not save_angular_flux_)
     return;
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiFromDevice");
   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
 }
 
@@ -408,6 +416,8 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 {
   if (not save_angular_flux_)
     return;
+
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiToDestinationPsi");
 
   stream_.synchronize();
 

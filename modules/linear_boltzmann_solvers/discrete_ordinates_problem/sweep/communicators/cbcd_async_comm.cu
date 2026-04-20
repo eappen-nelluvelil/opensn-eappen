@@ -472,6 +472,8 @@ CBCD_AsynchronousCommunicator::EnqueueDelayedCompletionMarkers(const std::size_t
 bool
 CBCD_AsynchronousCommunicator::PollInFlightSends()
 {
+  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::PollInFlightSends");
+
   bool completed_any = false;
   for (std::size_t i = 0; i < in_flight_sends_.size();)
   {

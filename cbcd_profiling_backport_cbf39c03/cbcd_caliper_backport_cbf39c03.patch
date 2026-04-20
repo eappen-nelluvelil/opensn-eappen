@@ -1,0 +1,169 @@
+--- a/framework/runtime.cc
++++ b/framework/runtime.cc
+@@ -30,6 +30,8 @@
+   if (use_caliper)
+   {
+     cali_mgr.add(cali_config.c_str());
++    if (cali_mgr.error())
++      throw std::runtime_error("Caliper configuration error: " + cali_mgr.error_msg());
+     cali_set_global_string_byname("opensn.version", GetVersionStr().c_str());
+     cali_set_global_string_byname("opensn.input", input_path.c_str());
+     cali_mgr.start();
+@@ -54,6 +56,12 @@
+   opensn::mpi_comm.barrier();
+ 
+   CALI_MARK_END(opensn::program.c_str());
++
++  if (use_caliper)
++  {
++    cali_mgr.flush();
++    cali_mgr.stop();
++  }
+ }
+ 
+ std::string
+--- a/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.cu
++++ b/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.cu
+@@ -276,6 +276,8 @@
+   if (dependency_counter_.load(std::memory_order_acquire) != 0)
+     return false;
+ 
++  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
++
+   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
+   InitializeTaskState();
+   boundary_data_initialized_ = true;
+@@ -292,33 +294,46 @@
+ 
+   // Retire a completed kernel batch before processing new arrivals.
+   bool work_done = false;
+-  work_done |= TryRetireCompletedBatch();
++  {
++    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
++    work_done |= TryRetireCompletedBatch();
++  }
+ 
+   // Consume any newly received non-local face data and release newly ready cells.
+-  work_done |= async_comm_->ProcessIncoming(
+-    GetID(),
+-    [this](const std::vector<IncomingFaceData>& batch)
+-    {
+-      for (const auto& entry : batch)
++  {
++    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
++    work_done |= async_comm_->ProcessIncoming(
++      GetID(),
++      [this](const std::vector<IncomingFaceData>& batch)
+       {
+-        const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
+-          entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
+-        if (--remaining_deps_[cell_local_id] == 0)
+-          cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+-            .push_back(static_cast<std::uint32_t>(cell_local_id));
+-      }
+-    });
++        for (const auto& entry : batch)
++        {
++          const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
++            entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
++          if (--remaining_deps_[cell_local_id] == 0)
++            cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
++              .push_back(static_cast<std::uint32_t>(cell_local_id));
++        }
++      });
++  }
+ 
+   // Launch the next batch once the stream is idle.
+-  work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
++  {
++    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::LaunchBatch");
++    work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
++  }
+ 
+   // Flush the completed batch after launching the next one so host packing
+   // overlaps with device execution when another batch is ready.
+-  FlushCompletedBatch(cbcd_sweep_chunk);
++  {
++    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
++    FlushCompletedBatch(cbcd_sweep_chunk);
++  }
+ 
+   // Finalize once all tasks are done and no kernel is in flight.
+   if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight))
+   {
++    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
+     async_comm_->SignalAngleSetComplete(GetID());
+     TryNotifyFollowingAngleSets();
+     executed_ = true;
+--- a/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.cu
++++ b/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.cu
+@@ -326,6 +326,8 @@
+ bool
+ CBCD_AsynchronousCommunicator::PollInFlightSends()
+ {
++  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::PollInFlightSends");
++
+   bool completed_any = false;
+   for (std::size_t i = 0; i < in_flight_sends_.size();)
+   {
+--- a/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.cu
++++ b/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.cu
+@@ -174,6 +174,8 @@
+ void
+ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
+ {
++  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice");
++
+   const auto& angle_indices = angle_set->GetAngleIndices();
+   const auto num_angles = angle_indices.size();
+   const std::size_t groups_bytes = num_groups_ * sizeof(double);
+@@ -218,6 +220,8 @@
+   if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and
+       common_data_.GetNumOutgoingNonlocalFaces() == 0)
+     return;
++
++  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyOutgoingPsiBackToHost");
+ 
+   const auto num_angles = angle_indices.size();
+   const auto& grid = *(GetSPDS().GetGrid());
+@@ -276,6 +280,7 @@
+ {
+   if (not save_angular_flux_)
+     return;
++  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiFromDevice");
+   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
+ }
+ 
+@@ -284,6 +289,8 @@
+ {
+   if (not save_angular_flux_)
+     return;
++
++  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiToDestinationPsi");
+ 
+   stream_.synchronize();
+ 
+--- a/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.cu
++++ b/modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.cu
+@@ -153,11 +153,19 @@
+   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
+ 
+   auto& ck = cached_params_[angle_set_id];
++  {
++    CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::ArgsRefresh");
++    ck.args = gpu_kernel::Arguments<gpu_kernel::SweepType::CBC>(
++      problem_, groupset_, *angle_sets_[angle_set_id], *ck.fluds);
++  }
+   auto& stream = angle_sets_[angle_set_id]->GetStream();
+   const auto grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
+   ::dim3 grid_size{ck.grid_size_x, grid_size_y};
+-  gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
+-    ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
++  {
++    CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::KernelLaunch");
++    gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
++      ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
++  }
+ }
+ 
+ } // namespace opensn

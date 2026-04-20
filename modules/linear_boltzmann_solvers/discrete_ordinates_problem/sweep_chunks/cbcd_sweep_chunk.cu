@@ -180,13 +180,19 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
   auto& ck = cached_params_[angle_set_id];
-  ck.args = gpu_kernel::Arguments<gpu_kernel::SweepType::CBC>(
-    problem_, groupset_, *angle_sets_[angle_set_id], *ck.fluds);
+  {
+    CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::ArgsRefresh");
+    ck.args = gpu_kernel::Arguments<gpu_kernel::SweepType::CBC>(
+      problem_, groupset_, *angle_sets_[angle_set_id], *ck.fluds);
+  }
   auto& stream = angle_sets_[angle_set_id]->GetStream();
   const auto grid_size_y = (num_ready_cells + ck.block_size.y - 1) / ck.block_size.y;
   ::dim3 grid_size{ck.grid_size_x, grid_size_y};
-  gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
-    ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
+  {
+    CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::KernelLaunch");
+    gpu_kernel::SweepKernel<gpu_kernel::SweepType::CBC><<<grid_size, ck.block_size, 0, stream>>>(
+      ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
+  }
 }
 
 } // namespace opensn
