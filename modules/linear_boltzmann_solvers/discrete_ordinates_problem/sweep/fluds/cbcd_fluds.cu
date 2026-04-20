@@ -48,11 +48,6 @@ CBCD_FLUDS::CBCD_FLUDS(size_t num_groups,
 CBCD_FLUDS::~CBCD_FLUDS()
 {
   local_psi_.async_free(stream_);
-  if (not host_psi_old_.empty())
-  {
-    host_psi_old_.clear();
-    device_psi_old_.async_free(stream_);
-  }
   if (not host_saved_psi_.empty())
   {
     host_saved_psi_.clear();
@@ -69,11 +64,6 @@ void
 CBCD_FLUDS::AllocateLocalAndSavedPsi()
 {
   local_psi_ = crb::DeviceMemory<double>(local_psi_data_size_, stream_);
-  if (host_psi_old_.empty())
-  {
-    host_psi_old_ = crb::HostVector<double>(local_psi_data_size_);
-    device_psi_old_ = crb::DeviceMemory<double>(local_psi_data_size_, stream_);
-  }
   if (save_angular_flux_ and host_saved_psi_.empty())
   {
     host_saved_psi_ = crb::HostVector<double>(local_psi_data_size_);
@@ -88,6 +78,9 @@ CBCD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
                                CBCD_AngleSet* angle_set)
 {
   if (psi_old_on_device_)
+    return;
+
+  if (not save_angular_flux_)
     return;
 
   const auto& psi_old_host = problem.GetPsiOldLocal()[groupset.id];
@@ -106,7 +99,7 @@ CBCD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
   {
     const double* src_psi = &psi_old_host[discretization.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0)];
     double* dst_psi =
-      host_psi_old_.data() + mesh->saved_psi_offset[cell.local_id] * GetStrideSize();
+      host_saved_psi_.data() + mesh->saved_psi_offset[cell.local_id] * GetStrideSize();
     const std::uint32_t cell_num_nodes = discretization.GetCellMapping(cell).GetNumNodes();
     for (std::uint32_t i = 0; i < cell_num_nodes; ++i)
     {
@@ -122,7 +115,7 @@ CBCD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
     }
   }
 
-  crb::copy(device_psi_old_, host_psi_old_, host_psi_old_.size(), 0, 0, stream_);
+  crb::copy(device_saved_psi_, host_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
   psi_old_on_device_ = true;
 }
 

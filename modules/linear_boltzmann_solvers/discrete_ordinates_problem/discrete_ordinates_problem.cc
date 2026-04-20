@@ -1931,7 +1931,11 @@ DiscreteOrdinatesProblem::UpdatePsiOld()
     std::copy(psi_new_local_[gs].begin(), psi_new_local_[gs].end(), psi_old_local_[gs].begin());
   }
 
-  InvalidateDevicePsiOld();
+  const bool preserve_device_psi_old = use_gpus_ and IsTimeDependent() and
+                                       SaveAngularFluxEnabled() and
+                                       (sweep_type_ == "AAH" or sweep_type_ == "CBC");
+  if (not preserve_device_psi_old)
+    InvalidateDevicePsiOld();
 }
 
 bool

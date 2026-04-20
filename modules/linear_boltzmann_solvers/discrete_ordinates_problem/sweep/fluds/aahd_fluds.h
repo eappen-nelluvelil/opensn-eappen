@@ -228,7 +228,12 @@ public:
   /// Check if the FLUDS has save angular flux storage.
   bool HasSaveAngularFlux() const { return not save_angular_flux_.host_storage.empty(); }
   /// Get psi_old device pointer.
-  double* GetPsiOldDevicePointer() { return psi_old_bank_.device_storage.get(); }
+  double* GetPsiOldDevicePointer()
+  {
+    return (psi_old_on_device_ and not save_angular_flux_.IsNotInitialized())
+             ? save_angular_flux_.device_storage.get()
+             : nullptr;
+  }
   /// Invalidate cached device psi_old data.
   void InvalidateDevicePsiOld() { psi_old_on_device_ = false; }
 
@@ -256,9 +261,7 @@ protected:
 
   /// Storage for saved angular fluxes.
   AAHD_Bank save_angular_flux_;
-  /// Storage for previous time-step angular fluxes.
-  AAHD_Bank psi_old_bank_;
-  /// True when psi_old_bank_ matches the current host psi_old state.
+  /// True when the device saved-angular-flux bank matches the current host psi_old state.
   bool psi_old_on_device_ = false;
 
   /// Stream for asynchronous operations.

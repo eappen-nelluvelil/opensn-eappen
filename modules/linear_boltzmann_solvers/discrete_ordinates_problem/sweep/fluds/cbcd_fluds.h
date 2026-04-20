@@ -58,7 +58,10 @@ public:
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
 
   /// Get previous time-step angular flux device pointer.
-  double* GetPsiOldDevicePointer() { return device_psi_old_.get(); }
+  double* GetPsiOldDevicePointer()
+  {
+    return psi_old_on_device_ ? device_saved_psi_.get() : nullptr;
+  }
 
   /// Copy saved psi from device to host.
   void CopySavedPsiFromDevice();
@@ -144,9 +147,6 @@ private:
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
   crb::HostVector<double> host_saved_psi_;
-  /// Device buffer for previous time-step angular fluxes.
-  crb::DeviceMemory<double> device_psi_old_;
-  crb::HostVector<double> host_psi_old_;
   bool psi_old_on_device_ = false;
   /// Pointer set to device angular flux data
   CBCD_FLUDSPointerSet pointer_set_;

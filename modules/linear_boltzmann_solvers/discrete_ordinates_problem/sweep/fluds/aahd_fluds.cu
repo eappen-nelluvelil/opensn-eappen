@@ -197,8 +197,8 @@ AAHD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
 
   auto* mesh_carrier = problem.GetMeshCarrier();
   const std::size_t bank_size = mesh_carrier->num_nodes_total * num_groups_and_angles_;
-  if (psi_old_bank_.IsNotInitialized())
-    psi_old_bank_ = AAHD_Bank(bank_size, stream_);
+  if (save_angular_flux_.IsNotInitialized())
+    save_angular_flux_ = AAHD_Bank(bank_size, stream_);
 
   const auto& psi_old_host = problem.GetPsiOldLocal()[groupset.id];
   if (psi_old_host.empty())
@@ -214,7 +214,7 @@ AAHD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
   {
     const double* src_psi =
       &psi_old_host[discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
-    double* dst_psi = psi_old_bank_.host_storage.data() +
+    double* dst_psi = save_angular_flux_.host_storage.data() +
                       mesh_carrier->saved_psi_offset[cell.local_id] * num_groups_and_angles_;
     const std::uint32_t cell_num_nodes = discretization.GetCellMapping(cell).GetNumNodes();
 
@@ -232,7 +232,7 @@ AAHD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
     }
   }
 
-  psi_old_bank_.UploadToDevice(stream_);
+  save_angular_flux_.UploadToDevice(stream_);
   psi_old_on_device_ = true;
 }
 
