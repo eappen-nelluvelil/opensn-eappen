@@ -7,7 +7,9 @@
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 
 namespace mpi = mpicpp_lite;
@@ -71,6 +73,8 @@ public:
   {
     outgoing_message_queue_.clear();
     delayed_outgoing_message_queue_.clear();
+    outgoing_message_lookup_.clear();
+    delayed_outgoing_message_lookup_.clear();
     send_buffer_.clear();
     std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), false);
     delayed_completion_markers_queued_ = false;
@@ -89,9 +93,33 @@ protected:
     std::vector<double> data;
   };
 
+  struct MessageKey
+  {
+    int location_id = 0;
+    std::uint64_t cell_global_id = 0;
+    unsigned int face_id = 0;
+
+    bool operator==(const MessageKey& other) const noexcept = default;
+  };
+
+  struct MessageKeyHash
+  {
+    std::size_t operator()(const MessageKey& key) const noexcept
+    {
+      std::size_t seed = std::hash<int>{}(key.location_id);
+      seed ^= std::hash<std::uint64_t>{}(key.cell_global_id) + 0x9e3779b97f4a7c15ULL + (seed << 6) +
+              (seed >> 2);
+      seed ^=
+        std::hash<unsigned int>{}(key.face_id) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+      return seed;
+    }
+  };
+
   /// Outgoing face payloads queued in sweep order.
   std::vector<QueuedMessage> outgoing_message_queue_;
   std::vector<QueuedMessage> delayed_outgoing_message_queue_;
+  std::unordered_map<MessageKey, std::size_t, MessageKeyHash> outgoing_message_lookup_;
+  std::unordered_map<MessageKey, std::size_t, MessageKeyHash> delayed_outgoing_message_lookup_;
 
   /// In-flight send buffer record.
   struct BufferItem

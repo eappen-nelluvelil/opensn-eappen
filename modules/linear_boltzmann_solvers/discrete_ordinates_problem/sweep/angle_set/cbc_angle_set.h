@@ -101,12 +101,25 @@ protected:
   /// Reset the mutable local-task state before a new sweep.
   void ResetTaskState();
 
+  /// Pop the next ready task, respecting the curvilinear sweep order when needed.
+  std::uint32_t PopNextReadyTask();
+
+  /// Advance the cylindrical curvilinear sweep in strict local-subgrid order.
+  AngleSetStatus
+  AngleSetAdvanceCylindrical(SweepChunk& sweep_chunk,
+                             AngleSetStatus permission,
+                             const std::vector<std::uint64_t>& tasks_who_received_data);
+
   /// CBC sweep plane data structure for this angle set.
   const CBC_SPDS& cbc_spds_;
   /// Initial predecessor counts per local CBC task.
   std::vector<unsigned int> initial_dependencies_;
   /// Local tasks that are ready at the start of a sweep.
   std::vector<std::uint32_t> initial_ready_tasks_;
+  /// Local sweep priority keyed by local task ID.
+  std::vector<std::uint32_t> task_order_;
+  /// Strict cylindrical execution sequence copied from the local subgrid.
+  std::vector<std::uint32_t> cylindrical_task_sequence_;
   /// Mutable predecessor counts for the current sweep.
   std::vector<unsigned int> remaining_dependencies_;
   /// Per-task execution flags for the current sweep.
@@ -115,10 +128,14 @@ protected:
   std::vector<std::uint32_t> ready_tasks_;
   /// Number of completed local tasks.
   size_t num_completed_tasks_ = 0;
+  /// Next task position in the cylindrical execution sequence.
+  std::size_t next_cylindrical_task_ = 0;
   /// Asynchronous communicator for this angle set.
   CBC_AsynchronousCommunicator async_comm_;
   /// CBC FLUDS instance for this angle set.
   CBC_FLUDS& cbc_fluds_;
+  /// Whether this angle set is sweeping a cylindrical curvilinear problem.
+  bool is_cylindrical_ = false;
 };
 
 } // namespace opensn

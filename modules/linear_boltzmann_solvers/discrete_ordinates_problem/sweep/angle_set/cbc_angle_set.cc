@@ -25,16 +25,23 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
     ready_tasks_(),
     async_comm_(id, *fluds, comm_set),
-    cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds))
+    cbc_fluds_(dynamic_cast<CBC_FLUDS&>(*fluds)),
+    is_cylindrical_(spds.GetGrid()->GetCoordinateSystem() == CoordinateSystemType::CYLINDRICAL)
 {
 
   const auto& task_list = cbc_spds_.GetTaskList();
   const auto num_tasks = task_list.size();
   initial_dependencies_.resize(num_tasks);
+  task_order_.assign(num_tasks, std::numeric_limits<std::uint32_t>::max());
   remaining_dependencies_.resize(num_tasks);
   task_completed_.resize(num_tasks, 0);
   initial_ready_tasks_.reserve(num_tasks);
   ready_tasks_.reserve(num_tasks);
+
+  const auto& local_subgrid = cbc_spds_.GetLocalSubgrid();
+  cylindrical_task_sequence_.assign(local_subgrid.begin(), local_subgrid.end());
+  for (std::uint32_t order = 0; order < local_subgrid.size(); ++order)
+    task_order_[local_subgrid[order]] = order;
 
   for (std::uint32_t task_idx = 0; task_idx < num_tasks; ++task_idx)
   {
@@ -73,6 +80,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
   const auto tasks_who_received_data = async_comm_.ReceiveData();
 
+  if (is_cylindrical_)
+    return AngleSetAdvanceCylindrical(sweep_chunk, permission, tasks_who_received_data);
+
   for (const auto& task_number : tasks_who_received_data)
   {
     assert(remaining_dependencies_[task_number] > 0);
@@ -87,10 +97,12 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     if (not boundary->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
+  if (permission != AngleSetStatus::EXECUTE)
+    return ready_tasks_.empty() ? AngleSetStatus::NOT_FINISHED : AngleSetStatus::READY_TO_EXECUTE;
+
   while (not ready_tasks_.empty())
   {
-    const auto task_idx = ready_tasks_.back();
-    ready_tasks_.pop_back();
+    const auto task_idx = PopNextReadyTask();
     if (task_completed_[task_idx] != 0)
       continue;
     const auto& cell_task = task_list[task_idx];
@@ -125,6 +137,71 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   return AngleSetStatus::NOT_FINISHED;
 }
 
+AngleSetStatus
+CBC_AngleSet::AngleSetAdvanceCylindrical(SweepChunk& sweep_chunk,
+                                         AngleSetStatus permission,
+                                         const std::vector<std::uint64_t>& tasks_who_received_data)
+{
+  const auto& task_list = cbc_spds_.GetTaskList();
+
+  for (const auto& task_number : tasks_who_received_data)
+  {
+    assert(remaining_dependencies_[task_number] > 0);
+    --remaining_dependencies_[task_number];
+  }
+
+  async_comm_.SendData();
+
+  for (auto& [bid, boundary] : boundaries_)
+    if (not boundary->CheckAnglesReadyStatus(angles_))
+      return AngleSetStatus::NOT_FINISHED;
+
+  while (next_cylindrical_task_ < cylindrical_task_sequence_.size())
+  {
+    const auto task_idx = cylindrical_task_sequence_[next_cylindrical_task_];
+    if (task_completed_[task_idx] != 0)
+    {
+      ++next_cylindrical_task_;
+      continue;
+    }
+
+    if (remaining_dependencies_[task_idx] != 0)
+      return permission == AngleSetStatus::EXECUTE ? AngleSetStatus::NOT_FINISHED
+                                                   : AngleSetStatus::READY_TO_EXECUTE;
+
+    if (permission != AngleSetStatus::EXECUTE)
+      return AngleSetStatus::READY_TO_EXECUTE;
+
+    const auto& cell_task = task_list[task_idx];
+    sweep_chunk.SetCell(cell_task.cell_ptr, *this);
+    sweep_chunk.Sweep(*this);
+
+    for (const auto& local_task_num : cell_task.successors)
+    {
+      assert(remaining_dependencies_[local_task_num] > 0);
+      --remaining_dependencies_[local_task_num];
+    }
+
+    task_completed_[task_idx] = 1;
+    ++num_completed_tasks_;
+    ++next_cylindrical_task_;
+    async_comm_.SendData();
+  }
+
+  const bool all_tasks_completed = (num_completed_tasks_ == task_list.size());
+  const bool all_messages_sent = async_comm_.SendData();
+
+  if (all_tasks_completed and all_messages_sent)
+  {
+    for (auto& [bid, boundary] : boundaries_)
+      boundary->UpdateAnglesReadyStatus(angles_);
+    executed_ = true;
+    return AngleSetStatus::FINISHED;
+  }
+
+  return AngleSetStatus::NOT_FINISHED;
+}
+
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
@@ -142,6 +219,34 @@ CBC_AngleSet::ResetTaskState()
   ready_tasks_ = initial_ready_tasks_;
   std::fill(task_completed_.begin(), task_completed_.end(), 0);
   num_completed_tasks_ = 0;
+  next_cylindrical_task_ = 0;
+}
+
+std::uint32_t
+CBC_AngleSet::PopNextReadyTask()
+{
+  if (not is_cylindrical_)
+  {
+    const auto task_idx = ready_tasks_.back();
+    ready_tasks_.pop_back();
+    return task_idx;
+  }
+
+  auto best_it = ready_tasks_.begin();
+  auto best_order = task_order_[*best_it];
+  for (auto it = std::next(ready_tasks_.begin()); it != ready_tasks_.end(); ++it)
+  {
+    const auto order = task_order_[*it];
+    if (order < best_order)
+    {
+      best_it = it;
+      best_order = order;
+    }
+  }
+
+  const auto task_idx = *best_it;
+  ready_tasks_.erase(best_it);
+  return task_idx;
 }
 
 bool

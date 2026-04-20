@@ -19,7 +19,9 @@ enum class SchedulingAlgorithm
   FIRST_IN_FIRST_OUT = 1, ///< FIFO
   DEPTH_OF_GRAPH = 2,     ///< DOG
   ALL_AT_ONCE = 3,        ///< AAO
-  ASYNC_FIFO = 4          ///< ASYNC_FIFO
+  ASYNC_FIFO = 4,         ///< ASYNC_FIFO
+  DEPENDENCY_FIFO = 5,    ///< FIFO with angle-set dependency gating
+  CURVILINEAR_CBC = 6     ///< Host CBC cylindrical scheduling
 };
 
 class SweepScheduler
@@ -36,6 +38,15 @@ public:
 private:
   /// Applies a first-in-first-out sweep scheduling.
   void ScheduleAlgoFIFO(SweepChunk& sweep_chunk);
+
+  /// Applies FIFO scheduling with angle-set dependency gating.
+  void ScheduleAlgoDependencyFIFO(SweepChunk& sweep_chunk);
+
+  /// Applies host CBC cylindrical scheduling.
+  void ScheduleAlgoCurvilinearCBC(SweepChunk& sweep_chunk);
+
+  /// Initializes host CBC cylindrical scheduling order.
+  void InitializeAlgoCurvilinearCBC();
 
   /// Applies a first-in-first-out sweep scheduling on device.
   void ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk);

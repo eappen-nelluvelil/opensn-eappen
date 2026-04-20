@@ -19,8 +19,13 @@ using PCShellPtr = PetscErrorCode (*)(PC, Vec, Vec);
 using namespace std::chrono;
 
 static inline SchedulingAlgorithm
-GetSchedulingAlgorithm(const std::string& sweep_type, bool use_gpu)
+GetSchedulingAlgorithm(const DiscreteOrdinatesProblem& do_problem)
 {
+  const auto& sweep_type = do_problem.GetSweepType();
+  const bool use_gpu = do_problem.UseGPUs();
+  const bool is_cylindrical =
+    do_problem.GetGrid()->GetCoordinateSystem() == CoordinateSystemType::CYLINDRICAL;
+
   if (sweep_type == "AAH")
   {
     if (use_gpu)
@@ -32,6 +37,8 @@ GetSchedulingAlgorithm(const std::string& sweep_type, bool use_gpu)
   {
     if (use_gpu)
       return SchedulingAlgorithm::ASYNC_FIFO;
+    else if (is_cylindrical)
+      return SchedulingAlgorithm::CURVILINEAR_CBC;
     else
       return SchedulingAlgorithm::FIRST_IN_FIRST_OUT;
   }
@@ -48,9 +55,7 @@ SweepWGSContext::SweepWGSContext(DiscreteOrdinatesProblem& do_problem,
                                  std::shared_ptr<SweepChunk> swp_chnk)
   : WGSContext(do_problem, groupset, set_source_function, lhs_scope, rhs_scope, log_info),
     sweep_chunk(std::move(swp_chnk)),
-    sweep_scheduler(GetSchedulingAlgorithm(do_problem.GetSweepType(), do_problem.UseGPUs()),
-                    *groupset.angle_agg,
-                    *sweep_chunk)
+    sweep_scheduler(GetSchedulingAlgorithm(do_problem), *groupset.angle_agg, *sweep_chunk)
 {
 }
 

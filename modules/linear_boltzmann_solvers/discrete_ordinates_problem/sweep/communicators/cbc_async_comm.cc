@@ -88,11 +88,25 @@ CBC_AsynchronousCommunicator::InitGetDownwindMessageData(int location_id,
   auto& queue = delayed_successor_flags_[static_cast<std::size_t>(location_id)] == 0
                   ? outgoing_message_queue_
                   : delayed_outgoing_message_queue_;
+  auto& lookup = delayed_successor_flags_[static_cast<std::size_t>(location_id)] == 0
+                   ? outgoing_message_lookup_
+                   : delayed_outgoing_message_lookup_;
+  const MessageKey key{location_id, cell_global_id, face_id};
+  const auto it = lookup.find(key);
+  if (it != lookup.end())
+  {
+    auto& message = queue[it->second];
+    if (message.data.size() != data_size)
+      message.data.resize(data_size);
+    return message.data;
+  }
+
   auto& message = queue.emplace_back();
   message.location_id = location_id;
   message.cell_global_id = cell_global_id;
   message.face_id = face_id;
   message.data.resize(data_size);
+  lookup.emplace(key, queue.size() - 1);
   return message.data;
 }
 
@@ -134,6 +148,10 @@ CBC_AsynchronousCommunicator::QueueOutgoingMessages(std::vector<QueuedMessage>& 
     std::memcpy(buffer.data() + old_size, message.data.data(), num_bytes);
   }
   message_queue.clear();
+  if (&message_queue == &outgoing_message_queue_)
+    outgoing_message_lookup_.clear();
+  else
+    delayed_outgoing_message_lookup_.clear();
 }
 
 bool
