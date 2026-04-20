@@ -11,7 +11,6 @@
 #include <cstring>
 #include <limits>
 #include <span>
-#include <utility>
 
 namespace opensn
 {
@@ -50,7 +49,9 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   const auto& cbc_common = dynamic_cast<const CBC_FLUDSCommonData&>(cbc_fluds_.GetCommonData());
   const auto num_deplocs = fluds_.GetSPDS().GetLocationSuccessors().size();
   const auto& delayed_successors = fluds_.GetSPDS().GetDelayedLocationSuccessors();
-  delayed_successor_set_.insert(delayed_successors.begin(), delayed_successors.end());
+  delayed_successor_flags_.assign(static_cast<std::size_t>(opensn::mpi_comm.size()), 0);
+  for (const int locI : delayed_successors)
+    delayed_successor_flags_[static_cast<std::size_t>(locI)] = 1;
 
   outgoing_message_queue_.reserve(cbc_common.GetNumOutgoingNonlocalFaces());
   delayed_outgoing_message_queue_.reserve(cbc_common.GetNumOutgoingNonlocalFaces());
@@ -84,31 +85,31 @@ CBC_AsynchronousCommunicator::InitGetDownwindMessageData(int location_id,
                                                          std::size_t data_size)
 {
   (void)angle_set_id;
-  MessageKey key{location_id, cell_global_id, face_id};
-  auto& queue = (delayed_successor_set_.count(location_id) == 0) ? outgoing_message_queue_
-                                                                 : delayed_outgoing_message_queue_;
-  auto [it, inserted] = queue.try_emplace(key);
-  std::vector<double>& data = it->second;
-  if (inserted)
-    data.resize(data_size);
-  return data;
+  auto& queue = delayed_successor_flags_[static_cast<std::size_t>(location_id)] == 0
+                  ? outgoing_message_queue_
+                  : delayed_outgoing_message_queue_;
+  auto& message = queue.emplace_back();
+  message.location_id = location_id;
+  message.cell_global_id = cell_global_id;
+  message.face_id = face_id;
+  message.data.resize(data_size);
+  return message.data;
 }
 
 void
-CBC_AsynchronousCommunicator::QueueOutgoingMessages(
-  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>& message_queue)
+CBC_AsynchronousCommunicator::QueueOutgoingMessages(std::vector<QueuedMessage>& message_queue)
 {
   if (message_queue.empty())
     return;
   std::fill(destination_buffer_indices_.begin(),
             destination_buffer_indices_.end(),
             std::numeric_limits<size_t>::max());
-  for (const auto& [msg_key, data] : message_queue)
+  for (const auto& message : message_queue)
   {
-    const int locI = std::get<0>(msg_key);
-    const std::uint64_t cell_global_id = std::get<1>(msg_key);
-    const unsigned int face_id = std::get<2>(msg_key);
-    const size_t data_size = data.size();
+    const int locI = message.location_id;
+    const std::uint64_t cell_global_id = message.cell_global_id;
+    const unsigned int face_id = message.face_id;
+    const size_t data_size = message.data.size();
     const auto deplocI = static_cast<size_t>(fluds_.GetSPDS().MapLocJToDeplocI(locI));
 
     auto buffer_index = destination_buffer_indices_[deplocI];
@@ -130,7 +131,7 @@ CBC_AsynchronousCommunicator::QueueOutgoingMessages(
     const size_t old_size = buffer.size();
     const size_t num_bytes = data_size * sizeof(double);
     buffer.resize(old_size + num_bytes);
-    std::memcpy(buffer.data() + old_size, data.data(), num_bytes);
+    std::memcpy(buffer.data() + old_size, message.data.data(), num_bytes);
   }
   message_queue.clear();
 }
@@ -176,10 +177,14 @@ CBC_AsynchronousCommunicator::AllBufferedSendsCompleted()
 void
 CBC_AsynchronousCommunicator::QueueDelayedCompletionMarkers()
 {
-  for (const int locI : delayed_successor_set_)
+  for (std::size_t locI = 0; locI < delayed_successor_flags_.size(); ++locI)
   {
-    MessageKey key{locI, delayed_done_cell_id_, delayed_done_face_id_};
-    delayed_outgoing_message_queue_.try_emplace(key, std::vector<double>{});
+    if (delayed_successor_flags_[locI] == 0)
+      continue;
+    auto& message = delayed_outgoing_message_queue_.emplace_back();
+    message.location_id = static_cast<int>(locI);
+    message.cell_global_id = delayed_done_cell_id_;
+    message.face_id = delayed_done_face_id_;
   }
   delayed_completion_markers_queued_ = true;
 }

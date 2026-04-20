@@ -8,9 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <set>
 #include <vector>
-#include <unordered_map>
 
 namespace mpi = mpicpp_lite;
 
@@ -83,24 +81,17 @@ protected:
   const size_t angle_set_id_;
 
   /// Outgoing message key: `(location_id, cell_global_id, face_id)`.
-  using MessageKey = std::tuple<int, std::uint64_t, unsigned int>;
-
-  /// Hash for MessageKey.
-  struct MessageKeyHash
+  struct QueuedMessage
   {
-    std::size_t operator()(const MessageKey& key) const noexcept
-    {
-      size_t h = std::hash<int>{}(std::get<0>(key));
-      h ^= std::hash<std::uint64_t>{}(std::get<1>(key)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-      h ^= std::hash<unsigned int>{}(std::get<2>(key)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-      return h;
-    }
+    int location_id = 0;
+    std::uint64_t cell_global_id = 0;
+    unsigned int face_id = 0;
+    std::vector<double> data;
   };
 
-  /// Outgoing face payloads grouped by destination key.
-  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
-  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>
-    delayed_outgoing_message_queue_;
+  /// Outgoing face payloads queued in sweep order.
+  std::vector<QueuedMessage> outgoing_message_queue_;
+  std::vector<QueuedMessage> delayed_outgoing_message_queue_;
 
   /// In-flight send buffer record.
   struct BufferItem
@@ -126,8 +117,8 @@ protected:
   std::vector<size_t> destination_buffer_bytes_;
   /// Send-buffer indices grouped by destination locality.
   std::vector<size_t> destination_buffer_indices_;
-  /// Delayed-successor localities for this angle set.
-  std::set<int> delayed_successor_set_;
+  /// Delayed-successor locality flags indexed by MPI rank.
+  std::vector<std::uint8_t> delayed_successor_flags_;
   /// Completion flags for delayed dependency receives.
   std::vector<bool> delayed_recv_done_;
   /// Whether completion markers were queued for delayed-successor sends.
@@ -137,8 +128,7 @@ protected:
 
 private:
   /// Pack the queued outgoing face payloads into send buffers.
-  void QueueOutgoingMessages(
-    std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash>& message_queue);
+  void QueueOutgoingMessages(std::vector<QueuedMessage>& message_queue);
 
   bool AllBufferedSendsCompleted();
 

@@ -67,6 +67,8 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   cell_face_offsets_.back() = static_cast<std::uint32_t>(total_num_faces);
   std::set<std::tuple<int, std::uint64_t, unsigned int>> outgoing_nonlocal_face_keys;
   local_face_slot_ids_.assign(total_num_faces, CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
+  incoming_face_kinds_.assign(total_num_faces, IncomingFaceKind::NONE);
+  outgoing_face_kinds_.assign(total_num_faces, OutgoingFaceKind::NONE);
   incoming_nonlocal_face_info_.resize(total_num_faces);
   outgoing_nonlocal_face_info_.resize(total_num_faces);
   delayed_local_face_info_by_storage_index_.assign(total_num_faces, {});
@@ -102,13 +104,17 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
           if (orientation == FaceOrientation::OUTGOING)
           {
             if (is_delayed_local_outgoing)
+            {
               delayed_local_outgoing_faces_[cell.local_id][f] = 1;
+              outgoing_face_kinds_[face_storage_index] = OutgoingFaceKind::DELAYED_LOCAL;
+            }
             else
             {
               const auto task_id =
                 cbc_spds.GetOutgoingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
               assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
               local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
+              outgoing_face_kinds_[face_storage_index] = OutgoingFaceKind::NORMAL_LOCAL;
               ++num_local_faces_;
             }
           }
@@ -117,6 +123,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
             if (is_delayed_local_incoming)
             {
               delayed_local_incoming_faces_[cell.local_id][f] = 1;
+              incoming_face_kinds_[face_storage_index] = IncomingFaceKind::DELAYED_LOCAL;
               delayed_local_face_info_by_storage_index_[face_storage_index] =
                 DelayedLocalFaceInfo{static_cast<std::uint32_t>(delayed_local_face_node_count_),
                                      static_cast<std::uint16_t>(num_face_nodes)};
@@ -128,6 +135,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
                 cbc_spds.GetIncomingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
               assert(task_id != CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
               local_face_slot_ids_[face_storage_index] = cbc_spds.GetLocalFaceSlotIDs()[task_id];
+              incoming_face_kinds_[face_storage_index] = IncomingFaceKind::NORMAL_LOCAL;
             }
           }
         }
@@ -148,6 +156,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
             static_cast<std::uint32_t>(delayed_preloc_face_node_count_[prelocI]),
             static_cast<std::uint16_t>(num_face_nodes)};
           delayed_nonlocal_incoming_faces_[cell.local_id][f] = 1;
+          incoming_face_kinds_[face_storage_index] = IncomingFaceKind::DELAYED_NONLOCAL;
           delayed_nonlocal_face_info_by_cell_[cell.local_id][f] = info;
           delayed_nonlocal_face_info_by_key_.emplace(
             CellFaceKey{cell.global_id, static_cast<unsigned int>(f)}, info);
@@ -155,6 +164,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         }
         else
         {
+          incoming_face_kinds_[face_storage_index] = IncomingFaceKind::NORMAL_NONLOCAL;
           ++num_incoming_nonlocal_faces_;
           IncomingNonlocalFaceInfo info{
             static_cast<std::uint32_t>(cell.local_id),
@@ -168,6 +178,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       }
       else if (orientation == FaceOrientation::OUTGOING)
       {
+        outgoing_face_kinds_[face_storage_index] = OutgoingFaceKind::NORMAL_NONLOCAL;
         ++num_outgoing_nonlocal_faces_;
         const int locality = face.GetNeighborPartitionID(&grid);
         const auto associated_face =
@@ -194,6 +205,10 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
           associated_face,
           static_cast<std::uint32_t>(
             grid_nodal_mappings[cell.local_id][f].face_node_mapping_.size())};
+      }
+      else if (orientation == FaceOrientation::INCOMING)
+      {
+        incoming_face_kinds_[face_storage_index] = IncomingFaceKind::NONE;
       }
     }
   }

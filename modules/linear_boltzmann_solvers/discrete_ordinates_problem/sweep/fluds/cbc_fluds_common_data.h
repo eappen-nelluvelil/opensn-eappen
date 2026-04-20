@@ -21,6 +21,24 @@ namespace opensn
 class CBC_FLUDSCommonData : public FLUDSCommonData
 {
 public:
+  enum class IncomingFaceKind : std::uint8_t
+  {
+    NONE = 0,
+    NORMAL_LOCAL = 1,
+    DELAYED_LOCAL = 2,
+    NORMAL_NONLOCAL = 3,
+    DELAYED_NONLOCAL = 4,
+  };
+
+  enum class OutgoingFaceKind : std::uint8_t
+  {
+    NONE = 0,
+    NORMAL_LOCAL = 1,
+    DELAYED_LOCAL = 2,
+    NORMAL_NONLOCAL = 3,
+    REFLECTING_BOUNDARY = 4,
+  };
+
   /// Incoming-face key: `(cell_global_id, face_id)`.
   using CellFaceKey = std::pair<std::uint64_t, unsigned int>;
 
@@ -114,6 +132,18 @@ public:
 
   bool IsDelayedNonlocalIncomingFace(std::uint32_t cell_local_id,
                                      unsigned int face_id) const noexcept;
+
+  IncomingFaceKind GetIncomingFaceKind(std::uint32_t cell_local_id,
+                                       unsigned int face_id) const noexcept
+  {
+    return incoming_face_kinds_[cell_face_offsets_[cell_local_id] + face_id];
+  }
+
+  OutgoingFaceKind GetOutgoingFaceKind(std::uint32_t cell_local_id,
+                                       unsigned int face_id) const noexcept
+  {
+    return outgoing_face_kinds_[cell_face_offsets_[cell_local_id] + face_id];
+  }
 
   /// Get number of outgoing non-local faces for dependent locality `deplocI`.
   size_t GetDeplocIFaceCount(std::size_t deplocI) const noexcept
@@ -213,6 +243,10 @@ private:
   std::vector<size_t> cell_face_offsets_;
   /// Flat local-face slot IDs, indexed by face storage index.
   std::vector<std::uint32_t> local_face_slot_ids_;
+  /// Flat incoming-face kinds, indexed by face storage index.
+  std::vector<IncomingFaceKind> incoming_face_kinds_;
+  /// Flat outgoing-face kinds, indexed by face storage index.
+  std::vector<OutgoingFaceKind> outgoing_face_kinds_;
   /// Per-face delayed-local incoming flags.
   std::vector<std::vector<std::uint8_t>> delayed_local_incoming_faces_;
   /// Per-face delayed-local outgoing flags.
