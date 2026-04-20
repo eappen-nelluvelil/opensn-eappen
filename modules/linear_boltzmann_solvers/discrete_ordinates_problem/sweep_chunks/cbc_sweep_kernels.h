@@ -117,7 +117,7 @@ struct CBCOutgoingFaceData
   /// Whether the outgoing face writes to delayed local storage.
   bool is_delayed_local_outgoing = false;
   /// Downwind delayed-local face key pieces, valid when `is_delayed_local_outgoing` is true.
-  std::uint64_t delayed_local_cell_global_id = 0;
+  std::uint32_t delayed_local_cell_local_id = 0;
   unsigned int delayed_local_face_id = 0;
   /// Nonlocal face info for MPI send staging; null for local/boundary faces.
   const CBC_FLUDSCommonData::OutgoingNonlocalFaceInfo* outgoing_nonlocal_face_info = nullptr;
@@ -275,7 +275,8 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
         cbc_common.IsDelayedLocalOutgoingFace(data.cell_local_id, static_cast<unsigned int>(f));
       if (face_data.is_delayed_local_outgoing)
       {
-        face_data.delayed_local_cell_global_id = face.neighbor_id;
+        face_data.delayed_local_cell_local_id =
+          face.GetNeighborLocalID(data.fluds.GetSPDS().GetGrid().get());
         face_data.delayed_local_face_id =
           static_cast<unsigned int>(face_nodal_mapping->associated_face_);
       }
@@ -349,7 +350,7 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
           const double* psi = nullptr;
 
           if (face_data.is_delayed_local_face)
-            psi = data.fluds.DelayedLocalUpwindPsi(data.cell.global_id,
+            psi = data.fluds.DelayedLocalUpwindPsi(data.cell_local_id,
                                                    static_cast<unsigned int>(f),
                                                    face_nodal_mapping->face_node_mapping_[fj],
                                                    as_ss_idx);
@@ -501,7 +502,7 @@ CBC_Sweep_Generic(CBCSweepData& data, CBCGenericSweepScratch& scratch, AngleSet&
 
         double* psi = nullptr;
         if (face_data.is_delayed_local_outgoing)
-          psi = data.fluds.DelayedLocalOutgoingPsi(face_data.delayed_local_cell_global_id,
+          psi = data.fluds.DelayedLocalOutgoingPsi(face_data.delayed_local_cell_local_id,
                                                    face_data.delayed_local_face_id,
                                                    static_cast<unsigned int>(fi),
                                                    as_ss_idx);

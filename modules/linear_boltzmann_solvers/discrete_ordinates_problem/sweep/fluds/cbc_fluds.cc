@@ -121,12 +121,12 @@ CBC_FLUDS::StoreIncomingFaceData(uint64_t cell_global_id,
 }
 
 double*
-CBC_FLUDS::DelayedLocalUpwindPsi(const std::uint64_t cell_global_id,
+CBC_FLUDS::DelayedLocalUpwindPsi(const std::uint32_t cell_local_id,
                                  const unsigned int face_id,
                                  const unsigned int face_node_mapped,
                                  const size_t as_ss_idx) noexcept
 {
-  const auto& face_info = common_data_.GetDelayedLocalFaceInfo(cell_global_id, face_id);
+  const auto& face_info = common_data_.GetDelayedLocalFaceInfo(cell_local_id, face_id);
   const auto dof_map =
     (static_cast<size_t>(face_info.slot_address) + face_node_mapped) * num_groups_and_angles_ +
     as_ss_idx * num_groups_;
@@ -134,12 +134,12 @@ CBC_FLUDS::DelayedLocalUpwindPsi(const std::uint64_t cell_global_id,
 }
 
 double*
-CBC_FLUDS::DelayedLocalOutgoingPsi(const std::uint64_t cell_global_id,
+CBC_FLUDS::DelayedLocalOutgoingPsi(const std::uint32_t cell_local_id,
                                    const unsigned int face_id,
                                    const unsigned int face_node,
                                    const size_t as_ss_idx) noexcept
 {
-  const auto& face_info = common_data_.GetDelayedLocalFaceInfo(cell_global_id, face_id);
+  const auto& face_info = common_data_.GetDelayedLocalFaceInfo(cell_local_id, face_id);
   const auto dof_map =
     (static_cast<size_t>(face_info.slot_address) + face_node) * num_groups_and_angles_ +
     as_ss_idx * num_groups_;

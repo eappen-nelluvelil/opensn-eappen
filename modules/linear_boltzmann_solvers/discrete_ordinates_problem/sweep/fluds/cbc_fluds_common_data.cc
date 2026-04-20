@@ -69,6 +69,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   local_face_slot_ids_.assign(total_num_faces, CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID);
   incoming_nonlocal_face_info_.resize(total_num_faces);
   outgoing_nonlocal_face_info_.resize(total_num_faces);
+  delayed_local_face_info_by_storage_index_.assign(total_num_faces, {});
 
   for (const auto& cell : grid.local_cells)
   {
@@ -116,10 +117,9 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
             if (is_delayed_local_incoming)
             {
               delayed_local_incoming_faces_[cell.local_id][f] = 1;
-              delayed_local_face_info_.emplace(
-                CellFaceKey{cell.global_id, static_cast<unsigned int>(f)},
+              delayed_local_face_info_by_storage_index_[face_storage_index] =
                 DelayedLocalFaceInfo{static_cast<std::uint32_t>(delayed_local_face_node_count_),
-                                     static_cast<std::uint16_t>(num_face_nodes)});
+                                     static_cast<std::uint16_t>(num_face_nodes)};
               delayed_local_face_node_count_ += num_face_nodes;
             }
             else
@@ -259,12 +259,13 @@ CBC_FLUDSCommonData::GetOutgoingNonlocalFaceInfo(const std::uint32_t cell_local_
 }
 
 const CBC_FLUDSCommonData::DelayedLocalFaceInfo&
-CBC_FLUDSCommonData::GetDelayedLocalFaceInfo(const std::uint64_t cell_global_id,
+CBC_FLUDSCommonData::GetDelayedLocalFaceInfo(const std::uint32_t cell_local_id,
                                              const unsigned int face_id) const noexcept
 {
-  const auto it = delayed_local_face_info_.find({cell_global_id, face_id});
-  assert(it != delayed_local_face_info_.end());
-  return it->second;
+  const auto& info =
+    delayed_local_face_info_by_storage_index_[cell_face_offsets_[cell_local_id] + face_id];
+  assert(info.num_face_nodes != 0);
+  return info;
 }
 
 const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo&

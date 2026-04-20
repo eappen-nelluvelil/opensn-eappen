@@ -126,12 +126,12 @@ public:
     return psi_nonlocal_outgoing + face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   }
 
-  double* DelayedLocalUpwindPsi(std::uint64_t cell_global_id,
+  double* DelayedLocalUpwindPsi(std::uint32_t cell_local_id,
                                 unsigned int face_id,
                                 unsigned int face_node_mapped,
                                 size_t as_ss_idx) noexcept;
 
-  double* DelayedLocalOutgoingPsi(std::uint64_t cell_global_id,
+  double* DelayedLocalOutgoingPsi(std::uint32_t cell_local_id,
                                   unsigned int face_id,
                                   unsigned int face_node,
                                   size_t as_ss_idx) noexcept;

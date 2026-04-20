@@ -151,7 +151,7 @@ public:
   const OutgoingNonlocalFaceInfo& GetOutgoingNonlocalFaceInfo(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const noexcept;
 
-  const DelayedLocalFaceInfo& GetDelayedLocalFaceInfo(std::uint64_t cell_global_id,
+  const DelayedLocalFaceInfo& GetDelayedLocalFaceInfo(std::uint32_t cell_local_id,
                                                       unsigned int face_id) const noexcept;
 
   const DelayedNonlocalFaceInfo& GetDelayedNonlocalFaceInfo(std::uint32_t cell_local_id,
@@ -223,6 +223,8 @@ private:
   std::vector<IncomingNonlocalFaceInfo> incoming_nonlocal_face_info_;
   /// Flat outgoing non-local face metadata, indexed by face storage index.
   std::vector<OutgoingNonlocalFaceInfo> outgoing_nonlocal_face_info_;
+  /// Flat delayed-local face metadata, indexed by face storage index.
+  std::vector<DelayedLocalFaceInfo> delayed_local_face_info_by_storage_index_;
   /// Per-face delayed non-local face metadata, indexed by [cell_local_id][face_id].
   std::vector<std::vector<DelayedNonlocalFaceInfo>> delayed_nonlocal_face_info_by_cell_;
   /// Per-dependent locality outgoing face counts.
@@ -233,8 +235,6 @@ private:
   std::vector<size_t> delayed_preloc_face_node_count_;
   /// Map from (cell_global_id, face_id) to flat storage index for incoming non-local faces.
   std::unordered_map<CellFaceKey, std::size_t, CellFaceKeyHas> incoming_nonlocal_face_info_by_key_;
-  /// Map from delayed-local incoming face key to sparse lagged-bank metadata.
-  std::unordered_map<CellFaceKey, DelayedLocalFaceInfo, CellFaceKeyHas> delayed_local_face_info_;
   /// Map from delayed incoming non-local face key to sparse lagged-bank metadata.
   std::unordered_map<CellFaceKey, DelayedNonlocalFaceInfo, CellFaceKeyHas>
     delayed_nonlocal_face_info_by_key_;
