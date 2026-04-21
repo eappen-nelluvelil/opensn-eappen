@@ -64,7 +64,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     }
     else
     {
-      incoming_mailboxes_.push_back(std::make_unique<LockFreeRingBuffer<std::vector<IncomingFaceData>>>());
+      incoming_mailboxes_.push_back(
+        std::make_unique<LockFreeRingBuffer<std::vector<IncomingFaceData>>>());
     }
   }
 
@@ -81,7 +82,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     const auto& source_partitions = incoming_source_partitions[angle_set_id];
     source_to_slot.reserve(source_partitions.size());
     for (std::size_t source_slot = 0; source_slot < source_partitions.size(); ++source_slot)
-      source_to_slot.emplace(source_partitions[source_slot], static_cast<std::uint32_t>(source_slot));
+      source_to_slot.emplace(source_partitions[source_slot],
+                             static_cast<std::uint32_t>(source_slot));
   }
 
   outgoing_queues_.reserve(destinations.size());
@@ -94,9 +96,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     queue->queue = std::make_unique<LockFreeRingBuffer<OutgoingFaceData>>();
     if (total_outgoing_faces > 0)
       queue->queue->Preallocate(total_outgoing_faces + 1);
-    queue->queue->InitializeSlots(
-      [max_outgoing_face_values](OutgoingFaceData& payload)
-      { payload.psi_data.reserve(max_outgoing_face_values); });
+    queue->queue->InitializeSlots([max_outgoing_face_values](OutgoingFaceData& payload)
+                                  { payload.psi_data.reserve(max_outgoing_face_values); });
     outgoing_queues_.push_back(std::move(queue));
     dest_to_queue_index_[dest_rank] = queue_index++;
   }
@@ -219,7 +220,8 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
       }
 
       const auto& comm = comm_set_.LocICommunicator(destination_queue->dest_rank);
-      const auto mapped_rank = comm_set_.MapIonJ(destination_queue->dest_rank, destination_queue->dest_rank);
+      const auto mapped_rank =
+        comm_set_.MapIonJ(destination_queue->dest_rank, destination_queue->dest_rank);
       in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
       in_flight_sends_.push_back(std::move(in_flight));
     };
@@ -231,8 +233,7 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
       const auto entry_bytes = sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t) +
                                entry.psi_data.size() * sizeof(double);
 
-      if (max_message_bytes_ > 0 and
-          current_payload_bytes + entry_bytes > max_message_bytes_ and
+      if (max_message_bytes_ > 0 and current_payload_bytes + entry_bytes > max_message_bytes_ and
           active_angle_sets > 0)
       {
         send_batch();
@@ -294,7 +295,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto num_entries = recv_buffer_.Read<std::size_t>();
         assert(angle_set_id < num_angle_sets_);
 
-        const auto slot_it = source_partition_to_slot_by_angle_set_[angle_set_id].find(source_partition);
+        const auto slot_it =
+          source_partition_to_slot_by_angle_set_[angle_set_id].find(source_partition);
         assert(slot_it != source_partition_to_slot_by_angle_set_[angle_set_id].end());
         const auto source_slot = slot_it->second;
 
@@ -326,6 +328,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 bool
 CBCD_AsynchronousCommunicator::PollInFlightSends()
 {
+  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::PollInFlightSends");
+
   bool completed_any = false;
   for (std::size_t i = 0; i < in_flight_sends_.size();)
   {

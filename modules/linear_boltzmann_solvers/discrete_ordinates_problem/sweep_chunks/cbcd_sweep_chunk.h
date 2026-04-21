@@ -58,6 +58,9 @@ public:
   /// Stop the aggregated communicator thread.
   void StopCommunicator();
 
+  /// Refresh cached kernel arguments once at the start of a sweep.
+  void RefreshCachedKernelArgs();
+
   using SweepChunk::Sweep;
   /**
    * Launch the CBC sweep kernel for one angle set.
@@ -66,7 +69,9 @@ public:
    * \param angle_set_id Producing angle-set ID.
    * \param local_cell_ids Pointer to the mapped host cell-ID buffer for the batch.
    */
-  void Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id, const std::uint32_t* local_cell_ids);
+  void Sweep(std::uint32_t num_ready_cells,
+             std::size_t angle_set_id,
+             const std::uint32_t* local_cell_ids);
 
 private:
   /// Cached launch data for one angle set.

@@ -19,6 +19,7 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>
+#include "caliper/cali.h"
 
 namespace opensn
 {
@@ -174,6 +175,8 @@ CBCD_FLUDS::CreatePointerSet()
 void
 CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet* angle_set)
 {
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice");
+
   const auto& angle_indices = angle_set->GetAngleIndices();
   const auto num_angles = angle_indices.size();
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
@@ -218,6 +221,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
   if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and
       common_data_.GetNumOutgoingNonlocalFaces() == 0)
     return;
+
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyOutgoingPsiBackToHost");
 
   const auto num_angles = angle_indices.size();
   const auto& grid = *(GetSPDS().GetGrid());
@@ -276,6 +281,7 @@ CBCD_FLUDS::CopySavedPsiFromDevice()
 {
   if (not save_angular_flux_)
     return;
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiFromDevice");
   crb::copy(host_saved_psi_, device_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
 }
 
@@ -284,6 +290,8 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 {
   if (not save_angular_flux_)
     return;
+
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiToDestinationPsi");
 
   stream_.synchronize();
 

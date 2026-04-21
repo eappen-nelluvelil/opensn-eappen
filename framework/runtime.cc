@@ -30,6 +30,8 @@ Initialize()
   if (use_caliper)
   {
     cali_mgr.add(cali_config.c_str());
+    if (cali_mgr.error())
+      throw std::runtime_error("Caliper configuration error: " + cali_mgr.error_msg());
     cali_set_global_string_byname("opensn.version", GetVersionStr().c_str());
     cali_set_global_string_byname("opensn.input", input_path.c_str());
     cali_mgr.start();
@@ -54,6 +56,12 @@ Finalize()
   opensn::mpi_comm.barrier();
 
   CALI_MARK_END(opensn::program.c_str());
+
+  if (use_caliper)
+  {
+    cali_mgr.flush();
+    cali_mgr.stop();
+  }
 }
 
 std::string
