@@ -9,6 +9,7 @@
 #include "caribou/main.hpp"
 #include <algorithm>
 #include <cstring>
+#include <tuple>
 #include <unordered_map>
 
 namespace crb = caribou;
@@ -48,13 +49,24 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   incoming_source_partitions_.reserve(num_local_cells);
   outgoing_boundary_nodes_.reserve(total_face_nodes);
   outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
-  struct SourceLookupBuild
+  struct OrderedIncomingFaceBuild
   {
     std::uint32_t source_slot = 0;
-    IncomingFaceLookup lookup;
+    std::uint64_t cell_global_id = 0;
+    unsigned int face_id = 0;
+    std::uint32_t face_index = 0;
   };
-  std::vector<SourceLookupBuild> incoming_lookup_build;
-  incoming_lookup_build.reserve(total_face_nodes);
+  struct OrderedOutgoingFaceBuild
+  {
+    std::uint32_t dest_slot = 0;
+    std::uint64_t cell_global_id = 0;
+    unsigned int face_id = 0;
+    std::uint32_t face_index = 0;
+  };
+  std::vector<OrderedIncomingFaceBuild> incoming_face_order;
+  std::vector<OrderedOutgoingFaceBuild> outgoing_face_order;
+  incoming_face_order.reserve(total_face_nodes);
+  outgoing_face_order.reserve(total_face_nodes);
 
   const auto update_cell_offsets = [this](const std::uint64_t cell_local_id)
   {
@@ -98,10 +110,10 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
             const auto slot_id = local_face_slot_ids[task_id];
             const auto local_face_node =
               static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
-            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
-                                          local_face_node,
-                                        is_outgoing_face,
-                                        true);
+            node_index = CBCD_NodeIndex(
+              static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) + local_face_node,
+              is_outgoing_face,
+              true);
           }
           else if (not is_boundary_face)
           {
@@ -123,11 +135,11 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               grouped_face.base_storage_index =
                 static_cast<std::uint32_t>(num_incoming_nonlocal_nodes_);
               grouped_face.source_slot = source_it->second;
-              incoming_lookup_build.push_back(
+              incoming_face_order.push_back(
                 {grouped_face.source_slot,
-                 {cell.global_id,
-                  static_cast<unsigned int>(f),
-                  static_cast<std::uint32_t>(incoming_nonlocal_faces_.size() - 1)}});
+                 cell.global_id,
+                 static_cast<unsigned int>(f),
+                 static_cast<std::uint32_t>(incoming_nonlocal_faces_.size() - 1)});
               ++num_incoming_nonlocal_faces_;
             }
 
@@ -160,10 +172,11 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
             const auto task_id = cbc_spds.GetOutgoingLocalFaceTaskID(
               static_cast<std::uint32_t>(cell.local_id), static_cast<unsigned int>(f));
             const auto slot_id = local_face_slot_ids[task_id];
-            node_index = CBCD_NodeIndex(static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
-                                          static_cast<std::uint64_t>(fn),
-                                        is_outgoing_face,
-                                        true);
+            node_index =
+              CBCD_NodeIndex(static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
+                               static_cast<std::uint64_t>(fn),
+                             is_outgoing_face,
+                             true);
           }
           else if (not is_boundary_face)
           {
@@ -184,16 +197,22 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
               else
                 dest_slot = dest_slot_it->second;
 
+              const auto dest_cell_global_id = face.neighbor_id;
+              const auto dest_face_id =
+                static_cast<unsigned int>(face_nodal_mapping.associated_face_);
               grouped_face_index =
                 static_cast<int>(outgoing_nonlocal_faces_.size() -
                                  cell_to_outgoing_nonlocal_face_offsets_[cell.local_id]);
               auto& grouped_face = outgoing_nonlocal_faces_.emplace_back();
-              grouped_face.cell_global_id = face.neighbor_id;
               grouped_face.dest_slot = dest_slot;
-              grouped_face.face_id = static_cast<unsigned int>(face_nodal_mapping.associated_face_);
               grouped_face.num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
               grouped_face.node_copy_offset =
                 static_cast<std::uint32_t>(outgoing_nonlocal_face_node_copies_.size());
+              outgoing_face_order.push_back(
+                {dest_slot,
+                 dest_cell_global_id,
+                 dest_face_id,
+                 static_cast<std::uint32_t>(outgoing_nonlocal_faces_.size() - 1)});
               ++num_outgoing_nonlocal_faces_;
             }
 
@@ -231,26 +250,45 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
     current_index_offset += num_cell_nodes;
   }
 
+  std::sort(incoming_face_order.begin(),
+            incoming_face_order.end(),
+            [](const OrderedIncomingFaceBuild& lhs, const OrderedIncomingFaceBuild& rhs)
+            {
+              return std::tuple(lhs.source_slot, lhs.cell_global_id, lhs.face_id) <
+                     std::tuple(rhs.source_slot, rhs.cell_global_id, rhs.face_id);
+            });
+
   source_to_incoming_face_offsets_.assign(incoming_source_partitions_.size() + 1, 0);
-  for (const auto& build : incoming_lookup_build)
+  for (const auto& build : incoming_face_order)
     ++source_to_incoming_face_offsets_[build.source_slot + 1];
   for (std::size_t i = 0; i < incoming_source_partitions_.size(); ++i)
     source_to_incoming_face_offsets_[i + 1] += source_to_incoming_face_offsets_[i];
-  incoming_face_lookups_by_source_.resize(incoming_lookup_build.size());
+
+  incoming_face_indices_by_source_.resize(incoming_face_order.size());
   auto source_write_offsets = source_to_incoming_face_offsets_;
-  for (const auto& build : incoming_lookup_build)
-    incoming_face_lookups_by_source_[source_write_offsets[build.source_slot]++] = build.lookup;
-  for (std::size_t source_slot = 0; source_slot < incoming_source_partitions_.size(); ++source_slot)
+  for (const auto& build : incoming_face_order)
+    incoming_face_indices_by_source_[source_write_offsets[build.source_slot]++] = build.face_index;
+
+  std::sort(outgoing_face_order.begin(),
+            outgoing_face_order.end(),
+            [](const OrderedOutgoingFaceBuild& lhs, const OrderedOutgoingFaceBuild& rhs)
+            {
+              return std::tuple(lhs.dest_slot, lhs.cell_global_id, lhs.face_id) <
+                     std::tuple(rhs.dest_slot, rhs.cell_global_id, rhs.face_id);
+            });
+
+  std::uint32_t current_dest_slot = 0;
+  std::uint32_t remote_face_index = 0;
+  bool first_outgoing_face = true;
+  for (const auto& build : outgoing_face_order)
   {
-    const auto begin = source_to_incoming_face_offsets_[source_slot];
-    const auto end = source_to_incoming_face_offsets_[source_slot + 1];
-    std::sort(incoming_face_lookups_by_source_.begin() + begin,
-              incoming_face_lookups_by_source_.begin() + end,
-              [](const IncomingFaceLookup& lhs, const IncomingFaceLookup& rhs)
-              {
-                return std::pair<std::uint64_t, unsigned int>{lhs.cell_global_id, lhs.face_id} <
-                       std::pair<std::uint64_t, unsigned int>{rhs.cell_global_id, rhs.face_id};
-              });
+    if (first_outgoing_face or (build.dest_slot != current_dest_slot))
+    {
+      current_dest_slot = build.dest_slot;
+      remote_face_index = 0;
+      first_outgoing_face = false;
+    }
+    outgoing_nonlocal_faces_[build.face_index].remote_face_index = remote_face_index++;
   }
 
   if (local_map.empty())

@@ -203,14 +203,6 @@ struct GroupedIncomingNonlocalFace
   std::uint16_t num_nodes = 0;
 };
 
-/// Source-partition-local incoming face lookup record.
-struct IncomingFaceLookup
-{
-  std::uint64_t cell_global_id = 0;
-  unsigned int face_id = 0;
-  std::uint32_t face_index = 0;
-};
-
 /// Outgoing node-copy descriptor
 struct OutgoingNodeCopy
 {
@@ -221,10 +213,9 @@ struct OutgoingNodeCopy
 /// Grouped outgoing non-local face.
 struct GroupedOutgoingNonlocalFace
 {
-  std::uint64_t cell_global_id = 0;
   std::uint32_t dest_slot = 0;
+  std::uint32_t remote_face_index = 0;
   std::uint32_t node_copy_offset = 0;
-  unsigned int face_id = 0;
   std::uint16_t num_face_nodes = 0;
   std::uint16_t num_node_copies = 0;
 };

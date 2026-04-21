@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cstring>
 #include <set>
+#include <cstddef>
 
 namespace opensn
 {
@@ -49,23 +50,22 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
       std::max(max_outgoing_face_values, capacities[i].max_outgoing_face_values);
     if (capacities[i].incoming_faces > 0)
     {
-      auto mailbox = std::make_unique<LockFreeRingBuffer<std::vector<IncomingFaceData>>>();
+      auto mailbox = std::make_unique<LockFreeRingBuffer<IncomingFaceBatch>>();
       mailbox->Preallocate(capacities[i].incoming_faces + 1);
       mailbox->InitializeSlots(
-        [&](std::vector<IncomingFaceData>& batch)
+        [&](IncomingFaceBatch& batch)
         {
-          batch.reserve(capacities[i].max_incoming_batch_entries);
-          batch.resize(capacities[i].max_incoming_batch_entries);
-          for (auto& entry : batch)
-            entry.psi_data.reserve(capacities[i].max_incoming_face_values);
-          batch.clear();
+          batch.entries.reserve(capacities[i].max_incoming_batch_entries);
+          batch.psi_data.reserve(capacities[i].max_incoming_batch_values);
+          batch.entries.clear();
+          batch.psi_data.clear();
+          batch.source_slot = 0;
         });
       incoming_mailboxes_.push_back(std::move(mailbox));
     }
     else
     {
-      incoming_mailboxes_.push_back(
-        std::make_unique<LockFreeRingBuffer<std::vector<IncomingFaceData>>>());
+      incoming_mailboxes_.push_back(std::make_unique<LockFreeRingBuffer<IncomingFaceBatch>>());
     }
   }
 
@@ -210,8 +210,7 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
         write_bytes(&num_entries, sizeof(std::size_t));
         for (const auto* entry : entries)
         {
-          write_bytes(&entry->cell_global_id, sizeof(std::uint64_t));
-          write_bytes(&entry->face_id, sizeof(unsigned int));
+          write_bytes(&entry->remote_face_index, sizeof(std::uint32_t));
           const auto data_size = entry->psi_data.size();
           write_bytes(&data_size, sizeof(std::size_t));
           write_bytes(entry->psi_data.data(), data_size * sizeof(double));
@@ -230,8 +229,8 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
     {
       const auto* slot = slot_cache_[slot_index];
       const auto& entry = slot->payload;
-      const auto entry_bytes = sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t) +
-                               entry.psi_data.size() * sizeof(double);
+      const auto entry_bytes =
+        sizeof(std::uint32_t) + sizeof(std::size_t) + entry.psi_data.size() * sizeof(double);
 
       if (max_message_bytes_ > 0 and current_payload_bytes + entry_bytes > max_message_bytes_ and
           active_angle_sets > 0)
@@ -287,12 +286,30 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       recv_buffer_.Data().resize(static_cast<std::size_t>(num_bytes));
       recv_comm.recv(source_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
 
-      recv_buffer_.Seek(0);
-      const auto num_active_angle_sets = recv_buffer_.Read<std::size_t>();
+      const auto* ptr = reinterpret_cast<const std::byte*>(recv_buffer_.Data().data());
+      const auto* const end = ptr + recv_buffer_.Data().size();
+      const auto load_size = [&ptr, end]()
+      {
+        assert(ptr + sizeof(std::size_t) <= end);
+        std::size_t value{};
+        std::memcpy(&value, ptr, sizeof(std::size_t));
+        ptr += sizeof(std::size_t);
+        return value;
+      };
+      const auto load_face_index = [&ptr, end]()
+      {
+        assert(ptr + sizeof(std::uint32_t) <= end);
+        std::uint32_t value{};
+        std::memcpy(&value, ptr, sizeof(std::uint32_t));
+        ptr += sizeof(std::uint32_t);
+        return value;
+      };
+
+      const auto num_active_angle_sets = load_size();
       for (std::size_t as_batch = 0; as_batch < num_active_angle_sets; ++as_batch)
       {
-        const auto angle_set_id = recv_buffer_.Read<std::size_t>();
-        const auto num_entries = recv_buffer_.Read<std::size_t>();
+        const auto angle_set_id = load_size();
+        const auto num_entries = load_size();
         assert(angle_set_id < num_angle_sets_);
 
         const auto slot_it =
@@ -300,21 +317,36 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         assert(slot_it != source_partition_to_slot_by_angle_set_[angle_set_id].end());
         const auto source_slot = slot_it->second;
 
-        auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-        auto& batch = slot.payload;
-        batch.resize(num_entries);
+        const auto* section_ptr = ptr;
+        std::size_t total_values = 0;
         for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
         {
-          auto& entry = batch[entry_index];
-          entry.cell_global_id = recv_buffer_.Read<std::uint64_t>();
-          entry.face_id = recv_buffer_.Read<unsigned int>();
-          entry.source_slot = source_slot;
-          const auto data_size = recv_buffer_.Read<std::size_t>();
-          entry.psi_data.resize(data_size);
-          std::memcpy(entry.psi_data.data(),
-                      recv_buffer_.Data().data() + recv_buffer_.Offset(),
-                      data_size * sizeof(double));
-          recv_buffer_.Seek(recv_buffer_.Offset() + data_size * sizeof(double));
+          const auto source_face_index = load_face_index();
+          (void)source_face_index;
+          const auto data_size = load_size();
+          assert(ptr + data_size * sizeof(double) <= end);
+          ptr += data_size * sizeof(double);
+          total_values += data_size;
+        }
+
+        auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+        auto& batch = slot.payload;
+        batch.source_slot = source_slot;
+        batch.entries.resize(num_entries);
+        batch.psi_data.resize(total_values);
+        ptr = section_ptr;
+        std::size_t value_offset = 0;
+        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+        {
+          auto& entry = batch.entries[entry_index];
+          entry.source_face_index = load_face_index();
+          entry.payload_offset = value_offset;
+          entry.payload_size = load_size();
+          assert(ptr + entry.payload_size * sizeof(double) <= end);
+          std::memcpy(
+            batch.psi_data.data() + value_offset, ptr, entry.payload_size * sizeof(double));
+          ptr += entry.payload_size * sizeof(double);
+          value_offset += entry.payload_size;
         }
 
         incoming_mailboxes_[angle_set_id]->PublishSlot(slot);

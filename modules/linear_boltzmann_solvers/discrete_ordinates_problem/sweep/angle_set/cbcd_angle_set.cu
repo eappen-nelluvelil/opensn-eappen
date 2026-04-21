@@ -318,12 +318,13 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
     work_done |= async_comm_->ProcessIncoming(
       GetID(),
-      [this](const std::vector<IncomingFaceData>& batch)
+      [this](const IncomingFaceBatch& batch)
       {
-        for (const auto& entry : batch)
+        const auto* psi_base = batch.psi_data.data();
+        for (const auto& entry : batch.entries)
         {
           const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-            entry.source_slot, entry.cell_global_id, entry.face_id, entry.psi_data.data());
+            batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
           if (--remaining_deps_[cell_local_id] == 0)
             cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
               .push_back(static_cast<std::uint32_t>(cell_local_id));

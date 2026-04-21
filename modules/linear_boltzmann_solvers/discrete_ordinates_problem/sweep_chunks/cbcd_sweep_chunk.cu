@@ -75,6 +75,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       }
 
       std::unordered_map<std::uint32_t, std::size_t> incoming_entries_by_source_slot;
+      std::unordered_map<std::uint32_t, std::size_t> incoming_values_by_source_slot;
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -82,23 +83,25 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
         {
           if (face_info.num_nodes == 0)
             continue;
-          capacities[as_ss_idx].max_incoming_face_values =
-            std::max(capacities[as_ss_idx].max_incoming_face_values,
-                     static_cast<std::size_t>(face_info.num_nodes) * stride);
           ++incoming_entries_by_source_slot[face_info.source_slot];
+          incoming_values_by_source_slot[face_info.source_slot] +=
+            static_cast<std::size_t>(face_info.num_nodes) * stride;
           const auto source_partition =
             common_data.GetIncomingSourcePartitions()[face_info.source_slot];
           auto& per_as_bytes = source_as_section_bytes[source_partition];
           if (per_as_bytes.empty())
             per_as_bytes.assign(angle_sets_.size(), 0);
           per_as_bytes[as_ss_idx] +=
-            sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t) +
+            sizeof(std::uint32_t) + sizeof(std::size_t) +
             static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
         }
       }
       for (const auto& [_, count] : incoming_entries_by_source_slot)
         capacities[as_ss_idx].max_incoming_batch_entries =
           std::max(capacities[as_ss_idx].max_incoming_batch_entries, count);
+      for (const auto& [_, values] : incoming_values_by_source_slot)
+        capacities[as_ss_idx].max_incoming_batch_values =
+          std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
     }
 
     std::size_t max_message_bytes = 0;

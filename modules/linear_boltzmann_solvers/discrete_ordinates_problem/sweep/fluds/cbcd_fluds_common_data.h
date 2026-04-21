@@ -61,13 +61,11 @@ public:
     return incoming_boundary_face_plans_;
   }
 
-  /// Return grouped incoming non-local face lookup records for one source locality slot.
-  std::span<const IncomingFaceLookup> GetIncomingFaceLookupsBySource(
-    std::size_t source_slot) const
+  /// Return the number of grouped incoming non-local faces from one source locality slot.
+  std::size_t GetNumIncomingFacesFromSource(const std::size_t source_slot) const
   {
-    const auto begin = source_to_incoming_face_offsets_[source_slot];
-    const auto end = source_to_incoming_face_offsets_[source_slot + 1];
-    return {incoming_face_lookups_by_source_.data() + begin, end - begin};
+    return source_to_incoming_face_offsets_[source_slot + 1] -
+           source_to_incoming_face_offsets_[source_slot];
   }
 
   /// Return outgoing-boundary nodes for one cell.
@@ -106,19 +104,14 @@ public:
   const std::vector<int>& GetOutgoingLocalities() const { return outgoing_localities_; }
 
   /// Return the ordered incoming source-locality table.
-  const std::vector<int>& GetIncomingSourcePartitions() const { return incoming_source_partitions_; }
+  const std::vector<int>& GetIncomingSourcePartitions() const
+  {
+    return incoming_source_partitions_;
+  }
 
-  /**
-   * Resolve one grouped incoming non-local face from wire identifiers.
-   *
-   * \param source_slot Source-locality slot for the sending partition.
-   * \param cell_global_id Destination cell global ID carried on the wire.
-   * \param face_id Destination face ID carried on the wire.
-   * \return Grouped incoming-face descriptor for the received payload.
-   */
-  const GroupedIncomingNonlocalFace& FindIncomingNonlocalFace(std::uint32_t source_slot,
-                                                              std::uint64_t cell_global_id,
-                                                              unsigned int face_id) const;
+  /// Resolve one grouped incoming non-local face by source-slot-local face index.
+  const GroupedIncomingNonlocalFace& GetIncomingNonlocalFace(std::uint32_t source_slot,
+                                                             std::uint32_t source_face_index) const;
 
   /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
   std::span<const OutgoingNodeCopy>
@@ -166,9 +159,10 @@ private:
   std::vector<int> outgoing_localities_;
   /// Ordered table of incoming source localities.
   std::vector<int> incoming_source_partitions_;
-  /// Source-major incoming grouped-face lookup spans.
+  /// Source-major incoming grouped-face spans.
   std::vector<std::uint32_t> source_to_incoming_face_offsets_;
-  std::vector<IncomingFaceLookup> incoming_face_lookups_by_source_;
+  /// Source-major ordered incoming grouped-face indices.
+  std::vector<std::uint32_t> incoming_face_indices_by_source_;
 
   /**
    * Build and upload the flattened cell-face-node index map.

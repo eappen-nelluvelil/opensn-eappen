@@ -22,19 +22,24 @@ namespace opensn
 class AngleSet;
 class MPICommunicatorSet;
 
-struct IncomingFaceData
+struct IncomingFaceBatchEntry
 {
-  std::uint64_t cell_global_id = 0;
-  unsigned int face_id = 0;
+  std::uint32_t source_face_index = 0;
+  std::size_t payload_offset = 0;
+  std::size_t payload_size = 0;
+};
+
+struct IncomingFaceBatch
+{
   std::uint32_t source_slot = 0;
+  std::vector<IncomingFaceBatchEntry> entries;
   std::vector<double> psi_data;
 };
 
 struct OutgoingFaceData
 {
   std::size_t angle_set_id = 0;
-  std::uint64_t cell_global_id = 0;
-  unsigned int face_id = 0;
+  std::uint32_t remote_face_index = 0;
   std::vector<double> psi_data;
 };
 
@@ -43,8 +48,8 @@ struct AngleSetCapacity
   std::size_t outgoing_faces = 0;
   std::size_t incoming_faces = 0;
   std::size_t max_outgoing_face_values = 0;
-  std::size_t max_incoming_face_values = 0;
   std::size_t max_incoming_batch_entries = 0;
+  std::size_t max_incoming_batch_values = 0;
 };
 
 class CBCD_AsynchronousCommunicator
@@ -61,8 +66,7 @@ public:
   template <typename FillCallback>
   void EnqueueOutgoing(int dest_rank,
                        std::size_t angle_set_id,
-                       std::uint64_t cell_global_id,
-                       unsigned int face_id,
+                       std::uint32_t remote_face_index,
                        std::size_t data_size,
                        FillCallback&& fill)
   {
@@ -71,8 +75,7 @@ public:
     auto& queue = *outgoing_queues_[it->second]->queue;
     auto& slot = queue.ReserveSlot();
     slot.payload.angle_set_id = angle_set_id;
-    slot.payload.cell_global_id = cell_global_id;
-    slot.payload.face_id = face_id;
+    slot.payload.remote_face_index = remote_face_index;
     slot.payload.psi_data.resize(data_size);
     fill(slot.payload.psi_data.data());
     queue.PublishSlot(slot);
@@ -124,8 +127,7 @@ private:
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set_;
   std::vector<std::unique_ptr<DestinationQueue>> outgoing_queues_;
   std::unordered_map<int, int> dest_to_queue_index_;
-  std::vector<std::unique_ptr<LockFreeRingBuffer<std::vector<IncomingFaceData>>>>
-    incoming_mailboxes_;
+  std::vector<std::unique_ptr<LockFreeRingBuffer<IncomingFaceBatch>>> incoming_mailboxes_;
   std::vector<std::vector<const OutgoingFaceData*>> send_batch_by_angle_set_;
   ByteArray recv_buffer_;
   std::vector<InFlightSend> in_flight_sends_;

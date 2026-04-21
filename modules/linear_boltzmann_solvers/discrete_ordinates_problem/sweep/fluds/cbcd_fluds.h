@@ -134,14 +134,12 @@ public:
    * Scatter one received non-local face payload into the mapped incoming buffer.
    *
    * \param source_slot Source-locality slot for the sending partition.
-   * \param cell_global_id Destination cell global ID carried on the wire.
-   * \param face_id Destination face ID carried on the wire.
+   * \param source_face_index Source-slot-local face index carried on the wire.
    * \param psi_data Packed payload doubles.
    * \return Local cell ID whose dependency count should be updated.
    */
   std::uint32_t ScatterReceivedFaceData(std::uint32_t source_slot,
-                                        std::uint64_t cell_global_id,
-                                        unsigned int face_id,
+                                        std::uint32_t source_face_index,
                                         const double* psi_data);
 
   void ClearLocalAndReceivePsi() override;
