@@ -95,9 +95,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   for (auto* angle_set : angle_sets)
     angle_set->ResetDependencyCounter();
 
-  cbcd_sweep_chunk.StartCommunicator();
-
   const auto num_workers = pool_.GetSize();
+  cbcd_sweep_chunk.StartCommunicator(num_workers);
   pool_.ExecuteBatch(
     [num_workers, num_angle_sets, &angle_sets, &cbcd_sweep_chunk](std::size_t worker_id)
     {
@@ -121,7 +120,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
             any_work_done |= angle_set->TryInitialize(cbcd_sweep_chunk);
             continue;
           }
-          any_work_done |= angle_set->TryAdvanceOneStep(cbcd_sweep_chunk);
+          any_work_done |= angle_set->TryAdvanceOneStep(cbcd_sweep_chunk, worker_id);
         }
         if ((not all_done) and (not any_work_done))
           std::this_thread::yield();
