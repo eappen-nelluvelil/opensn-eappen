@@ -60,6 +60,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     {
       const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
       const auto& common_data = fluds_list[as_ss_idx]->GetCommonData();
+      std::vector<std::size_t> outgoing_faces_by_dest_slot(
+        common_data.GetOutgoingLocalities().size(), 0);
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
       capacities[as_ss_idx].outgoing_faces = common_data.GetNumOutgoingNonlocalFaces();
       capacities[as_ss_idx].incoming_faces = common_data.GetNumIncomingNonlocalFaces();
@@ -68,10 +70,19 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       {
         for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
         {
+          ++outgoing_faces_by_dest_slot[face_info.dest_slot];
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
                      static_cast<std::size_t>(face_info.num_face_nodes) * stride);
         }
+      }
+      for (std::size_t dest_slot = 0; dest_slot < outgoing_faces_by_dest_slot.size(); ++dest_slot)
+      {
+        const auto face_count = outgoing_faces_by_dest_slot[dest_slot];
+        if (face_count == 0)
+          continue;
+        capacities[as_ss_idx].outgoing_faces_by_destination.push_back(
+          {common_data.GetOutgoingLocalities()[dest_slot], face_count});
       }
 
       std::unordered_map<std::uint32_t, std::size_t> incoming_entries_by_source_slot;
@@ -135,10 +146,10 @@ CBCDSweepChunk::~CBCDSweepChunk()
 }
 
 void
-CBCDSweepChunk::StartCommunicator()
+CBCDSweepChunk::StartCommunicator(const std::size_t num_workers)
 {
   if (async_comm_)
-    async_comm_->Start();
+    async_comm_->Start(num_workers);
 }
 
 void
