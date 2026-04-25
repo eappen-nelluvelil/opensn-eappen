@@ -148,9 +148,10 @@ public:
    * next ready batch, flush completed outgoing data, or finalize the angle set.
    *
    * \param sweep_chunk Owning CBCD sweep chunk.
+   * \param worker_id Worker ID that owns this angle set in the current sweep schedule.
    * \return True when any forward progress was made.
    */
-  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk);
+  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
@@ -256,7 +257,7 @@ private:
   bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
 
   /// Pack and send deferred outgoing data for the completed batch.
-  void FlushCompletedBatch(CBCDSweepChunk& sweep_chunk);
+  void FlushCompletedBatch(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
 
   /// Notify following angle sets once all reflecting-boundary producers have completed.
   void TryNotifyFollowingAngleSets();

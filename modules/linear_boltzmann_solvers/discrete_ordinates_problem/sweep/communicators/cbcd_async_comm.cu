@@ -65,6 +65,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSetCapacity>& capacities)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
+    capacities_(capacities),
     mpi_tag_(static_cast<int>(angle_sets.size())),
     max_message_bytes_(max_message_bytes),
     angle_set_done_(angle_sets.size())
@@ -74,8 +75,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
   std::set<int> sources;
   std::set<int> destinations;
-  std::size_t total_outgoing_faces = 0;
-  std::size_t max_outgoing_face_values = 0;
 
   for (std::size_t i = 0; i < angle_sets.size(); ++i)
   {
@@ -86,14 +85,11 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     for (const int succ : spds.GetLocationSuccessors())
       destinations.insert(succ);
 
-    total_outgoing_faces += capacities[i].outgoing_faces;
-    max_outgoing_face_values =
-      std::max(max_outgoing_face_values, capacities[i].max_outgoing_face_values);
     if (capacities[i].incoming_faces > 0)
     {
       // Each mailbox slot stores one incoming batch for a single angle set. Entry and value
       // buffers are reserved once from the angle-set-local capacity summary and then reused.
-      auto mailbox = std::make_unique<LockFreeRingBuffer<IncomingFaceBatch>>();
+      auto mailbox = std::make_unique<LockFreeSPSCSlotQueue<IncomingFaceBatch>>();
       mailbox->Preallocate(capacities[i].incoming_faces + 1);
       mailbox->InitializeSlots(
         [&](IncomingFaceBatch& batch)
@@ -108,7 +104,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     }
     else
     {
-      incoming_mailboxes_.push_back(std::make_unique<LockFreeRingBuffer<IncomingFaceBatch>>());
+      incoming_mailboxes_.push_back(std::make_unique<LockFreeSPSCSlotQueue<IncomingFaceBatch>>());
     }
   }
 
@@ -129,23 +125,10 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
                              static_cast<std::uint32_t>(source_slot));
   }
 
-  outgoing_queues_.reserve(destinations.size());
-  dest_to_queue_index_.reserve(destinations.size());
-  int queue_index = 0;
-  for (const int dest_rank : destinations)
-  {
-    // Each destination rank receives one bounded MPSC queue. The slots are preallocated once
-    // and their payload vectors retain capacity across all subsequent publications.
-    auto queue = std::make_unique<DestinationQueue>();
-    queue->dest_rank = dest_rank;
-    queue->queue = std::make_unique<LockFreeRingBuffer<OutgoingFaceData>>();
-    if (total_outgoing_faces > 0)
-      queue->queue->Preallocate(total_outgoing_faces + 1);
-    queue->queue->InitializeSlots([max_outgoing_face_values](OutgoingFaceData& payload)
-                                  { payload.psi_data.reserve(max_outgoing_face_values); });
-    outgoing_queues_.push_back(std::move(queue));
-    dest_to_queue_index_[dest_rank] = queue_index++;
-  }
+  destination_ranks_.assign(destinations.begin(), destinations.end());
+  dest_to_queue_index_.reserve(destination_ranks_.size());
+  for (std::size_t queue_index = 0; queue_index < destination_ranks_.size(); ++queue_index)
+    dest_to_queue_index_.emplace(destination_ranks_[queue_index], queue_index);
 
   send_batch_by_angle_set_.resize(num_angle_sets_);
   for (auto& done : angle_set_done_)
@@ -169,12 +152,107 @@ CBCD_AsynchronousCommunicator::SignalAngleSetComplete(const std::size_t angle_se
 }
 
 void
-CBCD_AsynchronousCommunicator::Start()
+CBCD_AsynchronousCommunicator::ConfigureProducerShards(const std::size_t num_producers)
 {
+  assert(num_producers > 0);
+  if ((num_producers_ == num_producers) and (producer_doorbells_.size() == num_producers) and
+      (outgoing_queues_.size() == destination_ranks_.size()))
+    return;
+
+  num_producers_ = num_producers;
+
+  std::vector<std::unordered_map<int, std::size_t>> producer_face_counts(num_producers);
+  std::vector<std::size_t> producer_max_outgoing_face_values(num_producers, 0);
+
+  const auto chunk_size = (num_angle_sets_ + num_producers - 1) / num_producers;
+  for (std::size_t producer_id = 0; producer_id < num_producers; ++producer_id)
+  {
+    const auto begin = producer_id * chunk_size;
+    const auto end = std::min(begin + chunk_size, num_angle_sets_);
+    auto& face_counts = producer_face_counts[producer_id];
+    for (std::size_t angle_set_id = begin; angle_set_id < end; ++angle_set_id)
+    {
+      const auto& capacity = capacities_[angle_set_id];
+      producer_max_outgoing_face_values[producer_id] =
+        std::max(producer_max_outgoing_face_values[producer_id], capacity.max_outgoing_face_values);
+      for (const auto& destination_capacity : capacity.outgoing_faces_by_destination)
+        face_counts[destination_capacity.dest_rank] += destination_capacity.face_count;
+    }
+  }
+
+  producer_doorbells_.clear();
+  producer_doorbells_.reserve(num_producers);
+  for (std::size_t producer_id = 0; producer_id < num_producers; ++producer_id)
+  {
+    auto doorbell = std::make_unique<DoorbellQueue>();
+    doorbell->Preallocate(producer_face_counts[producer_id].size() + 1);
+    producer_doorbells_.push_back(std::move(doorbell));
+  }
+
+  outgoing_queues_.clear();
+  outgoing_queues_.resize(destination_ranks_.size());
+  destination_active_local_.assign(destination_ranks_.size(), 0);
+  active_destinations_.clear();
+
+  for (std::size_t queue_index = 0; queue_index < destination_ranks_.size(); ++queue_index)
+  {
+    auto& destination_queue = outgoing_queues_[queue_index];
+    destination_queue.dest_rank = destination_ranks_[queue_index];
+    destination_queue.producer_shards.clear();
+    destination_queue.producer_shards.resize(num_producers);
+    destination_queue.active_producers.clear();
+    destination_queue.producer_active_local.assign(num_producers, 0);
+    destination_queue.rr_cursor = 0;
+
+    for (std::size_t producer_id = 0; producer_id < num_producers; ++producer_id)
+    {
+      auto shard = std::make_unique<OutgoingShard>();
+      const auto count_it = producer_face_counts[producer_id].find(destination_queue.dest_rank);
+      if (count_it != producer_face_counts[producer_id].end())
+      {
+        shard->queue.Preallocate(count_it->second + 1);
+        shard->queue.InitializeSlots(
+          [reserve = producer_max_outgoing_face_values[producer_id]](OutgoingFaceData& payload)
+          {
+            payload.angle_set_id = 0;
+            payload.remote_face_index = 0;
+            payload.psi_data.clear();
+            payload.psi_data.reserve(reserve);
+          });
+      }
+      destination_queue.producer_shards[producer_id] = std::move(shard);
+    }
+  }
+}
+
+void
+CBCD_AsynchronousCommunicator::Start(const std::size_t num_producers)
+{
+  ConfigureProducerShards(num_producers);
+
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& done : angle_set_done_)
     done.store(false, std::memory_order_relaxed);
   in_flight_sends_.clear();
+  active_destinations_.clear();
+  std::fill(destination_active_local_.begin(), destination_active_local_.end(), 0);
+  for (auto& destination_queue : outgoing_queues_)
+  {
+    destination_queue.active_producers.clear();
+    std::fill(destination_queue.producer_active_local.begin(),
+              destination_queue.producer_active_local.end(),
+              0);
+    destination_queue.rr_cursor = 0;
+    for (auto& shard : destination_queue.producer_shards)
+    {
+      shard->scheduled.store(false, std::memory_order_relaxed);
+      assert(shard->queue.Empty());
+    }
+  }
+  for (const auto& doorbell : producer_doorbells_)
+    assert(doorbell->Empty());
+  for (const auto& mailbox : incoming_mailboxes_)
+    assert(mailbox->Empty());
   comm_thread_ = std::thread(&CBCD_AsynchronousCommunicator::CommThreadLoop, this);
 }
 
@@ -218,89 +296,137 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
 }
 
 bool
-CBCD_AsynchronousCommunicator::SerializeAndSend()
+CBCD_AsynchronousCommunicator::DrainProducerDoorbells()
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::SerializeAndSend");
+  bool activated_any = false;
 
-  bool sent_any = false;
-
-  for (auto& destination_queue : outgoing_queues_)
+  for (std::size_t producer_id = 0; producer_id < producer_doorbells_.size(); ++producer_id)
   {
-    // Gather the currently published outgoing face payloads for this destination. The queue
-    // is drained in FIFO order, but the serialized message is batched by angle set so the
-    // receiver can publish one mailbox payload per angle set.
-    destination_queue->queue->GetReadySlots(slot_cache_);
-    if (slot_cache_.empty())
-      continue;
+    activated_any |= producer_doorbells_[producer_id]->ProcessReady(
+                       [this, producer_id](const std::size_t destination_queue_index)
+                       {
+                         assert(destination_queue_index < outgoing_queues_.size());
+                         auto& destination_queue = outgoing_queues_[destination_queue_index];
 
-    std::size_t current_payload_bytes = sizeof(std::size_t);
-    std::size_t active_angle_sets = 0;
-    std::size_t slots_processed = 0;
+                         if (not destination_queue.producer_active_local[producer_id])
+                         {
+                           destination_queue.producer_active_local[producer_id] = 1;
+                           destination_queue.active_producers.push_back(producer_id);
+                         }
 
-    const auto send_batch = [&]()
+                         if (not destination_active_local_[destination_queue_index])
+                         {
+                           destination_active_local_[destination_queue_index] = 1;
+                           active_destinations_.push_back(destination_queue_index);
+                         }
+                       }) > 0;
+  }
+
+  return activated_any;
+}
+
+bool
+CBCD_AsynchronousCommunicator::FlushActiveDestination(const std::size_t destination_queue_index)
+{
+  auto& destination_queue = outgoing_queues_[destination_queue_index];
+  if (destination_queue.active_producers.empty())
+    return false;
+
+  bool work_done = false;
+  std::size_t current_payload_bytes = sizeof(std::size_t);
+  std::size_t active_angle_sets = 0;
+
+  const auto send_batch = [&]()
+  {
+    assert(active_angle_sets > 0);
+
+    InFlightSend in_flight;
+    in_flight.data.Data().resize(current_payload_bytes);
+    std::size_t offset = 0;
+
+    const auto write_bytes = [&](const void* ptr, const std::size_t size)
     {
-      // Wire format:
-      // [num_active_angle_sets]
-      //   repeated:
-      //   [angle_set_id][num_entries]
-      //     repeated:
-      //     [remote_face_index][payload_size][payload doubles...]
-      InFlightSend in_flight;
-      in_flight.data.Data().resize(current_payload_bytes);
-      std::size_t offset = 0;
-
-      const auto write_bytes = [&](const void* ptr, const std::size_t size)
-      {
-        std::memcpy(in_flight.data.Data().data() + offset, ptr, size);
-        offset += size;
-      };
-
-      write_bytes(&active_angle_sets, sizeof(std::size_t));
-      for (std::size_t angle_set_id = 0; angle_set_id < num_angle_sets_; ++angle_set_id)
-      {
-        auto& entries = send_batch_by_angle_set_[angle_set_id];
-        if (entries.empty())
-          continue;
-
-        write_bytes(&angle_set_id, sizeof(std::size_t));
-        const auto num_entries = entries.size();
-        write_bytes(&num_entries, sizeof(std::size_t));
-        for (const auto* entry : entries)
-        {
-          write_bytes(&entry->remote_face_index, sizeof(std::uint32_t));
-          const auto data_size = entry->psi_data.size();
-          write_bytes(&data_size, sizeof(std::size_t));
-          write_bytes(entry->psi_data.data(), data_size * sizeof(double));
-        }
-        entries.clear();
-      }
-
-      const auto& comm = comm_set_.LocICommunicator(destination_queue->dest_rank);
-      const auto mapped_rank =
-        comm_set_.MapIonJ(destination_queue->dest_rank, destination_queue->dest_rank);
-      in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
-      in_flight_sends_.push_back(std::move(in_flight));
+      std::memcpy(in_flight.data.Data().data() + offset, ptr, size);
+      offset += size;
     };
 
-    for (std::size_t slot_index = 0; slot_index < slot_cache_.size(); ++slot_index)
+    write_bytes(&active_angle_sets, sizeof(std::size_t));
+    for (std::size_t angle_set_id = 0; angle_set_id < num_angle_sets_; ++angle_set_id)
     {
-      const auto* slot = slot_cache_[slot_index];
+      auto& entries = send_batch_by_angle_set_[angle_set_id];
+      if (entries.empty())
+        continue;
+
+      write_bytes(&angle_set_id, sizeof(std::size_t));
+      const auto num_entries = entries.size();
+      write_bytes(&num_entries, sizeof(std::size_t));
+      for (const auto* entry : entries)
+      {
+        write_bytes(&entry->remote_face_index, sizeof(std::uint32_t));
+        const auto data_size = entry->psi_data.size();
+        write_bytes(&data_size, sizeof(std::size_t));
+        write_bytes(entry->psi_data.data(), data_size * sizeof(double));
+      }
+      entries.clear();
+    }
+
+    const auto& comm = comm_set_.LocICommunicator(destination_queue.dest_rank);
+    const auto mapped_rank =
+      comm_set_.MapIonJ(destination_queue.dest_rank, destination_queue.dest_rank);
+    in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
+    in_flight_sends_.push_back(std::move(in_flight));
+    current_payload_bytes = sizeof(std::size_t);
+    active_angle_sets = 0;
+  };
+
+  const auto producer_count = destination_queue.active_producers.size();
+  for (std::size_t visited = 0;
+       visited < producer_count and not destination_queue.active_producers.empty();
+       ++visited)
+  {
+    if (destination_queue.rr_cursor >= destination_queue.active_producers.size())
+      destination_queue.rr_cursor = 0;
+
+    const auto active_index = destination_queue.rr_cursor;
+    const auto producer_id = destination_queue.active_producers[active_index];
+    auto& shard = *destination_queue.producer_shards[producer_id];
+    shard.queue.PeekReadySlots(slot_cache_);
+
+    if (slot_cache_.empty())
+    {
+      shard.scheduled.store(false, std::memory_order_release);
+      if (not shard.queue.Empty())
+      {
+        shard.scheduled.store(true, std::memory_order_release);
+        if (not destination_queue.active_producers.empty())
+          destination_queue.rr_cursor =
+            (active_index + 1) % destination_queue.active_producers.size();
+      }
+      else
+      {
+        destination_queue.producer_active_local[producer_id] = 0;
+        std::swap(destination_queue.active_producers[active_index],
+                  destination_queue.active_producers.back());
+        destination_queue.active_producers.pop_back();
+        if (destination_queue.active_producers.empty())
+          destination_queue.rr_cursor = 0;
+        else if (active_index >= destination_queue.active_producers.size())
+          destination_queue.rr_cursor = 0;
+        else
+          destination_queue.rr_cursor = active_index;
+      }
+      continue;
+    }
+
+    for (const auto* slot : slot_cache_)
+    {
       const auto& entry = slot->payload;
       const auto entry_bytes =
         sizeof(std::uint32_t) + sizeof(std::size_t) + entry.psi_data.size() * sizeof(double);
 
-      // Attempt to adhere to the message-size limit.
-      // Once the next entry would exceed the limit, flush the current
-      // batch and continue packing the remaining queue entries.
-      if (max_message_bytes_ > 0 and current_payload_bytes + entry_bytes > max_message_bytes_ and
-          active_angle_sets > 0)
-      {
+      if ((max_message_bytes_ > 0) and
+          (current_payload_bytes + entry_bytes > max_message_bytes_) and (active_angle_sets > 0))
         send_batch();
-        destination_queue->queue->FreeSlots(slots_processed);
-        current_payload_bytes = sizeof(std::size_t);
-        active_angle_sets = 0;
-        slots_processed = 0;
-      }
 
       auto& entries = send_batch_by_angle_set_[entry.angle_set_id];
       if (entries.empty())
@@ -310,19 +436,50 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
       }
       entries.push_back(&entry);
       current_payload_bytes += entry_bytes;
-      ++slots_processed;
     }
 
-    if (active_angle_sets > 0)
-    {
-      send_batch();
-      destination_queue->queue->FreeSlots(slots_processed);
-    }
-
-    sent_any = true;
+    shard.queue.ReleaseReadySlots(slot_cache_.size());
+    work_done = true;
+    destination_queue.rr_cursor = (active_index + 1) % destination_queue.active_producers.size();
   }
 
-  return sent_any;
+  if (active_angle_sets > 0)
+    send_batch();
+
+  return work_done;
+}
+
+bool
+CBCD_AsynchronousCommunicator::FlushActiveDestinations()
+{
+  bool work_done = false;
+
+  for (std::size_t i = 0; i < active_destinations_.size();)
+  {
+    const auto destination_queue_index = active_destinations_[i];
+    work_done |= FlushActiveDestination(destination_queue_index);
+
+    if (outgoing_queues_[destination_queue_index].active_producers.empty())
+    {
+      destination_active_local_[destination_queue_index] = 0;
+      std::swap(active_destinations_[i], active_destinations_.back());
+      active_destinations_.pop_back();
+    }
+    else
+      ++i;
+  }
+
+  return work_done;
+}
+
+bool
+CBCD_AsynchronousCommunicator::SerializeAndSend()
+{
+  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::SerializeAndSend");
+
+  const auto activated_any = DrainProducerDoorbells();
+  const auto sent_any = FlushActiveDestinations();
+  return activated_any or sent_any;
 }
 
 bool
@@ -397,7 +554,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
           value_offset += entry.payload_size;
         }
 
-        incoming_mailboxes_[angle_set_id]->PublishSlot(slot);
+        incoming_mailboxes_[angle_set_id]->PublishSlot();
       }
     }
   }
@@ -433,9 +590,21 @@ CBCD_AsynchronousCommunicator::AllAngleSetsComplete() const
     if (not done.load(std::memory_order_acquire))
       return false;
 
-  for (const auto& destination_queue : outgoing_queues_)
-    if (not destination_queue->queue->Empty())
+  if (not active_destinations_.empty())
+    return false;
+
+  for (const auto& doorbell : producer_doorbells_)
+    if (not doorbell->Empty())
       return false;
+
+  for (const auto& mailbox : incoming_mailboxes_)
+    if (not mailbox->Empty())
+      return false;
+
+  for (const auto& destination_queue : outgoing_queues_)
+    for (const auto& shard : destination_queue.producer_shards)
+      if (not shard->queue.Empty())
+        return false;
 
   return true;
 }
