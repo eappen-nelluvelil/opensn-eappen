@@ -5,10 +5,11 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_common_data.h"
 #include "framework/mesh/cell/cell.h"
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
-#include <unordered_map>
 #include <vector>
 
 namespace opensn
@@ -33,7 +34,8 @@ public:
 private:
   size_t num_incoming_nonlocal_faces_;
   size_t num_outgoing_nonlocal_faces_;
-  std::unordered_map<CellFaceKey, size_t> incoming_nonlocal_face_slots_;
+  boost::unordered_flat_map<CellFaceKey, size_t, std::hash<CellFaceKey>>
+    incoming_nonlocal_face_slots_;
   std::vector<size_t> incoming_nonlocal_face_slot_offsets_;
   std::vector<size_t> incoming_nonlocal_face_slots_by_local_face_;
 };

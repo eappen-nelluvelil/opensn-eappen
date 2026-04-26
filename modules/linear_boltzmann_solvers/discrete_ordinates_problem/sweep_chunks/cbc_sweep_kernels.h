@@ -11,9 +11,25 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include <algorithm>
+#include <span>
 
 namespace opensn
 {
+
+struct CBCOutgoingFaceBuffer
+{
+  int destination = 0;
+  std::uint64_t cell_global_id = 0;
+  unsigned int face_id = 0;
+  size_t data_size = 0;
+  std::vector<double> data;
+
+  void Prepare(size_t size)
+  {
+    data_size = size;
+    data.resize(size);
+  }
+};
 
 struct CBCSweepData
 {
@@ -52,7 +68,58 @@ struct CBCSweepData
   const DenseMatrix<double>& M;
   const std::vector<DenseMatrix<double>>& M_surf;
   const std::vector<Vector<double>>& IntS_shapeI;
+
+  std::vector<CBCOutgoingFaceBuffer>& outgoing_nonlocal_face_buffers;
+  std::vector<CBCOutgoingFaceBuffer*>& outgoing_nonlocal_face_buffer_by_face;
+  size_t& num_outgoing_nonlocal_face_buffers;
 };
+
+inline void
+CBCPrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
+                                      const std::vector<FaceOrientation>& face_orientations)
+{
+  auto& buffers = data.outgoing_nonlocal_face_buffers;
+  auto& buffer_by_face = data.outgoing_nonlocal_face_buffer_by_face;
+  buffers.reserve(data.cell_num_faces);
+  buffer_by_face.assign(data.cell_num_faces, nullptr);
+  data.num_outgoing_nonlocal_face_buffers = 0;
+
+  for (size_t f = 0; f < data.cell_num_faces; ++f)
+  {
+    if (face_orientations[f] != FaceOrientation::OUTGOING)
+      continue;
+
+    const auto& face = data.cell.faces[f];
+    if ((not face.has_neighbor) or data.cell_transport_view.IsFaceLocal(f))
+      continue;
+
+    const auto buffer_index = data.num_outgoing_nonlocal_face_buffers++;
+    if (buffer_index == buffers.size())
+      buffers.emplace_back();
+
+    auto& buffer = buffers[buffer_index];
+    const auto& face_nodal_mapping =
+      data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
+    buffer.destination = data.cell_transport_view.FaceLocality(f);
+    buffer.cell_global_id = face.neighbor_id;
+    buffer.face_id = face_nodal_mapping.associated_face_;
+    buffer.Prepare(data.cell_mapping.GetNumFaceNodes(f) * data.group_angle_stride);
+    buffer_by_face[f] = &buffer;
+  }
+}
+
+inline void
+CBCQueueOutgoingNonlocalFaceBuffers(CBCSweepData& data, CBC_AsynchronousCommunicator& async_comm)
+{
+  for (size_t i = 0; i < data.num_outgoing_nonlocal_face_buffers; ++i)
+  {
+    const auto& buffer = data.outgoing_nonlocal_face_buffers[i];
+    async_comm.QueueDownwindMessage(buffer.destination,
+                                    buffer.cell_global_id,
+                                    buffer.face_id,
+                                    std::span<const double>(buffer.data.data(), buffer.data_size));
+  }
+}
 
 template <bool time_dependent>
 inline void
@@ -92,6 +159,7 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
 
   const auto& as_angle_indices = angle_set.GetAngleIndices();
   auto& async_comm = *static_cast<CBC_AsynchronousCommunicator*>(angle_set.GetCommunicator());
+  CBCPrepareOutgoingNonlocalFaceBuffers(data, face_orientations);
 
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
   {
@@ -266,21 +334,9 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
       const auto& IntF_shapeI = data.IntS_shapeI[f];
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
-      std::vector<double>* psi_nonlocal_outgoing = nullptr;
-
-      if (not is_boundary_face and not is_local_face)
-      {
-        const int locality = data.cell_transport_view.FaceLocality(f);
-        const auto& face_nodal_mapping =
-          data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
-        const size_t data_size_for_msg = num_face_nodes * data.group_angle_stride;
-        psi_nonlocal_outgoing =
-          &async_comm.InitGetDownwindMessageData(locality,
-                                                 face.neighbor_id,
-                                                 face_nodal_mapping.associated_face_,
-                                                 angle_set.GetID(),
-                                                 data_size_for_msg);
-      }
+      auto* psi_nonlocal_outgoing = (not is_boundary_face and not is_local_face)
+                                      ? &data.outgoing_nonlocal_face_buffer_by_face[f]->data
+                                      : nullptr;
 
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
       {
@@ -307,6 +363,8 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
       }
     }
   }
+
+  CBCQueueOutgoingNonlocalFaceBuffers(data, async_comm);
 }
 
 template <unsigned int NumNodes, bool time_dependent>

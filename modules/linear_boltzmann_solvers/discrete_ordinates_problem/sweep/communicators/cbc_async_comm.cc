@@ -8,7 +8,6 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
-#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <type_traits>
@@ -44,34 +43,80 @@ ReadMessageValue(const std::vector<std::byte>& buffer, size_t& offset)
 namespace opensn
 {
 
-std::vector<double>&
-CBC_AsynchronousCommunicator::InitGetDownwindMessageData(int location_id,
-                                                         uint64_t cell_global_id,
-                                                         unsigned int face_id,
-                                                         size_t /*angle_set_id*/,
-                                                         size_t data_size)
+CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
+                                                           FLUDS& fluds,
+                                                           const MPICommunicatorSet& comm_set)
+  : AsynchronousCommunicator(fluds, comm_set),
+    angle_set_id_(angle_set_id),
+    location_id_(opensn::mpi_comm.rank()),
+    receive_comm_(comm_set.LocICommunicator(location_id_))
 {
-  auto pending = std::find_if(outgoing_message_queue_.begin(),
-                              outgoing_message_queue_.end(),
-                              [location_id, cell_global_id, face_id](const PendingMessage& message)
-                              {
-                                return message.destination == location_id and
-                                       message.cell_global_id == cell_global_id and
-                                       message.face_id == face_id;
-                              });
+  const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
+  receive_source_ranks_.reserve(location_dependencies.size());
+  for (int location : location_dependencies)
+    receive_source_ranks_.push_back(comm_set_.MapIonJ(location, location_id_));
 
-  if (pending == outgoing_message_queue_.end())
+  send_peers_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
+}
+
+const CBC_AsynchronousCommunicator::SendPeer&
+CBC_AsynchronousCommunicator::GetSendPeer(int destination)
+{
+  auto [it, inserted] = send_peers_.try_emplace(destination);
+  if (inserted)
   {
-    pending = outgoing_message_queue_.emplace(outgoing_message_queue_.end());
-    pending->destination = location_id;
-    pending->cell_global_id = cell_global_id;
-    pending->face_id = face_id;
+    it->second.comm = &comm_set_.LocICommunicator(destination);
+    it->second.rank = comm_set_.MapIonJ(destination, destination);
   }
 
-  if (pending->data.empty())
-    pending->data.assign(data_size, 0.0);
+  return it->second;
+}
 
-  return pending->data;
+CBC_AsynchronousCommunicator::BufferItem&
+CBC_AsynchronousCommunicator::GetOpenSendBuffer(int destination)
+{
+  const auto lookup_it = open_send_buffer_indices_.find(destination);
+  if (lookup_it != open_send_buffer_indices_.end())
+    return send_buffer_[lookup_it->second];
+
+  if (reusable_send_buffers_.empty())
+    send_buffer_.emplace_back();
+  else
+  {
+    send_buffer_.push_back(std::move(reusable_send_buffers_.back()));
+    reusable_send_buffers_.pop_back();
+  }
+
+  const auto buffer_index = send_buffer_.size() - 1;
+  auto& buffer = send_buffer_.back();
+  buffer.destination = destination;
+  buffer.send_initiated = false;
+  buffer.completed = false;
+  buffer.data.clear();
+  open_send_buffer_indices_.emplace(destination, buffer_index);
+  return buffer;
+}
+
+void
+CBC_AsynchronousCommunicator::QueueDownwindMessage(int destination,
+                                                   std::uint64_t cell_global_id,
+                                                   unsigned int face_id,
+                                                   std::span<const double> data)
+{
+  auto& raw = GetOpenSendBuffer(destination).data;
+  const size_t data_size = data.size();
+  raw.reserve(raw.size() + sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
+              data_size * sizeof(double));
+
+  AppendMessageValue(raw, cell_global_id);
+  AppendMessageValue(raw, face_id);
+  AppendMessageValue(raw, data_size);
+
+  const size_t old_size = raw.size();
+  const size_t num_bytes = data_size * sizeof(double);
+  raw.resize(old_size + num_bytes);
+  if (num_bytes != 0)
+    std::memcpy(raw.data() + old_size, data.data(), num_bytes);
 }
 
 bool
@@ -79,73 +124,15 @@ CBC_AsynchronousCommunicator::SendData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::SendData");
 
-  // First we convert any new outgoing messages from the queue into
-  // buffer messages. We aggregate these messages per location-id
-  // they need to be sent to
-  if (not outgoing_message_queue_.empty())
-  {
-    const auto new_buffer_start = send_buffer_.size();
-
-    auto append_send_buffer = [this](int destination) -> BufferItem&
-    {
-      if (reusable_send_buffers_.empty())
-        send_buffer_.emplace_back();
-      else
-      {
-        send_buffer_.push_back(std::move(reusable_send_buffers_.back()));
-        reusable_send_buffers_.pop_back();
-      }
-
-      auto& buffer = send_buffer_.back();
-      buffer.destination = destination;
-      buffer.send_initiated = false;
-      buffer.completed = false;
-      buffer.data.clear();
-      return buffer;
-    };
-
-    for (const auto& message : outgoing_message_queue_)
-    {
-      auto buffer_index = send_buffer_.size();
-      for (size_t i = new_buffer_start; i < send_buffer_.size(); ++i)
-        if (send_buffer_[i].destination == message.destination)
-        {
-          buffer_index = i;
-          break;
-        }
-
-      auto& buffer = (buffer_index == send_buffer_.size()) ? append_send_buffer(message.destination)
-                                                           : send_buffer_[buffer_index];
-
-      const size_t data_size = message.data.size();
-      auto& raw = buffer.data;
-      raw.reserve(raw.size() + sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
-                  data_size * sizeof(double));
-
-      AppendMessageValue(raw, message.cell_global_id);
-      AppendMessageValue(raw, message.face_id);
-      AppendMessageValue(raw, data_size);
-
-      const size_t old_size = raw.size();
-      const size_t num_bytes = data_size * sizeof(double);
-      raw.resize(old_size + num_bytes);
-      std::memcpy(raw.data() + old_size, message.data.data(), num_bytes);
-    }
-
-    outgoing_message_queue_.clear();
-  } // if there are outgoing messages
-
   // Now we attempt to flush items in the send buffer
   bool all_messages_sent = true;
   for (auto& buffer_item : send_buffer_)
   {
     if (not buffer_item.send_initiated)
     {
-      const int locJ = buffer_item.destination;
-      const auto& comm = comm_set_.LocICommunicator(locJ);
-      auto dest = comm_set_.MapIonJ(locJ, locJ);
-      auto tag = static_cast<int>(angle_set_id_);
-      buffer_item.mpi_request = comm.isend(dest, tag, buffer_item.data);
+      const auto& peer = GetSendPeer(buffer_item.destination);
+      const auto tag = static_cast<int>(angle_set_id_);
+      buffer_item.mpi_request = peer.comm->isend(peer.rank, tag, buffer_item.data);
       buffer_item.send_initiated = true;
     }
 
@@ -176,6 +163,7 @@ CBC_AsynchronousCommunicator::SendData()
   }
   send_buffer_.erase(send_buffer_.begin() + static_cast<std::ptrdiff_t>(next_active),
                      send_buffer_.end());
+  open_send_buffer_indices_.clear();
 
   return all_messages_sent;
 }
@@ -183,10 +171,10 @@ CBC_AsynchronousCommunicator::SendData()
 void
 CBC_AsynchronousCommunicator::Reset()
 {
-  outgoing_message_queue_.clear();
   send_buffer_.clear();
   reusable_send_buffers_.clear();
   receive_buffer_.clear();
+  open_send_buffer_indices_.clear();
 }
 
 std::vector<uint64_t>
@@ -203,21 +191,18 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint64_t>& cells_who_
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
 
   cells_who_received_data.clear();
-  const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  if (cells_who_received_data.capacity() < location_dependencies.size())
-    cells_who_received_data.reserve(location_dependencies.size());
+  if (cells_who_received_data.capacity() < receive_source_ranks_.size())
+    cells_who_received_data.reserve(receive_source_ranks_.size());
 
-  const auto& comm = comm_set_.LocICommunicator(opensn::mpi_comm.rank());
   const auto tag = static_cast<int>(angle_set_id_);
-  for (int locJ : location_dependencies)
+  for (int source_rank : receive_source_ranks_)
   {
-    auto source_rank = comm_set_.MapIonJ(locJ, opensn::mpi_comm.rank());
     mpi::Status status;
-    while (comm.iprobe(source_rank, tag, status))
+    while (receive_comm_.iprobe(source_rank, tag, status))
     {
       int num_items = status.count<std::byte>();
       receive_buffer_.resize(num_items);
-      comm.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
+      receive_comm_.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
 
       size_t offset = 0;
 

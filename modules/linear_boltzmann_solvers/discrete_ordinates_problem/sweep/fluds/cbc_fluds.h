@@ -8,8 +8,7 @@
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include <cstddef>
-#include <unordered_map>
-#include <functional>
+#include <vector>
 
 namespace opensn
 {

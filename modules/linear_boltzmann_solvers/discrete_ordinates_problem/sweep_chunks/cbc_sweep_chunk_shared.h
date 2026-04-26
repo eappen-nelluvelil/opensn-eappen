@@ -33,6 +33,10 @@ struct CBCSweepChunkContext
   const DenseMatrix<double>* M = nullptr;
   const std::vector<DenseMatrix<double>>* M_surf = nullptr;
   const std::vector<Vector<double>>* IntS_shapeI = nullptr;
+
+  std::vector<CBCOutgoingFaceBuffer> outgoing_nonlocal_face_buffers;
+  std::vector<CBCOutgoingFaceBuffer*> outgoing_nonlocal_face_buffer_by_face;
+  size_t num_outgoing_nonlocal_face_buffers = 0;
 };
 
 inline void
@@ -87,7 +91,7 @@ MakeCBCSweepData(const SpatialDiscretization& discretization,
                  DiscreteOrdinatesProblem& problem,
                  const std::vector<double>* psi_old,
                  unsigned int group_block_size,
-                 const CBCSweepChunkContext& ctx)
+                 CBCSweepChunkContext& ctx)
 {
   return CBCSweepData{discretization,
                       source_moments,
@@ -120,7 +124,10 @@ MakeCBCSweepData(const SpatialDiscretization& discretization,
                       *ctx.G,
                       *ctx.M,
                       *ctx.M_surf,
-                      *ctx.IntS_shapeI};
+                      *ctx.IntS_shapeI,
+                      ctx.outgoing_nonlocal_face_buffers,
+                      ctx.outgoing_nonlocal_face_buffer_by_face,
+                      ctx.num_outgoing_nonlocal_face_buffers};
 }
 
 } // namespace opensn
