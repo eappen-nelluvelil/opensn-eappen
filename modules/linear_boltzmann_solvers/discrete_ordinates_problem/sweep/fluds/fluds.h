@@ -65,6 +65,14 @@ public:
     return deplocs_outgoing_messages_;
   }
 
+  virtual std::vector<double>&
+  PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id, unsigned int face_id, size_t data_size)
+  {
+    auto& psi = deplocs_outgoing_messages_[CellFaceKey{cell_global_id, face_id}];
+    psi.resize(data_size);
+    return psi;
+  }
+
 protected:
   const unsigned int num_groups_;
   const size_t num_angles_;

@@ -73,7 +73,10 @@ public:
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
-  void ClearLocalAndReceivePsi() override { deplocs_outgoing_messages_.clear(); }
+  void ClearLocalAndReceivePsi() override;
+  std::vector<double>& PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
+                                                  unsigned int face_id,
+                                                  size_t data_size) override;
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
   void AllocateOutgoingPsi() override {}
@@ -98,6 +101,8 @@ protected:
   std::vector<double> local_psi_data_;
 
   std::vector<std::vector<double>> boundryI_incoming_psi_;
+  std::vector<std::vector<double>> incoming_nonlocal_psi_;
+  std::vector<unsigned char> incoming_nonlocal_psi_ready_;
 
   /// Pre-computed start index into local_psi_data_ for each local cell
   std::vector<size_t> cell_psi_start_;

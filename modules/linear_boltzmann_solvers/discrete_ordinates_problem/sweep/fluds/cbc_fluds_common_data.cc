@@ -30,11 +30,23 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         continue;
 
       if (orientation == FaceOrientation::INCOMING)
+      {
+        incoming_nonlocal_face_slots_.emplace(
+          CellFaceKey{cell.global_id, static_cast<unsigned int>(f)}, num_incoming_nonlocal_faces_);
         ++num_incoming_nonlocal_faces_;
+      }
       else if (orientation == FaceOrientation::OUTGOING)
         ++num_outgoing_nonlocal_faces_;
     }
   }
+}
+
+size_t
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceSlot(std::uint64_t cell_global_id,
+                                                 unsigned int face_id) const
+{
+  const auto it = incoming_nonlocal_face_slots_.find(CellFaceKey{cell_global_id, face_id});
+  return it == incoming_nonlocal_face_slots_.end() ? invalid_face_slot : it->second;
 }
 
 } // namespace opensn

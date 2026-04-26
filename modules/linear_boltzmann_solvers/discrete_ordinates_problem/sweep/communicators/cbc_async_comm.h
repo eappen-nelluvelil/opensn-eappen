@@ -5,12 +5,10 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
-#include "framework/data_types/byte_array.h"
 #include "mpicpp-lite/mpicpp-lite.h"
-#include <unordered_map>
 #include <vector>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 
 namespace mpi = mpicpp_lite;
 
@@ -18,7 +16,6 @@ namespace opensn
 {
 
 class MPICommunicatorSet;
-class ByteArray;
 
 class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
 {
@@ -39,32 +36,27 @@ public:
   bool SendData();
 
   std::vector<uint64_t> ReceiveData();
+  void ReceiveData(std::vector<std::uint64_t>& cells_who_received_data);
 
-  void Reset()
+  [[nodiscard]] bool HasPendingCommunication() const noexcept
   {
-    outgoing_message_queue_.clear();
-    send_buffer_.clear();
+    return (not outgoing_message_queue_.empty()) or (not send_buffer_.empty());
   }
+
+  void Reset();
 
 protected:
   const size_t angle_set_id_;
 
-  /// location_id, cell_global_id, face_id
-  using MessageKey = std::tuple<int, std::uint64_t, unsigned int>;
-
-  /// boost::hash_combine hash function for MessageKey.
-  struct MessageKeyHash
+  struct PendingMessage
   {
-    std::size_t operator()(const MessageKey& key) const noexcept
-    {
-      size_t h = std::hash<int>{}(std::get<0>(key));
-      h ^= std::hash<std::uint64_t>{}(std::get<1>(key)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-      h ^= std::hash<unsigned int>{}(std::get<2>(key)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-      return h;
-    }
+    int destination = 0;
+    std::uint64_t cell_global_id = 0;
+    unsigned int face_id = 0;
+    std::vector<double> data;
   };
 
-  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
+  std::vector<PendingMessage> outgoing_message_queue_;
 
   struct BufferItem
   {
@@ -72,9 +64,11 @@ protected:
     mpi::Request mpi_request;
     bool send_initiated = false;
     bool completed = false;
-    ByteArray data_array;
+    std::vector<std::byte> data;
   };
   std::vector<BufferItem> send_buffer_;
+  std::vector<BufferItem> reusable_send_buffers_;
+  std::vector<std::byte> receive_buffer_;
 };
 
 } // namespace opensn

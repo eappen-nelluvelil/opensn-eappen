@@ -6,6 +6,9 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
+#include <algorithm>
+#include <cassert>
+#include <stdexcept>
 
 namespace opensn
 {
@@ -24,7 +27,9 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     num_local_spatial_dofs_(num_quadrature_local_dofs_ / num_angles_in_gs_quadrature_ /
                             num_groups_),
     local_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    local_psi_data_(local_psi_data_size_)
+    local_psi_data_(local_psi_data_size_),
+    incoming_nonlocal_psi_(common_data.GetNumIncomingNonlocalFaces()),
+    incoming_nonlocal_psi_ready_(common_data.GetNumIncomingNonlocalFaces(), 0)
 {
   const auto& grid = *spds_.GetGrid();
   cell_psi_start_.resize(grid.local_cells.size());
@@ -33,9 +38,18 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
     cell_psi_start_[cell.local_id] =
       (sdm_.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0) / num_angles_in_gs_quadrature_ / num_groups_) *
       num_groups_and_angles_;
-  }
 
-  deplocs_outgoing_messages_.reserve(common_data.GetNumIncomingNonlocalFaces());
+    for (size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto slot =
+        common_data_.GetIncomingNonlocalFaceSlot(cell.global_id, static_cast<unsigned int>(f));
+      if (slot == CBC_FLUDSCommonData::invalid_face_slot)
+        continue;
+
+      incoming_nonlocal_psi_[slot].resize(sdm_.GetCellMapping(cell).GetNumFaceNodes(f) *
+                                          num_groups_and_angles_);
+    }
+  }
 }
 
 const FLUDSCommonData&
@@ -68,10 +82,11 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
                        unsigned int face_node_mapped,
                        size_t as_ss_idx)
 {
-  auto it = deplocs_outgoing_messages_.find({cell_global_id, face_id});
-  if (it == deplocs_outgoing_messages_.end())
+  const auto slot = common_data_.GetIncomingNonlocalFaceSlot(cell_global_id, face_id);
+  if (slot == CBC_FLUDSCommonData::invalid_face_slot or not incoming_nonlocal_psi_ready_[slot])
     return nullptr;
-  auto& psi = it->second;
+
+  auto& psi = incoming_nonlocal_psi_[slot];
   const size_t dof_map =
     face_node_mapped * num_groups_and_angles_ + //  Offset to start of data for face_node_mapped
     as_ss_idx * num_groups_;                    // Offset to start of data for angle_set_index
@@ -88,6 +103,30 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
   assert(psi_nonlocal_outgoing != nullptr);
   const size_t addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   return &(*psi_nonlocal_outgoing)[addr_offset];
+}
+
+void
+CBC_FLUDS::ClearLocalAndReceivePsi()
+{
+  std::fill(incoming_nonlocal_psi_ready_.begin(), incoming_nonlocal_psi_ready_.end(), 0);
+  deplocs_outgoing_messages_.clear();
+}
+
+std::vector<double>&
+CBC_FLUDS::PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
+                                      unsigned int face_id,
+                                      size_t data_size)
+{
+  const auto slot = common_data_.GetIncomingNonlocalFaceSlot(cell_global_id, face_id);
+  if (slot == CBC_FLUDSCommonData::invalid_face_slot)
+    throw std::logic_error("CBC_FLUDS received non-local psi for an unknown cell-face slot.");
+
+  auto& psi = incoming_nonlocal_psi_[slot];
+  if (psi.size() != data_size)
+    psi.resize(data_size);
+  incoming_nonlocal_psi_ready_[slot] = 1;
+
+  return psi;
 }
 
 } // namespace opensn
