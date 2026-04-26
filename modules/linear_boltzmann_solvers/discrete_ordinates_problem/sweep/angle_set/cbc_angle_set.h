@@ -34,7 +34,8 @@ public:
 
   AngleSetStatus FlushSendBuffers() override
   {
-    const bool all_messages_sent = async_comm_.SendData();
+    const bool all_messages_sent =
+      (not async_comm_.HasPendingCommunication()) or async_comm_.SendData();
     return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
   }
 
@@ -60,6 +61,7 @@ protected:
   const CBC_SPDS& cbc_spds_;
   std::vector<Task> current_task_list_;
   std::vector<std::uint64_t> ready_tasks_;
+  std::vector<std::uint64_t> received_task_buffer_;
   size_t num_completed_tasks = 0;
   CBC_AsynchronousCommunicator async_comm_;
 };

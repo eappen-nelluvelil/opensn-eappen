@@ -37,7 +37,7 @@ public:
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm);
 
-  virtual const FLUDSCommonData& GetCommonData() const;
+  const CBC_FLUDSCommonData& GetCommonData() const;
 
   /**
    * Given a local upwind neighbor cell, a node index on this cell, and an
@@ -63,6 +63,8 @@ public:
                       unsigned int face_id,
                       unsigned int face_node_mapped,
                       size_t as_ss_idx);
+  double*
+  NLUpwindPsiBySlot(size_t incoming_face_slot, unsigned int face_node_mapped, size_t as_ss_idx);
 
   /**
    * Given a pointer to a vector holding the non-local outgoing psi data for a face,

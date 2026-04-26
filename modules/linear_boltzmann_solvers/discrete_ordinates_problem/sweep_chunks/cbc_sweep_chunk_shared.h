@@ -41,7 +41,7 @@ CBCBindAngleSetContext(CBCSweepChunkContext& ctx,
                        bool surface_source_active,
                        AngleSet& angle_set)
 {
-  ctx.fluds = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
+  ctx.fluds = &static_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
   ctx.gs_size = groupset.GetNumGroups();
   ctx.gs_gi = groupset.first_group;
   ctx.surface_source_active = surface_source_active;

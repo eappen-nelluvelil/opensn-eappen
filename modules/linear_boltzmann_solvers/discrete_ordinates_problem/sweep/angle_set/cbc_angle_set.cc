@@ -54,16 +54,17 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
   sweep_chunk.SetAngleSet(*this);
 
-  auto tasks_who_received_data = async_comm_.ReceiveData();
+  async_comm_.ReceiveData(received_task_buffer_);
 
-  for (const std::uint64_t task_number : tasks_who_received_data)
+  for (const std::uint64_t task_number : received_task_buffer_)
   {
     if ((--current_task_list_[task_number].num_dependencies == 0) and
         (not current_task_list_[task_number].completed))
       ready_tasks_.push_back(task_number);
   }
 
-  async_comm_.SendData();
+  if (async_comm_.HasPendingCommunication())
+    async_comm_.SendData();
 
   // Check if boundaries allow for execution
   for (auto& [bid, boundary] : boundaries_)
@@ -88,11 +89,13 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
     cell_task.completed = true;
     ++num_completed_tasks;
-    async_comm_.SendData();
+    if (async_comm_.HasPendingCommunication())
+      async_comm_.SendData();
   }
 
   const bool all_tasks_completed = (num_completed_tasks == current_task_list_.size());
-  const bool all_messages_sent = async_comm_.SendData();
+  const bool all_messages_sent =
+    (not async_comm_.HasPendingCommunication()) or async_comm_.SendData();
 
   if (all_tasks_completed and all_messages_sent)
   {
@@ -111,6 +114,7 @@ CBC_AngleSet::ResetSweepBuffers()
 {
   current_task_list_.clear();
   ready_tasks_.clear();
+  received_task_buffer_.clear();
   num_completed_tasks = 0;
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();

@@ -41,8 +41,8 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
 
     for (size_t f = 0; f < cell.faces.size(); ++f)
     {
-      const auto slot =
-        common_data_.GetIncomingNonlocalFaceSlot(cell.global_id, static_cast<unsigned int>(f));
+      const auto slot = common_data_.GetIncomingNonlocalFaceSlotByLocalFace(
+        cell.local_id, static_cast<unsigned int>(f));
       if (slot == CBC_FLUDSCommonData::invalid_face_slot)
         continue;
 
@@ -52,7 +52,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
   }
 }
 
-const FLUDSCommonData&
+const CBC_FLUDSCommonData&
 CBC_FLUDS::GetCommonData() const
 {
   return common_data_;
@@ -83,6 +83,15 @@ CBC_FLUDS::NLUpwindPsi(uint64_t cell_global_id,
                        size_t as_ss_idx)
 {
   const auto slot = common_data_.GetIncomingNonlocalFaceSlot(cell_global_id, face_id);
+  return NLUpwindPsiBySlot(slot, face_node_mapped, as_ss_idx);
+}
+
+double*
+CBC_FLUDS::NLUpwindPsiBySlot(size_t incoming_face_slot,
+                             unsigned int face_node_mapped,
+                             size_t as_ss_idx)
+{
+  const auto slot = incoming_face_slot;
   if (slot == CBC_FLUDSCommonData::invalid_face_slot or not incoming_nonlocal_psi_ready_[slot])
     return nullptr;
 
