@@ -21,15 +21,15 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   const auto& face_orientations = spds.GetCellFaceOrientations();
   incoming_nonlocal_face_slot_offsets_.resize(grid.local_cells.size(), 0);
 
-  size_t num_local_faces = 0;
-  size_t num_incoming_nonlocal_faces = 0;
+  std::size_t num_local_faces = 0;
+  std::size_t num_incoming_nonlocal_faces = 0;
   for (const auto& cell : grid.local_cells)
   {
     assert(cell.local_id < incoming_nonlocal_face_slot_offsets_.size());
     incoming_nonlocal_face_slot_offsets_[cell.local_id] = num_local_faces;
     num_local_faces += cell.faces.size();
 
-    for (size_t f = 0; f < cell.faces.size(); ++f)
+    for (std::size_t f = 0; f < cell.faces.size(); ++f)
     {
       const auto& face = cell.faces[f];
       if ((not face.has_neighbor) or (face.IsNeighborLocal(&grid)))
@@ -43,13 +43,13 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
     }
   }
 
-  incoming_nonlocal_face_slots_by_local_face_.assign(num_local_faces, invalid_face_slot);
+  incoming_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
   incoming_nonlocal_face_slots_.reserve(num_incoming_nonlocal_faces);
 
   for (const auto& cell : grid.local_cells)
   {
     const auto local_face_slot_offset = incoming_nonlocal_face_slot_offsets_[cell.local_id];
-    for (size_t f = 0; f < cell.faces.size(); ++f)
+    for (std::size_t f = 0; f < cell.faces.size(); ++f)
     {
       const auto& face = cell.faces[f];
       const auto orientation = face_orientations[cell.local_id][f];
@@ -74,7 +74,7 @@ CBC_FLUDSCommonData::GetIncomingNonlocalFaceSlot(std::uint64_t cell_global_id,
                                                  unsigned int face_id) const
 {
   const auto it = incoming_nonlocal_face_slots_.find(CellFaceKey{cell_global_id, face_id});
-  return it == incoming_nonlocal_face_slots_.end() ? invalid_face_slot : it->second;
+  return it == incoming_nonlocal_face_slots_.end() ? INVALID_FACE_SLOT : it->second;
 }
 
 size_t

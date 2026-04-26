@@ -11,34 +11,71 @@
 namespace opensn
 {
 
+/// Reusable per-sweep-chunk context for binding angle-set and cell state.
 struct CBCSweepChunkContext
 {
+  /// CBC flux data accessor for the active angle set.
   CBC_FLUDS* fluds = nullptr;
 
+  /// Number of groups in the groupset.
   size_t gs_size = 0;
+
+  /// First group index in the groupset.
   unsigned int gs_gi = 0;
+
+  /// Number of angles in the active angle set.
   size_t num_angles_in_as = 0;
+
+  /// Number of groups in the active angle set.
   unsigned int group_stride = 0;
+
+  /// Angle-set angle-group stride.
   size_t group_angle_stride = 0;
+
+  /// Whether boundary surface sources are active.
   bool surface_source_active = false;
 
+  /// Cell currently bound to the sweep chunk.
   const Cell* cell = nullptr;
+
+  /// Local ID of the cell currently bound to the sweep chunk.
   std::uint32_t cell_local_id = 0;
+
+  /// Cell mapping for the current cell.
   const CellMapping* cell_mapping = nullptr;
+
+  /// Transport view for the current cell.
   CellLBSView* cell_transport_view = nullptr;
+
+  /// Number of faces on the current cell.
   size_t cell_num_faces = 0;
+
+  /// Number of nodes on the current cell.
   size_t cell_num_nodes = 0;
 
+  /// Volume gradient-shape matrix for the current cell.
   const DenseMatrix<Vector3>* G = nullptr;
+
+  /// Volume mass matrix for the current cell.
   const DenseMatrix<double>* M = nullptr;
+
+  /// Surface mass matrices for the current cell.
   const std::vector<DenseMatrix<double>>* M_surf = nullptr;
+
+  /// Surface shape-function integrals for the current cell.
   const std::vector<Vector<double>>* IntS_shapeI = nullptr;
 
+  /// Reusable outgoing nonlocal face payload buffers.
   std::vector<CBCOutgoingFaceBuffer> outgoing_nonlocal_face_buffers;
+
+  /// Outgoing nonlocal face payload lookup indexed by local face.
   std::vector<CBCOutgoingFaceBuffer*> outgoing_nonlocal_face_buffer_by_face;
+
+  /// Number of outgoing nonlocal face payload buffers used by the current cell.
   size_t num_outgoing_nonlocal_face_buffers = 0;
 };
 
+/// Bind angle-set state into a reusable CBC sweep-chunk context.
 inline void
 CBCBindAngleSetContext(CBCSweepChunkContext& ctx,
                        const LBSGroupset& groupset,
@@ -54,6 +91,7 @@ CBCBindAngleSetContext(CBCSweepChunkContext& ctx,
   ctx.group_angle_stride = ctx.group_stride * ctx.num_angles_in_as;
 }
 
+/// Bind cell state into a reusable CBC sweep-chunk context.
 inline void
 CBCBindCellContext(CBCSweepChunkContext& ctx,
                    const SpatialDiscretization& discretization,
@@ -75,6 +113,7 @@ CBCBindCellContext(CBCSweepChunkContext& ctx,
   ctx.IntS_shapeI = &unit_mats.intS_shapeI;
 }
 
+/// Create the bound data view consumed by CBC sweep kernels.
 inline CBCSweepData
 MakeCBCSweepData(const SpatialDiscretization& discretization,
                  const std::vector<double>& source_moments,

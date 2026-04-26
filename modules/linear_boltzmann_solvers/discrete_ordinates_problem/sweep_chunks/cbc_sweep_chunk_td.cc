@@ -74,9 +74,8 @@ CBCSweepChunkTD::SetAngleSet(AngleSet& angle_set)
 }
 
 void
-CBCSweepChunkTD::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
+CBCSweepChunkTD::SetCell(const Cell* cell_ptr, AngleSet&)
 {
-  static_cast<void>(angle_set);
   CBCBindCellContext(ctx_, discretization_, unit_cell_matrices_, cell_transport_views_, cell_ptr);
 }
 

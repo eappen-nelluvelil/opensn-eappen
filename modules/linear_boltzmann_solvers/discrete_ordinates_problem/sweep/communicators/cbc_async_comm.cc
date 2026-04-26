@@ -5,13 +5,15 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_comm_set.h"
-#include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <cassert>
 #include <cstring>
 #include <type_traits>
 #include <utility>
+
+namespace opensn
+{
 
 namespace
 {
@@ -29,7 +31,7 @@ AppendMessageValue(std::vector<std::byte>& buffer, const T& value)
 
 template <typename T>
 T
-ReadMessageValue(const std::vector<std::byte>& buffer, size_t& offset)
+ReadMessageValue(const std::vector<std::byte>& buffer, std::size_t& offset)
 {
   assert(offset + sizeof(T) <= buffer.size());
   T value;
@@ -39,9 +41,6 @@ ReadMessageValue(const std::vector<std::byte>& buffer, size_t& offset)
 }
 
 } // namespace
-
-namespace opensn
-{
 
 CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
                                                            FLUDS& fluds,
@@ -57,6 +56,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
     receive_source_ranks_.push_back(comm_set_.MapIonJ(location, location_id_));
 
   send_peers_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
+  open_send_buffer_indices_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
 }
 
 const CBC_AsynchronousCommunicator::SendPeer&
@@ -101,22 +101,22 @@ void
 CBC_AsynchronousCommunicator::QueueDownwindMessage(int destination,
                                                    std::uint64_t cell_global_id,
                                                    unsigned int face_id,
-                                                   std::span<const double> data)
+                                                   std::span<const double> payload)
 {
   auto& raw = GetOpenSendBuffer(destination).data;
-  const size_t data_size = data.size();
-  raw.reserve(raw.size() + sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(size_t) +
+  const auto data_size = payload.size();
+  raw.reserve(raw.size() + sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t) +
               data_size * sizeof(double));
 
   AppendMessageValue(raw, cell_global_id);
   AppendMessageValue(raw, face_id);
   AppendMessageValue(raw, data_size);
 
-  const size_t old_size = raw.size();
-  const size_t num_bytes = data_size * sizeof(double);
+  const auto old_size = raw.size();
+  const auto num_bytes = data_size * sizeof(double);
   raw.resize(old_size + num_bytes);
   if (num_bytes != 0)
-    std::memcpy(raw.data() + old_size, data.data(), num_bytes);
+    std::memcpy(raw.data() + old_size, payload.data(), num_bytes);
 }
 
 bool
@@ -143,10 +143,10 @@ CBC_AsynchronousCommunicator::SendData()
       else
         all_messages_sent = false;
     }
-  } // for item in buffer
+  }
 
-  size_t next_active = 0;
-  for (size_t i = 0; i < send_buffer_.size(); ++i)
+  std::size_t next_active = 0;
+  for (std::size_t i = 0; i < send_buffer_.size(); ++i)
   {
     if (send_buffer_[i].completed)
     {
@@ -177,10 +177,10 @@ CBC_AsynchronousCommunicator::Reset()
   open_send_buffer_indices_.clear();
 }
 
-std::vector<uint64_t>
+std::vector<std::uint64_t>
 CBC_AsynchronousCommunicator::ReceiveData()
 {
-  std::vector<uint64_t> cells_who_received_data;
+  std::vector<std::uint64_t> cells_who_received_data;
   ReceiveData(cells_who_received_data);
   return cells_who_received_data;
 }
@@ -195,25 +195,25 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint64_t>& cells_who_
     cells_who_received_data.reserve(receive_source_ranks_.size());
 
   const auto tag = static_cast<int>(angle_set_id_);
-  for (int source_rank : receive_source_ranks_)
+  for (const auto source_rank : receive_source_ranks_)
   {
     mpi::Status status;
     while (receive_comm_.iprobe(source_rank, tag, status))
     {
-      int num_items = status.count<std::byte>();
+      const auto num_items = status.count<std::byte>();
       receive_buffer_.resize(num_items);
       receive_comm_.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
 
-      size_t offset = 0;
+      std::size_t offset = 0;
 
       while (offset < receive_buffer_.size())
       {
-        const auto cell_global_id = ReadMessageValue<uint64_t>(receive_buffer_, offset);
+        const auto cell_global_id = ReadMessageValue<std::uint64_t>(receive_buffer_, offset);
         const auto face_id = ReadMessageValue<unsigned int>(receive_buffer_, offset);
-        const auto data_size = ReadMessageValue<size_t>(receive_buffer_, offset);
+        const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
 
         auto& psi_data = fluds_.PrepareIncomingNonlocalPsi(cell_global_id, face_id, data_size);
-        const size_t num_bytes = data_size * sizeof(double);
+        const auto num_bytes = data_size * sizeof(double);
         assert(offset + num_bytes <= receive_buffer_.size());
         std::memcpy(psi_data.data(), receive_buffer_.data() + offset, num_bytes);
         offset += num_bytes;
@@ -221,7 +221,7 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint64_t>& cells_who_
         cells_who_received_data.push_back(
           fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
       } // while not at end of buffer
-    } // Process each message embedded in buffer
+    }
   }
 }
 

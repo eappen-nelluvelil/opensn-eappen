@@ -31,7 +31,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
   const auto& sigma_t = data.xs.at(data.cell.block_id)->GetSigmaTotal();
 
   constexpr size_t matrix_size = static_cast<size_t>(NumNodes) * static_cast<size_t>(NumNodes);
-  auto idx = [](size_t i, size_t j) -> size_t { return i * NumNodes + j; };
+  constexpr auto idx = [](size_t i, size_t j) -> size_t { return i * NumNodes + j; };
 
   std::array<double, matrix_size> mass_matrix{};
   PRAGMA_UNROLL
@@ -82,7 +82,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
   {
     const auto direction_num = as_angle_indices[as_ss_idx];
-    const auto omega = groupset.quadrature->omegas[direction_num];
+    const auto& omega = groupset.quadrature->omegas[direction_num];
     const auto wt = groupset.quadrature->weights[direction_num];
 
     std::fill(b.begin(), b.end(), 0.0);
@@ -112,7 +112,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
                                              data.cell_local_id, static_cast<unsigned int>(f));
       const auto incoming_nonlocal_slot =
         (is_boundary_face or is_local_face)
-          ? CBC_FLUDSCommonData::invalid_face_slot
+          ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
           : data.fluds.GetCommonData().GetIncomingNonlocalFaceSlotByLocalFace(
               data.cell_local_id, static_cast<unsigned int>(f));
 
@@ -175,7 +175,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
           sigma_tg += tau_gsg[gsg];
         sigma_block[rel] = sigma_tg;
 
-        double* __restrict bg = &b[static_cast<std::size_t>(gsg) * NumNodes];
+        auto* __restrict bg = &b[static_cast<std::size_t>(gsg) * NumNodes];
         for (unsigned int m = 0; m < data.num_moments; ++m)
         {
           const double w = m2d_row[m];
@@ -186,7 +186,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
           for (size_t i = 0; i < NumNodes; ++i)
           {
             double value = 0.0;
-            const double* row = &mass_matrix[idx(i, 0)];
+            const auto* row = &mass_matrix[idx(i, 0)];
             PRAGMA_UNROLL
             for (size_t j = 0; j < NumNodes; ++j)
               value += row[j] * nodal_source[j];
@@ -202,12 +202,12 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
           for (size_t gsg = g0; gsg < g1; ++gsg)
           {
             const double tau = tau_gsg[gsg];
-            double* __restrict bg = &b[gsg * NumNodes];
+            auto* __restrict bg = &b[gsg * NumNodes];
 
             for (size_t i = 0; i < NumNodes; ++i)
             {
               double value = 0.0;
-              const double* row = &mass_matrix[idx(i, 0)];
+              const auto* row = &mass_matrix[idx(i, 0)];
               PRAGMA_UNROLL
               for (size_t j = 0; j < NumNodes; ++j)
               {
@@ -248,7 +248,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
             A[idx(i, j)] = Amat[idx(i, j)] + sigma_tg * mass_matrix[idx(i, j)];
         }
 
-        double* __restrict bg = &b[gsg * NumNodes];
+        auto* __restrict bg = &b[gsg * NumNodes];
 
         for (size_t pivot = 0; pivot < NumNodes; ++pivot)
         {
@@ -274,7 +274,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
       for (size_t gsg = g0; gsg < g1; ++gsg)
       {
-        const double* __restrict bg = &b[gsg * NumNodes];
+        const auto* __restrict bg = &b[gsg * NumNodes];
         for (unsigned int m = 0; m < data.num_moments; ++m)
         {
           const double w = d2m_row[m];
@@ -290,7 +290,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
 
     if (data.save_angular_flux)
     {
-      double* psi_new = &data.destination_psi[data.discretization.MapDOFLocal(
+      auto* psi_new = &data.destination_psi[data.discretization.MapDOFLocal(
         data.cell, 0, groupset.psi_uk_man_, 0, 0)];
 
       double theta = 1.0;
@@ -334,9 +334,9 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
       const auto& IntF_shapeI = data.IntS_shapeI[f];
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
-      auto* psi_nonlocal_outgoing = (not is_boundary_face and not is_local_face)
-                                      ? &data.outgoing_nonlocal_face_buffer_by_face[f]->data
-                                      : nullptr;
+      std::vector<double>* psi_nonlocal_outgoing = nullptr;
+      if (not is_boundary_face and not is_local_face)
+        psi_nonlocal_outgoing = &data.outgoing_nonlocal_face_buffer_by_face[f]->data;
 
       const double mu_wt_f = wt * face_mu_values[f];
 

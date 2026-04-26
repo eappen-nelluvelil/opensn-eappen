@@ -16,64 +16,143 @@
 namespace opensn
 {
 
+/// Staging buffer for one outgoing nonlocal CBC face payload.
 struct CBCOutgoingFaceBuffer
 {
+  /// Destination OpenSn location.
   int destination = 0;
+
+  /// Global cell ID expected by the downwind location.
   std::uint64_t cell_global_id = 0;
+
+  /// Face ID expected by the downwind location.
   unsigned int face_id = 0;
+
+  /// Number of valid angular-flux entries in `data`.
   size_t data_size = 0;
+
+  /// Reusable angular-flux payload storage.
   std::vector<double> data;
 
+  /// Resize the valid payload while preserving reusable capacity.
   void Prepare(size_t size)
   {
     data_size = size;
-    data.resize(size);
+    if (data.size() != size)
+      data.resize(size);
   }
 };
 
+/// Bound references and metadata used by CBC sweep kernels.
 struct CBCSweepData
 {
+  /// Spatial discretization used for DOF lookup.
   const SpatialDiscretization& discretization;
+
+  /// Source moment vector.
   const std::vector<double>& source_moments;
+
+  /// Groupset being swept.
   const LBSGroupset& groupset;
+
+  /// Cross sections keyed by block ID.
   const BlockID2XSMap& xs;
+
+  /// Number of angular moments.
   unsigned int num_moments;
+
+  /// Maximum cell DOFs used for dense stack temporaries.
   unsigned int max_num_cell_dofs;
+
+  /// Whether angular fluxes are saved to the global psi vector.
   bool save_angular_flux;
+
+  /// Groupset angle-group stride in the global psi vector.
   size_t groupset_angle_group_stride;
+
+  /// Groupset group stride in the global psi vector.
   size_t groupset_group_stride;
+
+  /// Destination scalar-flux moment vector.
   std::vector<double>& destination_phi;
+
+  /// Destination angular-flux vector.
   std::vector<double>& destination_psi;
+
+  /// Whether boundary surface sources are active.
   bool surface_source_active;
+
+  /// Whether transient RHS time terms are included.
   bool include_rhs_time_term;
+
+  /// Owning discrete ordinates problem.
   DiscreteOrdinatesProblem& problem;
+
+  /// Previous-step angular flux vector for transient sweeps.
   const std::vector<double>* psi_old;
+
+  /// Number of groups solved in one block.
   unsigned int group_block_size;
 
+  /// CBC flux data accessor.
   CBC_FLUDS& fluds;
+
+  /// Cell currently being swept.
   const Cell& cell;
+
+  /// Local ID of the cell currently being swept.
   std::uint32_t cell_local_id;
+
+  /// Cell mapping for the current cell.
   const CellMapping& cell_mapping;
+
+  /// Transport view for the current cell.
   CellLBSView& cell_transport_view;
+
+  /// Number of faces on the current cell.
   size_t cell_num_faces;
+
+  /// Number of nodes on the current cell.
   size_t cell_num_nodes;
 
+  /// Number of groups in the groupset.
   size_t gs_size;
+
+  /// First group index in the groupset.
   unsigned int gs_gi;
+
+  /// Number of angles in the active angle set.
   size_t num_angles_in_as;
+
+  /// Number of groups in the active angle set.
   unsigned int group_stride;
+
+  /// Angle-set angle-group stride.
   size_t group_angle_stride;
 
+  /// Volume gradient-shape matrix for the current cell.
   const DenseMatrix<Vector3>& G;
+
+  /// Volume mass matrix for the current cell.
   const DenseMatrix<double>& M;
+
+  /// Surface mass matrices for the current cell.
   const std::vector<DenseMatrix<double>>& M_surf;
+
+  /// Surface shape-function integrals for the current cell.
   const std::vector<Vector<double>>& IntS_shapeI;
 
+  /// Reusable outgoing nonlocal face payload buffers.
   std::vector<CBCOutgoingFaceBuffer>& outgoing_nonlocal_face_buffers;
+
+  /// Outgoing nonlocal face payload lookup indexed by local face.
   std::vector<CBCOutgoingFaceBuffer*>& outgoing_nonlocal_face_buffer_by_face;
+
+  /// Number of outgoing nonlocal face payload buffers used by the current cell.
   size_t& num_outgoing_nonlocal_face_buffers;
 };
 
+/// Prepare reusable outgoing nonlocal face payload buffers for the current cell.
 inline void
 CBCPrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
                                       const std::vector<FaceOrientation>& face_orientations)
@@ -108,6 +187,7 @@ CBCPrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
   }
 }
 
+/// Queue prepared outgoing nonlocal face payloads for asynchronous transmission.
 inline void
 CBCQueueOutgoingNonlocalFaceBuffers(CBCSweepData& data, CBC_AsynchronousCommunicator& async_comm)
 {
@@ -121,6 +201,10 @@ CBCQueueOutgoingNonlocalFaceBuffers(CBCSweepData& data, CBC_AsynchronousCommunic
   }
 }
 
+/**
+ * Sweep one host CBC cell using the generic dense-kernel path.
+ * \tparam time_dependent Whether transient time terms are assembled.
+ */
 template <bool time_dependent>
 inline void
 CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
@@ -164,7 +248,7 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
   for (size_t as_ss_idx = 0; as_ss_idx < data.num_angles_in_as; ++as_ss_idx)
   {
     const auto direction_num = as_angle_indices[as_ss_idx];
-    const auto omega = groupset.quadrature->omegas[direction_num];
+    const auto& omega = groupset.quadrature->omegas[direction_num];
     const auto wt = groupset.quadrature->weights[direction_num];
 
     for (size_t gsg = 0; gsg < data.gs_size; ++gsg)
@@ -192,7 +276,7 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
                                              data.cell_local_id, static_cast<unsigned int>(f));
       const auto incoming_nonlocal_slot =
         (is_boundary_face or is_local_face)
-          ? CBC_FLUDSCommonData::invalid_face_slot
+          ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
           : data.fluds.GetCommonData().GetIncomingNonlocalFaceSlotByLocalFace(
               data.cell_local_id, static_cast<unsigned int>(f));
 
@@ -334,9 +418,9 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
       const auto& IntF_shapeI = data.IntS_shapeI[f];
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
-      auto* psi_nonlocal_outgoing = (not is_boundary_face and not is_local_face)
-                                      ? &data.outgoing_nonlocal_face_buffer_by_face[f]->data
-                                      : nullptr;
+      std::vector<double>* psi_nonlocal_outgoing = nullptr;
+      if (not is_boundary_face and not is_local_face)
+        psi_nonlocal_outgoing = &data.outgoing_nonlocal_face_buffer_by_face[f]->data;
 
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
       {

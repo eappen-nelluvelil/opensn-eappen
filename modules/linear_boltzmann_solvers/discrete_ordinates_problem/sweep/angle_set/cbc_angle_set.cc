@@ -2,13 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
-#include "framework/mesh/mesh_continuum/mesh_continuum.h"
-#include "framework/data_types/range.h"
-#include "framework/logging/log.h"
-#include "framework/runtime.h"
 #include "caliper/cali.h"
 
 namespace opensn
@@ -31,13 +26,14 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
 AsynchronousCommunicator*
 CBC_AngleSet::GetCommunicator()
 {
-  return static_cast<AsynchronousCommunicator*>(&async_comm_);
+  return &async_comm_;
 }
 
 AngleSetStatus
 CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
 {
   CALI_CXX_MARK_SCOPE("CBC_AngleSet::AngleSetAdvance");
+  static_cast<void>(permission);
 
   if (executed_)
     return AngleSetStatus::FINISHED;
@@ -47,7 +43,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     current_task_list_ = cbc_spds_.GetTaskList();
     // Build initial ready queue
     ready_tasks_.reserve(current_task_list_.size());
-    for (size_t i = 0; i < current_task_list_.size(); ++i)
+    for (std::size_t i = 0; i < current_task_list_.size(); ++i)
       if ((current_task_list_[i].num_dependencies == 0) and (not current_task_list_[i].completed))
         ready_tasks_.push_back(i);
   }
@@ -64,11 +60,11 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   }
 
   if (async_comm_.HasPendingCommunication())
-    async_comm_.SendData();
+    static_cast<void>(async_comm_.SendData());
 
   // Check if boundaries allow for execution
-  for (auto& [bid, boundary] : boundaries_)
-    if (not boundary->CheckAnglesReadyStatus(angles_))
+  for (const auto& boundary_entry : boundaries_)
+    if (not boundary_entry.second->CheckAnglesReadyStatus(angles_))
       return AngleSetStatus::NOT_FINISHED;
 
   while (not ready_tasks_.empty())
@@ -81,16 +77,14 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     sweep_chunk.Sweep(*this);
 
     for (const auto& local_task_num : cell_task.successors)
-    {
       if ((--current_task_list_[local_task_num].num_dependencies == 0) and
           (not current_task_list_[local_task_num].completed))
         ready_tasks_.push_back(local_task_num);
-    }
 
     cell_task.completed = true;
     ++num_completed_tasks;
     if (async_comm_.HasPendingCommunication())
-      async_comm_.SendData();
+      static_cast<void>(async_comm_.SendData());
   }
 
   const bool all_tasks_completed = (num_completed_tasks == current_task_list_.size());
@@ -100,8 +94,8 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (all_tasks_completed and all_messages_sent)
   {
     // Update boundary readiness
-    for (auto& [bid, boundary] : boundaries_)
-      boundary->UpdateAnglesReadyStatus(angles_);
+    for (const auto& boundary_entry : boundaries_)
+      boundary_entry.second->UpdateAnglesReadyStatus(angles_);
     executed_ = true;
     return AngleSetStatus::FINISHED;
   }

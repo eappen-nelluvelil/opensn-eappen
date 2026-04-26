@@ -18,94 +18,116 @@ class SpatialDiscretization;
 class Cell;
 
 /**
- * Flux data structures (FLUDS) specific to the cell-by-cell (CBC) sweep algorithm
- *
- * This class manages the storage and access of angular flux data during a CBC sweep
- *
- * It provides methods to access:
- * - Upwind angular flux data from local neighbor cells
- * - Storage locations for downwind angular flux data for the current cell
- * - Upwind angular flux data received from remote MPI ranks
+ * Flux data structures for the host cell-by-cell sweep algorithm.
+ * This class manages local and nonlocal angular-flux storage during a CBC sweep.
  */
 class CBC_FLUDS : public FLUDS
 {
 public:
+  /// Construct host CBC flux data structures.
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
             const CBC_FLUDSCommonData& common_data,
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm);
 
-  const CBC_FLUDSCommonData& GetCommonData() const;
+  /// Return immutable common CBC FLUDS metadata.
+  [[nodiscard]] const CBC_FLUDSCommonData& GetCommonData() const;
 
   /**
-   * Given a local upwind neighbor cell, a node index on this cell, and an
-   * angleset subset index, this function returns a pointer to
-   * the start of the group data for the specified node and angle.
+   * Return local upwind angular-flux group data.
+   * The returned pointer addresses the first group for the requested node and angle-set subset.
    */
-  double* UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
+  [[nodiscard]] double*
+  UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
 
   /**
-   * Given a local cell, a node index on this cell, and an angleset subset index,
-   * this function returns a pointer to the start of the group data for the specified
-   * node and angle for writing its just solved angular fluxes.
+   * Return local outgoing angular-flux group data.
+   * The returned pointer addresses storage for writing the just-solved node and angle-set subset.
    */
-  double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
+  [[nodiscard]] double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
 
   /**
-   * Given a remote upwind cell's global ID, a face ID on this cell,
-   * a node index on this face, and an angleset subset index,
-   * this function returns a pointer to the start of the group data for the specified
-   * face node and angle.
+   * Return nonlocal upwind angular-flux group data.
+   * The returned pointer is null until the remote payload has been received.
    */
-  double* NLUpwindPsi(uint64_t cell_global_id,
-                      unsigned int face_id,
-                      unsigned int face_node_mapped,
-                      size_t as_ss_idx);
-  double*
+  [[nodiscard]] double* NLUpwindPsi(std::uint64_t cell_global_id,
+                                    unsigned int face_id,
+                                    unsigned int face_node_mapped,
+                                    size_t as_ss_idx);
+
+  /// Return nonlocal upwind angular-flux group data by incoming face slot.
+  [[nodiscard]] double*
   NLUpwindPsiBySlot(size_t incoming_face_slot, unsigned int face_node_mapped, size_t as_ss_idx);
 
   /**
-   * Given a pointer to a vector holding the non-local outgoing psi data for a face,
-   * a node index on this face, and an angleset subset index,
-   * this function returns a pointer to the start of the group data for the specified
-   * face node and angle.
+   * Return nonlocal outgoing angular-flux group data.
+   * The returned pointer addresses a caller-owned face payload buffer.
    */
-  double*
+  [[nodiscard]] double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
+  /// Clear local and received nonlocal angular-flux storage.
   void ClearLocalAndReceivePsi() override;
+
+  /// Prepare storage for an incoming nonlocal face payload.
   std::vector<double>& PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
                                                   unsigned int face_id,
                                                   size_t data_size) override;
+
+  /// Clear outgoing angular-flux storage.
   void ClearSendPsi() override {}
+
+  /// Allocate internal local angular-flux storage.
   void AllocateInternalLocalPsi() override {}
+
+  /// Allocate outgoing angular-flux storage.
   void AllocateOutgoingPsi() override {}
 
+  /// Allocate delayed local angular-flux storage.
   void AllocateDelayedLocalPsi() override {}
+
+  /// Allocate pre-location outgoing angular-flux storage.
   void AllocatePrelocIOutgoingPsi() override {}
+
+  /// Allocate delayed pre-location outgoing angular-flux storage.
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
 protected:
+  /// Common CBC FLUDS metadata.
   const CBC_FLUDSCommonData& common_data_;
+
+  /// Unknown manager for angular fluxes.
   const UnknownManager& psi_uk_man_;
+
+  /// Spatial discretization used for local DOF lookup.
   const SpatialDiscretization& sdm_;
+
+  /// Number of angles in the groupset quadrature.
   size_t num_angles_in_gs_quadrature_;
+
+  /// Number of quadrature-local DOFs.
   size_t num_quadrature_local_dofs_;
+
+  /// Number of local spatial DOFs.
   size_t num_local_spatial_dofs_;
+
+  /// Number of entries in local angular-flux storage.
   size_t local_psi_data_size_;
 
   /**
-   * Layout for storage for local angular fluxes:
+   * Local angular-flux storage.
    * spatial DOF major -> angle in angleset major -> group in groupset major
    */
   std::vector<double> local_psi_data_;
 
-  std::vector<std::vector<double>> boundryI_incoming_psi_;
+  /// Incoming nonlocal angular-flux payload storage indexed by face slot.
   std::vector<std::vector<double>> incoming_nonlocal_psi_;
+
+  /// Readiness flags for incoming nonlocal angular-flux payload slots.
   std::vector<unsigned char> incoming_nonlocal_psi_ready_;
 
-  /// Pre-computed start index into local_psi_data_ for each local cell
+  /// Precomputed start index into local angular-flux storage for each local cell.
   std::vector<size_t> cell_psi_start_;
 };
 
