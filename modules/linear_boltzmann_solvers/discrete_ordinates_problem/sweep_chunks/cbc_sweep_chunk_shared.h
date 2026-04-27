@@ -73,6 +73,18 @@ struct CBCSweepChunkContext
 
   /// Number of outgoing nonlocal face payload buffers used by the current cell.
   size_t num_outgoing_nonlocal_face_buffers = 0;
+
+  /// Reusable right-hand-side storage for fixed-node CBC kernels.
+  std::vector<double> fixed_rhs_buffer;
+
+  /// Reusable cross-section block storage for fixed-node CBC kernels.
+  std::vector<double> fixed_sigma_block;
+
+  /// Reusable moment/node DOF map for fixed-node CBC kernels.
+  std::vector<size_t> fixed_moment_dof_map;
+
+  /// Reusable angle-dependent face-normal dot products.
+  std::vector<double> face_mu_values;
 };
 
 /// Bind angle-set state into a reusable CBC sweep-chunk context.
@@ -166,7 +178,11 @@ MakeCBCSweepData(const SpatialDiscretization& discretization,
                       *ctx.IntS_shapeI,
                       ctx.outgoing_nonlocal_face_buffers,
                       ctx.outgoing_nonlocal_face_buffer_by_face,
-                      ctx.num_outgoing_nonlocal_face_buffers};
+                      ctx.num_outgoing_nonlocal_face_buffers,
+                      ctx.fixed_rhs_buffer,
+                      ctx.fixed_sigma_block,
+                      ctx.fixed_moment_dof_map,
+                      ctx.face_mu_values};
 }
 
 } // namespace opensn

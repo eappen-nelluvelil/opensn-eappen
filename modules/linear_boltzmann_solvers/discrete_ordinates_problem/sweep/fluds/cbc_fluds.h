@@ -24,6 +24,16 @@ class Cell;
 class CBC_FLUDS : public FLUDS
 {
 public:
+  /// Prepared incoming nonlocal angular-flux payload and the cell it unlocks.
+  struct IncomingNonlocalPsi
+  {
+    /// Incoming face angular-flux payload storage.
+    std::vector<double>& psi;
+
+    /// Local cell ID whose CBC task received one dependency.
+    std::uint32_t cell_local_id = 0;
+  };
+
   /// Construct host CBC flux data structures.
   CBC_FLUDS(unsigned int num_groups,
             size_t num_angles,
@@ -74,6 +84,11 @@ public:
   std::vector<double>& PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
                                                   unsigned int face_id,
                                                   size_t data_size) override;
+
+  /// Prepare storage for an incoming payload and return the local task it unlocks.
+  IncomingNonlocalPsi PrepareIncomingNonlocalPsiAndGetCell(std::uint64_t cell_global_id,
+                                                           unsigned int face_id,
+                                                           size_t data_size);
 
   /// Clear outgoing angular-flux storage.
   void ClearSendPsi() override {}

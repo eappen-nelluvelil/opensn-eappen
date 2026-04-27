@@ -36,6 +36,9 @@ public:
   [[nodiscard]] size_t GetIncomingNonlocalFaceSlotByLocalFace(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const;
 
+  /// Return the local cell whose task is unlocked by an incoming nonlocal face slot.
+  [[nodiscard]] std::uint32_t GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot) const;
+
   /// Invalid incoming nonlocal face slot sentinel.
   static constexpr size_t INVALID_FACE_SLOT = std::numeric_limits<size_t>::max();
 
@@ -55,6 +58,9 @@ private:
 
   /// Incoming nonlocal face slot lookup indexed by local face.
   std::vector<size_t> incoming_nonlocal_face_slots_by_local_face_;
+
+  /// Local cell IDs indexed by incoming nonlocal face slot.
+  std::vector<std::uint32_t> incoming_nonlocal_face_local_cells_;
 };
 
 } // namespace opensn

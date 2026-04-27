@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_comm_set.h"
@@ -20,13 +21,12 @@ namespace
 
 template <typename T>
 void
-AppendMessageValue(std::vector<std::byte>& buffer, const T& value)
+WriteMessageValue(std::byte*& buffer, const T& value)
 {
   static_assert(std::is_trivially_copyable_v<T>,
                 "CBC message serialization requires trivially copyable values.");
-  const auto offset = buffer.size();
-  buffer.resize(offset + sizeof(T));
-  std::memcpy(buffer.data() + offset, &value, sizeof(T));
+  std::memcpy(buffer, &value, sizeof(T));
+  buffer += sizeof(T);
 }
 
 template <typename T>
@@ -48,7 +48,8 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   : AsynchronousCommunicator(fluds, comm_set),
     angle_set_id_(angle_set_id),
     location_id_(opensn::mpi_comm.rank()),
-    receive_comm_(comm_set.LocICommunicator(location_id_))
+    receive_comm_(comm_set.LocICommunicator(location_id_)),
+    cbc_fluds_(static_cast<CBC_FLUDS&>(fluds))
 {
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   receive_source_ranks_.reserve(location_dependencies.size());
@@ -89,7 +90,10 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(int destination)
 
   const auto buffer_index = send_buffer_.size() - 1;
   auto& buffer = send_buffer_.back();
+  const auto& peer = GetSendPeer(destination);
   buffer.destination = destination;
+  buffer.comm = peer.comm;
+  buffer.rank = peer.rank;
   buffer.send_initiated = false;
   buffer.completed = false;
   buffer.data.clear();
@@ -105,18 +109,21 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(int destination,
 {
   auto& raw = GetOpenSendBuffer(destination).data;
   const auto data_size = payload.size();
-  raw.reserve(raw.size() + sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t) +
-              data_size * sizeof(double));
-
-  AppendMessageValue(raw, cell_global_id);
-  AppendMessageValue(raw, face_id);
-  AppendMessageValue(raw, data_size);
-
+  constexpr size_t header_size =
+    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t);
   const auto old_size = raw.size();
   const auto num_bytes = data_size * sizeof(double);
-  raw.resize(old_size + num_bytes);
+  const auto required_size = old_size + header_size + num_bytes;
+  if (raw.capacity() < required_size)
+    raw.reserve(required_size);
+  raw.resize(required_size);
+
+  auto* write_ptr = raw.data() + old_size;
+  WriteMessageValue(write_ptr, cell_global_id);
+  WriteMessageValue(write_ptr, face_id);
+  WriteMessageValue(write_ptr, data_size);
   if (num_bytes != 0)
-    std::memcpy(raw.data() + old_size, payload.data(), num_bytes);
+    std::memcpy(write_ptr, payload.data(), num_bytes);
 }
 
 bool
@@ -130,9 +137,8 @@ CBC_AsynchronousCommunicator::SendData()
   {
     if (not buffer_item.send_initiated)
     {
-      const auto& peer = GetSendPeer(buffer_item.destination);
       const auto tag = static_cast<int>(angle_set_id_);
-      buffer_item.mpi_request = peer.comm->isend(peer.rank, tag, buffer_item.data);
+      buffer_item.mpi_request = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
       buffer_item.send_initiated = true;
     }
 
@@ -212,14 +218,14 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint64_t>& cells_who_
         const auto face_id = ReadMessageValue<unsigned int>(receive_buffer_, offset);
         const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
 
-        auto& psi_data = fluds_.PrepareIncomingNonlocalPsi(cell_global_id, face_id, data_size);
+        auto incoming =
+          cbc_fluds_.PrepareIncomingNonlocalPsiAndGetCell(cell_global_id, face_id, data_size);
         const auto num_bytes = data_size * sizeof(double);
         assert(offset + num_bytes <= receive_buffer_.size());
-        std::memcpy(psi_data.data(), receive_buffer_.data() + offset, num_bytes);
+        std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);
         offset += num_bytes;
 
-        cells_who_received_data.push_back(
-          fluds_.GetSPDS().GetGrid()->MapCellGlobalID2LocalID(cell_global_id));
+        cells_who_received_data.push_back(incoming.cell_local_id);
       } // while not at end of buffer
     }
   }

@@ -18,6 +18,7 @@ namespace opensn
 namespace mpi = mpicpp_lite;
 
 class MPICommunicatorSet;
+class CBC_FLUDS;
 
 /// Nonblocking MPI communicator for host CBC nonlocal face flux payloads.
 class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
@@ -58,6 +59,9 @@ protected:
   /// Communicator used to receive messages targeting the current location.
   const mpi::Communicator& receive_comm_;
 
+  /// CBC FLUDS receive accessor.
+  CBC_FLUDS& cbc_fluds_;
+
   /// Source ranks that may send data to the current location.
   std::vector<int> receive_source_ranks_;
 
@@ -66,6 +70,12 @@ protected:
   {
     /// Destination OpenSn location.
     int destination = 0;
+
+    /// Communicator used to send to the destination location.
+    const mpi::Communicator* comm = nullptr;
+
+    /// Destination rank within the communicator.
+    int rank = 0;
 
     /// Nonblocking MPI send request.
     mpi::Request mpi_request;

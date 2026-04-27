@@ -127,6 +127,14 @@ CBC_FLUDS::PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
                                       unsigned int face_id,
                                       size_t data_size)
 {
+  return PrepareIncomingNonlocalPsiAndGetCell(cell_global_id, face_id, data_size).psi;
+}
+
+CBC_FLUDS::IncomingNonlocalPsi
+CBC_FLUDS::PrepareIncomingNonlocalPsiAndGetCell(std::uint64_t cell_global_id,
+                                                unsigned int face_id,
+                                                size_t data_size)
+{
   const auto slot = common_data_.GetIncomingNonlocalFaceSlot(cell_global_id, face_id);
   if (slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT)
     throw std::logic_error("CBC_FLUDS received non-local psi for an unknown cell-face slot.");
@@ -136,7 +144,7 @@ CBC_FLUDS::PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
     psi.resize(data_size);
   incoming_nonlocal_psi_ready_[slot] = 1;
 
-  return psi;
+  return {psi, common_data_.GetIncomingNonlocalFaceLocalCell(slot)};
 }
 
 } // namespace opensn

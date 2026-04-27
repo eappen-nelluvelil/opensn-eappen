@@ -150,6 +150,18 @@ struct CBCSweepData
 
   /// Number of outgoing nonlocal face payload buffers used by the current cell.
   size_t& num_outgoing_nonlocal_face_buffers;
+
+  /// Reusable right-hand-side storage for fixed-node CBC kernels.
+  std::vector<double>& fixed_rhs_buffer;
+
+  /// Reusable cross-section block storage for fixed-node CBC kernels.
+  std::vector<double>& fixed_sigma_block;
+
+  /// Reusable moment/node DOF map for fixed-node CBC kernels.
+  std::vector<size_t>& fixed_moment_dof_map;
+
+  /// Reusable angle-dependent face-normal dot products.
+  std::vector<double>& face_mu_values;
 };
 
 /// Prepare reusable outgoing nonlocal face payload buffers for the current cell.

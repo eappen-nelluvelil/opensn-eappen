@@ -45,6 +45,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 
   incoming_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
   incoming_nonlocal_face_slots_.reserve(num_incoming_nonlocal_faces);
+  incoming_nonlocal_face_local_cells_.reserve(num_incoming_nonlocal_faces);
 
   for (const auto& cell : grid.local_cells)
   {
@@ -63,6 +64,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         incoming_nonlocal_face_slots_.emplace(
           CellFaceKey{cell.global_id, static_cast<unsigned int>(f)}, slot);
         incoming_nonlocal_face_slots_by_local_face_[local_face_slot_offset + f] = slot;
+        incoming_nonlocal_face_local_cells_.push_back(cell.local_id);
         ++num_incoming_nonlocal_faces_;
       }
     }
@@ -85,6 +87,13 @@ CBC_FLUDSCommonData::GetIncomingNonlocalFaceSlotByLocalFace(std::uint32_t cell_l
   const auto slot_offset = incoming_nonlocal_face_slot_offsets_[cell_local_id] + face_id;
   assert(slot_offset < incoming_nonlocal_face_slots_by_local_face_.size());
   return incoming_nonlocal_face_slots_by_local_face_[slot_offset];
+}
+
+std::uint32_t
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot) const
+{
+  assert(incoming_face_slot < incoming_nonlocal_face_local_cells_.size());
+  return incoming_nonlocal_face_local_cells_[incoming_face_slot];
 }
 
 } // namespace opensn

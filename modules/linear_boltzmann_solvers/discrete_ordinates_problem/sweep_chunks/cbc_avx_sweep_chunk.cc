@@ -42,19 +42,23 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
       mass_matrix[idx(i, j)] = data.M(i, j);
   }
 
-  std::vector<std::array<size_t, NumNodes>> moment_dof_map(data.num_moments);
+  auto& moment_dof_map = data.fixed_moment_dof_map;
+  moment_dof_map.resize(static_cast<size_t>(data.num_moments) * NumNodes);
   for (unsigned int m = 0; m < data.num_moments; ++m)
   {
     PRAGMA_UNROLL
     for (size_t i = 0; i < NumNodes; ++i)
-      moment_dof_map[m][i] = data.cell_transport_view.MapDOF(i, m, data.gs_gi);
+      moment_dof_map[static_cast<size_t>(m) * NumNodes + i] =
+        data.cell_transport_view.MapDOF(i, m, data.gs_gi);
   }
 
   std::array<double, matrix_size> Amat{};
-  std::vector<double> b(static_cast<std::size_t>(data.gs_size) * NumNodes, 0.0);
-  std::vector<double> sigma_block;
+  auto& b = data.fixed_rhs_buffer;
+  b.resize(static_cast<std::size_t>(data.gs_size) * NumNodes);
+  auto& sigma_block = data.fixed_sigma_block;
   sigma_block.reserve(data.group_block_size);
-  std::vector<double> face_mu_values(data.cell_num_faces);
+  auto& face_mu_values = data.face_mu_values;
+  face_mu_values.resize(data.cell_num_faces);
 
   std::vector<double> tau_gsg;
   if constexpr (time_dependent)
@@ -176,49 +180,38 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
         sigma_block[rel] = sigma_tg;
 
         auto* __restrict bg = &b[static_cast<std::size_t>(gsg) * NumNodes];
+        std::array<double, NumNodes> nodal_source{};
         for (unsigned int m = 0; m < data.num_moments; ++m)
         {
           const double w = m2d_row[m];
-          std::array<double, NumNodes> nodal_source{};
           for (size_t i = 0; i < NumNodes; ++i)
-            nodal_source[i] = w * data.source_moments[moment_dof_map[m][i] + gsg];
-
-          for (size_t i = 0; i < NumNodes; ++i)
-          {
-            double value = 0.0;
-            const auto* row = &mass_matrix[idx(i, 0)];
-            PRAGMA_UNROLL
-            for (size_t j = 0; j < NumNodes; ++j)
-              value += row[j] * nodal_source[j];
-            bg[i] += value;
-          }
+            nodal_source[i] +=
+              w * data.source_moments[moment_dof_map[static_cast<size_t>(m) * NumNodes + i] + gsg];
         }
-      }
 
-      if constexpr (time_dependent)
-      {
-        if (data.include_rhs_time_term and psi_old)
+        if constexpr (time_dependent)
         {
-          for (size_t gsg = g0; gsg < g1; ++gsg)
+          if (data.include_rhs_time_term and psi_old)
           {
             const double tau = tau_gsg[gsg];
-            auto* __restrict bg = &b[gsg * NumNodes];
-
-            for (size_t i = 0; i < NumNodes; ++i)
+            for (size_t j = 0; j < NumNodes; ++j)
             {
-              double value = 0.0;
-              const auto* row = &mass_matrix[idx(i, 0)];
-              PRAGMA_UNROLL
-              for (size_t j = 0; j < NumNodes; ++j)
-              {
-                const size_t imap =
-                  j * data.groupset_angle_group_stride + direction_num * data.groupset_group_stride;
-                const double psi_old_val = psi_old[imap + gsg];
-                value += row[j] * psi_old_val;
-              }
-              bg[i] += tau * value;
+              const size_t imap =
+                j * data.groupset_angle_group_stride + direction_num * data.groupset_group_stride;
+              nodal_source[j] += tau * psi_old[imap + gsg];
             }
           }
+        }
+
+        PRAGMA_UNROLL
+        for (size_t i = 0; i < NumNodes; ++i)
+        {
+          double value = 0.0;
+          const auto* row = &mass_matrix[idx(i, 0)];
+          PRAGMA_UNROLL
+          for (size_t j = 0; j < NumNodes; ++j)
+            value += row[j] * nodal_source[j];
+          bg[i] += value;
         }
       }
 
@@ -281,7 +274,7 @@ CBC_Sweep_FixedN(CBCSweepData& data, AngleSet& angle_set)
           PRAGMA_UNROLL
           for (size_t i = 0; i < NumNodes; ++i)
           {
-            const size_t dof = data.cell_transport_view.MapDOF(i, m, data.gs_gi);
+            const size_t dof = moment_dof_map[static_cast<size_t>(m) * NumNodes + i];
             data.destination_phi[dof + gsg] += w * bg[i];
           }
         }
