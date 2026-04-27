@@ -38,26 +38,30 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (executed_)
     return AngleSetStatus::FINISHED;
 
-  if (current_task_list_.empty())
+  if (task_list_ == nullptr)
   {
-    current_task_list_ = cbc_spds_.GetTaskList();
-    // Build initial ready queue
-    ready_tasks_.reserve(current_task_list_.size());
-    for (std::size_t i = 0; i < current_task_list_.size(); ++i)
-      if ((current_task_list_[i].num_dependencies == 0) and (not current_task_list_[i].completed))
-        ready_tasks_.push_back(i);
+    task_list_ = &cbc_spds_.GetTaskList();
+    remaining_dependencies_.resize(task_list_->size());
+    completed_tasks_.assign(task_list_->size(), 0);
+    ready_tasks_.clear();
+    ready_tasks_.reserve(task_list_->size());
+
+    for (std::size_t i = 0; i < task_list_->size(); ++i)
+    {
+      const auto num_dependencies = (*task_list_)[i].num_dependencies;
+      remaining_dependencies_[i] = num_dependencies;
+      if (num_dependencies == 0)
+        ready_tasks_.push_back(static_cast<std::uint32_t>(i));
+    }
   }
 
   sweep_chunk.SetAngleSet(*this);
 
   async_comm_.ReceiveData(received_task_buffer_);
 
-  for (const std::uint64_t task_number : received_task_buffer_)
-  {
-    if ((--current_task_list_[task_number].num_dependencies == 0) and
-        (not current_task_list_[task_number].completed))
+  for (const auto task_number : received_task_buffer_)
+    if ((--remaining_dependencies_[task_number] == 0) and (not completed_tasks_[task_number]))
       ready_tasks_.push_back(task_number);
-  }
 
   if (async_comm_.HasPendingCommunication())
     static_cast<void>(async_comm_.SendData());
@@ -71,23 +75,23 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   {
     const auto task_idx = ready_tasks_.back();
     ready_tasks_.pop_back();
-    auto& cell_task = current_task_list_[task_idx];
+    const auto& cell_task = (*task_list_)[task_idx];
 
     sweep_chunk.SetCell(cell_task.cell_ptr, *this);
     sweep_chunk.Sweep(*this);
 
     for (const auto& local_task_num : cell_task.successors)
-      if ((--current_task_list_[local_task_num].num_dependencies == 0) and
-          (not current_task_list_[local_task_num].completed))
+      if ((--remaining_dependencies_[local_task_num] == 0) and
+          (not completed_tasks_[local_task_num]))
         ready_tasks_.push_back(local_task_num);
 
-    cell_task.completed = true;
-    ++num_completed_tasks;
+    completed_tasks_[task_idx] = 1;
+    ++num_completed_tasks_;
     if (async_comm_.HasPendingCommunication())
       static_cast<void>(async_comm_.SendData());
   }
 
-  const bool all_tasks_completed = (num_completed_tasks == current_task_list_.size());
+  const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
   const bool all_messages_sent =
     (not async_comm_.HasPendingCommunication()) or async_comm_.SendData();
 
@@ -106,10 +110,12 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
-  current_task_list_.clear();
+  task_list_ = nullptr;
+  remaining_dependencies_.clear();
+  completed_tasks_.clear();
   ready_tasks_.clear();
   received_task_buffer_.clear();
-  num_completed_tasks = 0;
+  num_completed_tasks_ = 0;
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;

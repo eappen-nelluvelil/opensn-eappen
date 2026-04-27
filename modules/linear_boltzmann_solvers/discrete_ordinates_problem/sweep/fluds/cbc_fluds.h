@@ -9,6 +9,7 @@
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace opensn
@@ -26,7 +27,7 @@ public:
   struct IncomingNonlocalPsi
   {
     /// Incoming face payload storage.
-    std::vector<double>& psi;
+    std::span<double> psi;
 
     /// Local cell with one newly satisfied CBC dependency.
     std::uint32_t cell_local_id = 0;
@@ -100,11 +101,17 @@ protected:
   /// Spatial DOF -> angle-set subset -> group angular-flux storage.
   std::vector<double> local_psi_data_;
 
-  /// Incoming nonlocal angular-flux payload storage indexed by face slot.
-  std::vector<std::vector<double>> incoming_nonlocal_psi_;
+  /// Contiguous incoming nonlocal angular-flux payload storage.
+  std::vector<double> incoming_nonlocal_psi_;
 
-  /// Readiness flags for incoming nonlocal angular-flux payload slots.
-  std::vector<unsigned char> incoming_nonlocal_psi_ready_;
+  /// Slot offsets into incoming nonlocal angular-flux storage.
+  std::vector<size_t> incoming_nonlocal_psi_offsets_;
+
+  /// Readiness generation keyed by incoming nonlocal face slot.
+  std::vector<std::uint32_t> incoming_nonlocal_psi_generation_;
+
+  /// Active readiness generation.
+  std::uint32_t incoming_nonlocal_psi_current_generation_ = 1;
 
   /// Precomputed start index into local angular-flux storage for each local cell.
   std::vector<size_t> cell_psi_start_;

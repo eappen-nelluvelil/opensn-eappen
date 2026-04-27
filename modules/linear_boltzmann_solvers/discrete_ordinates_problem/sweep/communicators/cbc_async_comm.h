@@ -35,10 +35,8 @@ public:
 
   [[nodiscard]] bool SendData();
 
-  [[nodiscard]] std::vector<std::uint64_t> ReceiveData();
-
   /// Receive all currently available nonlocal face payloads into a caller-owned buffer.
-  void ReceiveData(std::vector<std::uint64_t>& cells_who_received_data);
+  void ReceiveData(std::vector<std::uint32_t>& cells_who_received_data);
 
   [[nodiscard]] bool HasPendingCommunication() const noexcept { return not send_buffer_.empty(); }
 

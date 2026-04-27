@@ -5,6 +5,8 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include <cstdint>
+#include <vector>
 
 namespace opensn
 {
@@ -73,17 +75,23 @@ protected:
   /// CBC sweep-plane data structure.
   const CBC_SPDS& cbc_spds_;
 
-  /// Mutable task list for the active sweep.
-  std::vector<Task> current_task_list_;
+  /// Immutable CBC task graph for the active sweep.
+  const std::vector<Task>* task_list_ = nullptr;
+
+  /// Mutable dependency counts keyed by task index.
+  std::vector<unsigned int> remaining_dependencies_;
+
+  /// Mutable completion flags keyed by task index.
+  std::vector<unsigned char> completed_tasks_;
 
   /// Ready task stack.
-  std::vector<std::uint64_t> ready_tasks_;
+  std::vector<std::uint32_t> ready_tasks_;
 
   /// Scratch buffer for tasks that received nonlocal data.
-  std::vector<std::uint64_t> received_task_buffer_;
+  std::vector<std::uint32_t> received_task_buffer_;
 
   /// Number of completed local tasks in the active sweep.
-  size_t num_completed_tasks = 0;
+  size_t num_completed_tasks_ = 0;
 
   /// Host CBC asynchronous communicator.
   CBC_AsynchronousCommunicator async_comm_;

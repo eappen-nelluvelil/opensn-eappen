@@ -127,7 +127,6 @@ CBC_AsynchronousCommunicator::SendData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::SendData");
 
-  // Now we attempt to flush items in the send buffer
   bool all_messages_sent = true;
   for (auto& buffer_item : send_buffer_)
   {
@@ -147,24 +146,20 @@ CBC_AsynchronousCommunicator::SendData()
     }
   }
 
-  std::size_t next_active = 0;
-  for (std::size_t i = 0; i < send_buffer_.size(); ++i)
+  for (std::size_t i = 0; i < send_buffer_.size();)
   {
     if (send_buffer_[i].completed)
     {
       send_buffer_[i].send_initiated = false;
       send_buffer_[i].data.clear();
       reusable_send_buffers_.push_back(std::move(send_buffer_[i]));
+      if (i != send_buffer_.size() - 1)
+        send_buffer_[i] = std::move(send_buffer_.back());
+      send_buffer_.pop_back();
     }
     else
-    {
-      if (next_active != i)
-        send_buffer_[next_active] = std::move(send_buffer_[i]);
-      ++next_active;
-    }
+      ++i;
   }
-  send_buffer_.erase(send_buffer_.begin() + static_cast<std::ptrdiff_t>(next_active),
-                     send_buffer_.end());
   open_send_buffer_indices_.clear();
 
   return all_messages_sent;
@@ -179,16 +174,8 @@ CBC_AsynchronousCommunicator::Reset()
   open_send_buffer_indices_.clear();
 }
 
-std::vector<std::uint64_t>
-CBC_AsynchronousCommunicator::ReceiveData()
-{
-  std::vector<std::uint64_t> cells_who_received_data;
-  ReceiveData(cells_who_received_data);
-  return cells_who_received_data;
-}
-
 void
-CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint64_t>& cells_who_received_data)
+CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_received_data)
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
 
