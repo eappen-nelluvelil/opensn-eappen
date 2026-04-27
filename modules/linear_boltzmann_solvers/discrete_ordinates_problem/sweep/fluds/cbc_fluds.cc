@@ -77,16 +77,6 @@ CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_id
 }
 
 double*
-CBC_FLUDS::NLUpwindPsi(std::uint64_t cell_global_id,
-                       unsigned int face_id,
-                       unsigned int face_node_mapped,
-                       size_t as_ss_idx)
-{
-  const auto slot = common_data_.GetIncomingNonlocalFaceSlot(cell_global_id, face_id);
-  return NLUpwindPsiBySlot(slot, face_node_mapped, as_ss_idx);
-}
-
-double*
 CBC_FLUDS::NLUpwindPsiBySlot(size_t incoming_face_slot,
                              unsigned int face_node_mapped,
                              size_t as_ss_idx)
@@ -119,32 +109,21 @@ void
 CBC_FLUDS::ClearLocalAndReceivePsi()
 {
   std::fill(incoming_nonlocal_psi_ready_.begin(), incoming_nonlocal_psi_ready_.end(), 0);
-  deplocs_outgoing_messages_.clear();
-}
-
-std::vector<double>&
-CBC_FLUDS::PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
-                                      unsigned int face_id,
-                                      size_t data_size)
-{
-  return PrepareIncomingNonlocalPsiAndGetCell(cell_global_id, face_id, data_size).psi;
 }
 
 CBC_FLUDS::IncomingNonlocalPsi
-CBC_FLUDS::PrepareIncomingNonlocalPsiAndGetCell(std::uint64_t cell_global_id,
-                                                unsigned int face_id,
-                                                size_t data_size)
+CBC_FLUDS::PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t data_size)
 {
-  const auto slot = common_data_.GetIncomingNonlocalFaceSlot(cell_global_id, face_id);
-  if (slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT)
+  if (incoming_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT or
+      incoming_face_slot >= incoming_nonlocal_psi_.size())
     throw std::logic_error("CBC_FLUDS received non-local psi for an unknown cell-face slot.");
 
-  auto& psi = incoming_nonlocal_psi_[slot];
+  auto& psi = incoming_nonlocal_psi_[incoming_face_slot];
   if (psi.size() != data_size)
     psi.resize(data_size);
-  incoming_nonlocal_psi_ready_[slot] = 1;
+  incoming_nonlocal_psi_ready_[incoming_face_slot] = 1;
 
-  return {psi, common_data_.GetIncomingNonlocalFaceLocalCell(slot)};
+  return {psi, common_data_.GetIncomingNonlocalFaceLocalCell(incoming_face_slot)};
 }
 
 } // namespace opensn

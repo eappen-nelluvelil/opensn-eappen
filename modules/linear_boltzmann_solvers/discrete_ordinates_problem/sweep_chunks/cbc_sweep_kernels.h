@@ -11,6 +11,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include <algorithm>
+#include <cassert>
 #include <span>
 
 namespace opensn
@@ -22,11 +23,8 @@ struct CBCOutgoingFaceBuffer
   /// Destination OpenSn location.
   int destination = 0;
 
-  /// Global cell ID expected by the downwind location.
-  std::uint64_t cell_global_id = 0;
-
-  /// Face ID expected by the downwind location.
-  unsigned int face_id = 0;
+  /// Incoming nonlocal face slot on the downwind location.
+  size_t incoming_face_slot = CBC_FLUDSCommonData::INVALID_FACE_SLOT;
 
   /// Number of valid angular-flux entries in `data`.
   size_t data_size = 0;
@@ -189,11 +187,10 @@ CBCPrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
       buffers.emplace_back();
 
     auto& buffer = buffers[buffer_index];
-    const auto& face_nodal_mapping =
-      data.fluds.GetCommonData().GetFaceNodalMapping(data.cell_local_id, f);
     buffer.destination = data.cell_transport_view.FaceLocality(f);
-    buffer.cell_global_id = face.neighbor_id;
-    buffer.face_id = face_nodal_mapping.associated_face_;
+    buffer.incoming_face_slot = data.fluds.GetCommonData().GetOutgoingNonlocalFaceSlotByLocalFace(
+      data.cell_local_id, static_cast<unsigned int>(f));
+    assert(buffer.incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
     buffer.Prepare(data.cell_mapping.GetNumFaceNodes(f) * data.group_angle_stride);
     buffer_by_face[f] = &buffer;
   }
@@ -207,8 +204,7 @@ CBCQueueOutgoingNonlocalFaceBuffers(CBCSweepData& data, CBC_AsynchronousCommunic
   {
     const auto& buffer = data.outgoing_nonlocal_face_buffers[i];
     async_comm.QueueDownwindMessage(buffer.destination,
-                                    buffer.cell_global_id,
-                                    buffer.face_id,
+                                    buffer.incoming_face_slot,
                                     std::span<const double>(buffer.data.data(), buffer.data_size));
   }
 }

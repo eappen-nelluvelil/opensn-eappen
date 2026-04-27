@@ -4,7 +4,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
-#include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
@@ -103,14 +102,12 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(int destination)
 
 void
 CBC_AsynchronousCommunicator::QueueDownwindMessage(int destination,
-                                                   std::uint64_t cell_global_id,
-                                                   unsigned int face_id,
+                                                   size_t incoming_face_slot,
                                                    std::span<const double> payload)
 {
   auto& raw = GetOpenSendBuffer(destination).data;
   const auto data_size = payload.size();
-  constexpr size_t header_size =
-    sizeof(std::uint64_t) + sizeof(unsigned int) + sizeof(std::size_t);
+  constexpr size_t header_size = sizeof(std::size_t) + sizeof(std::size_t);
   const auto old_size = raw.size();
   const auto num_bytes = data_size * sizeof(double);
   const auto required_size = old_size + header_size + num_bytes;
@@ -119,8 +116,7 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(int destination,
   raw.resize(required_size);
 
   auto* write_ptr = raw.data() + old_size;
-  WriteMessageValue(write_ptr, cell_global_id);
-  WriteMessageValue(write_ptr, face_id);
+  WriteMessageValue(write_ptr, incoming_face_slot);
   WriteMessageValue(write_ptr, data_size);
   if (num_bytes != 0)
     std::memcpy(write_ptr, payload.data(), num_bytes);
@@ -214,12 +210,10 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint64_t>& cells_who_
 
       while (offset < receive_buffer_.size())
       {
-        const auto cell_global_id = ReadMessageValue<std::uint64_t>(receive_buffer_, offset);
-        const auto face_id = ReadMessageValue<unsigned int>(receive_buffer_, offset);
+        const auto incoming_face_slot = ReadMessageValue<std::size_t>(receive_buffer_, offset);
         const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
 
-        auto incoming =
-          cbc_fluds_.PrepareIncomingNonlocalPsiAndGetCell(cell_global_id, face_id, data_size);
+        auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, data_size);
         const auto num_bytes = data_size * sizeof(double);
         assert(offset + num_bytes <= receive_buffer_.size());
         std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);

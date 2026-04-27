@@ -8,6 +8,7 @@
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace opensn
@@ -17,20 +18,17 @@ class UnknownManager;
 class SpatialDiscretization;
 class Cell;
 
-/**
- * Flux data structures for the host cell-by-cell sweep algorithm.
- * This class manages local and nonlocal angular-flux storage during a CBC sweep.
- */
+/// Host CBC angular-flux storage.
 class CBC_FLUDS : public FLUDS
 {
 public:
-  /// Prepared incoming nonlocal angular-flux payload and the cell it unlocks.
+  /// Incoming nonlocal payload and unlocked cell.
   struct IncomingNonlocalPsi
   {
-    /// Incoming face angular-flux payload storage.
+    /// Incoming face payload storage.
     std::vector<double>& psi;
 
-    /// Local cell ID whose CBC task received one dependency.
+    /// Local cell with one newly satisfied CBC dependency.
     std::uint32_t cell_local_id = 0;
   };
 
@@ -41,71 +39,40 @@ public:
             const UnknownManager& psi_uk_man,
             const SpatialDiscretization& sdm);
 
-  /// Return immutable common CBC FLUDS metadata.
   [[nodiscard]] const CBC_FLUDSCommonData& GetCommonData() const;
 
-  /**
-   * Return local upwind angular-flux group data.
-   * The returned pointer addresses the first group for the requested node and angle-set subset.
-   */
+  /// Return local upwind angular-flux group data.
   [[nodiscard]] double*
   UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
 
-  /**
-   * Return local outgoing angular-flux group data.
-   * The returned pointer addresses storage for writing the just-solved node and angle-set subset.
-   */
+  /// Return local outgoing angular-flux group data.
   [[nodiscard]] double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
-
-  /**
-   * Return nonlocal upwind angular-flux group data.
-   * The returned pointer is null until the remote payload has been received.
-   */
-  [[nodiscard]] double* NLUpwindPsi(std::uint64_t cell_global_id,
-                                    unsigned int face_id,
-                                    unsigned int face_node_mapped,
-                                    size_t as_ss_idx);
 
   /// Return nonlocal upwind angular-flux group data by incoming face slot.
   [[nodiscard]] double*
   NLUpwindPsiBySlot(size_t incoming_face_slot, unsigned int face_node_mapped, size_t as_ss_idx);
 
-  /**
-   * Return nonlocal outgoing angular-flux group data.
-   * The returned pointer addresses a caller-owned face payload buffer.
-   */
+  /// Return nonlocal outgoing angular-flux group data.
   [[nodiscard]] double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
   /// Clear local and received nonlocal angular-flux storage.
   void ClearLocalAndReceivePsi() override;
 
-  /// Prepare storage for an incoming nonlocal face payload.
-  std::vector<double>& PrepareIncomingNonlocalPsi(std::uint64_t cell_global_id,
-                                                  unsigned int face_id,
-                                                  size_t data_size) override;
-
   /// Prepare storage for an incoming payload and return the local task it unlocks.
-  IncomingNonlocalPsi PrepareIncomingNonlocalPsiAndGetCell(std::uint64_t cell_global_id,
-                                                           unsigned int face_id,
-                                                           size_t data_size);
+  IncomingNonlocalPsi PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot,
+                                                       size_t data_size);
 
-  /// Clear outgoing angular-flux storage.
   void ClearSendPsi() override {}
 
-  /// Allocate internal local angular-flux storage.
   void AllocateInternalLocalPsi() override {}
 
-  /// Allocate outgoing angular-flux storage.
   void AllocateOutgoingPsi() override {}
 
-  /// Allocate delayed local angular-flux storage.
   void AllocateDelayedLocalPsi() override {}
 
-  /// Allocate pre-location outgoing angular-flux storage.
   void AllocatePrelocIOutgoingPsi() override {}
 
-  /// Allocate delayed pre-location outgoing angular-flux storage.
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
 protected:
@@ -130,10 +97,7 @@ protected:
   /// Number of entries in local angular-flux storage.
   size_t local_psi_data_size_;
 
-  /**
-   * Local angular-flux storage.
-   * spatial DOF major -> angle in angleset major -> group in groupset major
-   */
+  /// Spatial DOF -> angle-set subset -> group angular-flux storage.
   std::vector<double> local_psi_data_;
 
   /// Incoming nonlocal angular-flux payload storage indexed by face slot.
