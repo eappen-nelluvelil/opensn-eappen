@@ -138,14 +138,20 @@ CBC_AsynchronousCommunicator::SendData()
     }
   }
 
-  if (TestSomeCompleted(send_requests_, completed_send_indices_))
+  const auto completed_send_indices = TestSomeCompleted(send_requests_, completed_send_indices_);
+  if (completed_send_indices.empty())
   {
-    for (const int index : completed_send_indices_)
-    {
-      assert(index >= 0);
-      assert(static_cast<std::size_t>(index) < send_buffer_.size());
-      send_buffer_[static_cast<std::size_t>(index)].completed = true;
-    }
+    std::fill(open_send_buffer_indices_.begin(),
+              open_send_buffer_indices_.end(),
+              INVALID_BUFFER_INDEX);
+    return false;
+  }
+
+  for (const int index : completed_send_indices)
+  {
+    assert(index >= 0);
+    assert(static_cast<std::size_t>(index) < send_buffer_.size());
+    send_buffer_[static_cast<std::size_t>(index)].completed = true;
   }
 
   for (std::size_t i = 0; i < send_buffer_.size();)
