@@ -55,8 +55,8 @@ protected:
   /// Slot-addressed receive storage.
   CBC_FLUDS& cbc_fluds_;
 
-  /// Ranks that may send nonlocal payloads to this location.
-  std::vector<int> receive_source_ranks_;
+  /// Number of locations that may send nonlocal payloads to this location.
+  std::size_t num_receive_sources_ = 0;
 
   /// Destination-batched nonblocking send buffer.
   struct BufferItem

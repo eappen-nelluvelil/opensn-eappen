@@ -51,9 +51,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
     cbc_fluds_(static_cast<CBC_FLUDS&>(fluds))
 {
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  receive_source_ranks_.reserve(location_dependencies.size());
-  for (int location : location_dependencies)
-    receive_source_ranks_.push_back(comm_set_.MapIonJ(location, location_id_));
+  num_receive_sources_ = location_dependencies.size();
 
   send_peers_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
   open_send_buffer_indices_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
@@ -180,35 +178,32 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
 
   cells_who_received_data.clear();
-  if (cells_who_received_data.capacity() < receive_source_ranks_.size())
-    cells_who_received_data.reserve(receive_source_ranks_.size());
+  if (cells_who_received_data.capacity() < num_receive_sources_)
+    cells_who_received_data.reserve(num_receive_sources_);
 
   const auto tag = static_cast<int>(angle_set_id_);
-  for (const auto source_rank : receive_source_ranks_)
+  mpi::Status status;
+  while (receive_comm_.iprobe(ANY_SOURCE, tag, status))
   {
-    mpi::Status status;
-    while (receive_comm_.iprobe(source_rank, tag, status))
+    const auto num_items = status.count<std::byte>();
+    receive_buffer_.resize(num_items);
+    receive_comm_.recv(status.source(), status.tag(), receive_buffer_.data(), num_items);
+
+    std::size_t offset = 0;
+
+    while (offset < receive_buffer_.size())
     {
-      const auto num_items = status.count<std::byte>();
-      receive_buffer_.resize(num_items);
-      receive_comm_.recv(source_rank, status.tag(), receive_buffer_.data(), num_items);
+      const auto incoming_face_slot = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+      const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
 
-      std::size_t offset = 0;
+      auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, data_size);
+      const auto num_bytes = data_size * sizeof(double);
+      assert(offset + num_bytes <= receive_buffer_.size());
+      std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);
+      offset += num_bytes;
 
-      while (offset < receive_buffer_.size())
-      {
-        const auto incoming_face_slot = ReadMessageValue<std::size_t>(receive_buffer_, offset);
-        const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
-
-        auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, data_size);
-        const auto num_bytes = data_size * sizeof(double);
-        assert(offset + num_bytes <= receive_buffer_.size());
-        std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);
-        offset += num_bytes;
-
-        cells_who_received_data.push_back(incoming.cell_local_id);
-      } // while not at end of buffer
-    }
+      cells_who_received_data.push_back(incoming.cell_local_id);
+    } // while not at end of buffer
   }
 }
 
