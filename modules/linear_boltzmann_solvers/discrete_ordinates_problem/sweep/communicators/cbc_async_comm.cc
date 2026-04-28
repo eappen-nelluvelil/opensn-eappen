@@ -91,7 +91,6 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
   buffer.comm = peer.comm;
   buffer.rank = peer.rank;
   buffer.send_initiated = false;
-  buffer.completed = false;
   buffer.data.clear();
   open_buffer_index = buffer_index;
   return buffer;
@@ -127,55 +126,45 @@ CBC_AsynchronousCommunicator::SendData()
   if (send_buffer_.empty())
     return true;
 
+  const auto tag = static_cast<int>(angle_set_id_);
   for (std::size_t i = 0; i < send_buffer_.size(); ++i)
   {
     auto& buffer_item = send_buffer_[i];
     if (not buffer_item.send_initiated)
     {
-      const auto tag = static_cast<int>(angle_set_id_);
       send_requests_[i] = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
       buffer_item.send_initiated = true;
     }
   }
 
-  const auto completed_send_indices = TestSomeCompleted(send_requests_, completed_send_indices_);
-  if (completed_send_indices.empty())
-  {
-    std::fill(open_send_buffer_indices_.begin(),
-              open_send_buffer_indices_.end(),
-              INVALID_BUFFER_INDEX);
-    return false;
-  }
-
-  for (const int index : completed_send_indices)
-  {
-    assert(index >= 0);
-    assert(static_cast<std::size_t>(index) < send_buffer_.size());
-    send_buffer_[static_cast<std::size_t>(index)].completed = true;
-  }
-
-  for (std::size_t i = 0; i < send_buffer_.size();)
-  {
-    if (send_buffer_[i].completed)
-    {
-      send_buffer_[i].send_initiated = false;
-      send_buffer_[i].data.clear();
-      reusable_send_buffers_.push_back(std::move(send_buffer_[i]));
-      if (i != send_buffer_.size() - 1)
-      {
-        send_buffer_[i] = std::move(send_buffer_.back());
-        send_requests_[i] = std::move(send_requests_.back());
-      }
-      send_buffer_.pop_back();
-      send_requests_.pop_back();
-    }
-    else
-      ++i;
-  }
   std::fill(open_send_buffer_indices_.begin(),
             open_send_buffer_indices_.end(),
             INVALID_BUFFER_INDEX);
 
+  const auto completed_send_indices = TestSomeCompleted(send_requests_, completed_send_indices_);
+  if (completed_send_indices.empty())
+    return false;
+
+  std::sort(completed_send_indices.begin(),
+            completed_send_indices.end(),
+            [](int lhs, int rhs) { return lhs > rhs; });
+
+  for (const int index : completed_send_indices)
+  {
+    assert(index >= 0);
+    const auto i = static_cast<std::size_t>(index);
+    assert(i < send_buffer_.size());
+    send_buffer_[i].send_initiated = false;
+    send_buffer_[i].data.clear();
+    reusable_send_buffers_.push_back(std::move(send_buffer_[i]));
+    if (i != send_buffer_.size() - 1)
+    {
+      send_buffer_[i] = std::move(send_buffer_.back());
+      send_requests_[i] = std::move(send_requests_.back());
+    }
+    send_buffer_.pop_back();
+    send_requests_.pop_back();
+  }
   return send_buffer_.empty();
 }
 

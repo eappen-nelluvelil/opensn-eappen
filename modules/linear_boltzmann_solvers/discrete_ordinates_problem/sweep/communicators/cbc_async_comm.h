@@ -67,9 +67,6 @@ protected:
     /// Posted-send flag.
     bool send_initiated = false;
 
-    /// Completed-send flag.
-    bool completed = false;
-
     /// Packed face records.
     std::vector<std::byte> data;
   };

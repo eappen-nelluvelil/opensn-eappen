@@ -8,7 +8,7 @@
 namespace opensn
 {
 
-std::span<const int>
+std::span<int>
 TestSomeCompleted(std::vector<mpi::Request>& requests, std::vector<int>& completed_indices)
 {
   static_assert(sizeof(mpi::Request) == sizeof(MPI_Request),
