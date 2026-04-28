@@ -5,8 +5,10 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/mpi_comm_set.h"
+#include "framework/mpi/mpi_utils.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <type_traits>
@@ -53,57 +55,56 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   num_receive_sources_ = location_dependencies.size();
 
-  send_peers_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
-  open_send_buffer_indices_.reserve(fluds_.GetSPDS().GetLocationSuccessors().size());
-}
-
-const CBC_AsynchronousCommunicator::SendPeer&
-CBC_AsynchronousCommunicator::GetSendPeer(int destination)
-{
-  auto [it, inserted] = send_peers_.try_emplace(destination);
-  if (inserted)
+  const auto& location_successors = fluds_.GetSPDS().GetLocationSuccessors();
+  send_peers_.reserve(location_successors.size());
+  for (const int successor : location_successors)
   {
-    it->second.comm = &comm_set_.LocICommunicator(destination);
-    it->second.rank = comm_set_.MapIonJ(destination, destination);
+    auto& peer = send_peers_.emplace_back();
+    peer.comm = &comm_set_.LocICommunicator(successor);
+    peer.rank = comm_set_.MapIonJ(successor, successor);
   }
-
-  return it->second;
+  open_send_buffer_indices_.assign(send_peers_.size(), INVALID_BUFFER_INDEX);
 }
 
 CBC_AsynchronousCommunicator::BufferItem&
-CBC_AsynchronousCommunicator::GetOpenSendBuffer(int destination)
+CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
 {
-  const auto lookup_it = open_send_buffer_indices_.find(destination);
-  if (lookup_it != open_send_buffer_indices_.end())
-    return send_buffer_[lookup_it->second];
+  assert(peer_index < open_send_buffer_indices_.size());
+  auto& open_buffer_index = open_send_buffer_indices_[peer_index];
+  if (open_buffer_index != INVALID_BUFFER_INDEX)
+    return send_buffer_[open_buffer_index];
 
   if (reusable_send_buffers_.empty())
+  {
     send_buffer_.emplace_back();
+    send_requests_.emplace_back();
+  }
   else
   {
     send_buffer_.push_back(std::move(reusable_send_buffers_.back()));
     reusable_send_buffers_.pop_back();
+    send_requests_.emplace_back();
   }
 
   const auto buffer_index = send_buffer_.size() - 1;
   auto& buffer = send_buffer_.back();
-  const auto& peer = GetSendPeer(destination);
-  buffer.destination = destination;
+  const auto& peer = send_peers_[peer_index];
+  buffer.peer_index = peer_index;
   buffer.comm = peer.comm;
   buffer.rank = peer.rank;
   buffer.send_initiated = false;
   buffer.completed = false;
   buffer.data.clear();
-  open_send_buffer_indices_.emplace(destination, buffer_index);
+  open_buffer_index = buffer_index;
   return buffer;
 }
 
 void
-CBC_AsynchronousCommunicator::QueueDownwindMessage(int destination,
+CBC_AsynchronousCommunicator::QueueDownwindMessage(size_t peer_index,
                                                    size_t incoming_face_slot,
                                                    std::span<const double> payload)
 {
-  auto& raw = GetOpenSendBuffer(destination).data;
+  auto& raw = GetOpenSendBuffer(peer_index).data;
   const auto data_size = payload.size();
   constexpr size_t header_size = sizeof(std::size_t) + sizeof(std::size_t);
   const auto old_size = raw.size();
@@ -125,22 +126,27 @@ CBC_AsynchronousCommunicator::SendData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::SendData");
 
-  bool all_messages_sent = true;
-  for (auto& buffer_item : send_buffer_)
+  if (send_buffer_.empty())
+    return true;
+
+  for (std::size_t i = 0; i < send_buffer_.size(); ++i)
   {
+    auto& buffer_item = send_buffer_[i];
     if (not buffer_item.send_initiated)
     {
       const auto tag = static_cast<int>(angle_set_id_);
-      buffer_item.mpi_request = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
+      send_requests_[i] = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
       buffer_item.send_initiated = true;
     }
+  }
 
-    if (not buffer_item.completed)
+  if (TestSomeCompleted(send_requests_, completed_send_indices_))
+  {
+    for (const int index : completed_send_indices_)
     {
-      if (mpi::test(buffer_item.mpi_request))
-        buffer_item.completed = true;
-      else
-        all_messages_sent = false;
+      assert(index >= 0);
+      assert(static_cast<std::size_t>(index) < send_buffer_.size());
+      send_buffer_[static_cast<std::size_t>(index)].completed = true;
     }
   }
 
@@ -152,24 +158,34 @@ CBC_AsynchronousCommunicator::SendData()
       send_buffer_[i].data.clear();
       reusable_send_buffers_.push_back(std::move(send_buffer_[i]));
       if (i != send_buffer_.size() - 1)
+      {
         send_buffer_[i] = std::move(send_buffer_.back());
+        send_requests_[i] = std::move(send_requests_.back());
+      }
       send_buffer_.pop_back();
+      send_requests_.pop_back();
     }
     else
       ++i;
   }
-  open_send_buffer_indices_.clear();
+  std::fill(open_send_buffer_indices_.begin(),
+            open_send_buffer_indices_.end(),
+            INVALID_BUFFER_INDEX);
 
-  return all_messages_sent;
+  return send_buffer_.empty();
 }
 
 void
 CBC_AsynchronousCommunicator::Reset()
 {
   send_buffer_.clear();
+  send_requests_.clear();
+  completed_send_indices_.clear();
   reusable_send_buffers_.clear();
   receive_buffer_.clear();
-  open_send_buffer_indices_.clear();
+  std::fill(open_send_buffer_indices_.begin(),
+            open_send_buffer_indices_.end(),
+            INVALID_BUFFER_INDEX);
 }
 
 void

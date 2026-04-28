@@ -20,11 +20,11 @@ namespace opensn
 /// Staging buffer for one outgoing nonlocal CBC face payload.
 struct CBCOutgoingFaceBuffer
 {
-  /// Destination OpenSn location.
-  int destination = 0;
-
   /// Incoming nonlocal face slot on the downwind location.
   size_t incoming_face_slot = CBC_FLUDSCommonData::INVALID_FACE_SLOT;
+
+  /// SPDS-successor peer index on the current location.
+  size_t peer_index = CBC_FLUDSCommonData::INVALID_PEER_INDEX;
 
   /// Number of valid angular-flux entries in `data`.
   size_t data_size = 0;
@@ -187,10 +187,12 @@ CBCPrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
       buffers.emplace_back();
 
     auto& buffer = buffers[buffer_index];
-    buffer.destination = data.cell_transport_view.FaceLocality(f);
     buffer.incoming_face_slot = data.fluds.GetCommonData().GetOutgoingNonlocalFaceSlotByLocalFace(
       data.cell_local_id, static_cast<unsigned int>(f));
+    buffer.peer_index = data.fluds.GetCommonData().GetOutgoingNonlocalFacePeerIndexByLocalFace(
+      data.cell_local_id, static_cast<unsigned int>(f));
     assert(buffer.incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
+    assert(buffer.peer_index != CBC_FLUDSCommonData::INVALID_PEER_INDEX);
     buffer.Prepare(data.cell_mapping.GetNumFaceNodes(f) * data.group_angle_stride);
     buffer_by_face[f] = &buffer;
   }
@@ -203,7 +205,7 @@ CBCQueueOutgoingNonlocalFaceBuffers(CBCSweepData& data, CBC_AsynchronousCommunic
   for (size_t i = 0; i < data.num_outgoing_nonlocal_face_buffers; ++i)
   {
     const auto& buffer = data.outgoing_nonlocal_face_buffers[i];
-    async_comm.QueueDownwindMessage(buffer.destination,
+    async_comm.QueueDownwindMessage(buffer.peer_index,
                                     buffer.incoming_face_slot,
                                     std::span<const double>(buffer.data.data(), buffer.data_size));
   }

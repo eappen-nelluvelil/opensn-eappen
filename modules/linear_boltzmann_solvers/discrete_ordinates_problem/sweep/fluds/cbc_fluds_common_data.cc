@@ -81,6 +81,13 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   incoming_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
   incoming_nonlocal_face_local_cells_.reserve(num_incoming_nonlocal_faces);
   outgoing_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
+  outgoing_nonlocal_face_peer_indices_by_local_face_.assign(num_local_faces, INVALID_PEER_INDEX);
+
+  boost::unordered_flat_map<int, size_t> outgoing_peer_index_by_location;
+  const auto& location_successors = spds.GetLocationSuccessors();
+  outgoing_peer_index_by_location.reserve(location_successors.size());
+  for (size_t i = 0; i < location_successors.size(); ++i)
+    outgoing_peer_index_by_location.emplace(location_successors[i], i);
 
   std::map<int, std::vector<std::uint64_t>> incoming_slot_records_by_upstream_location;
   for (const auto& cell : grid.local_cells)
@@ -151,6 +158,13 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         throw std::logic_error("CBC non-local face slot exchange did not resolve an outgoing face.");
 
       outgoing_nonlocal_face_slots_by_local_face_[local_face_slot_offset + f] = slot_it->second;
+
+      const auto peer_it = outgoing_peer_index_by_location.find(face.GetNeighborPartitionID(&grid));
+      if (peer_it == outgoing_peer_index_by_location.end())
+        throw std::logic_error("CBC outgoing non-local face is missing an SPDS successor.");
+
+      outgoing_nonlocal_face_peer_indices_by_local_face_[local_face_slot_offset + f] =
+        peer_it->second;
     }
   }
 }
@@ -173,6 +187,16 @@ CBC_FLUDSCommonData::GetOutgoingNonlocalFaceSlotByLocalFace(std::uint32_t cell_l
   const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
   assert(slot_offset < outgoing_nonlocal_face_slots_by_local_face_.size());
   return outgoing_nonlocal_face_slots_by_local_face_[slot_offset];
+}
+
+size_t
+CBC_FLUDSCommonData::GetOutgoingNonlocalFacePeerIndexByLocalFace(std::uint32_t cell_local_id,
+                                                                 unsigned int face_id) const
+{
+  assert(cell_local_id < local_face_slot_offsets_.size());
+  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
+  assert(slot_offset < outgoing_nonlocal_face_peer_indices_by_local_face_.size());
+  return outgoing_nonlocal_face_peer_indices_by_local_face_[slot_offset];
 }
 
 std::uint32_t

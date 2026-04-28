@@ -20,6 +20,22 @@ namespace opensn
 std::vector<uint64_t> BuildLocationExtents(uint64_t local_size, const mpi::Communicator& comm);
 
 /**
+ * Tests a contiguous request array and returns true only when at least one request completed.
+ *
+ * This isolates OpenSn from the mpicpp-lite test_some return-type transition: older releases return
+ * the raw MPI outcount, while newer releases return a bool and resize `completed_indices`.
+ */
+inline bool
+TestSomeCompleted(std::vector<mpi::Request>& requests, std::vector<int>& completed_indices)
+{
+  const auto result = mpi::test_some(requests, completed_indices);
+  if constexpr (std::is_same_v<std::remove_cvref_t<decltype(result)>, bool>)
+    return result and not completed_indices.empty();
+  else
+    return result != MPI_UNDEFINED and result > 0;
+}
+
+/**
  * Given a map with keys indicating the destination process-ids and the values for each key a list
  * of values of type T (T must have an MPI_Datatype). Returns a map with the keys indicating the
  * source process-ids and the values for each key a list of values of type T (sent by the respective

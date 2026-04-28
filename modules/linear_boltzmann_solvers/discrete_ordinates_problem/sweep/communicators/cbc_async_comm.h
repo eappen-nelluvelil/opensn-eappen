@@ -6,9 +6,9 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
 #include "mpicpp-lite/mpicpp-lite.h"
-#include <boost/unordered/unordered_flat_map.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -29,7 +29,7 @@ public:
                                         const MPICommunicatorSet& comm_set);
 
   /// Queue a complete downwind face payload for asynchronous transmission.
-  void QueueDownwindMessage(int destination,
+  void QueueDownwindMessage(size_t peer_index,
                             size_t incoming_face_slot,
                             std::span<const double> payload);
 
@@ -61,17 +61,14 @@ protected:
   /// Destination-batched nonblocking send buffer.
   struct BufferItem
   {
-    /// Destination location.
-    int destination = 0;
+    /// SPDS-successor peer index.
+    size_t peer_index = 0;
 
     /// Destination communicator.
     const mpi::Communicator* comm = nullptr;
 
     /// Destination rank in `comm`.
     int rank = 0;
-
-    /// Active nonblocking send.
-    mpi::Request mpi_request;
 
     /// Posted-send flag.
     bool send_initiated = false;
@@ -93,14 +90,17 @@ protected:
     int rank = 0;
   };
 
-  /// Return cached MPI routing data for a destination location.
-  [[nodiscard]] const SendPeer& GetSendPeer(int destination);
-
-  /// Return the open send buffer for a destination location.
-  [[nodiscard]] BufferItem& GetOpenSendBuffer(int destination);
+  /// Return the open send buffer for an SPDS-successor peer.
+  [[nodiscard]] BufferItem& GetOpenSendBuffer(size_t peer_index);
 
   /// Queued or in-flight sends.
   std::vector<BufferItem> send_buffer_;
+
+  /// MPI requests aligned with `send_buffer_`.
+  std::vector<mpi::Request> send_requests_;
+
+  /// Completed request indices returned by MPI_Testsome.
+  std::vector<int> completed_send_indices_;
 
   /// Completed buffers retained for reuse.
   std::vector<BufferItem> reusable_send_buffers_;
@@ -108,11 +108,13 @@ protected:
   /// Packed receive scratch buffer.
   std::vector<std::byte> receive_buffer_;
 
-  /// Destination routing cache.
-  boost::unordered_flat_map<int, SendPeer> send_peers_;
+  /// SPDS-successor-indexed routing cache.
+  std::vector<SendPeer> send_peers_;
 
-  /// Open destination-batch indices.
-  boost::unordered_flat_map<int, size_t> open_send_buffer_indices_;
+  /// Open send-buffer index for each SPDS-successor peer.
+  std::vector<size_t> open_send_buffer_indices_;
+
+  static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();
 };
 
 } // namespace opensn

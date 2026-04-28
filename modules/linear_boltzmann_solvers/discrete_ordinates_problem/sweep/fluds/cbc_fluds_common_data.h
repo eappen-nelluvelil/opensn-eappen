@@ -32,11 +32,18 @@ public:
   [[nodiscard]] size_t GetOutgoingNonlocalFaceSlotByLocalFace(std::uint32_t cell_local_id,
                                                               unsigned int face_id) const;
 
+  /// Return the SPDS-successor peer index for an outgoing local cell face.
+  [[nodiscard]] size_t GetOutgoingNonlocalFacePeerIndexByLocalFace(std::uint32_t cell_local_id,
+                                                                   unsigned int face_id) const;
+
   /// Return the local cell whose task is unlocked by an incoming nonlocal face slot.
   [[nodiscard]] std::uint32_t GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot) const;
 
   /// Sentinel for cell faces without a nonlocal slot.
   static constexpr size_t INVALID_FACE_SLOT = std::numeric_limits<size_t>::max();
+
+  /// Sentinel for cell faces without an outgoing nonlocal peer.
+  static constexpr size_t INVALID_PEER_INDEX = std::numeric_limits<size_t>::max();
 
 private:
   /// Count of local faces with nonlocal upstream neighbors.
@@ -56,6 +63,9 @@ private:
 
   /// Local-face-indexed downstream incoming slots.
   std::vector<size_t> outgoing_nonlocal_face_slots_by_local_face_;
+
+  /// Local-face-indexed SPDS-successor peer indices.
+  std::vector<size_t> outgoing_nonlocal_face_peer_indices_by_local_face_;
 };
 
 } // namespace opensn
