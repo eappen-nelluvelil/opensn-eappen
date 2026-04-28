@@ -48,8 +48,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
                                                            const MPICommunicatorSet& comm_set)
   : AsynchronousCommunicator(fluds, comm_set),
     angle_set_id_(angle_set_id),
-    location_id_(opensn::mpi_comm.rank()),
-    receive_comm_(comm_set.LocICommunicator(location_id_)),
+    receive_comm_(comm_set.LocICommunicator(opensn::mpi_comm.rank())),
     cbc_fluds_(static_cast<CBC_FLUDS&>(fluds))
 {
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
@@ -89,7 +88,6 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
   const auto buffer_index = send_buffer_.size() - 1;
   auto& buffer = send_buffer_.back();
   const auto& peer = send_peers_[peer_index];
-  buffer.peer_index = peer_index;
   buffer.comm = peer.comm;
   buffer.rank = peer.rank;
   buffer.send_initiated = false;

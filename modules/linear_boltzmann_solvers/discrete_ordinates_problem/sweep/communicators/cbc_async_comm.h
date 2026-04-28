@@ -46,9 +46,6 @@ protected:
   /// MPI tag shared by the angle set.
   const size_t angle_set_id_;
 
-  /// Current location.
-  const int location_id_;
-
   /// Receiver-side communicator.
   const mpi::Communicator& receive_comm_;
 
@@ -58,12 +55,9 @@ protected:
   /// Number of locations that may send nonlocal payloads to this location.
   std::size_t num_receive_sources_ = 0;
 
-  /// Destination-batched nonblocking send buffer.
+  /// Packed nonblocking send buffer.
   struct BufferItem
   {
-    /// SPDS-successor peer index.
-    size_t peer_index = 0;
-
     /// Destination communicator.
     const mpi::Communicator* comm = nullptr;
 
@@ -80,7 +74,7 @@ protected:
     std::vector<std::byte> data;
   };
 
-  /// Cached destination routing.
+  /// Routing data for one SPDS successor.
   struct SendPeer
   {
     /// Destination communicator.
@@ -114,6 +108,7 @@ protected:
   /// Open send-buffer index for each SPDS-successor peer.
   std::vector<size_t> open_send_buffer_indices_;
 
+  /// Missing open send-buffer sentinel.
   static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();
 };
 

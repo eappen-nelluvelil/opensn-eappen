@@ -2,9 +2,45 @@
 // SPDX-License-Identifier: MIT
 
 #include "framework/mpi/mpi_utils.h"
+#include <limits>
+#include <stdexcept>
 
 namespace opensn
 {
+
+bool
+TestSomeCompleted(std::vector<mpi::Request>& requests, std::vector<int>& completed_indices)
+{
+  static_assert(sizeof(mpi::Request) == sizeof(MPI_Request),
+                "mpicpp-lite Request must remain layout-compatible with MPI_Request.");
+
+  if (requests.empty())
+  {
+    completed_indices.clear();
+    return false;
+  }
+
+  if (requests.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    throw std::logic_error("MPI_Testsome request count exceeds the MPI int range.");
+
+  auto* mpi_requests = reinterpret_cast<MPI_Request*>(requests.data());
+  int num_completed = MPI_UNDEFINED;
+  completed_indices.resize(requests.size());
+  MPI_CHECK(MPI_Testsome(static_cast<int>(requests.size()),
+                         mpi_requests,
+                         &num_completed,
+                         completed_indices.data(),
+                         MPI_STATUSES_IGNORE));
+
+  if (num_completed == MPI_UNDEFINED or num_completed == 0)
+  {
+    completed_indices.clear();
+    return false;
+  }
+
+  completed_indices.resize(static_cast<std::size_t>(num_completed));
+  return true;
+}
 
 std::vector<uint64_t>
 BuildLocationExtents(uint64_t local_size, const mpi::Communicator& comm)
