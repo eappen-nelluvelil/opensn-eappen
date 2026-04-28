@@ -5,10 +5,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/mpi_comm_set.h"
-#include "framework/mpi/mpi_utils.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
-#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <type_traits>
@@ -43,6 +41,17 @@ ReadMessageValue(const std::vector<std::byte>& buffer, std::size_t& offset)
 
 } // namespace
 
+void
+CBC_AsynchronousCommunicator::ResetOpenSendBufferIndices()
+{
+  for (const auto peer_index : open_send_peer_indices_)
+  {
+    assert(peer_index < open_send_buffer_indices_.size());
+    open_send_buffer_indices_[peer_index] = INVALID_BUFFER_INDEX;
+  }
+  open_send_peer_indices_.clear();
+}
+
 CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
                                                            FLUDS& fluds,
                                                            const MPICommunicatorSet& comm_set)
@@ -74,15 +83,11 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
     return send_buffer_[open_buffer_index];
 
   if (reusable_send_buffers_.empty())
-  {
     send_buffer_.emplace_back();
-    send_requests_.emplace_back();
-  }
   else
   {
     send_buffer_.push_back(std::move(reusable_send_buffers_.back()));
     reusable_send_buffers_.pop_back();
-    send_requests_.emplace_back();
   }
 
   const auto buffer_index = send_buffer_.size() - 1;
@@ -91,8 +96,10 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
   buffer.comm = peer.comm;
   buffer.rank = peer.rank;
   buffer.send_initiated = false;
+  buffer.completed = false;
   buffer.data.clear();
   open_buffer_index = buffer_index;
+  open_send_peer_indices_.push_back(peer_index);
   return buffer;
 }
 
@@ -126,59 +133,51 @@ CBC_AsynchronousCommunicator::SendData()
   if (send_buffer_.empty())
     return true;
 
+  bool all_messages_sent = true;
   const auto tag = static_cast<int>(angle_set_id_);
-  for (std::size_t i = 0; i < send_buffer_.size(); ++i)
+  for (auto& buffer_item : send_buffer_)
   {
-    auto& buffer_item = send_buffer_[i];
     if (not buffer_item.send_initiated)
     {
-      send_requests_[i] = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
+      buffer_item.mpi_request = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
       buffer_item.send_initiated = true;
     }
-  }
 
-  std::fill(open_send_buffer_indices_.begin(),
-            open_send_buffer_indices_.end(),
-            INVALID_BUFFER_INDEX);
-
-  const auto completed_send_indices = TestSomeCompleted(send_requests_, completed_send_indices_);
-  if (completed_send_indices.empty())
-    return false;
-
-  std::sort(completed_send_indices.begin(),
-            completed_send_indices.end(),
-            [](int lhs, int rhs) { return lhs > rhs; });
-
-  for (const int index : completed_send_indices)
-  {
-    assert(index >= 0);
-    const auto i = static_cast<std::size_t>(index);
-    assert(i < send_buffer_.size());
-    send_buffer_[i].send_initiated = false;
-    send_buffer_[i].data.clear();
-    reusable_send_buffers_.push_back(std::move(send_buffer_[i]));
-    if (i != send_buffer_.size() - 1)
+    if (not buffer_item.completed)
     {
-      send_buffer_[i] = std::move(send_buffer_.back());
-      send_requests_[i] = std::move(send_requests_.back());
+      if (mpi::test(buffer_item.mpi_request))
+        buffer_item.completed = true;
+      else
+        all_messages_sent = false;
     }
-    send_buffer_.pop_back();
-    send_requests_.pop_back();
   }
-  return send_buffer_.empty();
+
+  for (std::size_t i = 0; i < send_buffer_.size();)
+  {
+    if (send_buffer_[i].completed)
+    {
+      send_buffer_[i].send_initiated = false;
+      send_buffer_[i].data.clear();
+      reusable_send_buffers_.push_back(std::move(send_buffer_[i]));
+      if (i != send_buffer_.size() - 1)
+        send_buffer_[i] = std::move(send_buffer_.back());
+      send_buffer_.pop_back();
+    }
+    else
+      ++i;
+  }
+  ResetOpenSendBufferIndices();
+
+  return all_messages_sent;
 }
 
 void
 CBC_AsynchronousCommunicator::Reset()
 {
   send_buffer_.clear();
-  send_requests_.clear();
-  completed_send_indices_.clear();
   reusable_send_buffers_.clear();
   receive_buffer_.clear();
-  std::fill(open_send_buffer_indices_.begin(),
-            open_send_buffer_indices_.end(),
-            INVALID_BUFFER_INDEX);
+  ResetOpenSendBufferIndices();
 }
 
 void

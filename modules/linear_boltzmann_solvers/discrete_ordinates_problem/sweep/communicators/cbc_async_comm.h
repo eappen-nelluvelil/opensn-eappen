@@ -64,8 +64,14 @@ protected:
     /// Destination rank in `comm`.
     int rank = 0;
 
+    /// Active nonblocking send.
+    mpi::Request mpi_request;
+
     /// Posted-send flag.
     bool send_initiated = false;
+
+    /// Completed-send flag.
+    bool completed = false;
 
     /// Packed face records.
     std::vector<std::byte> data;
@@ -84,14 +90,11 @@ protected:
   /// Return the open send buffer for an SPDS-successor peer.
   [[nodiscard]] BufferItem& GetOpenSendBuffer(size_t peer_index);
 
+  /// Clear peer-index entries opened by the current send batch.
+  void ResetOpenSendBufferIndices();
+
   /// Queued or in-flight sends.
   std::vector<BufferItem> send_buffer_;
-
-  /// MPI requests aligned with `send_buffer_`.
-  std::vector<mpi::Request> send_requests_;
-
-  /// Completed request indices returned by MPI_Testsome.
-  std::vector<int> completed_send_indices_;
 
   /// Completed buffers retained for reuse.
   std::vector<BufferItem> reusable_send_buffers_;
@@ -104,6 +107,9 @@ protected:
 
   /// Open send-buffer index for each SPDS-successor peer.
   std::vector<size_t> open_send_buffer_indices_;
+
+  /// SPDS-successor peer indices with open buffers in the current send batch.
+  std::vector<size_t> open_send_peer_indices_;
 
   /// Missing open send-buffer sentinel.
   static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();

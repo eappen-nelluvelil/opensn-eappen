@@ -6,7 +6,6 @@
 #include "framework/runtime.h"
 #include <cstdint>
 #include <map>
-#include <span>
 #include <set>
 #include <type_traits>
 #include <vector>
@@ -20,9 +19,6 @@ namespace opensn
  * ends at extents[i+1]
  */
 std::vector<uint64_t> BuildLocationExtents(uint64_t local_size, const mpi::Communicator& comm);
-
-std::span<int> TestSomeCompleted(std::vector<mpi::Request>& requests,
-                                 std::vector<int>& completed_indices);
 
 /**
  * Given a map with keys indicating the destination process-ids and the values for each key a list
