@@ -92,6 +92,8 @@ private:
   /// Enumerate local directed faces and map them to producer and consumer cell ranks.
   void BuildLocalFaceTaskGraph();
 
+  void EnsureLocalFaceTaskGraph();
+
   /// Topological ordering of local cell IDs: topo_order_[rank] = cell_local_id.
   std::vector<std::uint32_t> topo_order_;
   /// Topological rank keyed by local cell ID.
@@ -128,6 +130,7 @@ private:
   std::size_t total_local_face_slot_nodes_ = 0;
   /// Maximum number of nodes across all local directed faces.
   std::size_t max_local_face_node_count_ = 0;
+  bool local_face_task_graph_built_ = false;
 
   /**
    * Recompute slot-local node extents and prefix offsets from the current slot assignment.

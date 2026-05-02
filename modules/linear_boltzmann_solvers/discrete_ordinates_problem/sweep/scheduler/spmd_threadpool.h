@@ -89,9 +89,9 @@ public:
   {
     AssignTask(std::forward<F>(task));
     const std::size_t n = worker_threads_.size();
-    outstanding_ += n;
     {
       std::scoped_lock<std::mutex> lock(mutex_);
+      outstanding_ += n;
       for (std::size_t i = 0; i < n; ++i)
         ++epoch_states_[i].request;
     }

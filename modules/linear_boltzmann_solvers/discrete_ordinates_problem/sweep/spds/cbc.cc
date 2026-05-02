@@ -118,6 +118,14 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
     static_cast<std::uint32_t>(local_face_producer_ranks_.size());
   local_face_slot_ids_.resize(local_face_producer_ranks_.size());
   std::iota(local_face_slot_ids_.begin(), local_face_slot_ids_.end(), std::uint32_t{0});
+  local_face_task_graph_built_ = true;
+}
+
+void
+CBC_SPDS::EnsureLocalFaceTaskGraph()
+{
+  if (not local_face_task_graph_built_)
+    BuildLocalFaceTaskGraph();
 }
 
 void
@@ -219,10 +227,6 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
   CommunicateLocationDependencies(location_dependencies_, global_dependencies);
   BuildTaskGraph();
-  BuildLocalFaceTaskGraph();
-
-  max_num_local_psi_slots_ = local_face_producer_ranks_.size();
-  UpdateLocalFaceSlotLayout();
 }
 
 const std::vector<Task>&
@@ -243,6 +247,8 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
     UpdateLocalFaceSlotLayout();
     return;
   }
+
+  EnsureLocalFaceTaskGraph();
 
   if (local_face_producer_ranks_.empty())
   {
