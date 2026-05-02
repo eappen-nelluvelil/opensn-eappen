@@ -49,6 +49,7 @@
 #include <atomic>
 #include <cassert>
 #include <cmath>
+#include <format>
 #include <iomanip>
 #include <limits>
 #include <numeric>
@@ -1507,20 +1508,31 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       const double avg_local_face_slots =
         static_cast<double>(global_total_local_face_slots) / static_cast<double>(global_num_spds);
 
-      log.Log() << "CBC SPDS cell-face slot plan calculated in " << max_elapsed_seconds
-                << " s with 1 thread/rank.\n"
-                << "  (avg, max, min) = (" << avg_local_face_slots << " slots, "
-                << global_max_local_face_slots << " slots, " << global_min_local_face_slots
-                << " slots).";
+      log.Log() << std::format("CBC SPDS cell-face slot planning\n"
+                               "  SPDS/rank                  : 1\n"
+                               "  Rank-local SPDS instances : {} across {} MPI ranks\n"
+                               "  Worker threads/rank       : 1\n"
+                               "  Wall time                  : {:.6g} s\n"
+                               "  Slots/SPDS (avg, min, max): {:.6g}, {}, {}",
+                               global_num_spds,
+                               mpi_comm.size(),
+                               max_elapsed_seconds,
+                               avg_local_face_slots,
+                               global_min_local_face_slots,
+                               global_max_local_face_slots);
     }
     else if (not cbc_spds_list.empty())
     {
       const auto thread_info = GetThreadResourceInfo();
       const auto num_workers = std::min(cbc_spds_list.size(), thread_info.available_threads);
 
+      std::size_t global_min_rank_spds = 0;
+      std::size_t global_max_rank_spds = 0;
       std::size_t global_num_spds = 0;
       std::size_t global_min_workers = 0;
       std::size_t global_max_workers = 0;
+      mpi_comm.all_reduce(cbc_spds_list.size(), global_min_rank_spds, mpi::op::min<std::size_t>());
+      mpi_comm.all_reduce(cbc_spds_list.size(), global_max_rank_spds, mpi::op::max<std::size_t>());
       mpi_comm.all_reduce(cbc_spds_list.size(), global_num_spds, mpi::op::sum<std::size_t>());
       mpi_comm.all_reduce(num_workers, global_min_workers, mpi::op::min<std::size_t>());
       mpi_comm.all_reduce(num_workers, global_max_workers, mpi::op::max<std::size_t>());
@@ -1528,9 +1540,18 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       SPMD_ThreadPool pool(num_workers);
       std::atomic<std::size_t> next_index{0};
 
-      log.Log() << "Computing cell-face slot plans for " << global_num_spds << " CBC SPDS across "
-                << mpi_comm.size() << " ranks with " << global_min_workers << "-"
-                << global_max_workers << " worker threads/rank.";
+      log.Log() << std::format("CBC SPDS cell-face slot planning\n"
+                               "  SPDS/rank                  : {}-{}\n"
+                               "  Rank-local SPDS instances : {} across {} MPI ranks\n"
+                               "  Worker threads/rank       : {}-{}\n"
+                               "  Launch resources          : {}",
+                               global_min_rank_spds,
+                               global_max_rank_spds,
+                               global_num_spds,
+                               mpi_comm.size(),
+                               global_min_workers,
+                               global_max_workers,
+                               FormatThreadResourceInfo(thread_info));
       log.LogAllVerbose1() << "CBC SPDS slot-plan thread resources on rank " << mpi_comm.rank()
                            << ": " << FormatThreadResourceInfo(thread_info)
                            << ", workers=" << num_workers << ".";
@@ -1580,10 +1601,13 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       const double avg_local_psi_slots =
         static_cast<double>(global_total_local_psi_slots) / static_cast<double>(global_num_spds);
 
-      log.Log() << "CBC SPDS cell-face slot plans calculated in " << max_elapsed_seconds << " s.\n"
-                << "  (avg, max, min) = (" << avg_local_psi_slots << " slots, "
-                << global_max_local_psi_slots << " slots, " << global_min_local_psi_slots
-                << " slots).";
+      log.Log() << std::format("CBC SPDS cell-face slot planning complete\n"
+                               "  Wall time                  : {:.6g} s\n"
+                               "  Slots/SPDS (avg, min, max): {:.6g}, {}, {}",
+                               max_elapsed_seconds,
+                               avg_local_psi_slots,
+                               global_min_local_psi_slots,
+                               global_max_local_psi_slots);
     }
   }
   else
@@ -2114,11 +2138,15 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
     std::uint64_t global_local_psi_storage = 0;
     std::uint64_t global_incoming_nonlocal_storage = 0;
     std::uint64_t global_outgoing_nonlocal_storage = 0;
+    std::uint64_t min_rank_fluds_count = 0;
+    std::uint64_t max_rank_fluds_count = 0;
     std::uint64_t min_rank_local_psi_storage = 0;
     std::uint64_t max_rank_local_psi_storage = 0;
 
     const auto fluds_count = static_cast<std::uint64_t>(cbc_fluds_local_psi_bytes.size());
     mpi_comm.all_reduce(fluds_count, global_fluds_count, mpi::op::sum<std::uint64_t>());
+    mpi_comm.all_reduce(fluds_count, min_rank_fluds_count, mpi::op::min<std::uint64_t>());
+    mpi_comm.all_reduce(fluds_count, max_rank_fluds_count, mpi::op::max<std::uint64_t>());
     mpi_comm.all_reduce(
       full_local_psi_storage_bytes, global_full_local_psi_storage, mpi::op::sum<std::uint64_t>());
     mpi_comm.all_reduce(local_psi_storage, global_local_psi_storage, mpi::op::sum<std::uint64_t>());
@@ -2152,13 +2180,13 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
       return std::string("0 B");
     };
 
-    std::ostringstream savings_out;
+    std::string savings;
     if (global_full_local_psi_storage > 0)
-      savings_out << 100.0 * (1.0 - (static_cast<double>(global_local_psi_storage) /
-                                     static_cast<double>(global_full_local_psi_storage)))
-                  << "%";
+      savings = std::format("{:.3f}%",
+                            100.0 * (1.0 - (static_cast<double>(global_local_psi_storage) /
+                                            static_cast<double>(global_full_local_psi_storage))));
     else
-      savings_out << "N/A";
+      savings = "N/A";
 
     const auto thread_info = GetThreadResourceInfo();
     std::ostringstream run_shape;
@@ -2172,29 +2200,39 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
     }
     run_shape << ", " << FormatThreadResourceInfo(thread_info);
 
-    log.Log() << (use_gpus_ ? "CBCD FLUDS" : "CBC FLUDS") << " psi bank storage across "
-              << global_fluds_count << " FLUDS instances.\n"
-              << "  Launch resources: " << run_shape.str() << ".\n"
-              << "  Local psi bank: total " << format_bytes(global_local_psi_storage)
-              << ", rank min/max (" << format_bytes(min_rank_local_psi_storage) << ", "
-              << format_bytes(max_rank_local_psi_storage) << "), savings vs full local-cell bank "
-              << savings_out.str() << ".\n";
+    log.Log() << std::format("{} FLUDS psi bank storage\n"
+                             "  FLUDS/rank                 : {}-{}\n"
+                             "  Rank-local FLUDS instances: {} across {} MPI ranks\n"
+                             "  Launch resources           : {}\n"
+                             "  Local psi bank             : total={}, rank min={}, rank max={}\n"
+                             "  Savings vs full local bank : {}",
+                             use_gpus_ ? "CBCD" : "CBC",
+                             min_rank_fluds_count,
+                             max_rank_fluds_count,
+                             global_fluds_count,
+                             mpi_comm.size(),
+                             run_shape.str(),
+                             format_bytes(global_local_psi_storage),
+                             format_bytes(min_rank_local_psi_storage),
+                             format_bytes(max_rank_local_psi_storage),
+                             savings);
 
     if (use_gpus_)
     {
-      log.Log() << "  Boundary psi is owned by the device boundary carrier, not CBCD_FLUDS.\n"
-                << "  Incoming non-local bank: " << format_bytes(global_incoming_nonlocal_storage)
-                << ".\n"
-                << "  Outgoing non-local bank: " << format_bytes(global_outgoing_nonlocal_storage)
-                << ".";
+      log.Log() << std::format(
+        "  Boundary psi ownership      : device boundary carrier, not CBCD_FLUDS\n"
+        "  Incoming non-local bank     : {}\n"
+        "  Outgoing non-local bank     : {}",
+        format_bytes(global_incoming_nonlocal_storage),
+        format_bytes(global_outgoing_nonlocal_storage));
     }
     else
     {
-      log.Log() << "  Incoming non-local receive bank: "
-                << format_bytes(global_incoming_nonlocal_storage) << ".\n"
-                << "  Boundary psi is owned by sweep-boundary objects, not CBC_FLUDS.\n"
-                << "  Outgoing non-local send staging is owned by CBC_AsynchronousCommunicator, "
-                   "not CBC_FLUDS.";
+      log.Log() << std::format(
+        "  Incoming non-local receive bank: {}\n"
+        "  Boundary psi ownership         : sweep-boundary objects, not CBC_FLUDS\n"
+        "  Outgoing non-local staging     : CBC_AsynchronousCommunicator, not CBC_FLUDS",
+        format_bytes(global_incoming_nonlocal_storage));
     }
   }
 
