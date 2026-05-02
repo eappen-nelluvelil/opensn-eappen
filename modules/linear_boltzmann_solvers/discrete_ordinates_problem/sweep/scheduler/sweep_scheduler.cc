@@ -11,6 +11,7 @@
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <thread>
 #include <unordered_map>
 
 namespace opensn
