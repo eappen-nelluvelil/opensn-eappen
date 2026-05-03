@@ -5,12 +5,15 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include <cstdint>
+#include <vector>
 
 namespace opensn
 {
 
 class CBC_SPDS;
 
+/// CBC angle set.
 class CBC_AngleSet : public AngleSet
 {
 public:
@@ -28,13 +31,14 @@ public:
 
   int GetMaxBufferMessages() const override { return 0; }
 
-  void SetMaxBufferMessages(int new_max) override {}
+  void SetMaxBufferMessages(int max_buffer_messages) override { (void)max_buffer_messages; }
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
   AngleSetStatus FlushSendBuffers() override
   {
-    const bool all_messages_sent = async_comm_.SendData();
+    const bool all_messages_sent =
+      (not async_comm_.HasPendingCommunication()) or async_comm_.SendData();
     return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
   }
 
@@ -44,7 +48,12 @@ public:
 
 protected:
   const CBC_SPDS& cbc_spds_;
-  std::vector<Task> current_task_list_;
+  const std::vector<Task>* task_list_ = nullptr;
+  std::vector<unsigned int> remaining_dependencies_;
+  std::vector<unsigned char> completed_tasks_;
+  std::vector<std::uint32_t> ready_tasks_;
+  std::vector<std::uint32_t> received_task_buffer_;
+  size_t num_completed_tasks_ = 0;
   CBC_AsynchronousCommunicator async_comm_;
 };
 
