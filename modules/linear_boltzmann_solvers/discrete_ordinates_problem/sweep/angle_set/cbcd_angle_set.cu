@@ -227,7 +227,7 @@ CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::size_
   auto& completed_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.completed_buffer_index);
   cbcd_fluds_.CopyOutgoingPsiBackToHost(
     sweep_chunk,
-    *async_comm_,
+    async_comm_,
     worker_id,
     GetID(),
     GetAngleIndices(),
@@ -290,7 +290,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
 
   auto& ready_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index);
   const bool kernel_completed = batch_state_.kernel_in_flight and stream_.is_completed();
-  const bool has_incoming = async_comm_->HasIncoming(GetID());
+  const bool has_incoming = async_comm_ != nullptr and async_comm_->HasIncoming(GetID());
   const bool can_finalize = (num_completed_tasks_ == num_tasks_) and
                             (not batch_state_.kernel_in_flight) and
                             (not batch_state_.completed_batch_pending);
@@ -351,7 +351,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
       (not batch_state_.completed_batch_pending))
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
-    async_comm_->SignalAngleSetComplete(GetID());
+    if (async_comm_ != nullptr)
+      async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
     executed_ = true;
     cbcd_fluds_.CopySavedPsiFromDevice();

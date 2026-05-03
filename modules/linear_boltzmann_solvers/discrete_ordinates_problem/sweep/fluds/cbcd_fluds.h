@@ -125,7 +125,7 @@ public:
    * \param cell_local_ids Local cells in the just-completed batch.
    */
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
-                                 CBCD_AsynchronousCommunicator& async_comm,
+                                 CBCD_AsynchronousCommunicator* async_comm,
                                  std::size_t producer_id,
                                  std::size_t angle_set_id,
                                  const std::vector<std::uint32_t>& angle_indices,

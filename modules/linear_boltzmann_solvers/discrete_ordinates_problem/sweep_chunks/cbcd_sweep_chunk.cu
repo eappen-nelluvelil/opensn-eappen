@@ -115,28 +115,36 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
     }
 
-    std::size_t max_message_bytes = 0;
-    for (const auto& [_, per_as_bytes] : source_as_section_bytes)
+    const bool has_nonlocal_faces =
+      std::any_of(capacities.begin(),
+                  capacities.end(),
+                  [](const auto& capacity)
+                  { return capacity.incoming_faces > 0 or capacity.outgoing_faces > 0; });
+    if (has_nonlocal_faces)
     {
-      std::size_t msg_size_in_bytes = sizeof(std::size_t);
-      for (const auto& section_bytes : per_as_bytes)
+      std::size_t max_message_bytes = 0;
+      for (const auto& [_, per_as_bytes] : source_as_section_bytes)
       {
-        if (section_bytes == 0)
-          continue;
-        msg_size_in_bytes += 2 * sizeof(std::size_t) + section_bytes;
+        std::size_t msg_size_in_bytes = sizeof(std::size_t);
+        for (const auto& section_bytes : per_as_bytes)
+        {
+          if (section_bytes == 0)
+            continue;
+          msg_size_in_bytes += 2 * sizeof(std::size_t) + section_bytes;
+        }
+        max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
       }
-      max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
-    }
 
-    std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
-    async_comm_ =
-      std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
-                                                      angle_sets_.front()->GetCommunicatorSet(),
-                                                      incoming_source_partitions_by_angle_set,
-                                                      max_message_bytes,
-                                                      capacities);
-    for (auto* angle_set : angle_sets_)
-      angle_set->SetCommunicator(*async_comm_);
+      std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
+      async_comm_ =
+        std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
+                                                        angle_sets_.front()->GetCommunicatorSet(),
+                                                        incoming_source_partitions_by_angle_set,
+                                                        max_message_bytes,
+                                                        capacities);
+      for (auto* angle_set : angle_sets_)
+        angle_set->SetCommunicator(*async_comm_);
+    }
   }
 }
 
