@@ -16,6 +16,7 @@ include(CheckTypeSize)
 include(CheckSymbolExists)
 include(CheckCXXCompilerFlag)
 include(CheckLinkerFlag)
+include(CheckCaliperVersion)
 include(FetchContent)
 
 # Inherit link-time library paths into the install rpath to keep runtime
@@ -216,10 +217,19 @@ if(PETSC_USE_COMPLEX)
     "Reconfigure PETSc with --with-scalar-type=real")
 endif()
 
+set(OPENSN_CALIPER_MIN_VERSION "2.14.0")
 find_package(caliper REQUIRED)
-if(caliper_FOUND)
-  message(STATUS "Found Caliper: ${caliper_DIR}")
+opensn_get_caliper_version(OPENSN_CALIPER_FOUND_VERSION)
+opensn_check_caliper_version(${OPENSN_CALIPER_MIN_VERSION} OPENSN_CALIPER_VERSION_OK)
+if(NOT OPENSN_CALIPER_VERSION_OK)
+  if(OPENSN_CALIPER_FOUND_VERSION STREQUAL "")
+    set(OPENSN_CALIPER_FOUND_VERSION "unknown")
+  endif()
+  message(FATAL_ERROR
+    "Caliper ${OPENSN_CALIPER_MIN_VERSION} or newer is required; "
+    "found ${OPENSN_CALIPER_FOUND_VERSION} at ${caliper_DIR}")
 endif()
+message(STATUS "Found Caliper: ${caliper_DIR} (version ${OPENSN_CALIPER_FOUND_VERSION})")
 
 # google test
 find_package(GTest QUIET)

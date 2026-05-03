@@ -8,7 +8,6 @@
 #include "framework/utils/utils.h"
 #include "framework/utils/timer.h"
 #include "framework/runtime.h"
-#include "caliper/cali.h"
 #include "cxxopts/cxxopts.h"
 #include <string>
 
@@ -99,7 +98,6 @@ PyApp::Run(int argc, char** argv)
   else
     return EXIT_FAILURE;
 
-  cali_mgr.flush();
   return EXIT_SUCCESS;
 }
 
@@ -115,8 +113,9 @@ PyApp::ProcessArguments(int argc, char** argv)
     ("h,help",                      "Help message")
     ("c,suppress-color",            "Suppress color output")
     ("v,verbose",                   "Verbosity level (0 to 3). Default is 0.", cxxopts::value<unsigned int>())
-    ("caliper",                     "Enable Caliper reporting",
-      cxxopts::value<std::string>()->implicit_value("runtime-report(calc.inclusive=true),max_column_width=80"))
+    ("caliper",                     "Enable Caliper with an optional configuration string",
+      cxxopts::value<std::string>()->implicit_value(opensn::default_caliper_config))
+    ("caliper-preset",              "Enable a named Caliper preset", cxxopts::value<std::string>())
     ("i,input",                     "Input file", cxxopts::value<std::string>())
     ("p,py",                        "Python expression", cxxopts::value<std::vector<std::string>>());
     /* clang-format on */
@@ -139,10 +138,18 @@ PyApp::ProcessArguments(int argc, char** argv)
     if (result.count("suppress-color"))
       opensn::log.SetColorEnabled(false);
 
+    if (result.count("caliper") and result.count("caliper-preset"))
+      throw std::runtime_error("Use either --caliper or --caliper-preset, not both.");
+
     if (result.count("caliper"))
     {
       opensn::use_caliper = true;
       opensn::cali_config = result["caliper"].as<std::string>();
+    }
+    else if (result.count("caliper-preset"))
+    {
+      opensn::use_caliper = true;
+      opensn::cali_config = GetCaliperPresetConfig(result["caliper-preset"].as<std::string>());
     }
 
     if (result.count("py"))

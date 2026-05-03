@@ -19,30 +19,45 @@ endif()
 message(STATUS "CMAKE_INSTALL_PREFIX is set to: ${CMAKE_INSTALL_PREFIX}")
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/../../cmake")
+include(CheckCaliperVersion)
 
 set(OPENSN_ENV_DIR "${CMAKE_INSTALL_PREFIX}/bin")
 set(ENV_SCRIPT "${OPENSN_ENV_DIR}/set_opensn_env.sh")
 
 find_package(MPI REQUIRED)
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
-find_package(mpicpp-lite 2.5 QUIET)
 
+option(OPENSN_FORCE_DEPENDENCY_BUILDS "Build managed dependencies even if compatible packages are found" OFF)
 option(ENABLE_BOOST   "Install Boost"   ON)
 option(ENABLE_PETSC   "Install PETSc"   ON)
 option(ENABLE_HDF5    "Install HDF5"    ON)
 option(ENABLE_VTK     "Install VTK"     ON)
 option(ENABLE_CALIPER "Install Caliper" ON)
+set(OPENSN_CALIPER_VERSION "2.14.0" CACHE STRING "Caliper version to install")
+option(OPENSN_CALIPER_WITH_CUDA "Build Caliper CUDA/CUPTI profiling services" OFF)
+set(OPENSN_CALIPER_ROCM_BACKEND "none" CACHE STRING "Caliper ROCm profiling backend")
+set_property(CACHE OPENSN_CALIPER_ROCM_BACKEND PROPERTY STRINGS none roctracer rocprofiler)
+if(NOT OPENSN_CALIPER_ROCM_BACKEND MATCHES "^(none|roctracer|rocprofiler)$")
+  message(FATAL_ERROR "OPENSN_CALIPER_ROCM_BACKEND must be one of: none, roctracer, rocprofiler")
+endif()
 if(ENABLE_VTK AND NOT ENABLE_HDF5)
   message(STATUS "ENABLE_VTK=ON requires HDF5; enabling HDF5")
   set(ENABLE_HDF5 ON CACHE BOOL "" FORCE)
+endif()
+if(OPENSN_FORCE_DEPENDENCY_BUILDS)
+  message(STATUS "Forcing managed dependency builds; compatible system packages will be ignored")
+endif()
+
+if(NOT OPENSN_FORCE_DEPENDENCY_BUILDS)
+  find_package(mpicpp-lite 2.5 QUIET)
 endif()
 
 set(INSTALLED_DEP_COUNT 0)
 set(ALL_DEP_TARGETS)
 
 # mpicpp-lite install
-if (TARGET mpicpp-lite::mpicpp-lite)
-  message(STATUS "Found mpicpp-lite: " ${MPICPP_LITE_VERSION})
+if (NOT OPENSN_FORCE_DEPENDENCY_BUILDS AND TARGET mpicpp-lite::mpicpp-lite)
+  message(STATUS "Found mpicpp-lite: ${MPICPP_LITE_VERSION}")
   if(NOT TARGET mpicpp-lite)
     add_custom_target(mpicpp-lite)
   endif()
@@ -74,9 +89,11 @@ endif()
 
 # Boost install (header-only)
 if(ENABLE_BOOST)
-  find_package(Boost CONFIG QUIET)
-  if (NOT Boost_FOUND)
-    find_package(Boost QUIET)
+  if(NOT OPENSN_FORCE_DEPENDENCY_BUILDS)
+    find_package(Boost CONFIG QUIET)
+    if (NOT Boost_FOUND)
+      find_package(Boost QUIET)
+    endif()
   endif()
   if(Boost_FOUND)
     message(STATUS "Found Boost: ${Boost_DIR}")
@@ -105,7 +122,9 @@ endif()
 
 # PETSc
 if(ENABLE_PETSC)
-  find_package(PETSc 3.17 QUIET)
+  if(NOT OPENSN_FORCE_DEPENDENCY_BUILDS)
+    find_package(PETSc 3.17 QUIET)
+  endif()
   if (PETSC_FOUND)
     check_symbol_exists(PETSC_USE_64BIT_INDICES "${PETSC_INCLUDE_DIR}/petscconf.h" PETSC_USE_64BIT_INDICES)
     check_symbol_exists(PETSC_HAVE_PTSCOTCH "${PETSC_INCLUDE_DIR}/petscconf.h" PETSC_HAVE_PTSCOTCH)
@@ -146,7 +165,9 @@ endif()
 
 # HDF5
 if(ENABLE_HDF5)
-  find_package(HDF5 COMPONENTS C HL QUIET)
+  if(NOT OPENSN_FORCE_DEPENDENCY_BUILDS)
+    find_package(HDF5 COMPONENTS C HL QUIET)
+  endif()
   if (HDF5_FOUND)
     message(STATUS "Found HDF5: ${HDF5_VERSION}")
     if(NOT TARGET hdf5)
@@ -161,7 +182,7 @@ if(ENABLE_HDF5)
       CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
       BUILD_COMMAND
-        ${CMAKE_COMMAND} --build <BINARY_DIR> -- -j${JOBS}
+        ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${JOBS}
       INSTALL_COMMAND
         ${CMAKE_COMMAND} --build <BINARY_DIR> --target install
       LOG_DOWNLOAD  1
@@ -179,19 +200,21 @@ endif()
 
 # VTK
 if(ENABLE_VTK)
-  find_package(VTK COMPONENTS
-               CommonCore
-               CommonDataModel
-               IOLegacy
-               IOCore
-               IOXML
-               ParallelCore
-               IOParallelXML
-               FiltersCore
-               IOEnSight
-               IOExodus
-               QUIET
-              )
+  if(NOT OPENSN_FORCE_DEPENDENCY_BUILDS)
+    find_package(VTK COMPONENTS
+                 CommonCore
+                 CommonDataModel
+                 IOLegacy
+                 IOCore
+                 IOXML
+                 ParallelCore
+                 IOParallelXML
+                 FiltersCore
+                 IOEnSight
+                 IOExodus
+                 QUIET
+                )
+  endif()
   if (VTK_FOUND)
     message(STATUS "Found VTK: ${VTK_DIR}")
     if(NOT TARGET vtk)
@@ -208,8 +231,9 @@ if(ENABLE_VTK)
                         -DVTK_GROUP_ENABLE_Imaging=DONT_WANT -DVTK_GROUP_ENABLE_Web=DONT_WANT
                         -DVTK_GROUP_ENABLE_Qt=DONT_WANT -DVTK_MODULE_USE_EXTERNAL_VTK_hdf5=ON
                         -DCMAKE_BUILD_TYPE=Release <SOURCE_DIR>
-      BUILD_COMMAND make -j${JOBS}
-      INSTALL_COMMAND make install
+      BINARY_DIR ${CMAKE_BINARY_DIR}/vtk-build
+      BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${JOBS}
+      INSTALL_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target install
       DEPENDS hdf5
       LOG_DOWNLOAD  1
       LOG_UPDATE    1
@@ -226,22 +250,53 @@ endif()
 
 # Caliper
 if(ENABLE_CALIPER)
-  find_package(caliper QUIET)
+  if(NOT OPENSN_FORCE_DEPENDENCY_BUILDS)
+    find_package(caliper QUIET)
+  endif()
+  set(CALIPER_CONFIG_OK FALSE)
   if(caliper_FOUND)
-    message(STATUS "Found Caliper: ${caliper_DIR}")
+    opensn_get_caliper_version(CALIPER_FOUND_VERSION)
+    opensn_check_caliper_version(${OPENSN_CALIPER_VERSION} CALIPER_CONFIG_OK)
+  endif()
+
+  if(caliper_FOUND AND CALIPER_CONFIG_OK)
+    message(STATUS "Found Caliper: ${caliper_DIR} (version ${CALIPER_FOUND_VERSION})")
     if(NOT TARGET caliper)
       add_custom_target(caliper)
     endif()
     list(APPEND ALL_DEP_TARGETS caliper)
   else()
-    ExternalProject_Add(caliper
-      URL https://github.com/LLNL/Caliper/archive/refs/tags/v2.13.0.tar.gz
+    if(caliper_FOUND)
+      if(CALIPER_FOUND_VERSION STREQUAL "")
+        set(CALIPER_FOUND_VERSION "unknown")
+      endif()
+      message(STATUS
+        "Found Caliper ${CALIPER_FOUND_VERSION}, but ${OPENSN_CALIPER_VERSION} is required")
+    endif()
+
+    set(_caliper_with_roctracer OFF)
+    set(_caliper_with_rocprofiler OFF)
+    if(OPENSN_CALIPER_ROCM_BACKEND STREQUAL "roctracer")
+      set(_caliper_with_roctracer ON)
+    elseif(OPENSN_CALIPER_ROCM_BACKEND STREQUAL "rocprofiler")
+      set(_caliper_with_rocprofiler ON)
+    endif()
+
+    ExternalProject_Add(caliper_ext
+      URL https://github.com/LLNL/Caliper/archive/refs/tags/v${OPENSN_CALIPER_VERSION}.tar.gz
       SOURCE_DIR ${CMAKE_BINARY_DIR}/caliper-src
       CONFIGURE_COMMAND ${CMAKE_COMMAND}
         -S <SOURCE_DIR>
         -B <BINARY_DIR>
         -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
-        -DWITH_MPI=ON -DWITH_KOKKOS=OFF -DWITH_GOTCHA=OFF
+        -DCMAKE_BUILD_TYPE=Release
+        -DWITH_MPI=ON
+        -DWITH_KOKKOS=OFF
+        -DWITH_GOTCHA=OFF
+        -DWITH_CUPTI=${OPENSN_CALIPER_WITH_CUDA}
+        -DWITH_NVTX=${OPENSN_CALIPER_WITH_CUDA}
+        -DWITH_ROCTRACER=${_caliper_with_roctracer}
+        -DWITH_ROCPROFILER=${_caliper_with_rocprofiler}
       BUILD_COMMAND   ${CMAKE_COMMAND} --build <BINARY_DIR> -- -j${JOBS}
       INSTALL_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target install --
       LOG_DOWNLOAD  1
@@ -251,7 +306,7 @@ if(ENABLE_CALIPER)
       LOG_INSTALL   1
       LOG_TEST      1
     )
-    list(APPEND ALL_DEP_TARGETS caliper)
+    list(APPEND ALL_DEP_TARGETS caliper_ext)
     math(EXPR INSTALLED_DEP_COUNT "${INSTALLED_DEP_COUNT}+1")
   endif()
 endif()

@@ -5,7 +5,6 @@
 #include "python/lib/py_env.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
-#include "caliper/cali.h"
 #include "petscsys.h"
 #include <pybind11/eval.h>
 #include <stdexcept>
@@ -99,7 +98,7 @@ WrapSettings(py::module& context)
     {
       if (use_caliper)
       {
-        throw std::runtime_error("This function can only be called before enabling Cailper.");
+        throw std::runtime_error("This function can only be called before enabling Caliper.");
       }
       cali_config = config;
     },
@@ -111,29 +110,43 @@ WrapSettings(py::module& context)
 
     Parameters
     ----------
-    config: str, default='runtime-report(calc.inclusive=true),max_column_width=80'
+    config: str
         Configuration.
     )",
-    py::arg("config") = "runtime-report(calc.inclusive=true),max_column_width=80"
+    py::arg("config") = default_caliper_config
+  );
+  context.def(
+    "SetCaliperPreset",
+    [](const std::string& preset)
+    {
+      if (use_caliper)
+        throw std::runtime_error("This function can only be called before enabling Caliper.");
+      cali_config = GetCaliperPresetConfig(preset);
+    },
+    "Set Caliper configuration from a built-in OpenSn preset.",
+    py::arg("preset")
   );
   context.def(
     "EnableCaliper",
     []()
     {
-      // check if caliper is already initialized
       if (use_caliper)
       {
         throw std::runtime_error("Caliper is already set.");
       }
       use_caliper = true;
-      // initialize Caliper
-      cali_mgr.add(cali_config.c_str());
-      cali_set_global_string_byname("opensn.version", GetVersionStr().c_str());
-      cali_set_global_string_byname("opensn.input", input_path.c_str());
-      cali_mgr.start();
+      try
+      {
+        StartCaliper();
+      }
+      catch (...)
+      {
+        use_caliper = false;
+        throw;
+      }
     },
     R"(
-    Start the Caliper manager and mark the program begin.
+    Start the Caliper manager.
     )"
   );
   // clang-format on
@@ -174,13 +187,26 @@ WrapSysArgv(py::module& context)
         // caliper
         if (arg == "--caliper")
         {
+          use_caliper = true;
+          cali_config = default_caliper_config;
+          if (i_arg + 1 < sys_argv.size())
+          {
+            const auto next_arg = sys_argv[i_arg + 1].cast<std::string>();
+            if (not next_arg.starts_with("-"))
+            {
+              cali_config = next_arg;
+              ++i_arg;
+            }
+          }
+          StartCaliper();
+          continue;
+        }
+        if (arg == "--caliper-preset")
+        {
           auto next_arg = sys_argv[++i_arg].cast<std::string>();
           use_caliper = true;
-          cali_config = next_arg;
-          cali_mgr.add(cali_config.c_str());
-          cali_set_global_string_byname("opensn.version", GetVersionStr().c_str());
-          cali_set_global_string_byname("opensn.input", input_path.c_str());
-          cali_mgr.start();
+          cali_config = GetCaliperPresetConfig(next_arg);
+          StartCaliper();
           continue;
         }
         // PETSc handler
