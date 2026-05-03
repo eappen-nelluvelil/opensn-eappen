@@ -57,8 +57,6 @@ PyEnv::~PyEnv()
     std::cout << "Elapsed execution time: " << program_timer.GetTimeString() << "\n";
     std::cout << Timer::GetLocalDateTimeString() << " " << program << " finished execution.\n";
   }
-  // flush caliper
-  cali_mgr.flush();
 }
 
 std::unique_ptr<PyEnv> PyEnv::p_default_env{};

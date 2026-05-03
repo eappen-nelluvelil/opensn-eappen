@@ -41,7 +41,7 @@ build (if not found on your system):
 2. Boost 1.86+
 3. HDF5 1.14+
 4. VTK 9.3.0+
-5. Caliper 2.10+
+5. Caliper 2.14+
 
 Virtual environments (recommended)
 ----------------------------------
@@ -99,16 +99,18 @@ directory using **CMake**:
 
 .. code-block:: shell
 
-   mkdir build_deps && cd build_deps
-   cmake -DCMAKE_INSTALL_PREFIX=/path/to/dependencies/directory \
-         /path/to/opensn/tools/dependencies
-   make -j
-   cd ..
+   cmake -S /path/to/opensn/tools/dependencies \
+         -B build_deps \
+         -DCMAKE_INSTALL_PREFIX=/path/to/dependencies/directory \
+         -DOPENSN_FORCE_DEPENDENCY_BUILDS=ON
+   cmake --build build_deps --parallel $NPROC
    rm -rf build_deps
 
 During this step, **CMake** automatically searches for compatible system
 installations of the required packages. Any missing dependencies will be
 downloaded, built, and installed into the specified directory.
+``OPENSN_FORCE_DEPENDENCY_BUILDS`` gives a reproducible prefix by ignoring
+compatible packages from the current shell environment.
 
 When the process completes, a helper script named ``set_opensn_env.sh``
 is generated in the installation directory:
@@ -129,6 +131,44 @@ example, ``~/.bashrc`` or ``~/.zshrc``):
 Sourcing this script ensures that **OpenSn** uses the correct versions
 of all required dependencies. This setup is recommended for both end
 users and developers working on the OpenSn code base.
+
+Caliper can also be built with GPU profiling support. Enable CUDA/CUPTI
+profiling when building dependencies for NVIDIA GPUs:
+
+.. code-block:: shell
+
+   cmake -S /path/to/opensn/tools/dependencies \
+         -B build_deps \
+         -DCMAKE_INSTALL_PREFIX=/path/to/dependencies/directory \
+         -DOPENSN_FORCE_DEPENDENCY_BUILDS=ON \
+         -DOPENSN_CALIPER_WITH_CUDA=ON
+   cmake --build build_deps --parallel $NPROC
+
+For ROCm/HIP systems, use the rocprofiler backend when it is available:
+
+.. code-block:: shell
+
+   cmake -S /path/to/opensn/tools/dependencies \
+         -B build_deps \
+         -DCMAKE_INSTALL_PREFIX=/path/to/dependencies/directory \
+         -DOPENSN_FORCE_DEPENDENCY_BUILDS=ON \
+         -DOPENSN_CALIPER_ROCM_BACKEND=rocprofiler
+   cmake --build build_deps --parallel $NPROC
+
+After installing a new dependency prefix, source its generated environment
+script before configuring OpenSn:
+
+.. code-block:: shell
+
+   source /path/to/dependencies/directory/bin/set_opensn_env.sh
+
+If you are switching from an older dependency prefix in the same shell, first
+clear stale CMake package search paths:
+
+.. code-block:: shell
+
+   unset CMAKE_PREFIX_PATH
+   hash -r
 
 Configure and build OpenSn
 --------------------------
@@ -151,10 +191,26 @@ To compile the console application:
 
 .. code-block:: shell
 
-   mkdir build
-   cd build
-   cmake ..
-   make -j$NPROC
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Native
+   cmake --build build --parallel $NPROC
+
+``Native`` enables architecture-specific host optimizations for the machine
+where OpenSn is built. Use ``Release`` instead if the build node is not
+representative of the compute nodes where the executable will run.
+
+CUDA and HIP builds should also specify the target device architecture:
+
+.. code-block:: shell
+
+   cmake -S . -B build-cuda \
+         -DCMAKE_BUILD_TYPE=Native \
+         -DOPENSN_WITH_CUDA=ON \
+         -DCMAKE_CUDA_ARCHITECTURES=<cuda-architecture>
+
+   cmake -S . -B build-hip \
+         -DCMAKE_BUILD_TYPE=Native \
+         -DOPENSN_WITH_HIP=ON \
+         -DCMAKE_HIP_ARCHITECTURES=<hip-architecture>
 
 .. danger::
 
@@ -204,6 +260,38 @@ Run the regression tests to verify your installation:
    .. code-block:: shell
 
       cmake -DOPENSN_WITH_PYTHON_MODULE=ON ..
+
+Caliper profiling
+-----------------
+
+The console executable accepts raw Caliper configuration strings and a small
+set of OpenSn presets:
+
+.. code-block:: shell
+
+   opensn --caliper -i input.py
+   opensn --caliper-preset mpi -i input.py
+   opensn --caliper-preset cuda -i input.py
+   opensn --caliper-preset hip -i input.py
+
+``--caliper`` without an argument prints an inclusive runtime report for
+annotated OpenSn regions. The ``mpi`` preset adds MPI timing, message counts,
+message sizes, and memory high-water marks. The ``cuda`` and ``hip`` presets
+require Caliper to be built with the corresponding GPU profiling backend.
+
+For machine-readable output, use:
+
+.. code-block:: shell
+
+   opensn --caliper-preset profile -i input.py
+   opensn --caliper-preset cuda-profile -i input.py
+   opensn --caliper-preset hip-profile -i input.py
+
+Raw Caliper configurations remain supported:
+
+.. code-block:: shell
+
+   opensn --caliper "runtime-report(calc.inclusive=true),profile.mpi" -i input.py
 
 Build documentation
 -------------------

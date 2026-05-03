@@ -491,6 +491,7 @@ Caliper configuration
    :template: noinit.rst
 
    context.SetCaliperConfig
+   context.SetCaliperPreset
    context.EnableCaliper
 
 Argument vector
