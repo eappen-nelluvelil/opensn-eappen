@@ -108,7 +108,7 @@ CBCD_FLUDS::CreatePointerSet()
 
 void
 CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
-                                      CBCD_AsynchronousCommunicator& async_comm,
+                                      CBCD_AsynchronousCommunicator* async_comm,
                                       const std::size_t producer_id,
                                       const std::size_t angle_set_id,
                                       const std::vector<std::uint32_t>&,
@@ -124,10 +124,11 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
   {
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
+      assert(async_comm != nullptr);
       const std::size_t face_data_size =
         static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       const int dest_rank = common_data_.GetOutgoingLocalities()[face_info.dest_slot];
-      async_comm.EnqueueOutgoing(
+      async_comm->EnqueueOutgoing(
         dest_rank,
         producer_id,
         angle_set_id,
