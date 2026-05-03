@@ -55,6 +55,8 @@ public:
     return data_.data() + i * padded_words_per_row_;
   }
 
+  std::size_t Size() const noexcept { return n_; }
+
   void SetBit(const std::size_t i, const std::size_t j) noexcept
   {
     Row(i)[j / 64] |= (1ULL << (j % 64));
@@ -149,6 +151,11 @@ struct DFSFrame
 struct ThreadLocalWorkspace
 {
   BitMatrix reachability;
+  std::vector<std::uint32_t> task_mate_u;
+  std::vector<std::uint32_t> task_mate_v;
+  std::vector<int> task_dist;
+  std::vector<std::uint32_t> task_queue;
+  std::vector<DFSFrame> task_dfs_frames;
   std::vector<std::uint32_t> face_mate_u;
   std::vector<std::uint32_t> face_mate_v;
   std::vector<int> face_dist;
@@ -162,6 +169,17 @@ struct ThreadLocalWorkspace
   std::vector<std::uint32_t> greedy_consumer_rank_order;
   std::vector<std::uint32_t> face_last_rank_for_slot;
   std::vector<DFSFrame> dfs_frames;
+
+  void PrepareTaskMatching(const std::size_t num_tasks)
+  {
+    task_mate_u.assign(num_tasks, INVALID_INDEX);
+    task_mate_v.assign(num_tasks, INVALID_INDEX);
+    task_dist.assign(num_tasks, -1);
+    if (task_queue.size() < num_tasks)
+      task_queue.resize(num_tasks);
+    if (task_dfs_frames.capacity() < num_tasks)
+      task_dfs_frames.reserve(num_tasks);
+  }
 
   void PrepareMatching(const std::size_t num_consumer_ranks, const std::size_t num_faces)
   {
@@ -182,6 +200,179 @@ struct ThreadLocalWorkspace
     greedy_consumer_rank_order.clear();
     candidate_producer_ranks.clear();
   }
+};
+
+class LocalTaskHopcroftKarp
+{
+public:
+  explicit LocalTaskHopcroftKarp(ThreadLocalWorkspace& ws)
+    : num_tasks_(static_cast<std::uint32_t>(ws.reachability.Size())), ws_(ws)
+  {
+    ws_.PrepareTaskMatching(num_tasks_);
+  }
+
+  std::size_t Solve()
+  {
+    if (num_tasks_ == 0)
+      return 0;
+
+    std::size_t matching_size = GreedyInit();
+    while (BFS())
+    {
+      for (std::uint32_t task = 0; task < num_tasks_; ++task)
+      {
+        if (ws_.task_mate_u[task] == INVALID_INDEX and DFS(task))
+          ++matching_size;
+      }
+    }
+    return static_cast<std::size_t>(num_tasks_) - matching_size;
+  }
+
+private:
+  template <class F>
+  void ForEachCandidate(const std::uint32_t u_task, const F& fn) const
+  {
+    for (std::size_t v_task = ws_.reachability.FindFirstSet(u_task, u_task + 1);
+         v_task < num_tasks_;
+         v_task = ws_.reachability.FindNextSet(u_task, v_task))
+    {
+      if (fn(static_cast<std::uint32_t>(v_task)))
+        return;
+    }
+  }
+
+  std::size_t GreedyInit()
+  {
+    std::size_t count = 0;
+    for (std::uint32_t u_task = 0; u_task < num_tasks_; ++u_task)
+    {
+      ForEachCandidate(u_task,
+                       [&](const std::uint32_t v_task) -> bool
+                       {
+                         if (ws_.task_mate_v[v_task] != INVALID_INDEX)
+                           return false;
+                         ws_.task_mate_u[u_task] = v_task;
+                         ws_.task_mate_v[v_task] = u_task;
+                         ++count;
+                         return true;
+                       });
+    }
+    return count;
+  }
+
+  bool BFS()
+  {
+    std::fill_n(ws_.task_dist.begin(), num_tasks_, -1);
+    std::size_t head = 0;
+    std::size_t tail = 0;
+
+    for (std::uint32_t task = 0; task < num_tasks_; ++task)
+    {
+      if (ws_.task_mate_u[task] != INVALID_INDEX)
+        continue;
+      ws_.task_dist[task] = 0;
+      ws_.task_queue[tail++] = task;
+    }
+
+    dist_null_ = std::numeric_limits<int>::max();
+    while (head < tail)
+    {
+      const auto u_task = ws_.task_queue[head++];
+      if (ws_.task_dist[u_task] >= dist_null_)
+        continue;
+
+      ForEachCandidate(u_task,
+                       [&](const std::uint32_t v_task) -> bool
+                       {
+                         const auto mate_of_v = ws_.task_mate_v[v_task];
+                         if (mate_of_v == INVALID_INDEX)
+                         {
+                           if (dist_null_ == std::numeric_limits<int>::max())
+                             dist_null_ = ws_.task_dist[u_task] + 1;
+                         }
+                         else if (ws_.task_dist[mate_of_v] == -1)
+                         {
+                           ws_.task_dist[mate_of_v] = ws_.task_dist[u_task] + 1;
+                           ws_.task_queue[tail++] = mate_of_v;
+                         }
+                         return false;
+                       });
+    }
+
+    return dist_null_ != std::numeric_limits<int>::max();
+  }
+
+  bool DFS(const std::uint32_t u_task)
+  {
+    ws_.task_dfs_frames.clear();
+    PushDFSFrame(u_task, INVALID_INDEX);
+
+    while (not ws_.task_dfs_frames.empty())
+    {
+      auto& frame = ws_.task_dfs_frames.back();
+      const auto current_u = frame.u_face_rank;
+      const auto current_dist = ws_.task_dist[current_u];
+
+      bool descended = false;
+      while (AdvanceFrame(frame))
+      {
+        const auto v_task = frame.next_v_face_rank++;
+        const auto mate_of_v = ws_.task_mate_v[v_task];
+        if (mate_of_v == INVALID_INDEX)
+        {
+          if (dist_null_ != current_dist + 1)
+            continue;
+
+          ws_.task_mate_v[v_task] = current_u;
+          ws_.task_mate_u[current_u] = v_task;
+          ws_.task_dist[current_u] = -1;
+          for (std::size_t depth = ws_.task_dfs_frames.size(); depth-- > 1;)
+          {
+            const auto parent_u = ws_.task_dfs_frames[depth - 1].u_face_rank;
+            const auto via_v = ws_.task_dfs_frames[depth].via_v_face_rank;
+            ws_.task_mate_v[via_v] = parent_u;
+            ws_.task_mate_u[parent_u] = via_v;
+            ws_.task_dist[parent_u] = -1;
+          }
+          return true;
+        }
+
+        if (ws_.task_dist[mate_of_v] != current_dist + 1)
+          continue;
+
+        PushDFSFrame(mate_of_v, v_task);
+        descended = true;
+        break;
+      }
+
+      if (descended)
+        continue;
+
+      ws_.task_dist[current_u] = -1;
+      ws_.task_dfs_frames.pop_back();
+    }
+
+    return false;
+  }
+
+  void PushDFSFrame(const std::uint32_t u_task, const std::uint32_t via_v_task)
+  {
+    ws_.task_dfs_frames.push_back(
+      {u_task, via_v_task, 0, 0, static_cast<std::uint32_t>(u_task + 1), 0});
+  }
+
+  bool AdvanceFrame(DFSFrame& frame) const
+  {
+    const auto next = ws_.reachability.FindFirstSet(frame.u_face_rank, frame.next_v_face_rank);
+    if (next >= num_tasks_)
+      return false;
+    frame.next_v_face_rank = static_cast<std::uint32_t>(next);
+    return true;
+  }
+
+  std::uint32_t num_tasks_ = 0;
+  ThreadLocalWorkspace& ws_;
+  int dist_null_ = 0;
 };
 
 namespace
@@ -263,10 +454,10 @@ public:
     ExtractSlotAssignment();
     const std::size_t slot_count = static_cast<std::size_t>(num_faces_) - matching_size;
     if (VerifySlotAssignment(slot_count))
-      return {slot_count, false};
+      return {slot_count, 0, false};
 
     std::iota(face_slot_ids_.begin(), face_slot_ids_.end(), std::uint32_t{0});
-    return {static_cast<std::size_t>(num_faces_), true};
+    return {static_cast<std::size_t>(num_faces_), 0, true};
   }
 
 private:
@@ -602,21 +793,24 @@ ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offset
                          const std::vector<std::uint32_t>& producer_cell_face_offsets,
                          std::vector<std::uint32_t>& face_slot_ids)
 {
-  if (face_producer_ranks.empty())
-  {
-    face_slot_ids.clear();
-    return {};
-  }
-
   static thread_local ThreadLocalWorkspace workspace;
   BuildReachability(static_cast<std::uint32_t>(successor_rank_offsets.size() - 1),
                     successor_rank_offsets,
                     successor_ranks,
                     workspace);
+  const std::size_t local_task_width = LocalTaskHopcroftKarp(workspace).Solve();
+
+  if (face_producer_ranks.empty())
+  {
+    face_slot_ids.clear();
+    return {0, local_task_width, false};
+  }
 
   LocalFaceHopcroftKarp slot_planner(
     face_producer_ranks, face_consumer_ranks, producer_cell_face_offsets, face_slot_ids, workspace);
-  return slot_planner.Solve();
+  auto result = slot_planner.Solve();
+  result.local_task_width = local_task_width;
+  return result;
 }
 
 } // namespace opensn::detail
