@@ -56,6 +56,8 @@ public:
 
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
 
+  std::size_t GetMaxLocalWavefrontWidth() const noexcept { return max_local_wavefront_width_; }
+
   const std::vector<std::uint32_t>& GetLocalFaceSlotIDs() const noexcept
   {
     return local_face_slot_ids_;
@@ -124,6 +126,8 @@ private:
   std::vector<std::uint32_t> local_face_slot_node_offsets_;
   /// Minimum number of local-face angular flux storage slots.
   std::size_t max_num_local_psi_slots_ = 0;
+  /// Exact width of the rank-local cell task poset.
+  std::size_t max_local_wavefront_width_ = 0;
   /// Total number of local-face nodes in the compact slot bank.
   std::size_t total_local_face_slot_nodes_ = 0;
   /// Maximum number of nodes across all local directed faces.

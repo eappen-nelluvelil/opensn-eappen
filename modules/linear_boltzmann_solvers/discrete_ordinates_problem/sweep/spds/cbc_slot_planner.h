@@ -15,6 +15,8 @@ struct SlotSolveResult
 {
   /// Exact number of reusable slots required by the computed chain cover.
   std::size_t slot_count = 0;
+  /// Exact width of the rank-local cell task poset.
+  std::size_t local_task_width = 0;
   /// Flag indicating that the post-solve verifier rejected the computed assignment.
   bool verifier_rejected = false;
 };

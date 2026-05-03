@@ -239,14 +239,7 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   if (task_list_.empty())
   {
     max_num_local_psi_slots_ = 0;
-    local_face_slot_ids_.clear();
-    UpdateLocalFaceSlotLayout();
-    return;
-  }
-
-  if (local_face_producer_ranks_.empty())
-  {
-    max_num_local_psi_slots_ = 0;
+    max_local_wavefront_width_ = 0;
     local_face_slot_ids_.clear();
     UpdateLocalFaceSlotLayout();
     return;
@@ -261,6 +254,7 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
                                                        producer_cell_face_offsets_,
                                                        local_face_slot_ids_);
   max_num_local_psi_slots_ = result.slot_count;
+  max_local_wavefront_width_ = result.local_task_width;
   UpdateLocalFaceSlotLayout();
   if (result.verifier_rejected)
     opensn::log.LogAllWarning()
