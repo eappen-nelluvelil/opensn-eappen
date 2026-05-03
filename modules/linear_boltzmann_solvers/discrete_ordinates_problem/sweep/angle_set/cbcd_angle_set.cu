@@ -283,8 +283,6 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk&)
 bool
 CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::size_t worker_id)
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
-
   if (executed_ or (not boundary_data_initialized_))
     return false;
 
@@ -298,6 +296,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   if ((not kernel_completed) and (not batch_state_.completed_batch_pending) and
       ready_cell_ids.empty() and (not has_incoming) and (not can_finalize))
     return false;
+
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
   bool work_done = false;
 
