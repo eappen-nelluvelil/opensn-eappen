@@ -420,6 +420,15 @@ CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
   return boundary->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
 }
 
+bool
+CBCD_AngleSet::IsZeroFluxBoundary(const std::uint64_t boundary_id,
+                                  const bool surface_source_active) const
+{
+  const auto boundary_it = boundary_ptrs_.find(boundary_id);
+  assert(boundary_it != boundary_ptrs_.end());
+  return not boundary_it->second->IsReflecting() and not surface_source_active;
+}
+
 double*
 CBCD_AngleSet::PsiReflected(uint64_t boundary_id,
                             unsigned int angle_num,

@@ -180,19 +180,31 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
   const auto gs_gi = sweep_chunk.GetGroupsetGroupIndex();
   const bool surface_source_active = sweep_chunk.IsSurfaceSourceActive();
+  bool copied_nonzero_boundary = false;
 
   for (const auto& face_plan : common_data_.GetIncomingBoundaryFaces())
   {
-    for (std::size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
+    double* dst_face =
+      incoming_boundary_psi_.data() +
+      static_cast<std::size_t>(face_plan.base_storage_index) * num_groups_and_angles_;
+
+    if (angle_set->IsZeroFluxBoundary(face_plan.boundary_id, surface_source_active))
     {
-      const auto direction_num = angle_indices[as_ss_idx];
-      double* dst_face =
-        incoming_boundary_psi_.data() +
-        static_cast<std::size_t>(face_plan.base_storage_index) * num_groups_and_angles_ +
-        as_ss_idx * num_groups_;
-      for (std::size_t node = 0; node < face_plan.num_nodes; ++node)
+      if (not incoming_boundary_psi_zero_)
       {
-        double* dst_psi = dst_face + node * num_groups_and_angles_;
+        std::fill_n(
+          dst_face, static_cast<std::size_t>(face_plan.num_nodes) * num_groups_and_angles_, 0.0);
+      }
+      continue;
+    }
+
+    copied_nonzero_boundary = true;
+    for (std::size_t node = 0; node < face_plan.num_nodes; ++node)
+    {
+      double* dst_node = dst_face + node * num_groups_and_angles_;
+      for (std::size_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
+      {
+        const auto direction_num = angle_indices[as_ss_idx];
         const double* src_psi =
           angle_set->PsiBoundary(face_plan.boundary_id,
                                  direction_num,
@@ -201,10 +213,12 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
                                  static_cast<unsigned int>(face_plan.first_face_node + node),
                                  gs_gi,
                                  surface_source_active);
-        std::memcpy(dst_psi, src_psi, groups_bytes);
+        std::memcpy(dst_node + as_ss_idx * num_groups_, src_psi, groups_bytes);
       }
     }
   }
+
+  incoming_boundary_psi_zero_ = not copied_nonzero_boundary;
 }
 
 void

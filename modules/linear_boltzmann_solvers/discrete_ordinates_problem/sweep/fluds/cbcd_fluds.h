@@ -182,6 +182,7 @@ private:
   crb::MappedHostVector<double> outgoing_boundary_psi_;
   crb::MappedHostVector<double> incoming_nonlocal_psi_;
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
+  bool incoming_boundary_psi_zero_ = true;
   /// Associated angleset's stream.
   crb::Stream stream_;
   /// Mapped host launch buffers that hold ready local cell IDs.

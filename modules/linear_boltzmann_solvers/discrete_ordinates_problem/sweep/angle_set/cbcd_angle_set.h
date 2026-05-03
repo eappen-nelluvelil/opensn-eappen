@@ -173,6 +173,8 @@ public:
                             unsigned int g,
                             bool surface_source_active) override;
 
+  bool IsZeroFluxBoundary(std::uint64_t boundary_id, bool surface_source_active) const;
+
   double* PsiReflected(uint64_t boundary_id,
                        unsigned int angle_num,
                        uint64_t cell_local_id,
