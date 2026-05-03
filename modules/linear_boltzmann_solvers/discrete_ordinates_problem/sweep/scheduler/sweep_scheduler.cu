@@ -8,7 +8,9 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "caribou/main.hpp"
 #include "caliper/cali.h"
+#include <algorithm>
 #include <thread>
+#include <vector>
 
 namespace opensn
 {
@@ -104,25 +106,46 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       const auto begin = worker_id * chunk_size;
       const auto end = std::min(begin + chunk_size, num_angle_sets);
 
-      bool all_done = false;
-      while (not all_done)
+      std::vector<std::size_t> active_angle_set_ids;
+      active_angle_set_ids.reserve(end - begin);
+      for (std::size_t i = begin; i < end; ++i)
+        active_angle_set_ids.push_back(i);
+
+      while (not active_angle_set_ids.empty())
       {
-        all_done = true;
         bool any_work_done = false;
-        for (std::size_t i = begin; i < end; ++i)
+        for (std::size_t i = 0; i < active_angle_set_ids.size();)
         {
-          auto* angle_set = angle_sets[i];
+          auto* angle_set = angle_sets[active_angle_set_ids[i]];
           if (angle_set->IsExecuted())
-            continue;
-          all_done = false;
-          if (not angle_set->IsInitialized())
           {
-            any_work_done |= angle_set->TryInitialize(cbcd_sweep_chunk);
+            active_angle_set_ids[i] = active_angle_set_ids.back();
+            active_angle_set_ids.pop_back();
             continue;
           }
+
+          if (not angle_set->IsInitialized())
+          {
+            if (not angle_set->TryInitialize(cbcd_sweep_chunk))
+            {
+              ++i;
+              continue;
+            }
+            any_work_done = true;
+          }
+
           any_work_done |= angle_set->TryAdvanceOneStep(cbcd_sweep_chunk, worker_id);
+
+          if (angle_set->IsExecuted())
+          {
+            active_angle_set_ids[i] = active_angle_set_ids.back();
+            active_angle_set_ids.pop_back();
+            continue;
+          }
+
+          ++i;
         }
-        if ((not all_done) and (not any_work_done))
+        if (not any_work_done)
           std::this_thread::yield();
       }
     });
