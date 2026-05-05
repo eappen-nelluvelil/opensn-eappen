@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -40,37 +41,62 @@ ReadMessageValue(const std::vector<std::byte>& buffer, std::size_t& offset)
   return value;
 }
 
+constexpr std::size_t CBC_MESSAGE_HEADER_SIZE =
+  sizeof(std::size_t) + sizeof(std::size_t) + sizeof(std::size_t) + sizeof(std::size_t);
+constexpr std::size_t CBC_MAX_IMMEDIATE_MESSAGE_BYTES = 3072;
+
 void
 AppendDownwindMessage(std::vector<std::byte>& raw,
                       size_t incoming_face_slot,
+                      size_t total_size,
+                      size_t offset,
                       std::span<const double> payload)
 {
-  const auto data_size = payload.size();
-  constexpr size_t header_size = sizeof(std::size_t) + sizeof(std::size_t);
+  const auto chunk_size = payload.size();
   const auto old_size = raw.size();
-  const auto num_bytes = data_size * sizeof(double);
-  const auto required_size = old_size + header_size + num_bytes;
+  const auto num_bytes = chunk_size * sizeof(double);
+  const auto required_size = old_size + CBC_MESSAGE_HEADER_SIZE + num_bytes;
   if (raw.capacity() < required_size)
     raw.reserve(required_size);
   raw.resize(required_size);
 
   auto* write_ptr = raw.data() + old_size;
   WriteMessageValue(write_ptr, incoming_face_slot);
-  WriteMessageValue(write_ptr, data_size);
+  WriteMessageValue(write_ptr, total_size);
+  WriteMessageValue(write_ptr, offset);
+  WriteMessageValue(write_ptr, chunk_size);
   if (num_bytes != 0)
     std::memcpy(write_ptr, payload.data(), num_bytes);
+}
+
+std::size_t
+DownwindMessageSize(std::size_t chunk_size)
+{
+  return CBC_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double);
+}
+
+std::size_t
+MaxPayloadChunkSize(std::size_t max_mpi_message_size)
+{
+  if (max_mpi_message_size <= CBC_MESSAGE_HEADER_SIZE + sizeof(double))
+    return 1;
+  return (max_mpi_message_size - CBC_MESSAGE_HEADER_SIZE) / sizeof(double);
 }
 
 } // namespace
 
 CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
                                                            FLUDS& fluds,
+                                                           int max_mpi_message_size,
                                                            const MPICommunicatorSet& comm_set)
   : AsynchronousCommunicator(fluds, comm_set),
     angle_set_id_(angle_set_id),
     location_id_(opensn::mpi_comm.rank()),
     receive_comm_(comm_set.LocICommunicator(location_id_)),
-    cbc_fluds_(dynamic_cast<CBC_FLUDS&>(fluds))
+    cbc_fluds_(dynamic_cast<CBC_FLUDS&>(fluds)),
+    max_mpi_message_size_(std::max(
+      std::min(static_cast<std::size_t>(max_mpi_message_size), CBC_MAX_IMMEDIATE_MESSAGE_BYTES),
+      CBC_MESSAGE_HEADER_SIZE + sizeof(double)))
 {
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   num_receive_sources_ = location_dependencies.size();
@@ -101,12 +127,18 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
 }
 
 CBC_AsynchronousCommunicator::BufferItem&
-CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
+CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index, size_t record_size)
 {
   assert(peer_index < open_send_buffer_indices_.size());
   auto& open_buffer_index = open_send_buffer_indices_[peer_index];
   if (open_buffer_index != INVALID_BUFFER_INDEX)
-    return send_buffer_[open_buffer_index];
+  {
+    auto& buffer = send_buffer_[open_buffer_index];
+    if ((not buffer.data.empty()) and buffer.data.size() + record_size > max_mpi_message_size_)
+      open_buffer_index = INVALID_BUFFER_INDEX;
+    else
+      return buffer;
+  }
 
   if (reusable_send_buffers_.empty())
   {
@@ -133,12 +165,19 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index)
 }
 
 CBC_AsynchronousCommunicator::BufferItem&
-CBC_AsynchronousCommunicator::GetOpenDelayedSendBuffer(size_t delayed_peer_index)
+CBC_AsynchronousCommunicator::GetOpenDelayedSendBuffer(size_t delayed_peer_index,
+                                                       size_t record_size)
 {
   assert(delayed_peer_index < open_delayed_send_buffer_indices_.size());
   auto& open_buffer_index = open_delayed_send_buffer_indices_[delayed_peer_index];
   if (open_buffer_index != INVALID_BUFFER_INDEX)
-    return send_buffer_[open_buffer_index];
+  {
+    auto& buffer = send_buffer_[open_buffer_index];
+    if ((not buffer.data.empty()) and buffer.data.size() + record_size > max_mpi_message_size_)
+      open_buffer_index = INVALID_BUFFER_INDEX;
+    else
+      return buffer;
+  }
 
   if (reusable_send_buffers_.empty())
   {
@@ -169,8 +208,15 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(size_t peer_index,
                                                    size_t incoming_face_slot,
                                                    std::span<const double> payload)
 {
-  auto& raw = GetOpenSendBuffer(peer_index).data;
-  AppendDownwindMessage(raw, incoming_face_slot, payload);
+  const auto total_size = payload.size();
+  const auto max_chunk_size = MaxPayloadChunkSize(max_mpi_message_size_);
+  for (size_t offset = 0; offset < total_size; offset += max_chunk_size)
+  {
+    const auto chunk_size = std::min(max_chunk_size, total_size - offset);
+    auto& raw = GetOpenSendBuffer(peer_index, DownwindMessageSize(chunk_size)).data;
+    AppendDownwindMessage(
+      raw, incoming_face_slot, total_size, offset, payload.subspan(offset, chunk_size));
+  }
 }
 
 void
@@ -184,8 +230,15 @@ CBC_AsynchronousCommunicator::QueueDelayedDownwindMessage(int destination_locati
   const auto delayed_peer_index = delayed_peer_indices_by_location_[location];
   assert(delayed_peer_index != INVALID_BUFFER_INDEX);
 
-  auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index).data;
-  AppendDownwindMessage(raw, delayed_face_slot, payload);
+  const auto total_size = payload.size();
+  const auto max_chunk_size = MaxPayloadChunkSize(max_mpi_message_size_);
+  for (size_t offset = 0; offset < total_size; offset += max_chunk_size)
+  {
+    const auto chunk_size = std::min(max_chunk_size, total_size - offset);
+    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, DownwindMessageSize(chunk_size)).data;
+    AppendDownwindMessage(
+      raw, delayed_face_slot, total_size, offset, payload.subspan(offset, chunk_size));
+  }
 }
 
 void
@@ -246,8 +299,9 @@ CBC_AsynchronousCommunicator::QueueDelayedCompletionMarkers()
   for (std::size_t delayed_peer_index = 0; delayed_peer_index < delayed_send_peers_.size();
        ++delayed_peer_index)
   {
-    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index).data;
-    AppendDownwindMessage(raw, CBC_FLUDSCommonData::INVALID_FACE_SLOT, std::span<const double>());
+    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, DownwindMessageSize(0)).data;
+    AppendDownwindMessage(
+      raw, CBC_FLUDSCommonData::INVALID_FACE_SLOT, 0, 0, std::span<const double>());
   }
   delayed_completion_markers_queued_ = true;
 }
@@ -271,6 +325,8 @@ CBC_AsynchronousCommunicator::Reset()
   send_requests_.clear();
   reusable_send_buffers_.clear();
   receive_buffer_.clear();
+  incoming_partials_.clear();
+  delayed_partials_.clear();
   std::fill(
     open_send_buffer_indices_.begin(), open_send_buffer_indices_.end(), INVALID_BUFFER_INDEX);
   std::fill(open_delayed_send_buffer_indices_.begin(),
@@ -306,16 +362,54 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
       while (offset < receive_buffer_.size())
       {
         const auto incoming_face_slot = ReadMessageValue<std::size_t>(receive_buffer_, offset);
-        const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+        const auto total_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+        const auto chunk_offset = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+        const auto chunk_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
         assert(incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
 
-        auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, data_size);
-        const auto num_bytes = data_size * sizeof(double);
-        assert(offset + num_bytes <= receive_buffer_.size());
-        std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);
-        offset += num_bytes;
+        if (chunk_offset + chunk_size > total_size)
+          throw std::logic_error("CBC received a malformed non-local psi chunk.");
 
-        cells_who_received_data.push_back(incoming.cell_local_id);
+        const auto num_bytes = chunk_size * sizeof(double);
+        assert(offset + num_bytes <= receive_buffer_.size());
+
+        if (chunk_offset == 0 and chunk_size == total_size)
+        {
+          auto incoming =
+            cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
+          if (num_bytes != 0)
+            std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);
+          cells_who_received_data.push_back(incoming.cell_local_id);
+        }
+        else
+        {
+          if (incoming_face_slot >= incoming_partials_.size())
+            incoming_partials_.resize(incoming_face_slot + 1);
+
+          auto& partial = incoming_partials_[incoming_face_slot];
+          if (partial.data.size() != total_size)
+          {
+            partial.data.assign(total_size, 0.0);
+            partial.received = 0;
+          }
+
+          if (num_bytes != 0)
+            std::memcpy(
+              partial.data.data() + chunk_offset, receive_buffer_.data() + offset, num_bytes);
+          partial.received += chunk_size;
+
+          if (partial.received == total_size)
+          {
+            auto incoming =
+              cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
+            std::copy(partial.data.begin(), partial.data.end(), incoming.psi.begin());
+            partial.data.clear();
+            partial.received = 0;
+            cells_who_received_data.push_back(incoming.cell_local_id);
+          }
+        }
+
+        offset += num_bytes;
       } // while not at end of buffer
     }
   }
@@ -351,20 +445,59 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
       while (offset < receive_buffer_.size())
       {
         const auto delayed_face_slot = ReadMessageValue<std::size_t>(receive_buffer_, offset);
-        const auto data_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+        const auto total_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+        const auto chunk_offset = ReadMessageValue<std::size_t>(receive_buffer_, offset);
+        const auto chunk_size = ReadMessageValue<std::size_t>(receive_buffer_, offset);
 
         if (delayed_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT)
         {
-          assert(data_size == 0);
+          assert(total_size == 0);
+          assert(chunk_offset == 0);
+          assert(chunk_size == 0);
           delayed_recv_done_[dependency_index] = 1;
           continue;
         }
 
-        auto incoming =
-          cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, data_size);
-        const auto num_bytes = data_size * sizeof(double);
+        if (chunk_offset + chunk_size > total_size)
+          throw std::logic_error("CBC received a malformed delayed non-local psi chunk.");
+
+        const auto num_bytes = chunk_size * sizeof(double);
         assert(offset + num_bytes <= receive_buffer_.size());
-        std::memcpy(incoming.data(), receive_buffer_.data() + offset, num_bytes);
+
+        if (chunk_offset == 0 and chunk_size == total_size)
+        {
+          auto incoming =
+            cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
+          if (num_bytes != 0)
+            std::memcpy(incoming.data(), receive_buffer_.data() + offset, num_bytes);
+        }
+        else
+        {
+          if (delayed_face_slot >= delayed_partials_.size())
+            delayed_partials_.resize(delayed_face_slot + 1);
+
+          auto& partial = delayed_partials_[delayed_face_slot];
+          if (partial.data.size() != total_size)
+          {
+            partial.data.assign(total_size, 0.0);
+            partial.received = 0;
+          }
+
+          if (num_bytes != 0)
+            std::memcpy(
+              partial.data.data() + chunk_offset, receive_buffer_.data() + offset, num_bytes);
+          partial.received += chunk_size;
+
+          if (partial.received == total_size)
+          {
+            auto incoming =
+              cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
+            std::copy(partial.data.begin(), partial.data.end(), incoming.begin());
+            partial.data.clear();
+            partial.received = 0;
+          }
+        }
+
         offset += num_bytes;
       }
     }
