@@ -80,6 +80,9 @@ public:
   /// Return the local cell whose task becomes ready by an incoming nonlocal face slot.
   std::uint32_t GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot) const;
 
+  /// Return the source MPI location for an incoming nonlocal face slot.
+  int GetIncomingNonlocalFaceSourceLocation(size_t incoming_face_slot) const;
+
   /// Marker for cell faces without a nonlocal slot.
   static constexpr size_t INVALID_FACE_SLOT = std::numeric_limits<size_t>::max();
 
@@ -98,6 +101,8 @@ private:
   std::vector<size_t> delayed_nonlocal_face_slots_by_local_face_;
   /// Slot-indexed local cells unlocked by received payloads.
   std::vector<std::uint32_t> incoming_nonlocal_face_local_cells_;
+  /// Slot-indexed source MPI locations for incoming nonlocal payloads.
+  std::vector<int> incoming_nonlocal_face_source_locations_;
   /// Local-face-indexed downstream incoming slots.
   std::vector<size_t> outgoing_nonlocal_face_slots_by_local_face_;
   /// Local-face-indexed SPDS-successor peer indices.

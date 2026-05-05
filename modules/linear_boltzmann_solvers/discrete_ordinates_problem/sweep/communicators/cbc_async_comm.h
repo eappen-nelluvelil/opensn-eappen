@@ -109,6 +109,12 @@ protected:
   std::vector<SendPeer> delayed_send_peers_;
   /// Source ranks that may send immediate nonlocal payloads.
   std::vector<int> receive_source_ranks_;
+  /// Expected immediate complete face payloads from each receive source.
+  std::vector<size_t> receive_source_expected_payloads_;
+  /// Received immediate complete face payloads from each receive source in the active sweep.
+  std::vector<size_t> receive_source_payloads_received_;
+  /// Completion flags for immediate predecessor receives.
+  std::vector<unsigned char> receive_source_done_;
   /// Source ranks that may send delayed nonlocal payloads.
   std::vector<int> delayed_receive_source_ranks_;
   /// Open send-buffer index for each SPDS-successor peer.

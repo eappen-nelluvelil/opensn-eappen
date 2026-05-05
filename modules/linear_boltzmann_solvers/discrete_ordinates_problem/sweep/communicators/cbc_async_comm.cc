@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -181,9 +182,30 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   for (const int dependency : location_dependencies)
     receive_source_ranks_.push_back(comm_set_.MapIonJ(dependency, location_id_));
 
-  incoming_partials_.resize(cbc_fluds_.GetCommonData().GetNumIncomingNonlocalFaces());
-  delayed_partials_.resize(cbc_fluds_.GetCommonData().GetNumDelayedNonlocalFaces());
-  delayed_payload_received_.assign(cbc_fluds_.GetCommonData().GetNumDelayedNonlocalFaces(), 0);
+  constexpr auto invalid_source_index = std::numeric_limits<std::size_t>::max();
+  std::vector<std::size_t> source_index_by_location(
+    static_cast<std::size_t>(opensn::mpi_comm.size()), invalid_source_index);
+  for (std::size_t i = 0; i < location_dependencies.size(); ++i)
+    source_index_by_location[static_cast<std::size_t>(location_dependencies[i])] = i;
+
+  receive_source_expected_payloads_.assign(location_dependencies.size(), 0);
+  const auto& common_data = cbc_fluds_.GetCommonData();
+  for (std::size_t slot = 0; slot < common_data.GetNumIncomingNonlocalFaces(); ++slot)
+  {
+    const auto source_location = common_data.GetIncomingNonlocalFaceSourceLocation(slot);
+    assert(source_location >= 0);
+    const auto source_index = source_index_by_location[static_cast<std::size_t>(source_location)];
+    assert(source_index != invalid_source_index);
+    ++receive_source_expected_payloads_[source_index];
+  }
+  receive_source_payloads_received_.assign(location_dependencies.size(), 0);
+  receive_source_done_.assign(location_dependencies.size(), 0);
+  for (std::size_t i = 0; i < receive_source_expected_payloads_.size(); ++i)
+    receive_source_done_[i] = receive_source_expected_payloads_[i] == 0 ? 1 : 0;
+
+  incoming_partials_.resize(common_data.GetNumIncomingNonlocalFaces());
+  delayed_partials_.resize(common_data.GetNumDelayedNonlocalFaces());
+  delayed_payload_received_.assign(common_data.GetNumDelayedNonlocalFaces(), 0);
 
   const auto& location_successors = fluds_.GetSPDS().GetLocationSuccessors();
   send_peers_.reserve(location_successors.size());
@@ -417,6 +439,9 @@ CBC_AsynchronousCommunicator::Reset()
     ResetPartialPayload(partial);
   for (auto& partial : delayed_partials_)
     ResetPartialPayload(partial);
+  std::fill(receive_source_payloads_received_.begin(), receive_source_payloads_received_.end(), 0);
+  for (std::size_t i = 0; i < receive_source_done_.size(); ++i)
+    receive_source_done_[i] = receive_source_expected_payloads_[i] == 0 ? 1 : 0;
   std::fill(delayed_payload_received_.begin(), delayed_payload_received_.end(), 0);
   std::fill(
     open_send_buffer_indices_.begin(), open_send_buffer_indices_.end(), INVALID_BUFFER_INDEX);
@@ -437,8 +462,12 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
     cells_who_received_data.reserve(num_receive_sources_);
 
   const auto tag = static_cast<int>(angle_set_id_);
-  for (const int source_rank : receive_source_ranks_)
+  for (std::size_t source_index = 0; source_index < receive_source_ranks_.size(); ++source_index)
   {
+    if (receive_source_done_[source_index] != 0)
+      continue;
+
+    const int source_rank = receive_source_ranks_[source_index];
     mpi::Status status;
     while (receive_comm_.iprobe(source_rank, tag, status))
     {
@@ -477,6 +506,7 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
           if (num_bytes != 0)
             std::memcpy(incoming.psi.data(), receive_buffer_.data() + offset, num_bytes);
           cells_who_received_data.push_back(incoming.cell_local_id);
+          ++receive_source_payloads_received_[source_index];
         }
         else
         {
@@ -497,11 +527,23 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
               cbc_fluds_.CommitIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
             ResetPartialPayload(partial);
             cells_who_received_data.push_back(cell_local_id);
+            ++receive_source_payloads_received_[source_index];
           }
         }
 
+        if (receive_source_payloads_received_[source_index] >
+            receive_source_expected_payloads_[source_index])
+          throw std::logic_error(
+            "CBC received too many immediate non-local payloads from a source.");
+        if (receive_source_payloads_received_[source_index] ==
+            receive_source_expected_payloads_[source_index])
+          receive_source_done_[source_index] = 1;
+
         offset += num_bytes;
       } // while not at end of buffer
+
+      if (receive_source_done_[source_index] != 0)
+        break;
     }
   }
 }

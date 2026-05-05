@@ -161,6 +161,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         const auto slot = num_incoming_nonlocal_faces_;
         incoming_nonlocal_face_slots_by_local_face_[face_storage_index] = slot;
         incoming_nonlocal_face_local_cells_.push_back(cell.local_id);
+        incoming_nonlocal_face_source_locations_.push_back(neighbor_location);
         records.push_back(cell.global_id);
         records.push_back(static_cast<std::uint64_t>(f));
         records.push_back(static_cast<std::uint64_t>(slot));
@@ -393,6 +394,13 @@ CBC_FLUDSCommonData::GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot)
 {
   assert(incoming_face_slot < incoming_nonlocal_face_local_cells_.size());
   return incoming_nonlocal_face_local_cells_[incoming_face_slot];
+}
+
+int
+CBC_FLUDSCommonData::GetIncomingNonlocalFaceSourceLocation(size_t incoming_face_slot) const
+{
+  assert(incoming_face_slot < incoming_nonlocal_face_source_locations_.size());
+  return incoming_nonlocal_face_source_locations_[incoming_face_slot];
 }
 
 } // namespace opensn
