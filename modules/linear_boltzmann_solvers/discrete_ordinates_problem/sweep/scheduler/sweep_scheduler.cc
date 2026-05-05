@@ -337,6 +337,42 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
 }
 
 void
+SweepScheduler::ScheduleAlgoDependencyFIFO(SweepChunk& sweep_chunk)
+{
+  bool finished = false;
+  std::unordered_set<AngleSet*> completed;
+  while (not finished)
+  {
+    finished = true;
+
+    for (auto& angle_set : angle_agg_)
+    {
+      bool deps_ready = true;
+      const auto dep_it = preceding_angle_sets_.find(angle_set.get());
+      if (dep_it != preceding_angle_sets_.end())
+      {
+        for (auto* dep : dep_it->second)
+        {
+          if (completed.find(dep) == completed.end())
+          {
+            deps_ready = false;
+            break;
+          }
+        }
+      }
+
+      const auto permission =
+        deps_ready ? AngleSetStatus::EXECUTE : AngleSetStatus::READY_TO_EXECUTE;
+      const auto status = angle_set->AngleSetAdvance(sweep_chunk, permission);
+      if (status == AngleSetStatus::FINISHED)
+        completed.insert(angle_set.get());
+      if (status != AngleSetStatus::FINISHED)
+        finished = false;
+    }
+  }
+}
+
+void
 SweepScheduler::ScheduleAlgoFIFORZ(SweepChunk& sweep_chunk)
 {
   bool finished = false;

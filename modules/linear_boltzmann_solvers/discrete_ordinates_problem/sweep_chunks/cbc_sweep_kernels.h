@@ -24,6 +24,10 @@ struct CBCOutgoingFaceBuffer
   size_t incoming_face_slot = CBC_FLUDSCommonData::INVALID_FACE_SLOT;
   /// SPDS-successor peer index on the current location.
   size_t peer_index = CBC_FLUDSCommonData::INVALID_PEER_INDEX;
+  /// Destination MPI location for delayed nonlocal payloads.
+  int destination_location = -1;
+  /// Whether this payload is a delayed nonlocal face.
+  bool delayed = false;
   /// Number of valid angular-flux entries in `data`.
   size_t data_size = 0;
   /// Reusable angular-flux payload storage.
@@ -109,10 +113,18 @@ PrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
     auto& buffer = buffers[buffer_index];
     buffer.incoming_face_slot = data.fluds.GetCommonData().GetOutgoingNonlocalFaceSlotByLocalFace(
       data.cell_local_id, static_cast<unsigned int>(f));
-    buffer.peer_index = data.fluds.GetCommonData().GetOutgoingNonlocalFacePeerIndexByLocalFace(
+    buffer.delayed = data.fluds.GetCommonData().IsDelayedNonlocalOutgoingFace(
       data.cell_local_id, static_cast<unsigned int>(f));
+    buffer.destination_location =
+      data.fluds.GetCommonData().GetOutgoingNonlocalFaceLocationByLocalFace(
+        data.cell_local_id, static_cast<unsigned int>(f));
+    buffer.peer_index = buffer.delayed
+                          ? CBC_FLUDSCommonData::INVALID_PEER_INDEX
+                          : data.fluds.GetCommonData().GetOutgoingNonlocalFacePeerIndexByLocalFace(
+                              data.cell_local_id, static_cast<unsigned int>(f));
     assert(buffer.incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
-    assert(buffer.peer_index != CBC_FLUDSCommonData::INVALID_PEER_INDEX);
+    assert(buffer.delayed or buffer.peer_index != CBC_FLUDSCommonData::INVALID_PEER_INDEX);
+    assert(buffer.destination_location >= 0);
     buffer.Prepare(data.cell_mapping.GetNumFaceNodes(f) * data.group_angle_stride);
     buffer_by_face[f] = &buffer;
   }
@@ -125,9 +137,12 @@ QueueOutgoingNonlocalFaceBuffers(CBCSweepData& data, CBC_AsynchronousCommunicato
   for (size_t i = 0; i < data.num_outgoing_nonlocal_face_buffers; ++i)
   {
     const auto& buffer = data.outgoing_nonlocal_face_buffers[i];
-    async_comm.QueueDownwindMessage(buffer.peer_index,
-                                    buffer.incoming_face_slot,
-                                    std::span<const double>(buffer.data.data(), buffer.data_size));
+    const std::span<const double> payload(buffer.data.data(), buffer.data_size);
+    if (buffer.delayed)
+      async_comm.QueueDelayedDownwindMessage(
+        buffer.destination_location, buffer.incoming_face_slot, payload);
+    else
+      async_comm.QueueDownwindMessage(buffer.peer_index, buffer.incoming_face_slot, payload);
   }
 }
 
@@ -204,8 +219,19 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
                                          ? nullptr
                                          : &data.fluds.GetCommonData().GetFaceNodalMapping(
                                              data.cell_local_id, static_cast<unsigned int>(f));
+      const bool is_delayed_local_face =
+        is_local_face and data.fluds.GetCommonData().IsDelayedLocalIncomingFace(
+                            data.cell_local_id, static_cast<unsigned int>(f));
+      const bool is_delayed_nonlocal_face =
+        (not is_boundary_face) and (not is_local_face) and
+        data.fluds.GetCommonData().IsDelayedNonlocalIncomingFace(data.cell_local_id,
+                                                                 static_cast<unsigned int>(f));
+      const auto delayed_nonlocal_face_info =
+        is_delayed_nonlocal_face ? data.fluds.GetCommonData().GetDelayedNonlocalFaceInfoByLocalFace(
+                                     data.cell_local_id, static_cast<unsigned int>(f))
+                                 : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
       const auto incoming_nonlocal_slot =
-        (is_boundary_face or is_local_face)
+        (is_boundary_face or is_local_face or is_delayed_nonlocal_face)
           ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
           : data.fluds.GetCommonData().GetIncomingNonlocalFaceSlotByLocalFace(
               data.cell_local_id, static_cast<unsigned int>(f));
@@ -223,7 +249,15 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
 
           const double* psi = nullptr;
 
-          if (is_local_face)
+          if (is_delayed_local_face)
+            psi = data.fluds.DelayedLocalUpwindPsi(data.cell_local_id,
+                                                   static_cast<unsigned int>(f),
+                                                   face_nodal_mapping->face_node_mapping_[fj],
+                                                   as_ss_idx);
+          else if (is_delayed_nonlocal_face)
+            psi = data.fluds.DelayedNLUpwindPsi(
+              delayed_nonlocal_face_info, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
+          else if (is_local_face)
             psi = data.fluds.UpwindPsi(*data.cell_transport_view.FaceNeighbor(f),
                                        face_nodal_mapping->cell_node_mapping_[fj],
                                        as_ss_idx);
@@ -345,6 +379,21 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
       const bool is_boundary_face = not face.has_neighbor;
       const bool is_reflecting_boundary_face =
         (is_boundary_face and angle_set.GetBoundaries()[face.neighbor_id]->IsReflecting());
+      const auto* face_nodal_mapping = is_boundary_face
+                                         ? nullptr
+                                         : &data.fluds.GetCommonData().GetFaceNodalMapping(
+                                             data.cell_local_id, static_cast<unsigned int>(f));
+      const bool is_delayed_local_outgoing =
+        is_local_face and data.fluds.GetCommonData().IsDelayedLocalOutgoingFace(
+                            data.cell_local_id, static_cast<unsigned int>(f));
+      std::uint32_t delayed_local_cell_local_id = 0;
+      unsigned int delayed_local_face_id = 0;
+      if (is_delayed_local_outgoing)
+      {
+        delayed_local_cell_local_id = face.GetNeighborLocalID(data.fluds.GetSPDS().GetGrid().get());
+        assert(face_nodal_mapping->associated_face_ >= 0);
+        delayed_local_face_id = static_cast<unsigned int>(face_nodal_mapping->associated_face_);
+      }
       const auto& IntF_shapeI = data.IntS_shapeI[f];
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
@@ -364,7 +413,12 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
         }
 
         double* psi = nullptr;
-        if (is_local_face)
+        if (is_delayed_local_outgoing)
+          psi = data.fluds.DelayedLocalOutgoingPsi(delayed_local_cell_local_id,
+                                                   delayed_local_face_id,
+                                                   static_cast<unsigned int>(fi),
+                                                   as_ss_idx);
+        else if (is_local_face)
           psi = data.fluds.OutgoingPsi(data.cell, i, as_ss_idx);
         else if (not is_boundary_face)
           psi = data.fluds.NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
