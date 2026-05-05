@@ -4,13 +4,20 @@
 import re
 import glob
 import warnings
-import yaml
-import matplotlib.pyplot as plt
 from datetime import datetime
 from argparse import ArgumentParser
-from matplotlib.ticker import NullLocator
 from pathlib import Path
 from generate_scaling_study import extra_data
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+
+def study_label(sweep_type, processor):
+    """Return a history label that includes algorithm and execution target."""
+    return f"{extra_data['name']}_{sweep_type.lower()}_{processor}_weak_scaling"
 
 
 def extract_data(filename):
@@ -38,18 +45,24 @@ def extract_data(filename):
     return n, metric
 
 
-def plot_data(data, output_file, with_history):
+def plot_data(data, output_file, with_history, sweep_type, processor):
     """Plot the data and save to a file."""
+
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import NullLocator
 
     n_nodes = [d[0] for d in data]
     sweep_time = [d[1] for d in data]
     efficiency = [sweep_time[0] * 100.0 / t for t in sweep_time]
 
     history = {}
-    if with_history and (Path(__file__).resolve().parent / "history.yaml").exists():
-        with open("history.yaml", "r") as f:
+    history_file = Path(__file__).resolve().parent / "history.yaml"
+    if with_history and yaml is None:
+        warnings.warn("PyYAML is not installed. Plotting without history.")
+    elif with_history and history_file.exists():
+        with open(history_file, "r") as f:
             history_dict = yaml.safe_load(f)
-        history_label = f"{extra_data['name']}_weak_scaling"
+        history_label = study_label(sweep_type, processor)
         if history_dict is not None and history_label in history_dict:
             history_data = history_dict[history_label]
             history["nodes"] = history_data["nodes"]
@@ -73,22 +86,25 @@ def plot_data(data, output_file, with_history):
     ax.xaxis.set_minor_locator(NullLocator())
     ax.set_ylim(bottom=0.0, top=max(efficiency) + 10.0)
     ax.set_ylabel("Efficiency (%)")
-    ax.set_title("Node-to-node weak scaling")
+    ax.set_title(f"Node-to-node weak scaling ({sweep_type}, {processor})")
     ax.grid(True, which='both')
     ax.legend()
     fig.savefig(output_file)
     plt.show()
 
 
-def export_data(data, output_file):
+def export_data(data, output_file, sweep_type, processor):
     """Export data to a YAML file."""
+
+    if yaml is None:
+        raise ImportError("Saving history requires PyYAML.")
 
     sweep_time = [d[1] for d in data]
     efficiency = [sweep_time[0] * 100.0 / t for t in sweep_time]
 
-    label = f"{extra_data['name']}_weak_scaling"
+    label = study_label(sweep_type, processor)
     export_dict = None
-    if (Path(__file__).resolve().parent / "history.yaml").exists():
+    if Path(output_file).exists():
         with open(output_file, "r") as f:
             export_dict = yaml.safe_load(f)
     if export_dict is None:
@@ -116,8 +132,31 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         type=str,
-        default="output/weak_cpu",
-        help="Folder to find weak scaling result (default: output/weak_cpu)."
+        default=None,
+        help=(
+            "Folder to find weak scaling results. Defaults to "
+            "output/weak_{sweep_type}_{cpu/gpu}."
+        )
+    )
+    parser.add_argument(
+        "--sweep-type",
+        type=str.upper,
+        choices=["AAH", "CBC"],
+        default="AAH",
+        help="Sweep algorithm associated with the results. Defaults to AAH."
+    )
+    processor_group = parser.add_mutually_exclusive_group()
+    processor_group.add_argument(
+        "--use-gpus",
+        action="store_true",
+        help="Select GPU result defaults and history label."
+    )
+    processor_group.add_argument(
+        "--processor",
+        type=str,
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Processor target associated with the results. Defaults to CPU."
     )
     parser.add_argument(
         "--history",
@@ -134,8 +173,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    processor = args.processor or ("gpu" if args.use_gpus else "cpu")
+    input_dir_arg = args.dir or f"output/weak_{args.sweep_type.lower()}_{processor}"
+
     # get files matching the prefix in the input directory
-    input_dir = Path(__file__).resolve().parent / args.dir
+    input_dir = Path(__file__).resolve().parent / input_dir_arg
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory {input_dir} does not exist.")
     files = glob.glob(f"{input_dir}/weak_*.out")
@@ -154,8 +196,8 @@ if __name__ == "__main__":
 
     # plot
     with_history = (args.history == "comp")
-    plot_data(data, args.output, with_history)
+    plot_data(data, args.output, with_history, args.sweep_type, processor)
 
     # export data to YAML
     if args.history == "save":
-        export_data(data, "history.yaml")
+        export_data(data, Path(__file__).resolve().parent / "history.yaml", args.sweep_type, processor)

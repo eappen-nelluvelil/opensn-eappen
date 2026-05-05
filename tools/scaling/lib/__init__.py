@@ -49,6 +49,7 @@ def make_launch_script_keys(
     outdir,
     opensn_binary,
     processor,
+    sweep_type,
     n_cores,
     partition,
     ngpus,
@@ -62,7 +63,8 @@ def make_launch_script_keys(
         "opensn_binary": opensn_binary,
         "environment": environment,
         "partition": partition,
-        "processor": processor
+        "processor": processor,
+        "sweep_type": sweep_type
     }
     if processor == "gpu":
         keys["use_gpus"] = True
@@ -93,8 +95,10 @@ def generate_strong_scaling(nodes, **kwargs):
 
     # copy necessary files to output directory
     processor = kwargs["processor"]
+    sweep_type = kwargs["sweep_type"]
+    sweep_label = sweep_type.lower()
     engine = kwargs["engine"]
-    out_dir = base_dir.parent / "output" / f"strong_{processor}"
+    out_dir = base_dir.parent / "output" / f"strong_{sweep_label}_{processor}"
     os.makedirs(out_dir, exist_ok=True)
     shutil.copyfile(
         base_dir / "xs_168g.xs",
@@ -111,10 +115,11 @@ def generate_strong_scaling(nodes, **kwargs):
 
     # create job files
     keys = make_launch_script_keys(
-        base_name=f"strong_{processor}",
+        base_name=f"strong_{sweep_label}_{processor}",
         outdir=out_dir,
         opensn_binary=kwargs["opensn_binary"],
         processor=processor,
+        sweep_type=sweep_type,
         n_cores=kwargs["ncores"],
         partition=kwargs["partition"],
         ngpus=kwargs["ngpus"],
@@ -148,10 +153,15 @@ def generate_strong_scaling(nodes, **kwargs):
 def generate_weak_scaling(nodes, divisors, **kwargs):
     """Generate files for weak scaling study."""
 
+    if len(nodes) != len(divisors):
+        raise ValueError("Weak scaling requires one mesh divisor per node count.")
+
     # copy necessary files to output directory
     processor = kwargs["processor"]
+    sweep_type = kwargs["sweep_type"]
+    sweep_label = sweep_type.lower()
     engine = kwargs["engine"]
-    out_dir = base_dir.parent / "output" / f"weak_{processor}"
+    out_dir = base_dir.parent / "output" / f"weak_{sweep_label}_{processor}"
     os.makedirs(out_dir, exist_ok=True)
     shutil.copyfile(
         base_dir / "xs_168g.xs",
@@ -169,10 +179,11 @@ def generate_weak_scaling(nodes, divisors, **kwargs):
 
     # create job files
     keys = make_launch_script_keys(
-        base_name=f"weak_{processor}",
+        base_name=f"weak_{sweep_label}_{processor}",
         outdir=out_dir,
         opensn_binary=kwargs["opensn_binary"],
         processor=processor,
+        sweep_type=sweep_type,
         n_cores=kwargs["ncores"],
         partition=kwargs["partition"],
         ngpus=kwargs["ngpus"],

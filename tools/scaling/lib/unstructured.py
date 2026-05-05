@@ -8,16 +8,13 @@ scaling studies with OpenSn.
 
 import os
 import sys
-import math
 
 if "opensn_console" not in globals():
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from pyopensn.mesh import DistributedMeshGenerator, FromFileMeshGenerator, MeshGenerator
-    from pyopensn.xs import LoadFromOpenSn
-    from pyopensn.aquad import CreateProductQuadrature
-    import pyopensn.lbs as lbs
-    from pyopensn.mat import SetProperty, ISOTROPIC_MG_SOURCE, FROM_ARRAY
-    from pyopensn import mat, materials
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
+    from pyopensn.mesh import DistributedMeshGenerator, FromFileMeshGenerator
+    from pyopensn.xs import MultiGroupXS
+    from pyopensn.aquad import GLCProductQuadrature3DXYZ
+    from pyopensn.solver import DiscreteOrdinatesProblem, SteadyStateSourceSolver
 
 n_g = 64              # Number of energy groups
 n_polar = 14          # Number of polar angles
@@ -70,6 +67,7 @@ phys = DiscreteOrdinatesProblem(
     options={
         "max_mpi_message_size": 256 * 1024
     },
+    sweep_type="{{sweep_type}}",
     use_gpus={{use_gpus}}
 )
 ss_solver = SteadyStateSourceSolver(problem=phys)

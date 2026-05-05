@@ -1,4 +1,4 @@
-label_name_strong_scaling:
+label_name_aah_cpu_strong_scaling:
   description: LLNL Dane (64 rpn)
   nodes:
   - 1
@@ -23,7 +23,7 @@ label_name_strong_scaling:
   - 2.9203455094051134e-12
   - 2.271379840648422e-12
   time: '2026-04-25T02:25:31.928145'
-label_name_weak_scaling:
+label_name_aah_cpu_weak_scaling:
   description: LLNL Dane (64 rpn)
   efficiency:
   - 100.0

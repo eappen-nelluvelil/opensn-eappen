@@ -72,14 +72,31 @@ if __name__ == "__main__":
         "--type",
         type=str,
         choices=["strong", "weak"],
+        required=True,
         help="Type of scaling test to generate files for."
     )
     parser.add_argument(
+        "--sweep-type",
+        type=str.upper,
+        choices=["AAH", "CBC"],
+        default="AAH",
+        help="Sweep algorithm to use in the generated OpenSn input. Defaults to AAH."
+    )
+    processor_group = parser.add_mutually_exclusive_group()
+    processor_group.add_argument(
+        "--use-gpus",
+        action="store_true",
+        help="Enable GPU sweep execution in the generated OpenSn input and launch scripts."
+    )
+    processor_group.add_argument(
         "--processor",
         type=str,
         choices=["cpu", "gpu"],
-        default="cpu",
-        help="Processor target for the generated study files. Defaults to CPU."
+        default=None,
+        help=(
+            "Processor target for the generated study files. Defaults to CPU. "
+            "This is retained for compatibility; prefer --use-gpus for GPU studies."
+        )
     )
     parser.add_argument(
         "--engine",
@@ -88,9 +105,17 @@ if __name__ == "__main__":
         default="slurm",
         help="Job submitting system. Defaults to slurm."
     )
+    parser.add_argument(
+        "--opensn-binary",
+        type=Path,
+        default=opensn_binary,
+        help=f"Path to the OpenSn executable. Defaults to {opensn_binary}."
+    )
     args = parser.parse_args()
 
-    if args.processor == "gpu" and ngpus == 0:
+    processor = args.processor or ("gpu" if args.use_gpus else "cpu")
+
+    if processor == "gpu" and ngpus == 0:
         raise ValueError("Please specify the number of GPUs per node.")
 
     if user_defined_config:
@@ -99,12 +124,13 @@ if __name__ == "__main__":
         gpu_option = gpu_config[args.engine]
 
     inputs = {
-        "opensn_binary": opensn_binary,
+        "opensn_binary": args.opensn_binary,
         "gmsh_binary": gmsh_binary,
         "geo_filename": geo_filename,
         "ncores": ncores,
         "partition": partition,
-        "processor": args.processor,
+        "processor": processor,
+        "sweep_type": args.sweep_type,
         "ngpus": ngpus,
         "engine": args.engine,
         "environment": environment,
