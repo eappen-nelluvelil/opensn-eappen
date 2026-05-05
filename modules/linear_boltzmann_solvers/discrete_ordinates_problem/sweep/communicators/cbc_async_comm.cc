@@ -175,6 +175,10 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
 {
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   num_receive_sources_ = location_dependencies.size();
+  receive_source_ranks_.reserve(location_dependencies.size());
+  for (const int dependency : location_dependencies)
+    receive_source_ranks_.push_back(comm_set_.MapIonJ(dependency, location_id_));
+
   incoming_partials_.resize(cbc_fluds_.GetCommonData().GetNumIncomingNonlocalFaces());
   delayed_partials_.resize(cbc_fluds_.GetCommonData().GetNumDelayedNonlocalFaces());
   delayed_payload_received_.assign(cbc_fluds_.GetCommonData().GetNumDelayedNonlocalFaces(), 0);
@@ -190,6 +194,11 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   open_send_buffer_indices_.assign(send_peers_.size(), INVALID_BUFFER_INDEX);
 
   const auto& delayed_location_successors = fluds_.GetSPDS().GetDelayedLocationSuccessors();
+  const auto& delayed_location_dependencies = fluds_.GetSPDS().GetDelayedLocationDependencies();
+  delayed_receive_source_ranks_.reserve(delayed_location_dependencies.size());
+  for (const int dependency : delayed_location_dependencies)
+    delayed_receive_source_ranks_.push_back(comm_set_.MapIonJ(dependency, location_id_));
+
   delayed_peer_indices_by_location_.assign(static_cast<size_t>(opensn::mpi_comm.size()),
                                            INVALID_BUFFER_INDEX);
   delayed_send_peers_.reserve(delayed_location_successors.size());
@@ -322,7 +331,7 @@ CBC_AsynchronousCommunicator::InitializeDelayedUpstreamData()
 {
   cbc_fluds_.AllocateDelayedLocalPsi();
   cbc_fluds_.AllocateDelayedPrelocIOutgoingPsi();
-  delayed_recv_done_.assign(fluds_.GetSPDS().GetDelayedLocationDependencies().size(), 0);
+  delayed_recv_done_.assign(delayed_receive_source_ranks_.size(), 0);
   std::fill(delayed_payload_received_.begin(), delayed_payload_received_.end(), 0);
   delayed_completion_markers_queued_ = false;
 }
@@ -426,10 +435,8 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
     cells_who_received_data.reserve(num_receive_sources_);
 
   const auto tag = static_cast<int>(angle_set_id_);
-  const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  for (const int locJ : location_dependencies)
+  for (const int source_rank : receive_source_ranks_)
   {
-    const auto source_rank = comm_set_.MapIonJ(locJ, location_id_);
     mpi::Status status;
     while (receive_comm_.iprobe(source_rank, tag, status))
     {
@@ -500,19 +507,17 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveDelayedData");
 
-  const auto& delayed_location_dependencies = fluds_.GetSPDS().GetDelayedLocationDependencies();
-  if (delayed_recv_done_.size() != delayed_location_dependencies.size())
-    delayed_recv_done_.assign(delayed_location_dependencies.size(), 0);
+  if (delayed_recv_done_.size() != delayed_receive_source_ranks_.size())
+    delayed_recv_done_.assign(delayed_receive_source_ranks_.size(), 0);
 
   const auto tag = static_cast<int>(angle_set_id_);
-  for (std::size_t dependency_index = 0; dependency_index < delayed_location_dependencies.size();
+  for (std::size_t dependency_index = 0; dependency_index < delayed_receive_source_ranks_.size();
        ++dependency_index)
   {
     if (delayed_recv_done_[dependency_index] != 0)
       continue;
 
-    const int locJ = delayed_location_dependencies[dependency_index];
-    const auto source_rank = comm_set_.MapIonJ(locJ, location_id_);
+    const auto source_rank = delayed_receive_source_ranks_[dependency_index];
     mpi::Status status;
     while (receive_comm_.iprobe(source_rank, tag, status))
     {

@@ -107,6 +107,10 @@ protected:
   std::vector<SendPeer> send_peers_;
   /// Delayed SPDS-successor-indexed routing cache.
   std::vector<SendPeer> delayed_send_peers_;
+  /// Source ranks that may send immediate nonlocal payloads.
+  std::vector<int> receive_source_ranks_;
+  /// Source ranks that may send delayed nonlocal payloads.
+  std::vector<int> delayed_receive_source_ranks_;
   /// Open send-buffer index for each SPDS-successor peer.
   std::vector<size_t> open_send_buffer_indices_;
   /// Open send-buffer index for each delayed SPDS-successor peer.
