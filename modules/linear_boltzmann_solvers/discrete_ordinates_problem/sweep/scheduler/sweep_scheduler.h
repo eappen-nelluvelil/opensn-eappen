@@ -78,7 +78,7 @@ private:
 
   std::vector<RuleValues> rule_values_;
 
-  /// Angle set dependencies (preceding sets) used by DOG scheduling.
+  /// Angle set dependencies (preceding sets) used by RZ scheduling.
   std::unordered_map<AngleSet*, std::set<AngleSet*>> preceding_angle_sets_;
 
   SPMD_ThreadPool pool_;
