@@ -4,10 +4,28 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbc_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
+#include "framework/mesh/cell/cell.h"
 #include "caliper/cali.h"
 
 namespace opensn
 {
+
+bool
+CBC_AngleSet::IncomingBoundaryFacesReady(const Cell& cell) const
+{
+  const auto& face_orientations = cbc_spds_.GetCellFaceOrientations()[cell.local_id];
+  for (std::size_t f = 0; f < cell.faces.size(); ++f)
+  {
+    const auto& face = cell.faces[f];
+    if (face.has_neighbor or face_orientations[f] != FaceOrientation::INCOMING)
+      continue;
+
+    if (not boundaries_.at(face.neighbor_id)->CheckAnglesReadyStatus(angles_))
+      return false;
+  }
+
+  return true;
+}
 
 CBC_AngleSet::CBC_AngleSet(size_t id,
                            unsigned int num_groups,
@@ -65,17 +83,6 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (async_comm_.HasPendingCommunication())
     async_comm_.SendData();
 
-  if (not boundaries_ready_)
-  {
-    boundaries_ready_ = true;
-    for (const auto& boundary_entry : boundaries_)
-      if (not boundary_entry.second->CheckAnglesReadyStatus(angles_))
-      {
-        boundaries_ready_ = false;
-        return AngleSetStatus::NOT_FINISHED;
-      }
-  }
-
   if (permission != AngleSetStatus::EXECUTE)
   {
     const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
@@ -92,11 +99,20 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     return ready_tasks_.empty() ? AngleSetStatus::NOT_FINISHED : AngleSetStatus::READY_TO_EXECUTE;
   }
 
+  std::vector<std::uint32_t> boundary_blocked_tasks;
+  boundary_blocked_tasks.reserve(ready_tasks_.size());
+
   while (not ready_tasks_.empty())
   {
     const auto task_idx = ready_tasks_.back();
     ready_tasks_.pop_back();
     const auto& cell_task = (*task_list_)[task_idx];
+
+    if (not IncomingBoundaryFacesReady(*cell_task.cell_ptr))
+    {
+      boundary_blocked_tasks.push_back(task_idx);
+      continue;
+    }
 
     sweep_chunk.SetCell(cell_task.cell_ptr, *this);
     sweep_chunk.Sweep(*this);
@@ -111,6 +127,9 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     if (async_comm_.HasPendingCommunication())
       async_comm_.SendData();
   }
+
+  ready_tasks_.insert(
+    ready_tasks_.end(), boundary_blocked_tasks.begin(), boundary_blocked_tasks.end());
 
   const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
   const bool all_messages_sent =
@@ -137,7 +156,6 @@ CBC_AngleSet::ResetSweepBuffers()
   ready_tasks_.clear();
   received_task_buffer_.clear();
   num_completed_tasks_ = 0;
-  boundaries_ready_ = false;
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;

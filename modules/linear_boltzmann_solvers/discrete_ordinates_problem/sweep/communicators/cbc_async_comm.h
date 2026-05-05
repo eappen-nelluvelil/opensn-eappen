@@ -33,10 +33,21 @@ public:
                             size_t incoming_face_slot,
                             std::span<const double> payload);
 
+  /// Queue a complete delayed downwind face payload for sending after the normal sweep.
+  void QueueDelayedDownwindMessage(int destination_location,
+                                   size_t delayed_face_slot,
+                                   std::span<const double> payload);
+
+  void InitializeDelayedUpstreamData();
+
   bool SendData();
+
+  bool FlushSendBuffers();
 
   /// Receive all currently available nonlocal face payloads into a caller-owned buffer.
   void ReceiveData(std::vector<std::uint32_t>& cells_who_received_data);
+
+  bool ReceiveDelayedData();
 
   bool HasPendingCommunication() const noexcept { return not send_buffer_.empty(); }
 
@@ -79,6 +90,10 @@ protected:
 
   BufferItem& GetOpenSendBuffer(size_t peer_index);
 
+  BufferItem& GetOpenDelayedSendBuffer(size_t delayed_peer_index);
+
+  void QueueDelayedCompletionMarkers();
+
   /// Queued or in-flight sends.
   std::vector<BufferItem> send_buffer_;
   /// MPI requests aligned with `send_buffer_`.
@@ -89,8 +104,17 @@ protected:
   std::vector<std::byte> receive_buffer_;
   /// SPDS-successor-indexed routing cache.
   std::vector<SendPeer> send_peers_;
+  /// Delayed SPDS-successor-indexed routing cache.
+  std::vector<SendPeer> delayed_send_peers_;
   /// Open send-buffer index for each SPDS-successor peer.
   std::vector<size_t> open_send_buffer_indices_;
+  /// Open send-buffer index for each delayed SPDS-successor peer.
+  std::vector<size_t> open_delayed_send_buffer_indices_;
+  /// MPI-location-indexed map to delayed peer indices.
+  std::vector<size_t> delayed_peer_indices_by_location_;
+  /// Completion flags for delayed predecessor receives.
+  std::vector<unsigned char> delayed_recv_done_;
+  bool delayed_completion_markers_queued_ = false;
   static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();
 };
 

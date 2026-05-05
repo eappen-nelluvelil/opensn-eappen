@@ -11,6 +11,7 @@
 namespace opensn
 {
 
+class Cell;
 class CBC_SPDS;
 
 /// CBC angle set implementation.
@@ -27,7 +28,7 @@ public:
 
   AsynchronousCommunicator* GetCommunicator() override;
 
-  void InitializeDelayedUpstreamData() override {}
+  void InitializeDelayedUpstreamData() override { async_comm_.InitializeDelayedUpstreamData(); }
 
   int GetMaxBufferMessages() const override { return 0; }
 
@@ -37,14 +38,13 @@ public:
 
   AngleSetStatus FlushSendBuffers() override
   {
-    const bool all_messages_sent =
-      (not async_comm_.HasPendingCommunication()) or async_comm_.SendData();
+    const bool all_messages_sent = async_comm_.FlushSendBuffers();
     return all_messages_sent ? AngleSetStatus::MESSAGES_SENT : AngleSetStatus::MESSAGES_PENDING;
   }
 
   void ResetSweepBuffers() override;
 
-  bool ReceiveDelayedData() override { return true; }
+  bool ReceiveDelayedData() override { return async_comm_.ReceiveDelayedData(); }
 
   const double* PsiBoundary(uint64_t boundary_id,
                             unsigned int angle_num,
@@ -61,6 +61,8 @@ public:
                        unsigned int fi) override;
 
 protected:
+  bool IncomingBoundaryFacesReady(const Cell& cell) const;
+
   const CBC_SPDS& cbc_spds_;
   /// Immutable CBC task graph for the active sweep.
   const std::vector<Task>* task_list_ = nullptr;
@@ -74,7 +76,6 @@ protected:
   std::vector<std::uint32_t> received_task_buffer_;
   /// Number of completed local tasks in the active sweep.
   size_t num_completed_tasks_ = 0;
-  bool boundaries_ready_ = false;
   CBC_AsynchronousCommunicator async_comm_;
 };
 
