@@ -43,6 +43,8 @@ public:
   bool IsDelayedLocalDependency(std::uint32_t upwind_local_id,
                                 std::uint32_t downwind_local_id) const noexcept;
 
+  bool IsDelayedLocationDependency(int location_id) const noexcept;
+
 protected:
   void BuildTaskList();
 
@@ -58,6 +60,8 @@ protected:
   std::vector<double> global_edge_weights_;
   /// Local feedback arc set encoded as packed `(upwind, downwind)` local cell IDs.
   std::set<std::uint64_t> delayed_local_dependency_set_;
+  /// MPI-rank-indexed delayed location dependency flags.
+  std::vector<unsigned char> delayed_location_dependency_flags_;
 };
 
 } // namespace opensn

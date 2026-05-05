@@ -24,12 +24,6 @@ PackEdge(const std::uint32_t upwind_local_id, const std::uint32_t downwind_local
          static_cast<std::uint64_t>(downwind_local_id);
 }
 
-bool
-ContainsLocation(const std::vector<int>& locations, const int location) noexcept
-{
-  return std::find(locations.begin(), locations.end(), location) != locations.end();
-}
-
 } // namespace
 
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
@@ -130,8 +124,7 @@ CBC_SPDS::BuildTaskList()
             if (IsDelayedLocalDependency(upwind_local_id, cell.local_id))
               continue;
           }
-          else if (ContainsLocation(delayed_location_dependencies_,
-                                    face.GetNeighborPartitionID(&grid)))
+          else if (IsDelayedLocationDependency(face.GetNeighborPartitionID(&grid)))
             continue;
 
           ++num_dependencies;
@@ -166,6 +159,14 @@ CBC_SPDS::IsDelayedLocalDependency(const std::uint32_t upwind_local_id,
                                    const std::uint32_t downwind_local_id) const noexcept
 {
   return delayed_local_dependency_set_.contains(PackEdge(upwind_local_id, downwind_local_id));
+}
+
+bool
+CBC_SPDS::IsDelayedLocationDependency(const int location_id) const noexcept
+{
+  return location_id >= 0 and
+         static_cast<std::size_t>(location_id) < delayed_location_dependency_flags_.size() and
+         delayed_location_dependency_flags_[static_cast<std::size_t>(location_id)] != 0;
 }
 
 void
@@ -210,6 +211,7 @@ CBC_SPDS::BuildGlobalSweepTDG()
 
   delayed_location_dependencies_.clear();
   delayed_location_successors_.clear();
+  delayed_location_dependency_flags_.assign(static_cast<std::size_t>(opensn::mpi_comm.size()), 0);
 
   Graph global_tdg(opensn::mpi_comm.size());
   for (int loc = 0; loc < opensn::mpi_comm.size(); ++loc)
@@ -235,6 +237,7 @@ CBC_SPDS::BuildGlobalSweepTDG()
       if (it != location_dependencies_.end())
         location_dependencies_.erase(it);
       delayed_location_dependencies_.push_back(pred_loc);
+      delayed_location_dependency_flags_[static_cast<std::size_t>(pred_loc)] = 1;
     }
 
     if (pred_loc == opensn::mpi_comm.rank())

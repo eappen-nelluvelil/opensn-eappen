@@ -45,6 +45,12 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(spds);
   const auto& face_orientations = spds.GetCellFaceOrientations();
   const auto& delayed_location_dependencies = spds.GetDelayedLocationDependencies();
+  constexpr std::size_t INVALID_DELAYED_PRELOCI = std::numeric_limits<std::size_t>::max();
+  std::vector<std::size_t> delayed_prelocI_by_location(
+    static_cast<std::size_t>(opensn::mpi_comm.size()), INVALID_DELAYED_PRELOCI);
+  for (std::size_t prelocI = 0; prelocI < delayed_location_dependencies.size(); ++prelocI)
+    delayed_prelocI_by_location[static_cast<std::size_t>(delayed_location_dependencies[prelocI])] =
+      prelocI;
   local_face_slot_offsets_.resize(grid.local_cells.size(), 0);
 
   std::size_t num_local_faces = 0;
@@ -132,21 +138,18 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       {
         const auto neighbor_location = face.GetNeighborPartitionID(&grid);
         auto& records = incoming_slot_records_by_upstream_location[neighbor_location];
-        const auto delayed_it = std::find(delayed_location_dependencies.begin(),
-                                          delayed_location_dependencies.end(),
-                                          neighbor_location);
-        if (delayed_it != delayed_location_dependencies.end())
+        const auto delayed_prelocI =
+          delayed_prelocI_by_location[static_cast<std::size_t>(neighbor_location)];
+        if (delayed_prelocI != INVALID_DELAYED_PRELOCI)
         {
-          const auto prelocI =
-            static_cast<size_t>(std::distance(delayed_location_dependencies.begin(), delayed_it));
           const auto slot = delayed_nonlocal_face_info_by_slot_.size();
           const DelayedNonlocalFaceInfo info{
-            prelocI, delayed_prelocI_face_node_counts_[prelocI], num_face_nodes};
+            delayed_prelocI, delayed_prelocI_face_node_counts_[delayed_prelocI], num_face_nodes};
           delayed_nonlocal_face_slots_by_local_face_[face_storage_index] = slot;
           delayed_nonlocal_face_info_by_local_face_[face_storage_index] = info;
           delayed_nonlocal_face_info_by_slot_.push_back(info);
           delayed_nonlocal_incoming_by_local_face_[face_storage_index] = 1;
-          delayed_prelocI_face_node_counts_[prelocI] += num_face_nodes;
+          delayed_prelocI_face_node_counts_[delayed_prelocI] += num_face_nodes;
           records.push_back(cell.global_id);
           records.push_back(static_cast<std::uint64_t>(f));
           records.push_back(static_cast<std::uint64_t>(slot));
