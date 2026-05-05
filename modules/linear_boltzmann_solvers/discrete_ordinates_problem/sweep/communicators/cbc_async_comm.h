@@ -26,6 +26,7 @@ class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
 public:
   explicit CBC_AsynchronousCommunicator(size_t angle_set_id,
                                         FLUDS& fluds,
+                                        int max_mpi_message_size,
                                         const MPICommunicatorSet& comm_set);
 
   /// Queue a complete downwind face payload for sending.
@@ -88,9 +89,9 @@ protected:
     int rank = 0;
   };
 
-  BufferItem& GetOpenSendBuffer(size_t peer_index);
+  BufferItem& GetOpenSendBuffer(size_t peer_index, size_t record_size);
 
-  BufferItem& GetOpenDelayedSendBuffer(size_t delayed_peer_index);
+  BufferItem& GetOpenDelayedSendBuffer(size_t delayed_peer_index, size_t record_size);
 
   void QueueDelayedCompletionMarkers();
 
@@ -114,7 +115,15 @@ protected:
   std::vector<size_t> delayed_peer_indices_by_location_;
   /// Completion flags for delayed predecessor receives.
   std::vector<unsigned char> delayed_recv_done_;
+  struct PartialIncomingPayload
+  {
+    std::vector<double> data;
+    size_t received = 0;
+  };
+  std::vector<PartialIncomingPayload> incoming_partials_;
+  std::vector<PartialIncomingPayload> delayed_partials_;
   bool delayed_completion_markers_queued_ = false;
+  std::size_t max_mpi_message_size_ = 0;
   static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();
 };
 

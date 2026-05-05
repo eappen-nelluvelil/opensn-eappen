@@ -33,11 +33,12 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
                            std::shared_ptr<FLUDS>& fluds,
                            const std::vector<size_t>& angle_indices,
                            std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
+                           int max_mpi_message_size,
                            const MPICommunicatorSet& comm_set)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
     ready_tasks_(),
-    async_comm_(id, *fluds, comm_set)
+    async_comm_(id, *fluds, max_mpi_message_size, comm_set)
 {
 }
 

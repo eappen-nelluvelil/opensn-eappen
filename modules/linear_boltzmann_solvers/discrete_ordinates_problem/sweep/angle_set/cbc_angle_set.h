@@ -24,6 +24,7 @@ public:
                std::shared_ptr<FLUDS>& fluds,
                const std::vector<size_t>& angle_indices,
                std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
+               int max_mpi_message_size,
                const MPICommunicatorSet& comm_set);
 
   AsynchronousCommunicator* GetCommunicator() override;
