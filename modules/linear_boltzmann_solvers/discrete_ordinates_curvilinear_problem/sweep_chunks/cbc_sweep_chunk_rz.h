@@ -27,6 +27,13 @@ public:
   void Sweep(AngleSet& angle_set) override;
 
 private:
+  using SweepFunc = void (CBCSweepChunkRZ::*)(AngleSet&);
+
+  void Sweep_Generic(AngleSet& angle_set);
+
+  template <unsigned int NumNodes>
+  void Sweep_FixedN(AngleSet& angle_set);
+
   void PrepareOutgoingNonlocalFaceBuffers(const std::vector<FaceOrientation>& face_orientations);
 
   void QueueOutgoingNonlocalFaceBuffers();
@@ -45,6 +52,10 @@ private:
   Vector3 normal_vector_boundary_;
   /// Reusable CBC angle-set and cell context.
   CBCSweepChunkContext ctx_;
+  /// Number of groups solved in one block.
+  unsigned int group_block_size_;
+  /// Selected sweep implementation.
+  SweepFunc sweep_impl_;
 };
 
 } // namespace opensn
