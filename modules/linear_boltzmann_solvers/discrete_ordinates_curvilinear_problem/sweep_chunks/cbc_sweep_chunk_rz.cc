@@ -166,7 +166,12 @@ CBCSweepChunkRZ::PrepareOutgoingNonlocalFaceBuffers(
     OpenSnLogicalErrorIf(buffer.destination_location < 0,
                          "CBCSweepChunkRZ missing an outgoing non-local destination location.");
 
-    buffer.Prepare(ctx_.cell_mapping->GetNumFaceNodes(f) * ctx_.group_angle_stride);
+    const auto num_face_nodes = common_data.GetOutgoingNonlocalFaceNodeCountByLocalFace(
+      ctx_.cell_local_id, static_cast<unsigned int>(f));
+    OpenSnLogicalErrorIf(num_face_nodes != ctx_.cell_mapping->GetNumFaceNodes(f),
+                         "CBCSweepChunkRZ found inconsistent outgoing non-local face-node count.");
+
+    buffer.Prepare(num_face_nodes * ctx_.group_angle_stride);
     buffer_by_face[f] = &buffer;
   }
 }

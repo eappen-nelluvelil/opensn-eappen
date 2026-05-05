@@ -125,7 +125,11 @@ PrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
     assert(buffer.incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
     assert(buffer.delayed or buffer.peer_index != CBC_FLUDSCommonData::INVALID_PEER_INDEX);
     assert(buffer.destination_location >= 0);
-    buffer.Prepare(data.cell_mapping.GetNumFaceNodes(f) * data.group_angle_stride);
+    const auto num_face_nodes =
+      data.fluds.GetCommonData().GetOutgoingNonlocalFaceNodeCountByLocalFace(
+        data.cell_local_id, static_cast<unsigned int>(f));
+    assert(num_face_nodes == data.cell_mapping.GetNumFaceNodes(f));
+    buffer.Prepare(num_face_nodes * data.group_angle_stride);
     buffer_by_face[f] = &buffer;
   }
 }

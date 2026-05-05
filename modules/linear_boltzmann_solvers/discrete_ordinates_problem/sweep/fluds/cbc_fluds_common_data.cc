@@ -23,11 +23,12 @@ namespace
 static_assert(sizeof(size_t) <= sizeof(std::uint64_t),
               "CBC face slot exchange assumes size_t fits in uint64_t.");
 
-constexpr std::size_t FACE_SLOT_RECORD_SIZE = 4;
+constexpr std::size_t FACE_SLOT_RECORD_SIZE = 5;
 
 struct RemoteFaceSlot
 {
   size_t slot = CBC_FLUDSCommonData::INVALID_FACE_SLOT;
+  size_t num_face_nodes = 0;
   bool delayed = false;
 };
 
@@ -74,6 +75,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   outgoing_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
   outgoing_nonlocal_face_peer_indices_by_local_face_.assign(num_local_faces, INVALID_PEER_INDEX);
   outgoing_nonlocal_face_locations_by_local_face_.assign(num_local_faces, -1);
+  outgoing_nonlocal_face_node_counts_by_local_face_.assign(num_local_faces, 0);
   delayed_local_face_info_by_local_face_.assign(num_local_faces, {});
   delayed_nonlocal_face_info_by_local_face_.assign(num_local_faces, {});
   delayed_prelocI_face_node_counts_.assign(delayed_location_dependencies.size(), 0);
@@ -149,6 +151,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
           records.push_back(static_cast<std::uint64_t>(f));
           records.push_back(static_cast<std::uint64_t>(slot));
           records.push_back(1);
+          records.push_back(static_cast<std::uint64_t>(num_face_nodes));
           continue;
         }
 
@@ -159,6 +162,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         records.push_back(static_cast<std::uint64_t>(f));
         records.push_back(static_cast<std::uint64_t>(slot));
         records.push_back(0);
+        records.push_back(static_cast<std::uint64_t>(num_face_nodes));
         ++num_incoming_nonlocal_faces_;
       }
     }
@@ -187,9 +191,17 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       const auto delayed_record = records[i + 3];
       OpenSnLogicalErrorIf(delayed_record > 1,
                            "CBC non-local face slot record has invalid delayed flag.");
+      const auto num_face_nodes_record = records[i + 4];
+      if constexpr (sizeof(size_t) < sizeof(std::uint64_t))
+        OpenSnLogicalErrorIf(num_face_nodes_record > std::numeric_limits<size_t>::max(),
+                             "CBC non-local face slot record has invalid face-node count.");
+      OpenSnLogicalErrorIf(num_face_nodes_record == 0,
+                           "CBC non-local face slot record has zero face-node count.");
 
       const CellFaceKey key{records[i], static_cast<unsigned int>(face_id)};
-      const RemoteFaceSlot slot{static_cast<size_t>(slot_record), delayed_record != 0};
+      const RemoteFaceSlot slot{static_cast<size_t>(slot_record),
+                                static_cast<size_t>(num_face_nodes_record),
+                                delayed_record != 0};
       OpenSnLogicalErrorIf(not downstream_slot_by_face.try_emplace(key, slot).second,
                            "CBC non-local face slot exchange returned duplicate records.");
     }
@@ -220,10 +232,15 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 
       const auto face_storage_index = local_face_slot_offset + f;
       const auto neighbor_location = face.GetNeighborPartitionID(&grid);
+      const auto local_num_face_nodes = face_nodal_mapping.face_node_mapping_.size();
+      OpenSnLogicalErrorIf(local_num_face_nodes != slot_it->second.num_face_nodes,
+                           "CBC non-local face slot exchange found inconsistent face-node counts.");
       outgoing_nonlocal_face_slots_by_local_face_[face_storage_index] = slot_it->second.slot;
       delayed_nonlocal_outgoing_by_local_face_[face_storage_index] =
         slot_it->second.delayed ? 1 : 0;
       outgoing_nonlocal_face_locations_by_local_face_[face_storage_index] = neighbor_location;
+      outgoing_nonlocal_face_node_counts_by_local_face_[face_storage_index] =
+        slot_it->second.num_face_nodes;
 
       if (not slot_it->second.delayed)
       {
@@ -356,6 +373,16 @@ CBC_FLUDSCommonData::GetOutgoingNonlocalFaceLocationByLocalFace(std::uint32_t ce
   const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
   assert(slot_offset < outgoing_nonlocal_face_locations_by_local_face_.size());
   return outgoing_nonlocal_face_locations_by_local_face_[slot_offset];
+}
+
+size_t
+CBC_FLUDSCommonData::GetOutgoingNonlocalFaceNodeCountByLocalFace(std::uint32_t cell_local_id,
+                                                                 unsigned int face_id) const
+{
+  assert(cell_local_id < local_face_slot_offsets_.size());
+  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
+  assert(slot_offset < outgoing_nonlocal_face_node_counts_by_local_face_.size());
+  return outgoing_nonlocal_face_node_counts_by_local_face_[slot_offset];
 }
 
 std::uint32_t

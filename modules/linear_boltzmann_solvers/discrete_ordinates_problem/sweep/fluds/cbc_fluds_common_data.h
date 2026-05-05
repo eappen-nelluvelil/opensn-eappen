@@ -73,6 +73,10 @@ public:
   int GetOutgoingNonlocalFaceLocationByLocalFace(std::uint32_t cell_local_id,
                                                  unsigned int face_id) const;
 
+  /// Return the receiver-side face-node count for an outgoing nonlocal cell face.
+  size_t GetOutgoingNonlocalFaceNodeCountByLocalFace(std::uint32_t cell_local_id,
+                                                     unsigned int face_id) const;
+
   /// Return the local cell whose task becomes ready by an incoming nonlocal face slot.
   std::uint32_t GetIncomingNonlocalFaceLocalCell(size_t incoming_face_slot) const;
 
@@ -100,6 +104,8 @@ private:
   std::vector<size_t> outgoing_nonlocal_face_peer_indices_by_local_face_;
   /// Local-face-indexed outgoing destination locations.
   std::vector<int> outgoing_nonlocal_face_locations_by_local_face_;
+  /// Local-face-indexed receiver-side outgoing face-node counts.
+  std::vector<size_t> outgoing_nonlocal_face_node_counts_by_local_face_;
   /// Local-face-indexed delayed local incoming face metadata.
   std::vector<DelayedLocalFaceInfo> delayed_local_face_info_by_local_face_;
   /// Delayed incoming nonlocal metadata indexed by delayed face slot.
