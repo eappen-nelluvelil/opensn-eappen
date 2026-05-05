@@ -148,15 +148,13 @@ CBCSweepChunkRZ::PrepareOutgoingNonlocalFaceBuffers(
       buffers.emplace_back();
 
     auto& buffer = buffers[buffer_index];
-    buffer.incoming_face_slot = common_data.GetOutgoingNonlocalFaceSlotByLocalFace(
-      ctx_.cell_local_id, static_cast<unsigned int>(f));
-    buffer.delayed =
-      common_data.IsDelayedNonlocalOutgoingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
-    buffer.destination_location = common_data.GetOutgoingNonlocalFaceLocationByLocalFace(
-      ctx_.cell_local_id, static_cast<unsigned int>(f));
+    const auto& face_info =
+      common_data.GetLocalFaceInfo(ctx_.cell_local_id, static_cast<unsigned int>(f));
+    buffer.incoming_face_slot = face_info.outgoing_nonlocal_face_slot;
+    buffer.delayed = face_info.delayed_nonlocal_outgoing != 0;
+    buffer.destination_location = face_info.outgoing_nonlocal_face_location;
     buffer.peer_index = buffer.delayed ? CBC_FLUDSCommonData::INVALID_PEER_INDEX
-                                       : common_data.GetOutgoingNonlocalFacePeerIndexByLocalFace(
-                                           ctx_.cell_local_id, static_cast<unsigned int>(f));
+                                       : face_info.outgoing_nonlocal_face_peer_index;
 
     OpenSnLogicalErrorIf(buffer.incoming_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT,
                          "CBCSweepChunkRZ missing an outgoing non-local face slot.");
@@ -166,8 +164,7 @@ CBCSweepChunkRZ::PrepareOutgoingNonlocalFaceBuffers(
     OpenSnLogicalErrorIf(buffer.destination_location < 0,
                          "CBCSweepChunkRZ missing an outgoing non-local destination location.");
 
-    const auto num_face_nodes = common_data.GetOutgoingNonlocalFaceNodeCountByLocalFace(
-      ctx_.cell_local_id, static_cast<unsigned int>(f));
+    const auto num_face_nodes = face_info.outgoing_nonlocal_face_node_count;
     OpenSnLogicalErrorIf(num_face_nodes != ctx_.cell_mapping->GetNumFaceNodes(f),
                          "CBCSweepChunkRZ found inconsistent outgoing non-local face-node count.");
 
@@ -281,21 +278,18 @@ CBCSweepChunkRZ::Sweep_Generic(AngleSet& angle_set)
         is_boundary_face
           ? nullptr
           : &common_data.GetFaceNodalMapping(ctx_.cell_local_id, static_cast<unsigned int>(f));
-      const bool is_delayed_local_face =
-        is_local_face and
-        common_data.IsDelayedLocalIncomingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
+      const auto& face_info =
+        common_data.GetLocalFaceInfo(ctx_.cell_local_id, static_cast<unsigned int>(f));
+      const bool is_delayed_local_face = is_local_face and face_info.delayed_local_incoming != 0;
       const bool is_delayed_nonlocal_face =
-        (not is_boundary_face) and (not is_local_face) and
-        common_data.IsDelayedNonlocalIncomingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
-      const auto delayed_nonlocal_face_info =
-        is_delayed_nonlocal_face ? common_data.GetDelayedNonlocalFaceInfoByLocalFace(
-                                     ctx_.cell_local_id, static_cast<unsigned int>(f))
-                                 : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
+        (not is_boundary_face) and (not is_local_face) and face_info.delayed_nonlocal_incoming != 0;
+      const auto delayed_nonlocal_face_info = is_delayed_nonlocal_face
+                                                ? face_info.delayed_nonlocal_face_info
+                                                : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
       const auto incoming_nonlocal_slot =
         (is_boundary_face or is_local_face or is_delayed_nonlocal_face)
           ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
-          : common_data.GetIncomingNonlocalFaceSlotByLocalFace(ctx_.cell_local_id,
-                                                               static_cast<unsigned int>(f));
+          : face_info.incoming_nonlocal_face_slot;
 
       const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -421,9 +415,10 @@ CBCSweepChunkRZ::Sweep_Generic(AngleSet& angle_set)
         is_boundary_face
           ? nullptr
           : &common_data.GetFaceNodalMapping(ctx_.cell_local_id, static_cast<unsigned int>(f));
+      const auto& face_info =
+        common_data.GetLocalFaceInfo(ctx_.cell_local_id, static_cast<unsigned int>(f));
       const bool is_delayed_local_outgoing =
-        is_local_face and
-        common_data.IsDelayedLocalOutgoingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
+        is_local_face and face_info.delayed_local_outgoing != 0;
       std::uint32_t delayed_local_cell_local_id = 0;
       unsigned int delayed_local_face_id = 0;
       if (is_delayed_local_outgoing)
@@ -604,21 +599,18 @@ CBCSweepChunkRZ::Sweep_FixedN(AngleSet& angle_set)
         is_boundary_face
           ? nullptr
           : &common_data.GetFaceNodalMapping(ctx_.cell_local_id, static_cast<unsigned int>(f));
-      const bool is_delayed_local_face =
-        is_local_face and
-        common_data.IsDelayedLocalIncomingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
+      const auto& face_info =
+        common_data.GetLocalFaceInfo(ctx_.cell_local_id, static_cast<unsigned int>(f));
+      const bool is_delayed_local_face = is_local_face and face_info.delayed_local_incoming != 0;
       const bool is_delayed_nonlocal_face =
-        (not is_boundary_face) and (not is_local_face) and
-        common_data.IsDelayedNonlocalIncomingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
-      const auto delayed_nonlocal_face_info =
-        is_delayed_nonlocal_face ? common_data.GetDelayedNonlocalFaceInfoByLocalFace(
-                                     ctx_.cell_local_id, static_cast<unsigned int>(f))
-                                 : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
+        (not is_boundary_face) and (not is_local_face) and face_info.delayed_nonlocal_incoming != 0;
+      const auto delayed_nonlocal_face_info = is_delayed_nonlocal_face
+                                                ? face_info.delayed_nonlocal_face_info
+                                                : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
       const auto incoming_nonlocal_slot =
         (is_boundary_face or is_local_face or is_delayed_nonlocal_face)
           ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
-          : common_data.GetIncomingNonlocalFaceSlotByLocalFace(ctx_.cell_local_id,
-                                                               static_cast<unsigned int>(f));
+          : face_info.incoming_nonlocal_face_slot;
 
       const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -797,9 +789,10 @@ CBCSweepChunkRZ::Sweep_FixedN(AngleSet& angle_set)
         is_boundary_face
           ? nullptr
           : &common_data.GetFaceNodalMapping(ctx_.cell_local_id, static_cast<unsigned int>(f));
+      const auto& face_info =
+        common_data.GetLocalFaceInfo(ctx_.cell_local_id, static_cast<unsigned int>(f));
       const bool is_delayed_local_outgoing =
-        is_local_face and
-        common_data.IsDelayedLocalOutgoingFace(ctx_.cell_local_id, static_cast<unsigned int>(f));
+        is_local_face and face_info.delayed_local_outgoing != 0;
       std::uint32_t delayed_local_cell_local_id = 0;
       unsigned int delayed_local_face_id = 0;
       if (is_delayed_local_outgoing)
