@@ -111,23 +111,17 @@ PrepareOutgoingNonlocalFaceBuffers(CBCSweepData& data,
       buffers.emplace_back();
 
     auto& buffer = buffers[buffer_index];
-    buffer.incoming_face_slot = data.fluds.GetCommonData().GetOutgoingNonlocalFaceSlotByLocalFace(
-      data.cell_local_id, static_cast<unsigned int>(f));
-    buffer.delayed = data.fluds.GetCommonData().IsDelayedNonlocalOutgoingFace(
-      data.cell_local_id, static_cast<unsigned int>(f));
-    buffer.destination_location =
-      data.fluds.GetCommonData().GetOutgoingNonlocalFaceLocationByLocalFace(
-        data.cell_local_id, static_cast<unsigned int>(f));
-    buffer.peer_index = buffer.delayed
-                          ? CBC_FLUDSCommonData::INVALID_PEER_INDEX
-                          : data.fluds.GetCommonData().GetOutgoingNonlocalFacePeerIndexByLocalFace(
-                              data.cell_local_id, static_cast<unsigned int>(f));
+    const auto& face_info =
+      data.fluds.GetCommonData().GetLocalFaceInfo(data.cell_local_id, static_cast<unsigned int>(f));
+    buffer.incoming_face_slot = face_info.outgoing_nonlocal_face_slot;
+    buffer.delayed = face_info.delayed_nonlocal_outgoing != 0;
+    buffer.destination_location = face_info.outgoing_nonlocal_face_location;
+    buffer.peer_index = buffer.delayed ? CBC_FLUDSCommonData::INVALID_PEER_INDEX
+                                       : face_info.outgoing_nonlocal_face_peer_index;
     assert(buffer.incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
     assert(buffer.delayed or buffer.peer_index != CBC_FLUDSCommonData::INVALID_PEER_INDEX);
     assert(buffer.destination_location >= 0);
-    const auto num_face_nodes =
-      data.fluds.GetCommonData().GetOutgoingNonlocalFaceNodeCountByLocalFace(
-        data.cell_local_id, static_cast<unsigned int>(f));
+    const auto num_face_nodes = face_info.outgoing_nonlocal_face_node_count;
     assert(num_face_nodes == data.cell_mapping.GetNumFaceNodes(f));
     buffer.Prepare(num_face_nodes * data.group_angle_stride);
     buffer_by_face[f] = &buffer;
@@ -223,22 +217,18 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
                                          ? nullptr
                                          : &data.fluds.GetCommonData().GetFaceNodalMapping(
                                              data.cell_local_id, static_cast<unsigned int>(f));
-      const bool is_delayed_local_face =
-        is_local_face and data.fluds.GetCommonData().IsDelayedLocalIncomingFace(
-                            data.cell_local_id, static_cast<unsigned int>(f));
+      const auto& face_info = data.fluds.GetCommonData().GetLocalFaceInfo(
+        data.cell_local_id, static_cast<unsigned int>(f));
+      const bool is_delayed_local_face = is_local_face and face_info.delayed_local_incoming != 0;
       const bool is_delayed_nonlocal_face =
-        (not is_boundary_face) and (not is_local_face) and
-        data.fluds.GetCommonData().IsDelayedNonlocalIncomingFace(data.cell_local_id,
-                                                                 static_cast<unsigned int>(f));
-      const auto delayed_nonlocal_face_info =
-        is_delayed_nonlocal_face ? data.fluds.GetCommonData().GetDelayedNonlocalFaceInfoByLocalFace(
-                                     data.cell_local_id, static_cast<unsigned int>(f))
-                                 : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
+        (not is_boundary_face) and (not is_local_face) and face_info.delayed_nonlocal_incoming != 0;
+      const auto delayed_nonlocal_face_info = is_delayed_nonlocal_face
+                                                ? face_info.delayed_nonlocal_face_info
+                                                : CBC_FLUDSCommonData::DelayedNonlocalFaceInfo{};
       const auto incoming_nonlocal_slot =
         (is_boundary_face or is_local_face or is_delayed_nonlocal_face)
           ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
-          : data.fluds.GetCommonData().GetIncomingNonlocalFaceSlotByLocalFace(
-              data.cell_local_id, static_cast<unsigned int>(f));
+          : face_info.incoming_nonlocal_face_slot;
 
       const size_t num_face_nodes = data.cell_mapping.GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -387,9 +377,10 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
                                          ? nullptr
                                          : &data.fluds.GetCommonData().GetFaceNodalMapping(
                                              data.cell_local_id, static_cast<unsigned int>(f));
+      const auto& face_info = data.fluds.GetCommonData().GetLocalFaceInfo(
+        data.cell_local_id, static_cast<unsigned int>(f));
       const bool is_delayed_local_outgoing =
-        is_local_face and data.fluds.GetCommonData().IsDelayedLocalOutgoingFace(
-                            data.cell_local_id, static_cast<unsigned int>(f));
+        is_local_face and face_info.delayed_local_outgoing != 0;
       std::uint32_t delayed_local_cell_local_id = 0;
       unsigned int delayed_local_face_id = 0;
       if (is_delayed_local_outgoing)

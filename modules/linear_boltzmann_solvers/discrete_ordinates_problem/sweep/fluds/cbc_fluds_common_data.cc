@@ -75,20 +75,9 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
     }
   }
 
-  incoming_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
-  delayed_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
+  local_face_info_by_local_face_.assign(num_local_faces, {});
   incoming_nonlocal_face_local_cells_.reserve(num_incoming_nonlocal_faces);
-  outgoing_nonlocal_face_slots_by_local_face_.assign(num_local_faces, INVALID_FACE_SLOT);
-  outgoing_nonlocal_face_peer_indices_by_local_face_.assign(num_local_faces, INVALID_PEER_INDEX);
-  outgoing_nonlocal_face_locations_by_local_face_.assign(num_local_faces, -1);
-  outgoing_nonlocal_face_node_counts_by_local_face_.assign(num_local_faces, 0);
-  delayed_local_face_info_by_local_face_.assign(num_local_faces, {});
-  delayed_nonlocal_face_info_by_local_face_.assign(num_local_faces, {});
   delayed_prelocI_face_node_counts_.assign(delayed_location_dependencies.size(), 0);
-  delayed_local_incoming_by_local_face_.assign(num_local_faces, 0);
-  delayed_local_outgoing_by_local_face_.assign(num_local_faces, 0);
-  delayed_nonlocal_incoming_by_local_face_.assign(num_local_faces, 0);
-  delayed_nonlocal_outgoing_by_local_face_.assign(num_local_faces, 0);
 
   boost::unordered_flat_map<int, std::size_t> outgoing_peer_index_by_location;
   const auto& location_successors = spds.GetLocationSuccessors();
@@ -105,6 +94,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       const auto& face = cell.faces[f];
       const auto orientation = face_orientations[cell.local_id][f];
       const auto face_storage_index = local_face_slot_offset + f;
+      auto& face_info = local_face_info_by_local_face_[face_storage_index];
       const auto num_face_nodes =
         GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f)).face_node_mapping_.size();
 
@@ -120,13 +110,13 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 
         if (delayed_incoming)
         {
-          delayed_local_incoming_by_local_face_[face_storage_index] = 1;
-          delayed_local_face_info_by_local_face_[face_storage_index] =
+          face_info.delayed_local_incoming = 1;
+          face_info.delayed_local_face_info =
             DelayedLocalFaceInfo{num_delayed_local_face_nodes_, num_face_nodes};
           num_delayed_local_face_nodes_ += num_face_nodes;
         }
         if (delayed_outgoing)
-          delayed_local_outgoing_by_local_face_[face_storage_index] = 1;
+          face_info.delayed_local_outgoing = 1;
 
         continue;
       }
@@ -145,10 +135,10 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
           const auto slot = delayed_nonlocal_face_info_by_slot_.size();
           const DelayedNonlocalFaceInfo info{
             delayed_prelocI, delayed_prelocI_face_node_counts_[delayed_prelocI], num_face_nodes};
-          delayed_nonlocal_face_slots_by_local_face_[face_storage_index] = slot;
-          delayed_nonlocal_face_info_by_local_face_[face_storage_index] = info;
+          face_info.delayed_nonlocal_face_slot = slot;
+          face_info.delayed_nonlocal_face_info = info;
           delayed_nonlocal_face_info_by_slot_.push_back(info);
-          delayed_nonlocal_incoming_by_local_face_[face_storage_index] = 1;
+          face_info.delayed_nonlocal_incoming = 1;
           delayed_prelocI_face_node_counts_[delayed_prelocI] += num_face_nodes;
           records.push_back(cell.global_id);
           records.push_back(static_cast<std::uint64_t>(f));
@@ -159,7 +149,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         }
 
         const auto slot = num_incoming_nonlocal_faces_;
-        incoming_nonlocal_face_slots_by_local_face_[face_storage_index] = slot;
+        face_info.incoming_nonlocal_face_slot = slot;
         incoming_nonlocal_face_local_cells_.push_back(cell.local_id);
         incoming_nonlocal_face_source_locations_.push_back(neighbor_location);
         records.push_back(cell.global_id);
@@ -235,16 +225,15 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
                            "CBC non-local face slot exchange did not resolve an outgoing face.");
 
       const auto face_storage_index = local_face_slot_offset + f;
+      auto& face_info = local_face_info_by_local_face_[face_storage_index];
       const auto neighbor_location = face.GetNeighborPartitionID(&grid);
       const auto local_num_face_nodes = face_nodal_mapping.face_node_mapping_.size();
       OpenSnLogicalErrorIf(local_num_face_nodes != slot_it->second.num_face_nodes,
                            "CBC non-local face slot exchange found inconsistent face-node counts.");
-      outgoing_nonlocal_face_slots_by_local_face_[face_storage_index] = slot_it->second.slot;
-      delayed_nonlocal_outgoing_by_local_face_[face_storage_index] =
-        slot_it->second.delayed ? 1 : 0;
-      outgoing_nonlocal_face_locations_by_local_face_[face_storage_index] = neighbor_location;
-      outgoing_nonlocal_face_node_counts_by_local_face_[face_storage_index] =
-        slot_it->second.num_face_nodes;
+      face_info.outgoing_nonlocal_face_slot = slot_it->second.slot;
+      face_info.delayed_nonlocal_outgoing = slot_it->second.delayed ? 1 : 0;
+      face_info.outgoing_nonlocal_face_location = neighbor_location;
+      face_info.outgoing_nonlocal_face_node_count = slot_it->second.num_face_nodes;
 
       if (not slot_it->second.delayed)
       {
@@ -252,7 +241,7 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         OpenSnLogicalErrorIf(peer_it == outgoing_peer_index_by_location.end(),
                              "CBC outgoing non-local face is missing an SPDS successor.");
 
-        outgoing_nonlocal_face_peer_indices_by_local_face_[face_storage_index] = peer_it->second;
+        face_info.outgoing_nonlocal_face_peer_index = peer_it->second;
       }
     }
   }
@@ -276,60 +265,51 @@ bool
 CBC_FLUDSCommonData::IsDelayedLocalIncomingFace(std::uint32_t cell_local_id,
                                                 unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < delayed_local_incoming_by_local_face_.size());
-  return delayed_local_incoming_by_local_face_[slot_offset] != 0;
+  return GetLocalFaceInfo(cell_local_id, face_id).delayed_local_incoming != 0;
 }
 
 bool
 CBC_FLUDSCommonData::IsDelayedLocalOutgoingFace(std::uint32_t cell_local_id,
                                                 unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < delayed_local_outgoing_by_local_face_.size());
-  return delayed_local_outgoing_by_local_face_[slot_offset] != 0;
+  return GetLocalFaceInfo(cell_local_id, face_id).delayed_local_outgoing != 0;
 }
 
 bool
 CBC_FLUDSCommonData::IsDelayedNonlocalIncomingFace(std::uint32_t cell_local_id,
                                                    unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < delayed_nonlocal_incoming_by_local_face_.size());
-  return delayed_nonlocal_incoming_by_local_face_[slot_offset] != 0;
+  return GetLocalFaceInfo(cell_local_id, face_id).delayed_nonlocal_incoming != 0;
 }
 
 bool
 CBC_FLUDSCommonData::IsDelayedNonlocalOutgoingFace(std::uint32_t cell_local_id,
                                                    unsigned int face_id) const
 {
+  return GetLocalFaceInfo(cell_local_id, face_id).delayed_nonlocal_outgoing != 0;
+}
+
+const CBC_FLUDSCommonData::LocalFaceInfo&
+CBC_FLUDSCommonData::GetLocalFaceInfo(std::uint32_t cell_local_id, unsigned int face_id) const
+{
   assert(cell_local_id < local_face_slot_offsets_.size());
   const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < delayed_nonlocal_outgoing_by_local_face_.size());
-  return delayed_nonlocal_outgoing_by_local_face_[slot_offset] != 0;
+  assert(slot_offset < local_face_info_by_local_face_.size());
+  return local_face_info_by_local_face_[slot_offset];
 }
 
 const CBC_FLUDSCommonData::DelayedLocalFaceInfo&
 CBC_FLUDSCommonData::GetDelayedLocalFaceInfo(std::uint32_t cell_local_id,
                                              unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < delayed_local_face_info_by_local_face_.size());
-  return delayed_local_face_info_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).delayed_local_face_info;
 }
 
 const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo&
 CBC_FLUDSCommonData::GetDelayedNonlocalFaceInfoByLocalFace(std::uint32_t cell_local_id,
                                                            unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < delayed_nonlocal_face_info_by_local_face_.size());
-  return delayed_nonlocal_face_info_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).delayed_nonlocal_face_info;
 }
 
 const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo&
@@ -343,50 +323,35 @@ size_t
 CBC_FLUDSCommonData::GetIncomingNonlocalFaceSlotByLocalFace(std::uint32_t cell_local_id,
                                                             unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < incoming_nonlocal_face_slots_by_local_face_.size());
-  return incoming_nonlocal_face_slots_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).incoming_nonlocal_face_slot;
 }
 
 size_t
 CBC_FLUDSCommonData::GetOutgoingNonlocalFaceSlotByLocalFace(std::uint32_t cell_local_id,
                                                             unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < outgoing_nonlocal_face_slots_by_local_face_.size());
-  return outgoing_nonlocal_face_slots_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).outgoing_nonlocal_face_slot;
 }
 
 size_t
 CBC_FLUDSCommonData::GetOutgoingNonlocalFacePeerIndexByLocalFace(std::uint32_t cell_local_id,
                                                                  unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < outgoing_nonlocal_face_peer_indices_by_local_face_.size());
-  return outgoing_nonlocal_face_peer_indices_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).outgoing_nonlocal_face_peer_index;
 }
 
 int
 CBC_FLUDSCommonData::GetOutgoingNonlocalFaceLocationByLocalFace(std::uint32_t cell_local_id,
                                                                 unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < outgoing_nonlocal_face_locations_by_local_face_.size());
-  return outgoing_nonlocal_face_locations_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).outgoing_nonlocal_face_location;
 }
 
 size_t
 CBC_FLUDSCommonData::GetOutgoingNonlocalFaceNodeCountByLocalFace(std::uint32_t cell_local_id,
                                                                  unsigned int face_id) const
 {
-  assert(cell_local_id < local_face_slot_offsets_.size());
-  const auto slot_offset = local_face_slot_offsets_[cell_local_id] + face_id;
-  assert(slot_offset < outgoing_nonlocal_face_node_counts_by_local_face_.size());
-  return outgoing_nonlocal_face_node_counts_by_local_face_[slot_offset];
+  return GetLocalFaceInfo(cell_local_id, face_id).outgoing_nonlocal_face_node_count;
 }
 
 std::uint32_t

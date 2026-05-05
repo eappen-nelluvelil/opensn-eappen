@@ -15,6 +15,12 @@ namespace opensn
 class CBC_FLUDSCommonData : public FLUDSCommonData
 {
 public:
+  /// Marker for cell faces without a nonlocal slot.
+  static constexpr size_t INVALID_FACE_SLOT = std::numeric_limits<size_t>::max();
+
+  /// Marker for cell faces without an outgoing nonlocal peer.
+  static constexpr size_t INVALID_PEER_INDEX = std::numeric_limits<size_t>::max();
+
   struct DelayedLocalFaceInfo
   {
     size_t slot_address = 0;
@@ -26,6 +32,22 @@ public:
     size_t prelocI = 0;
     size_t slot_address = 0;
     size_t num_face_nodes = 0;
+  };
+
+  struct LocalFaceInfo
+  {
+    size_t incoming_nonlocal_face_slot = INVALID_FACE_SLOT;
+    size_t delayed_nonlocal_face_slot = INVALID_FACE_SLOT;
+    size_t outgoing_nonlocal_face_slot = INVALID_FACE_SLOT;
+    size_t outgoing_nonlocal_face_peer_index = INVALID_PEER_INDEX;
+    int outgoing_nonlocal_face_location = -1;
+    size_t outgoing_nonlocal_face_node_count = 0;
+    DelayedLocalFaceInfo delayed_local_face_info;
+    DelayedNonlocalFaceInfo delayed_nonlocal_face_info;
+    unsigned char delayed_local_incoming = 0;
+    unsigned char delayed_local_outgoing = 0;
+    unsigned char delayed_nonlocal_incoming = 0;
+    unsigned char delayed_nonlocal_outgoing = 0;
   };
 
   CBC_FLUDSCommonData(const SPDS& spds,
@@ -48,6 +70,9 @@ public:
   bool IsDelayedNonlocalIncomingFace(std::uint32_t cell_local_id, unsigned int face_id) const;
 
   bool IsDelayedNonlocalOutgoingFace(std::uint32_t cell_local_id, unsigned int face_id) const;
+
+  /// Return compact CBC metadata for a local cell-face pair.
+  const LocalFaceInfo& GetLocalFaceInfo(std::uint32_t cell_local_id, unsigned int face_id) const;
 
   const DelayedLocalFaceInfo& GetDelayedLocalFaceInfo(std::uint32_t cell_local_id,
                                                       unsigned int face_id) const;
@@ -83,50 +108,22 @@ public:
   /// Return the source MPI location for an incoming nonlocal face slot.
   int GetIncomingNonlocalFaceSourceLocation(size_t incoming_face_slot) const;
 
-  /// Marker for cell faces without a nonlocal slot.
-  static constexpr size_t INVALID_FACE_SLOT = std::numeric_limits<size_t>::max();
-
-  /// Marker for cell faces without an outgoing nonlocal peer.
-  static constexpr size_t INVALID_PEER_INDEX = std::numeric_limits<size_t>::max();
-
 private:
   size_t num_incoming_nonlocal_faces_;
   size_t num_outgoing_nonlocal_faces_;
   size_t num_delayed_local_face_nodes_;
   /// Prefix offsets into local-face-indexed slot arrays.
   std::vector<size_t> local_face_slot_offsets_;
-  /// Local-face-indexed incoming slots.
-  std::vector<size_t> incoming_nonlocal_face_slots_by_local_face_;
-  /// Local-face-indexed delayed incoming nonlocal slots.
-  std::vector<size_t> delayed_nonlocal_face_slots_by_local_face_;
+  /// Local-face-indexed compact CBC face metadata.
+  std::vector<LocalFaceInfo> local_face_info_by_local_face_;
   /// Slot-indexed local cells unlocked by received payloads.
   std::vector<std::uint32_t> incoming_nonlocal_face_local_cells_;
   /// Slot-indexed source MPI locations for incoming nonlocal payloads.
   std::vector<int> incoming_nonlocal_face_source_locations_;
-  /// Local-face-indexed downstream incoming slots.
-  std::vector<size_t> outgoing_nonlocal_face_slots_by_local_face_;
-  /// Local-face-indexed SPDS-successor peer indices.
-  std::vector<size_t> outgoing_nonlocal_face_peer_indices_by_local_face_;
-  /// Local-face-indexed outgoing destination locations.
-  std::vector<int> outgoing_nonlocal_face_locations_by_local_face_;
-  /// Local-face-indexed receiver-side outgoing face-node counts.
-  std::vector<size_t> outgoing_nonlocal_face_node_counts_by_local_face_;
-  /// Local-face-indexed delayed local incoming face metadata.
-  std::vector<DelayedLocalFaceInfo> delayed_local_face_info_by_local_face_;
   /// Delayed incoming nonlocal metadata indexed by delayed face slot.
   std::vector<DelayedNonlocalFaceInfo> delayed_nonlocal_face_info_by_slot_;
-  /// Local-face-indexed delayed incoming nonlocal metadata.
-  std::vector<DelayedNonlocalFaceInfo> delayed_nonlocal_face_info_by_local_face_;
   /// Per-delayed-predecessor face-node counts.
   std::vector<size_t> delayed_prelocI_face_node_counts_;
-  /// Local-face-indexed delayed local incoming flags.
-  std::vector<unsigned char> delayed_local_incoming_by_local_face_;
-  /// Local-face-indexed delayed local outgoing flags.
-  std::vector<unsigned char> delayed_local_outgoing_by_local_face_;
-  /// Local-face-indexed delayed nonlocal incoming flags.
-  std::vector<unsigned char> delayed_nonlocal_incoming_by_local_face_;
-  /// Local-face-indexed delayed nonlocal outgoing flags.
-  std::vector<unsigned char> delayed_nonlocal_outgoing_by_local_face_;
 };
 
 } // namespace opensn
