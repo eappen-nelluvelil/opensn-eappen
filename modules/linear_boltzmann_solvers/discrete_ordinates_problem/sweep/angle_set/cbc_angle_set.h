@@ -64,9 +64,17 @@ public:
 protected:
   bool IncomingBoundaryFacesReady(const Cell& cell) const;
 
+  void InitializeTaskState();
+
+  void ResetTaskState();
+
   const CBC_SPDS& cbc_spds_;
   /// Immutable CBC task graph for the active sweep.
   const std::vector<Task>* task_list_ = nullptr;
+  /// Immutable dependency counts keyed by task index.
+  std::vector<unsigned int> initial_dependencies_;
+  /// Immutable initial ready-task stack.
+  std::vector<std::uint32_t> initial_ready_tasks_;
   /// Mutable dependency counts keyed by task index.
   std::vector<unsigned int> remaining_dependencies_;
   /// Mutable completion flags keyed by task index.

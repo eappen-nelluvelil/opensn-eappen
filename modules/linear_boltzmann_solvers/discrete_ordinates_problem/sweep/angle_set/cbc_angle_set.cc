@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "framework/mesh/cell/cell.h"
 #include "caliper/cali.h"
+#include <algorithm>
 
 namespace opensn
 {
@@ -37,9 +38,11 @@ CBC_AngleSet::CBC_AngleSet(size_t id,
                            const MPICommunicatorSet& comm_set)
   : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
-    ready_tasks_(),
+    task_list_(&cbc_spds_.GetTaskList()),
     async_comm_(id, *fluds, max_mpi_message_size, comm_set)
 {
+  InitializeTaskState();
+  ResetTaskState();
 }
 
 AsynchronousCommunicator*
@@ -55,23 +58,6 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
   if (executed_)
     return AngleSetStatus::FINISHED;
-
-  if (task_list_ == nullptr)
-  {
-    task_list_ = &cbc_spds_.GetTaskList();
-    remaining_dependencies_.resize(task_list_->size());
-    completed_tasks_.assign(task_list_->size(), 0);
-    ready_tasks_.clear();
-    ready_tasks_.reserve(task_list_->size());
-
-    for (std::size_t i = 0; i < task_list_->size(); ++i)
-    {
-      const auto num_dependencies = (*task_list_)[i].num_dependencies;
-      remaining_dependencies_[i] = num_dependencies;
-      if (num_dependencies == 0)
-        ready_tasks_.push_back(static_cast<std::uint32_t>(i));
-    }
-  }
 
   sweep_chunk.SetAngleSet(*this);
 
@@ -151,15 +137,41 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
-  task_list_ = nullptr;
-  remaining_dependencies_.clear();
-  completed_tasks_.clear();
-  ready_tasks_.clear();
+  ResetTaskState();
   received_task_buffer_.clear();
-  num_completed_tasks_ = 0;
   async_comm_.Reset();
   fluds_->ClearLocalAndReceivePsi();
   executed_ = false;
+}
+
+void
+CBC_AngleSet::InitializeTaskState()
+{
+  const auto num_tasks = task_list_->size();
+  initial_dependencies_.resize(num_tasks);
+  initial_ready_tasks_.clear();
+  initial_ready_tasks_.reserve(num_tasks);
+  remaining_dependencies_.resize(num_tasks);
+  completed_tasks_.resize(num_tasks);
+  ready_tasks_.reserve(num_tasks);
+
+  for (std::size_t i = 0; i < num_tasks; ++i)
+  {
+    const auto num_dependencies = (*task_list_)[i].num_dependencies;
+    initial_dependencies_[i] = num_dependencies;
+    if (num_dependencies == 0)
+      initial_ready_tasks_.push_back(static_cast<std::uint32_t>(i));
+  }
+}
+
+void
+CBC_AngleSet::ResetTaskState()
+{
+  std::copy(
+    initial_dependencies_.begin(), initial_dependencies_.end(), remaining_dependencies_.begin());
+  std::fill(completed_tasks_.begin(), completed_tasks_.end(), 0);
+  ready_tasks_ = initial_ready_tasks_;
+  num_completed_tasks_ = 0;
 }
 
 const double*
