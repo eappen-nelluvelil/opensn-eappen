@@ -267,3 +267,52 @@ Each item should be committed separately. The AAH-inspired and higher-risk
 ideas should remain documented until the low-risk set has been verified and
 profiled, because they either change delayed communication layout or can alter
 the latency/bandwidth balance of CBC.
+
+## Second implementation pass
+
+The first implementation pass completed the safe scheduler/communicator
+optimizations, except that configured-size chunking was restored to the
+conservative CBC cap after the three-rank HDPE balance regression showed that
+large nonblocking sends can still depend on MPI eager buffering. The next pass
+therefore keeps CBC's bounded-message safety policy intact and focuses only on
+metadata and local-kernel overhead.
+
+### A. Compact per-local-face metadata
+
+`CBC_FLUDSCommonData` already owns all local-face-indexed CBC metadata, but the
+sweep kernels recover this information through several separate accessors. A
+compact local-face metadata record can be built once during FLUDS common-data
+construction and consumed by the sweep kernels with a single lookup per face.
+
+Natural commit boundary: one commit touching `CBC_FLUDSCommonData` and the
+standard host CBC sweep kernels. The change should preserve all existing
+accessors for other code paths.
+
+### B. RZ sweep-kernel use of compact metadata
+
+The r-z CBC sweep chunk uses the same common data but has a separate kernel
+implementation. After the standard host CBC path is verified, the same
+single-lookup metadata pattern can be applied to the r-z sweep chunk without
+changing numerical semantics.
+
+Natural commit boundary: one commit touching only the r-z CBC sweep chunk.
+
+### C. Delayed block communication design
+
+Delayed CBC payloads do not unlock work in the current sweep, which makes them
+the best candidate for AAH-style block communication. This should not be mixed
+with metadata-cache changes: it needs a separate design and validation step
+because it changes the delayed completion protocol and FLUDS delayed-buffer
+layout assumptions.
+
+Natural commit boundary: one or more future commits after profiling confirms
+delayed parsing/copy overhead is material.
+
+### D. Protocol-level eager-independent CBC communication
+
+The conservative 3072-byte cap is safe for current tests but not a mathematical
+MPI guarantee. A future eager-independent protocol should pre-post receives or
+use explicit header/credit/acknowledgement flow control so correctness no
+longer depends on an MPI eager threshold. This is a correctness/protocol
+project, not a small optimization, and should remain separate from the local
+metadata optimizations.
