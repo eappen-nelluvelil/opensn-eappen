@@ -81,6 +81,10 @@ public:
   /// Prepare storage for an incoming payload and return the local task it unlocks.
   IncomingNonlocalPsi PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t data_size);
 
+  std::span<double> IncomingNonlocalPsiBufferBySlot(size_t incoming_face_slot, size_t data_size);
+
+  std::uint32_t CommitIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t data_size);
+
   size_t GetIncomingNonlocalPsiSize(size_t incoming_face_slot) const;
 
   size_t GetDelayedNonlocalPsiSize(size_t delayed_face_slot) const;

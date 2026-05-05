@@ -119,7 +119,6 @@ ValidatePayloadChunk(std::size_t expected_size,
 void
 CBC_AsynchronousCommunicator::ResetPartialPayload(PartialIncomingPayload& partial)
 {
-  partial.data.clear();
   partial.received_chunks.clear();
   partial.total_size = 0;
   partial.received = 0;
@@ -131,12 +130,15 @@ CBC_AsynchronousCommunicator::StorePartialPayload(PartialIncomingPayload& partia
                                                   std::size_t chunk_offset,
                                                   std::size_t chunk_size,
                                                   std::size_t max_payload_chunk_size,
+                                                  std::span<double> destination,
                                                   const std::byte* payload,
                                                   const char* context)
 {
+  if (destination.size() != total_size)
+    throw std::logic_error(context);
+
   if (partial.total_size == 0)
   {
-    partial.data.assign(total_size, 0.0);
     partial.received_chunks.assign(NumPayloadChunks(total_size, max_payload_chunk_size), 0);
     partial.total_size = total_size;
     partial.received = 0;
@@ -149,7 +151,7 @@ CBC_AsynchronousCommunicator::StorePartialPayload(PartialIncomingPayload& partia
     throw std::logic_error(context);
 
   const auto num_bytes = chunk_size * sizeof(double);
-  std::memcpy(partial.data.data() + chunk_offset, payload, num_bytes);
+  std::memcpy(destination.data() + chunk_offset, payload, num_bytes);
   partial.received_chunks[chunk_index] = 1;
   partial.received += chunk_size;
 
@@ -479,20 +481,22 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
         else
         {
           auto& partial = incoming_partials_[incoming_face_slot];
+          auto incoming =
+            cbc_fluds_.IncomingNonlocalPsiBufferBySlot(incoming_face_slot, total_size);
 
           if (StorePartialPayload(partial,
                                   total_size,
                                   chunk_offset,
                                   chunk_size,
                                   max_payload_chunk_size_,
+                                  incoming,
                                   receive_buffer_.data() + offset,
                                   "CBC received a duplicate non-local psi chunk."))
           {
-            auto incoming =
-              cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
-            std::copy(partial.data.begin(), partial.data.end(), incoming.psi.begin());
+            const auto cell_local_id =
+              cbc_fluds_.CommitIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
             ResetPartialPayload(partial);
-            cells_who_received_data.push_back(incoming.cell_local_id);
+            cells_who_received_data.push_back(cell_local_id);
           }
         }
 
@@ -569,22 +573,22 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
         }
         else
         {
+          if (delayed_payload_received_[delayed_face_slot] != 0)
+            throw std::logic_error("CBC received duplicate delayed non-local psi.");
+
           auto& partial = delayed_partials_[delayed_face_slot];
+          auto incoming =
+            cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
 
           if (StorePartialPayload(partial,
                                   total_size,
                                   chunk_offset,
                                   chunk_size,
                                   max_payload_chunk_size_,
+                                  incoming,
                                   receive_buffer_.data() + offset,
                                   "CBC received a duplicate delayed non-local psi chunk."))
           {
-            if (delayed_payload_received_[delayed_face_slot] != 0)
-              throw std::logic_error("CBC received duplicate delayed non-local psi.");
-
-            auto incoming =
-              cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
-            std::copy(partial.data.begin(), partial.data.end(), incoming.begin());
             ResetPartialPayload(partial);
             delayed_payload_received_[delayed_face_slot] = 1;
           }

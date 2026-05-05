@@ -239,6 +239,14 @@ CBC_FLUDS::SetDelayedOutgoingPsiNewToOld()
 CBC_FLUDS::IncomingNonlocalPsi
 CBC_FLUDS::PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t data_size)
 {
+  auto psi = IncomingNonlocalPsiBufferBySlot(incoming_face_slot, data_size);
+  const auto cell_local_id = CommitIncomingNonlocalPsiBySlot(incoming_face_slot, data_size);
+  return {psi, cell_local_id};
+}
+
+std::span<double>
+CBC_FLUDS::IncomingNonlocalPsiBufferBySlot(size_t incoming_face_slot, size_t data_size)
+{
   if (incoming_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT or
       incoming_face_slot >= incoming_nonlocal_psi_generation_.size())
     throw std::logic_error("CBC_FLUDS received non-local psi for an unknown cell-face slot.");
@@ -251,10 +259,25 @@ CBC_FLUDS::PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t da
       incoming_nonlocal_psi_current_generation_)
     throw std::logic_error("CBC_FLUDS received duplicate non-local psi for a cell-face slot.");
 
-  incoming_nonlocal_psi_generation_[incoming_face_slot] = incoming_nonlocal_psi_current_generation_;
+  return std::span<double>(incoming_nonlocal_psi_.data() + slot_begin, data_size);
+}
 
-  return {std::span<double>(incoming_nonlocal_psi_.data() + slot_begin, data_size),
-          common_data_.GetIncomingNonlocalFaceLocalCell(incoming_face_slot)};
+std::uint32_t
+CBC_FLUDS::CommitIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t data_size)
+{
+  if (incoming_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT or
+      incoming_face_slot >= incoming_nonlocal_psi_generation_.size())
+    throw std::logic_error("CBC_FLUDS received non-local psi for an unknown cell-face slot.");
+
+  if (GetIncomingNonlocalPsiSize(incoming_face_slot) != data_size)
+    throw std::logic_error("CBC_FLUDS received non-local psi with an unexpected payload size.");
+
+  if (incoming_nonlocal_psi_generation_[incoming_face_slot] ==
+      incoming_nonlocal_psi_current_generation_)
+    throw std::logic_error("CBC_FLUDS received duplicate non-local psi for a cell-face slot.");
+
+  incoming_nonlocal_psi_generation_[incoming_face_slot] = incoming_nonlocal_psi_current_generation_;
+  return common_data_.GetIncomingNonlocalFaceLocalCell(incoming_face_slot);
 }
 
 size_t

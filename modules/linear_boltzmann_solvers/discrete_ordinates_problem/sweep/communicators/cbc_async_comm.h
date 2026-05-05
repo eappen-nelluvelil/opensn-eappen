@@ -121,7 +121,6 @@ protected:
   std::vector<unsigned char> delayed_recv_done_;
   struct PartialIncomingPayload
   {
-    std::vector<double> data;
     std::vector<unsigned char> received_chunks;
     size_t total_size = 0;
     size_t received = 0;
@@ -134,6 +133,7 @@ protected:
                                   size_t chunk_offset,
                                   size_t chunk_size,
                                   size_t max_payload_chunk_size,
+                                  std::span<double> destination,
                                   const std::byte* payload,
                                   const char* context);
 
