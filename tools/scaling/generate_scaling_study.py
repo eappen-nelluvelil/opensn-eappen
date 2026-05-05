@@ -29,8 +29,11 @@ weak_divisors = [15, 19, 24, 31, 39, 49, 62, 78, 98, 124]
 # 64 tasks per node with 2048 cells per task
 # weak_divisors = [30, 39, 48, 62, 78, 98, 124]
 
-nodes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
-"""List of node counts to generate job files for."""
+strong_nodes = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+"""List of node counts to generate strong-scaling job files for."""
+
+weak_nodes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+"""List of node counts to generate weak-scaling job files for."""
 
 ncores = 96
 """
@@ -111,6 +114,15 @@ if __name__ == "__main__":
         default=opensn_binary,
         help=f"Path to the OpenSn executable. Defaults to {opensn_binary}."
     )
+    parser.add_argument(
+        "--study-name",
+        type=str,
+        default="",
+        help=(
+            "Optional study identifier appended to output directories and job names, "
+            "for example a branch or binary label."
+        )
+    )
     args = parser.parse_args()
 
     processor = args.processor or ("gpu" if args.use_gpus else "cpu")
@@ -134,9 +146,10 @@ if __name__ == "__main__":
         "ngpus": ngpus,
         "engine": args.engine,
         "environment": environment,
-        "gpu_config": gpu_option
+        "gpu_config": gpu_option,
+        "study_name": args.study_name
     }
     if args.type == "strong":
-        generate_strong_scaling(nodes, divisor=strong_divisor, **inputs)
+        generate_strong_scaling(strong_nodes, divisor=strong_divisor, **inputs)
     else:
-        generate_weak_scaling(nodes, weak_divisors, **inputs)
+        generate_weak_scaling(weak_nodes, weak_divisors, **inputs)

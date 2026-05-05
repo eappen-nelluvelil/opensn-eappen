@@ -7,6 +7,9 @@ execution.
 ## 1. Generate inputs
 
 ``generate_scaling_study.py`` generates the meshes and launch scripts necessary for strong and weak scaling studies.
+Edit ``strong_nodes`` and ``weak_nodes`` in the script to choose separate node counts for strong and
+weak scaling. For example, CBC strong scaling can omit 1-node runs while weak scaling still includes
+1 node.
 
 Usage:
 ```
@@ -21,6 +24,9 @@ python3 generate_scaling_study.py
                         Job submitting system. Defaults to slurm.
   --opensn-binary OPENSN_BINARY
                         Path to the OpenSn executable.
+  --study-name STUDY_NAME
+                        Optional identifier appended to output directories and
+                        job names, for example a branch or binary label.
 ```
 
 Examples:
@@ -32,13 +38,16 @@ python3 generate_scaling_study.py --type=strong --sweep-type=CBC --engine=slurm
 ```
 ```
 python3 generate_scaling_study.py --type=strong --sweep-type=CBC --engine=slurm \
-  --opensn-binary=/path/to/build/python/opensn
+  --opensn-binary=/path/to/build/python/opensn \
+  --study-name=cbc-cycles-2
 ```
 ```
 python3 generate_scaling_study.py --type=weak --sweep-type=CBC --use-gpus --engine=lc-flux
 ```
 
-After running the script, a folder ``output/{strong/weak}_{aah/cbc}_{cpu/gpu}`` will appear.
+After running the script, a folder ``output/{strong/weak}_{aah/cbc}_{cpu/gpu}`` will appear. If
+``--study-name`` is used, the folder is suffixed with that study name, e.g.
+``output/strong_cbc_cpu_cbc-cycles-2``.
 Change directory into that folder for the next step.
 
 ## 2. Submitting jobs
@@ -64,6 +73,13 @@ python3 plot_weak.py --sweep-type=CBC --use-gpus
 Custom result folders can be provided with ``--dir``:
 ```
 python3 plot_strong.py --dir=output/strong_cbc_cpu --sweep-type=CBC
+```
+Multiple result folders can be overlaid by specifying ``--dir`` and ``--label`` more than once:
+```
+python3 plot_strong.py \
+  --dir=output/strong_cbc_cpu_cbc-cycles-2 --label=cbc-cycles-2 \
+  --dir=output/strong_cbc_cpu_cyclic-deps-stages --label=cyclic-deps-stages \
+  --sweep-type=CBC
 ```
 
 Result of the current run can be compared with or recorded with:

@@ -10,6 +10,7 @@ from jinja2 import Environment, FileSystemLoader
 import os
 import subprocess
 import shutil
+import re
 
 base_dir = Path(__file__).resolve().parent
 env = Environment(
@@ -27,6 +28,17 @@ commands = {
     "alcf-pbs": "qsub"
 }
 py_template = env.get_template("unstructured.py")
+
+
+def make_study_tag(sweep_type, processor, study_name=""):
+    """Create a filesystem- and scheduler-friendly study tag."""
+
+    tag = f"{sweep_type.lower()}_{processor}"
+    if study_name:
+        suffix = re.sub(r"[^A-Za-z0-9_.-]+", "-", study_name.strip()).strip("-")
+        if suffix:
+            tag = f"{tag}_{suffix}"
+    return tag
 
 
 def run_gmsh(gmsh_binary, input_geo, divisor, output_msh):
@@ -96,9 +108,9 @@ def generate_strong_scaling(nodes, **kwargs):
     # copy necessary files to output directory
     processor = kwargs["processor"]
     sweep_type = kwargs["sweep_type"]
-    sweep_label = sweep_type.lower()
+    study_tag = make_study_tag(sweep_type, processor, kwargs.get("study_name", ""))
     engine = kwargs["engine"]
-    out_dir = base_dir.parent / "output" / f"strong_{sweep_label}_{processor}"
+    out_dir = base_dir.parent / "output" / f"strong_{study_tag}"
     os.makedirs(out_dir, exist_ok=True)
     shutil.copyfile(
         base_dir / "xs_168g.xs",
@@ -115,7 +127,7 @@ def generate_strong_scaling(nodes, **kwargs):
 
     # create job files
     keys = make_launch_script_keys(
-        base_name=f"strong_{sweep_label}_{processor}",
+        base_name=f"strong_{study_tag}",
         outdir=out_dir,
         opensn_binary=kwargs["opensn_binary"],
         processor=processor,
@@ -159,9 +171,9 @@ def generate_weak_scaling(nodes, divisors, **kwargs):
     # copy necessary files to output directory
     processor = kwargs["processor"]
     sweep_type = kwargs["sweep_type"]
-    sweep_label = sweep_type.lower()
+    study_tag = make_study_tag(sweep_type, processor, kwargs.get("study_name", ""))
     engine = kwargs["engine"]
-    out_dir = base_dir.parent / "output" / f"weak_{sweep_label}_{processor}"
+    out_dir = base_dir.parent / "output" / f"weak_{study_tag}"
     os.makedirs(out_dir, exist_ok=True)
     shutil.copyfile(
         base_dir / "xs_168g.xs",
@@ -179,7 +191,7 @@ def generate_weak_scaling(nodes, divisors, **kwargs):
 
     # create job files
     keys = make_launch_script_keys(
-        base_name=f"weak_{sweep_label}_{processor}",
+        base_name=f"weak_{study_tag}",
         outdir=out_dir,
         opensn_binary=kwargs["opensn_binary"],
         processor=processor,
