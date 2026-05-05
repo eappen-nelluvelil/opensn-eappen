@@ -44,7 +44,6 @@ ReadMessageValue(const std::vector<std::byte>& buffer, std::size_t& offset)
 
 constexpr std::size_t CBC_MESSAGE_HEADER_SIZE =
   sizeof(std::size_t) + sizeof(std::size_t) + sizeof(std::size_t) + sizeof(std::size_t);
-constexpr std::size_t CBC_MAX_IMMEDIATE_MESSAGE_BYTES = 3072;
 
 void
 AppendDownwindMessage(std::vector<std::byte>& raw,
@@ -172,7 +171,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
     receive_comm_(comm_set.LocICommunicator(location_id_)),
     cbc_fluds_(dynamic_cast<CBC_FLUDS&>(fluds)),
     max_mpi_message_size_(std::max(
-      std::min(static_cast<std::size_t>(max_mpi_message_size), CBC_MAX_IMMEDIATE_MESSAGE_BYTES),
+      max_mpi_message_size > 0 ? static_cast<std::size_t>(max_mpi_message_size) : std::size_t{0},
       CBC_MESSAGE_HEADER_SIZE + sizeof(double))),
     max_payload_chunk_size_(MaxPayloadChunkSize(max_mpi_message_size_))
 {
