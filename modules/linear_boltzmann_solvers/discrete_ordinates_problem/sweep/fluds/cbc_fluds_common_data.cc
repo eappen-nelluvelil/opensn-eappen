@@ -244,6 +244,13 @@ CBC_FLUDSCommonData::GetDelayedPrelocIFaceNodeCount(size_t prelocI) const
   return delayed_prelocI_face_node_counts_[prelocI];
 }
 
+size_t
+CBC_FLUDSCommonData::GetDelayedNonlocalFaceNodeCount(size_t delayed_face_slot) const
+{
+  assert(delayed_face_slot < delayed_nonlocal_face_info_by_slot_.size());
+  return delayed_nonlocal_face_info_by_slot_[delayed_face_slot].num_face_nodes;
+}
+
 bool
 CBC_FLUDSCommonData::IsDelayedLocalIncomingFace(std::uint32_t cell_local_id,
                                                 unsigned int face_id) const
