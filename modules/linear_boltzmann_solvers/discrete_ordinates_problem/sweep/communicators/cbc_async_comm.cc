@@ -116,12 +116,24 @@ ValidatePayloadChunk(std::size_t expected_size,
 
 } // namespace
 
+CBC_AsynchronousCommunicator::PartialIncomingPayload
+CBC_AsynchronousCommunicator::MakePartialPayload(std::size_t total_size,
+                                                 std::size_t max_payload_chunk_size)
+{
+  PartialIncomingPayload partial;
+  partial.total_size = total_size;
+  if (total_size != 0)
+    partial.received_chunks.assign(NumPayloadChunks(total_size, max_payload_chunk_size), 0);
+  return partial;
+}
+
 void
 CBC_AsynchronousCommunicator::ResetPartialPayload(PartialIncomingPayload& partial)
 {
-  partial.received_chunks.clear();
-  partial.total_size = 0;
+  if (partial.active != 0)
+    std::fill(partial.received_chunks.begin(), partial.received_chunks.end(), 0);
   partial.received = 0;
+  partial.active = 0;
 }
 
 bool
@@ -137,14 +149,15 @@ CBC_AsynchronousCommunicator::StorePartialPayload(PartialIncomingPayload& partia
   if (destination.size() != total_size)
     throw std::logic_error(context);
 
-  if (partial.total_size == 0)
-  {
-    partial.received_chunks.assign(NumPayloadChunks(total_size, max_payload_chunk_size), 0);
-    partial.total_size = total_size;
-    partial.received = 0;
-  }
-  else if (partial.total_size != total_size)
+  if (partial.total_size != total_size)
     throw std::logic_error(context);
+
+  if (partial.active == 0)
+  {
+    std::fill(partial.received_chunks.begin(), partial.received_chunks.end(), 0);
+    partial.received = 0;
+    partial.active = 1;
+  }
 
   const auto chunk_index = chunk_offset / max_payload_chunk_size;
   if (chunk_index >= partial.received_chunks.size() or partial.received_chunks[chunk_index] != 0)
@@ -202,8 +215,15 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   for (std::size_t i = 0; i < receive_source_expected_payloads_.size(); ++i)
     receive_source_done_[i] = receive_source_expected_payloads_[i] == 0 ? 1 : 0;
 
-  incoming_partials_.resize(common_data.GetNumIncomingNonlocalFaces());
-  delayed_partials_.resize(common_data.GetNumDelayedNonlocalFaces());
+  incoming_partials_.reserve(common_data.GetNumIncomingNonlocalFaces());
+  for (std::size_t slot = 0; slot < common_data.GetNumIncomingNonlocalFaces(); ++slot)
+    incoming_partials_.push_back(
+      MakePartialPayload(cbc_fluds_.GetIncomingNonlocalPsiSize(slot), max_payload_chunk_size_));
+
+  delayed_partials_.reserve(common_data.GetNumDelayedNonlocalFaces());
+  for (std::size_t slot = 0; slot < common_data.GetNumDelayedNonlocalFaces(); ++slot)
+    delayed_partials_.push_back(
+      MakePartialPayload(cbc_fluds_.GetDelayedNonlocalPsiSize(slot), max_payload_chunk_size_));
   delayed_payload_received_.assign(common_data.GetNumDelayedNonlocalFaces(), 0);
 
   const auto& location_successors = fluds_.GetSPDS().GetLocationSuccessors();

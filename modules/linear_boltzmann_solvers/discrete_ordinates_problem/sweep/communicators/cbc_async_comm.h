@@ -130,7 +130,11 @@ protected:
     std::vector<unsigned char> received_chunks;
     size_t total_size = 0;
     size_t received = 0;
+    unsigned char active = 0;
   };
+
+  static PartialIncomingPayload MakePartialPayload(size_t total_size,
+                                                   size_t max_payload_chunk_size);
 
   static void ResetPartialPayload(PartialIncomingPayload& partial);
 
