@@ -118,12 +118,27 @@ protected:
   struct PartialIncomingPayload
   {
     std::vector<double> data;
+    std::vector<unsigned char> received_chunks;
+    size_t total_size = 0;
     size_t received = 0;
   };
+
+  static void ResetPartialPayload(PartialIncomingPayload& partial);
+
+  static bool StorePartialPayload(PartialIncomingPayload& partial,
+                                  size_t total_size,
+                                  size_t chunk_offset,
+                                  size_t chunk_size,
+                                  size_t max_payload_chunk_size,
+                                  const std::byte* payload,
+                                  const char* context);
+
   std::vector<PartialIncomingPayload> incoming_partials_;
   std::vector<PartialIncomingPayload> delayed_partials_;
+  std::vector<unsigned char> delayed_payload_received_;
   bool delayed_completion_markers_queued_ = false;
   std::size_t max_mpi_message_size_ = 0;
+  std::size_t max_payload_chunk_size_ = 1;
   static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();
 };
 

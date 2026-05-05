@@ -33,9 +33,13 @@ public:
 
   size_t GetNumIncomingNonlocalFaces() const { return num_incoming_nonlocal_faces_; }
 
+  size_t GetNumDelayedNonlocalFaces() const { return delayed_nonlocal_face_info_by_slot_.size(); }
+
   size_t GetNumDelayedLocalFaceNodes() const { return num_delayed_local_face_nodes_; }
 
   size_t GetDelayedPrelocIFaceNodeCount(size_t prelocI) const;
+
+  size_t GetDelayedNonlocalFaceNodeCount(size_t delayed_face_slot) const;
 
   bool IsDelayedLocalIncomingFace(std::uint32_t cell_local_id, unsigned int face_id) const;
 
