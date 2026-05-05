@@ -432,7 +432,14 @@ CBC_AsynchronousCommunicator::Reset()
 {
   send_buffer_.clear();
   send_requests_.clear();
-  reusable_send_buffers_.clear();
+  std::erase_if(reusable_send_buffers_,
+                [this](const auto& buffer)
+                { return buffer.data.capacity() > max_mpi_message_size_; });
+  for (auto& buffer : reusable_send_buffers_)
+  {
+    buffer.send_initiated = false;
+    buffer.data.clear();
+  }
   receive_buffer_.clear();
   for (auto& partial : incoming_partials_)
     ResetPartialPayload(partial);
