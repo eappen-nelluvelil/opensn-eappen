@@ -37,6 +37,9 @@ private:
   /// Applies a first-in-first-out sweep scheduling.
   void ScheduleAlgoFIFO(SweepChunk& sweep_chunk);
 
+  /// Executes FIFO scheduling while respecting angle-set dependencies.
+  void ScheduleAlgoDependencyFIFO(SweepChunk& sweep_chunk);
+
   /// Executes FIFO scheduler (RZ).
   void ScheduleAlgoFIFORZ(SweepChunk& sweep_chunk);
 
