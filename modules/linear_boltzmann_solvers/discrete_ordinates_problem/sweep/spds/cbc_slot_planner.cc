@@ -386,8 +386,9 @@ BuildReachability(const std::uint32_t num_tasks,
                   ThreadLocalWorkspace& ws)
 {
   ws.reachability.ResizeAndClear(num_tasks);
-  for (std::uint32_t i = 0; i < num_tasks; ++i)
+  for (std::uint32_t offset = 0; offset < num_tasks; ++offset)
   {
+    const auto i = num_tasks - 1 - offset;
     const auto successor_begin = successor_ranks.begin() + successor_rank_offsets[i];
     const auto successor_end = successor_ranks.begin() + successor_rank_offsets[i + 1];
     const auto start_word = static_cast<std::size_t>(i / 64);

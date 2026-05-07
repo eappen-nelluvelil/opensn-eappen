@@ -9,9 +9,9 @@
 #include "framework/math/quadratures/angular/curvilinear_product_quadrature.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include "framework/utils/thread_utils.h"
 #include "caliper/cali.h"
 #include <algorithm>
-#include <thread>
 #include <unordered_map>
 
 namespace opensn
@@ -74,10 +74,9 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   }
   else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
-    const std::size_t hardware_concurrency = std::thread::hardware_concurrency();
+    const auto thread_info = GetThreadResourceInfo();
     const std::size_t num_workers = std::max<std::size_t>(
-      1,
-      std::min(angle_agg_.GetNumAngleSets(), hardware_concurrency == 0 ? 1 : hardware_concurrency));
+      1, std::min(angle_agg_.GetNumAngleSets(), thread_info.available_threads));
     pool_.Resize(num_workers);
   }
 
