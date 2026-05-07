@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+This script sets up a 64-group PWLD transport problem that is used for strong
+scaling studies with OpenSn.
+"""
+
+import os
+import sys
+
+if "opensn_console" not in globals():
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
+    from pyopensn.mesh import DistributedMeshGenerator, FromFileMeshGenerator
+    from pyopensn.xs import MultiGroupXS
+    from pyopensn.aquad import GLCProductQuadrature3DXYZ
+    from pyopensn.solver import DiscreteOrdinatesProblem, SteadyStateSourceSolver
+
+n_g = 64              # Number of energy groups
+n_polar = 14          # Number of polar angles
+n_azimuthal = 32      # Number of azimuthal angles
+scattering_order = 0  # Scattering order
+
+# Mesh
+meshgen = DistributedMeshGenerator(
+    inputs=[
+        FromFileMeshGenerator(filename="{{mesh_file}}")
+    ]
+)
+grid = meshgen.Execute()
+grid.SetOrthogonalBoundaries()
+
+# Cross-section data
+xs_diag = MultiGroupXS()
+xs_diag.LoadFromOpenSn("xs_168g.xs")
+
+# Boundary conditions
+bsrc = [0.0 for _ in range(n_g)]
+bsrc[0] = 1.0
+
+# Angular quadrature
+pquad = GLCProductQuadrature3DXYZ(n_polar=n_polar,
+                                  n_azimuthal=n_azimuthal,
+                                  scattering_order=scattering_order)
+
+# Solver
+phys = DiscreteOrdinatesProblem(
+    mesh=grid,
+    num_groups=n_g,
+    groupsets=[
+        {
+            "groups_from_to": (0, n_g - 1),
+            "angular_quadrature": pquad,
+            "angle_aggregation_type": "single",
+            "angle_aggregation_num_subsets": 1,
+            "inner_linear_method": "petsc_richardson",
+            "l_abs_tol": 1.0e-12,
+            "l_max_its": 64,
+        },
+    ],
+    xs_map=[
+        {"block_ids": [1], "xs": xs_diag},
+    ],
+    boundary_conditions=[
+        {"name": "xmin", "type": "isotropic", "group_strength": bsrc},
+    ],
+    options={
+        "max_mpi_message_size": 256 * 1024
+    },
+    sweep_type="{{sweep_type}}",
+    use_gpus={{use_gpus}}
+)
+ss_solver = SteadyStateSourceSolver(problem=phys)
+ss_solver.Initialize()
+ss_solver.Execute()
