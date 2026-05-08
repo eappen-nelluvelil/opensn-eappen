@@ -437,17 +437,11 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
 void
 CBC_AsynchronousCommunicator::MarkDelayedReceiveComplete(int source_rank)
 {
-  if (source_rank < 0)
-    throw std::logic_error("CBC received a delayed completion marker from an invalid source.");
-
+  assert(source_rank >= 0);
   const auto source_rank_index = static_cast<std::size_t>(source_rank);
-  if (source_rank_index >= delayed_dependency_index_by_source_rank_.size())
-    throw std::logic_error("CBC received a delayed completion marker from an unknown source.");
-
+  assert(source_rank_index < delayed_dependency_index_by_source_rank_.size());
   const auto dependency_index = delayed_dependency_index_by_source_rank_[source_rank_index];
-  if (dependency_index == INVALID_BUFFER_INDEX)
-    throw std::logic_error("CBC received a delayed completion marker from a non-delayed source.");
-
+  assert(dependency_index != INVALID_BUFFER_INDEX);
   if (delayed_recv_done_.size() <= dependency_index)
     delayed_recv_done_.resize(dependency_index + 1, 0);
   delayed_recv_done_[dependency_index] = 1;
@@ -480,7 +474,6 @@ CBC_AsynchronousCommunicator::StoreIncomingPayload(
   else
   {
     auto& partial = incoming_partials_[incoming_face_slot];
-
     if (StorePartialPayload(
           partial, total_size, chunk_offset, chunk_size, max_payload_chunk_size_, payload))
     {
@@ -572,13 +565,13 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
           StoreDelayedPayload(face_slot, total_size, chunk_offset, chunk_size, read_ptr);
           break;
         case CBCMessageKind::DELAYED_COMPLETION:
-          if (face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT or total_size != 0 or
-              chunk_offset != 0 or chunk_size != 0)
-            throw std::logic_error("CBC received a malformed delayed completion marker.");
+          assert((face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT) and
+                 (total_size == 0) and (chunk_offset == 0) and (chunk_size == 0));
           MarkDelayedReceiveComplete(source_rank);
           break;
         default:
-          throw std::logic_error("CBC received a message with an unknown type.");
+          assert(false and "Invalid CBC message kind.");
+          break;
       }
 
       read_ptr += num_bytes;
