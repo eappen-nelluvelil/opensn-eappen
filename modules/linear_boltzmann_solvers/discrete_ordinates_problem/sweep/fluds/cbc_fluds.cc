@@ -90,12 +90,38 @@ CBC_FLUDS::UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size
 }
 
 double*
+CBC_FLUDS::UpwindPsi(std::uint32_t cell_local_id,
+                     unsigned int face_id,
+                     unsigned int face_node_mapped,
+                     size_t as_ss_idx)
+{
+  const auto& info = common_data_.GetDelayedLocalFaceInfo(cell_local_id, face_id);
+  const auto index =
+    (info.slot_address + face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  assert(index < delayed_local_psi_old_.size());
+  return &delayed_local_psi_old_[index];
+}
+
+double*
 CBC_FLUDS::OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx)
 {
   const auto index =
     cell_psi_start_[cell.local_id] + cell_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   assert(index < local_psi_data_.size());
   return &local_psi_data_[index];
+}
+
+double*
+CBC_FLUDS::OutgoingPsi(std::uint32_t cell_local_id,
+                       unsigned int face_id,
+                       unsigned int face_node,
+                       size_t as_ss_idx)
+{
+  const auto& info = common_data_.GetDelayedLocalFaceInfo(cell_local_id, face_id);
+  const auto index =
+    (info.slot_address + face_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  assert(index < delayed_local_psi_.size());
+  return &delayed_local_psi_[index];
 }
 
 double*
@@ -116,6 +142,19 @@ CBC_FLUDS::NLUpwindPsi(size_t incoming_face_slot, unsigned int face_node_mapped,
 }
 
 double*
+CBC_FLUDS::NLUpwindPsi(const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo& info,
+                       unsigned int face_node_mapped,
+                       size_t as_ss_idx)
+{
+  assert(info.prelocI < delayed_prelocI_outgoing_psi_old_.size());
+  auto& psi = delayed_prelocI_outgoing_psi_old_[info.prelocI];
+  const auto index =
+    (info.slot_address + face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
+  assert(index < psi.size());
+  return &psi[index];
+}
+
+double*
 CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
                          size_t face_node,
                          size_t as_ss_idx)
@@ -124,45 +163,6 @@ CBC_FLUDS::NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing,
   const auto addr_offset = face_node * num_groups_and_angles_ + as_ss_idx * num_groups_;
   assert(addr_offset < psi_nonlocal_outgoing->size());
   return &(*psi_nonlocal_outgoing)[addr_offset];
-}
-
-double*
-CBC_FLUDS::DelayedLocalUpwindPsi(std::uint32_t cell_local_id,
-                                 unsigned int face_id,
-                                 unsigned int face_node_mapped,
-                                 size_t as_ss_idx)
-{
-  const auto& info = common_data_.GetDelayedLocalFaceInfo(cell_local_id, face_id);
-  const auto index =
-    (info.slot_address + face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  assert(index < delayed_local_psi_old_.size());
-  return &delayed_local_psi_old_[index];
-}
-
-double*
-CBC_FLUDS::DelayedLocalOutgoingPsi(std::uint32_t cell_local_id,
-                                   unsigned int face_id,
-                                   unsigned int face_node,
-                                   size_t as_ss_idx)
-{
-  const auto& info = common_data_.GetDelayedLocalFaceInfo(cell_local_id, face_id);
-  const auto index =
-    (info.slot_address + face_node) * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  assert(index < delayed_local_psi_.size());
-  return &delayed_local_psi_[index];
-}
-
-double*
-CBC_FLUDS::DelayedNLUpwindPsi(const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo& info,
-                              unsigned int face_node_mapped,
-                              size_t as_ss_idx)
-{
-  assert(info.prelocI < delayed_prelocI_outgoing_psi_old_.size());
-  auto& psi = delayed_prelocI_outgoing_psi_old_[info.prelocI];
-  const auto index =
-    (info.slot_address + face_node_mapped) * num_groups_and_angles_ + as_ss_idx * num_groups_;
-  assert(index < psi.size());
-  return &psi[index];
 }
 
 void

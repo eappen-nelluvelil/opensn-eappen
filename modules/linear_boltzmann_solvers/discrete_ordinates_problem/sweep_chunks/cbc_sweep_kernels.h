@@ -245,12 +245,12 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
           const double* psi = nullptr;
 
           if (is_delayed_local_face)
-            psi = data.fluds.DelayedLocalUpwindPsi(data.cell_local_id,
-                                                   static_cast<unsigned int>(f),
-                                                   face_nodal_mapping->face_node_mapping_[fj],
-                                                   as_ss_idx);
+            psi = data.fluds.UpwindPsi(data.cell_local_id,
+                                       static_cast<unsigned int>(f),
+                                       face_nodal_mapping->face_node_mapping_[fj],
+                                       as_ss_idx);
           else if (is_delayed_nonlocal_face)
-            psi = data.fluds.DelayedNLUpwindPsi(
+            psi = data.fluds.NLUpwindPsi(
               delayed_nonlocal_face_info, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
           else if (is_local_face)
             psi = data.fluds.UpwindPsi(*data.cell_transport_view.FaceNeighbor(f),
@@ -409,10 +409,10 @@ CBC_Sweep_Generic(CBCSweepData& data, AngleSet& angle_set)
 
         double* psi = nullptr;
         if (is_delayed_local_outgoing)
-          psi = data.fluds.DelayedLocalOutgoingPsi(delayed_local_cell_local_id,
-                                                   delayed_local_face_id,
-                                                   static_cast<unsigned int>(fi),
-                                                   as_ss_idx);
+          psi = data.fluds.OutgoingPsi(delayed_local_cell_local_id,
+                                       delayed_local_face_id,
+                                       static_cast<unsigned int>(fi),
+                                       as_ss_idx);
         else if (is_local_face)
           psi = data.fluds.OutgoingPsi(data.cell, i, as_ss_idx);
         else if (not is_boundary_face)

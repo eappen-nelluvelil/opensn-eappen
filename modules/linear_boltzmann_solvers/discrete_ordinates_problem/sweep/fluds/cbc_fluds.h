@@ -38,26 +38,26 @@ public:
 
   double* UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
 
+  double* UpwindPsi(std::uint32_t cell_local_id,
+                    unsigned int face_id,
+                    unsigned int face_node_mapped,
+                    size_t as_ss_idx);
+
   double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
+
+  double* OutgoingPsi(std::uint32_t cell_local_id,
+                      unsigned int face_id,
+                      unsigned int face_node,
+                      size_t as_ss_idx);
 
   double* NLUpwindPsi(size_t incoming_face_slot, unsigned int face_node_mapped, size_t as_ss_idx);
 
+  double* NLUpwindPsi(const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo& info,
+                      unsigned int face_node_mapped,
+                      size_t as_ss_idx);
+
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
-
-  double* DelayedLocalUpwindPsi(std::uint32_t cell_local_id,
-                                unsigned int face_id,
-                                unsigned int face_node_mapped,
-                                size_t as_ss_idx);
-
-  double* DelayedLocalOutgoingPsi(std::uint32_t cell_local_id,
-                                  unsigned int face_id,
-                                  unsigned int face_node,
-                                  size_t as_ss_idx);
-
-  double* DelayedNLUpwindPsi(const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo& info,
-                             unsigned int face_node_mapped,
-                             size_t as_ss_idx);
 
   void ClearLocalAndReceivePsi() override;
 

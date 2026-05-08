@@ -313,12 +313,12 @@ CBCSweepChunkRZ::Sweep_Generic(AngleSet& angle_set)
 
           const double* psi = nullptr;
           if (is_delayed_local_face)
-            psi = fluds.DelayedLocalUpwindPsi(ctx_.cell_local_id,
-                                              static_cast<unsigned int>(f),
-                                              face_nodal_mapping->face_node_mapping_[fj],
-                                              as_ss_idx);
+            psi = fluds.UpwindPsi(ctx_.cell_local_id,
+                                  static_cast<unsigned int>(f),
+                                  face_nodal_mapping->face_node_mapping_[fj],
+                                  as_ss_idx);
           else if (is_delayed_nonlocal_face)
-            psi = fluds.DelayedNLUpwindPsi(
+            psi = fluds.NLUpwindPsi(
               delayed_nonlocal_face_info, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
           else if (is_local_face)
             psi = fluds.UpwindPsi(*cell_transport_view.FaceNeighbor(f),
@@ -457,10 +457,10 @@ CBCSweepChunkRZ::Sweep_Generic(AngleSet& angle_set)
 
         double* psi = nullptr;
         if (is_delayed_local_outgoing)
-          psi = fluds.DelayedLocalOutgoingPsi(delayed_local_cell_local_id,
-                                              delayed_local_face_id,
-                                              static_cast<unsigned int>(fi),
-                                              as_ss_idx);
+          psi = fluds.OutgoingPsi(delayed_local_cell_local_id,
+                                  delayed_local_face_id,
+                                  static_cast<unsigned int>(fi),
+                                  as_ss_idx);
         else if (is_local_face)
           psi = fluds.OutgoingPsi(cell, i, as_ss_idx);
         else if (not is_boundary_face)
@@ -636,12 +636,12 @@ CBCSweepChunkRZ::Sweep_FixedN(AngleSet& angle_set)
 
           const double* psi = nullptr;
           if (is_delayed_local_face)
-            psi = fluds.DelayedLocalUpwindPsi(ctx_.cell_local_id,
-                                              static_cast<unsigned int>(f),
-                                              face_nodal_mapping->face_node_mapping_[fj],
-                                              as_ss_idx);
+            psi = fluds.UpwindPsi(ctx_.cell_local_id,
+                                  static_cast<unsigned int>(f),
+                                  face_nodal_mapping->face_node_mapping_[fj],
+                                  as_ss_idx);
           else if (is_delayed_nonlocal_face)
-            psi = fluds.DelayedNLUpwindPsi(
+            psi = fluds.NLUpwindPsi(
               delayed_nonlocal_face_info, face_nodal_mapping->face_node_mapping_[fj], as_ss_idx);
           else if (is_local_face)
             psi = fluds.UpwindPsi(*cell_transport_view.FaceNeighbor(f),
@@ -836,10 +836,10 @@ CBCSweepChunkRZ::Sweep_FixedN(AngleSet& angle_set)
 
         double* psi = nullptr;
         if (is_delayed_local_outgoing)
-          psi = fluds.DelayedLocalOutgoingPsi(delayed_local_cell_local_id,
-                                              delayed_local_face_id,
-                                              static_cast<unsigned int>(fi),
-                                              as_ss_idx);
+          psi = fluds.OutgoingPsi(delayed_local_cell_local_id,
+                                  delayed_local_face_id,
+                                  static_cast<unsigned int>(fi),
+                                  as_ss_idx);
         else if (is_local_face)
           psi = fluds.OutgoingPsi(cell, i, as_ss_idx);
         else if (not is_boundary_face)
