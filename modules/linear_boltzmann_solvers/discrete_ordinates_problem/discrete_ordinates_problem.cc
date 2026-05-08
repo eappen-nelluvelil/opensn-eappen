@@ -1455,7 +1455,6 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
   else if (sweep_type_ == "CBC")
   {
     std::vector<std::shared_ptr<CBC_SPDS>> cbc_spds_list;
-    bool any_cbc_spds_allows_cycles = false;
 
     // Initialize CBC SPDS. CBC uses globally unique SPDS ids because the FAS exchange below is
     // flattened across all quadratures.
@@ -1474,103 +1473,92 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
         const bool allow_cycles = quadrature_allow_cycles_map_[quadrature];
         const auto new_swp_order =
           std::make_shared<CBC_SPDS>(cbc_spds_id++, omega, this->grid_, allow_cycles);
-        any_cbc_spds_allows_cycles = any_cbc_spds_allows_cycles or allow_cycles;
         quadrature_spds_map_[quadrature].push_back(new_swp_order);
         cbc_spds_list.push_back(new_swp_order);
       }
     }
 
-    if (opensn::mpi_comm.size() > 1)
+    const int comm_size = opensn::mpi_comm.size();
+    const int matrix_size = comm_size * comm_size;
+    std::vector<int> recv_counts(opensn::mpi_comm.size(), comm_size);
+    std::vector<int> recv_displacements(opensn::mpi_comm.size(), 0);
+    for (int loc = 0; loc < opensn::mpi_comm.size(); ++loc)
+      recv_displacements[loc] = loc * comm_size;
+
+    // Accumulate global edge weights for each CBC SPDS on the owning rank only.
+    for (const auto& spds : cbc_spds_list)
     {
-      if (any_cbc_spds_allows_cycles)
+      const int owner = spds->GetId() % opensn::mpi_comm.size();
+      const auto local_row = spds->ComputeLocalLocationEdgeWeights();
+      std::vector<double> recv;
+      if (opensn::mpi_comm.rank() == owner)
+        recv.assign(matrix_size, 0.0);
+      opensn::mpi_comm.gather(local_row, recv, recv_counts, recv_displacements, owner);
+
+      if (opensn::mpi_comm.rank() == owner)
+        spds->SetGlobalEdgeWeights(recv);
+    }
+
+    // Generate the global sweep FAS for each CBC SPDS on its owning rank.
+    log.Log0Verbose1() << program_timer.GetTimeString() << " Build global sweep FAS for CBC SPDS.";
+    for (const auto& spds : cbc_spds_list)
+      if (opensn::mpi_comm.rank() == (spds->GetId() % opensn::mpi_comm.size()))
+        spds->BuildGlobalSweepFAS();
+
+    // Communicate the FAS for each CBC SPDS to all ranks.
+    log.Log0Verbose1() << program_timer.GetTimeString() << " Gather FAS for CBC SPDS.";
+    std::vector<int> local_edges_to_remove;
+    for (const auto& spds : cbc_spds_list)
+    {
+      if ((spds->GetId() % opensn::mpi_comm.size()) == opensn::mpi_comm.rank())
       {
-        const int comm_size = opensn::mpi_comm.size();
-        const int matrix_size = comm_size * comm_size;
-        std::vector<int> recv_counts(opensn::mpi_comm.size(), comm_size);
-        std::vector<int> recv_displacements(opensn::mpi_comm.size(), 0);
-        for (int loc = 0; loc < opensn::mpi_comm.size(); ++loc)
-          recv_displacements[loc] = loc * comm_size;
+        auto edges_to_remove = spds->GetGlobalSweepFAS();
+        local_edges_to_remove.push_back(spds->GetId());
+        local_edges_to_remove.push_back(static_cast<int>(edges_to_remove.size()));
+        local_edges_to_remove.insert(
+          local_edges_to_remove.end(), edges_to_remove.begin(), edges_to_remove.end());
+      }
+    }
 
-        // Accumulate global edge weights for each SPDS on the owning rank only.
-        for (const auto& spds : cbc_spds_list)
+    int local_size = static_cast<int>(local_edges_to_remove.size());
+    std::vector<int> receive_counts(opensn::mpi_comm.size(), 0);
+    std::vector<int> displacements(opensn::mpi_comm.size(), 0);
+    mpi_comm.all_gather(local_size, receive_counts);
+
+    int total_size = 0;
+    for (std::size_t i = 0; i < receive_counts.size(); ++i)
+    {
+      displacements[i] = total_size;
+      total_size += receive_counts[i];
+    }
+
+    std::vector<int> global_edges_to_remove(total_size, 0);
+    mpi_comm.all_gather(
+      local_edges_to_remove, global_edges_to_remove, receive_counts, displacements);
+
+    int offset = 0;
+    while (offset < static_cast<int>(global_edges_to_remove.size()))
+    {
+      const auto spds_id = global_edges_to_remove[offset++];
+      const auto num_edges = global_edges_to_remove[offset++];
+      std::vector<int> edges;
+      edges.reserve(num_edges);
+      for (int i = 0; i < num_edges; ++i)
+        edges.emplace_back(global_edges_to_remove[offset++]);
+
+      for (const auto& spds : cbc_spds_list)
+      {
+        if (spds->GetId() == spds_id)
         {
-          const int owner = spds->GetId() % opensn::mpi_comm.size();
-          const auto local_row = spds->ComputeLocalLocationEdgeWeights();
-          std::vector<double> recv;
-          if (opensn::mpi_comm.rank() == owner)
-            recv.assign(matrix_size, 0.0);
-          opensn::mpi_comm.gather(local_row, recv, recv_counts, recv_displacements, owner);
-
-          if (opensn::mpi_comm.rank() == owner)
-            spds->SetGlobalEdgeWeights(recv);
-        }
-
-        // Generate the global sweep FAS for each CBC SPDS on its owning rank.
-        log.Log0Verbose1() << program_timer.GetTimeString()
-                           << " Build global sweep FAS for CBC SPDS.";
-        for (const auto& spds : cbc_spds_list)
-          if (opensn::mpi_comm.rank() == (spds->GetId() % opensn::mpi_comm.size()))
-            spds->BuildGlobalSweepFAS();
-
-        // Communicate the FAS for each CBC SPDS to all ranks.
-        log.Log0Verbose1() << program_timer.GetTimeString() << " Gather FAS for CBC SPDS.";
-        std::vector<int> local_edges_to_remove;
-        for (const auto& spds : cbc_spds_list)
-        {
-          if ((spds->GetId() % opensn::mpi_comm.size()) == opensn::mpi_comm.rank())
-          {
-            auto edges_to_remove = spds->GetGlobalSweepFAS();
-            local_edges_to_remove.push_back(spds->GetId());
-            local_edges_to_remove.push_back(static_cast<int>(edges_to_remove.size()));
-            local_edges_to_remove.insert(
-              local_edges_to_remove.end(), edges_to_remove.begin(), edges_to_remove.end());
-          }
-        }
-
-        int local_size = static_cast<int>(local_edges_to_remove.size());
-        std::vector<int> receive_counts(opensn::mpi_comm.size(), 0);
-        std::vector<int> displacements(opensn::mpi_comm.size(), 0);
-        mpi_comm.all_gather(local_size, receive_counts);
-
-        int total_size = 0;
-        for (std::size_t i = 0; i < receive_counts.size(); ++i)
-        {
-          displacements[i] = total_size;
-          total_size += receive_counts[i];
-        }
-
-        std::vector<int> global_edges_to_remove(total_size, 0);
-        mpi_comm.all_gather(
-          local_edges_to_remove, global_edges_to_remove, receive_counts, displacements);
-
-        int offset = 0;
-        while (offset < static_cast<int>(global_edges_to_remove.size()))
-        {
-          const auto spds_id = global_edges_to_remove[offset++];
-          const auto num_edges = global_edges_to_remove[offset++];
-          std::vector<int> edges;
-          edges.reserve(num_edges);
-          for (int i = 0; i < num_edges; ++i)
-            edges.emplace_back(global_edges_to_remove[offset++]);
-
-          for (const auto& spds : cbc_spds_list)
-          {
-            if (spds->GetId() == spds_id)
-            {
-              spds->SetGlobalSweepFAS(edges);
-              break;
-            }
-          }
+          spds->SetGlobalSweepFAS(edges);
+          break;
         }
       }
-
-      // Apply the gathered FAS and validate the remaining global graph. Unlike AAH, CBC does not
-      // build or use global sweep planes.
-      log.Log0Verbose1() << program_timer.GetTimeString()
-                         << " Apply global sweep FAS for CBC SPDS.";
-      for (const auto& spds : cbc_spds_list)
-        spds->ApplyGlobalSweepFAS();
     }
+
+    log.Log0Verbose1() << program_timer.GetTimeString() << " Apply global sweep FAS for CBC SPDS.";
+    for (const auto& spds : cbc_spds_list)
+      spds->ApplyGlobalSweepFAS();
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type_ + "\"");
