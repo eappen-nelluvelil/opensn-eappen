@@ -242,10 +242,8 @@ CBC_FLUDS::PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t da
 
   const auto slot_begin = incoming_nonlocal_psi_offsets_[incoming_face_slot];
   assert((incoming_nonlocal_psi_offsets_[incoming_face_slot + 1] - slot_begin) == data_size);
-
-  if (incoming_nonlocal_psi_generation_[incoming_face_slot] ==
-      incoming_nonlocal_psi_current_generation_)
-    throw std::logic_error("CBC_FLUDS received duplicate non-local psi for a cell-face slot.");
+  assert(incoming_nonlocal_psi_generation_[incoming_face_slot] !=
+         incoming_nonlocal_psi_current_generation_);
 
   incoming_nonlocal_psi_generation_[incoming_face_slot] = incoming_nonlocal_psi_current_generation_;
 
@@ -256,10 +254,8 @@ CBC_FLUDS::PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t da
 size_t
 CBC_FLUDS::GetIncomingNonlocalPsiSize(size_t incoming_face_slot) const
 {
-  if (incoming_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT or
-      incoming_face_slot + 1 >= incoming_nonlocal_psi_offsets_.size())
-    throw std::logic_error("CBC_FLUDS received non-local psi for an unknown cell-face slot.");
-
+  assert(incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
+  assert(incoming_face_slot < incoming_nonlocal_psi_generation_.size());
   return incoming_nonlocal_psi_offsets_[incoming_face_slot + 1] -
          incoming_nonlocal_psi_offsets_[incoming_face_slot];
 }
@@ -273,13 +269,10 @@ CBC_FLUDS::GetDelayedNonlocalPsiSize(size_t delayed_face_slot) const
 std::span<double>
 CBC_FLUDS::PrepareIncomingDelayedNonlocalPsiBySlot(size_t delayed_face_slot, size_t data_size)
 {
-  if (data_size != GetDelayedNonlocalPsiSize(delayed_face_slot))
-    throw std::logic_error(
-      "CBC_FLUDS received delayed non-local psi with an unexpected payload size.");
-
+  assert(data_size == GetDelayedNonlocalPsiSize(delayed_face_slot));
+  
   const auto& info = common_data_.GetDelayedNonlocalFaceInfoBySlot(delayed_face_slot);
-  if (info.prelocI >= delayed_prelocI_outgoing_psi_.size())
-    throw std::logic_error("CBC_FLUDS received delayed non-local psi for an unknown dependency.");
+  assert(info.prelocI < delayed_prelocI_outgoing_psi_.size());
 
   auto& psi = delayed_prelocI_outgoing_psi_[info.prelocI];
   const auto begin = info.slot_address * num_groups_and_angles_;
