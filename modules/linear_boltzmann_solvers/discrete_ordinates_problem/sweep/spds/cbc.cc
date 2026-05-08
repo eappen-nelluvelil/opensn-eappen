@@ -24,12 +24,6 @@ PackEdge(const std::uint32_t upwind_local_id, const std::uint32_t downwind_local
          static_cast<std::uint64_t>(downwind_local_id);
 }
 
-bool
-ContainsLocation(const std::vector<int>& locations, const int location) noexcept
-{
-  return std::find(locations.begin(), locations.end(), location) != locations.end();
-}
-
 } // namespace
 
 CBC_SPDS::CBC_SPDS(const Vector3& omega,
@@ -102,8 +96,6 @@ CBC_SPDS::BuildTaskList()
   constexpr auto INCOMING = FaceOrientation::INCOMING;
   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
 
-  // For each local cell create a task. Downstream dependency updates use local cell IDs as task
-  // IDs, so the task vector must be keyed by local_id rather than local-cell iteration order.
   task_list_.assign(grid.local_cells.size(), Task{});
   for (const auto& cell : grid.local_cells)
   {
@@ -130,8 +122,7 @@ CBC_SPDS::BuildTaskList()
             if (IsDelayedLocalDependency(upwind_local_id, cell.local_id))
               continue;
           }
-          else if (ContainsLocation(delayed_location_dependencies_,
-                                    face.GetNeighborPartitionID(&grid)))
+          else if (std::find(delayed_location_dependencies_.begin(),            delayed_location_dependencies_.end(), face.GetNeighborPartitionID(&grid)) != delayed_location_dependencies_.end())
             continue;
 
           ++num_dependencies;
@@ -204,9 +195,9 @@ CBC_SPDS::BuildGlobalSweepFAS()
 }
 
 void
-CBC_SPDS::BuildGlobalSweepTDG()
+CBC_SPDS::ApplyGlobalSweepFAS()
 {
-  CALI_CXX_MARK_SCOPE("CBC_SPDS::BuildGlobalSweepTDG");
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::ApplyGlobalSweepFAS");
 
   delayed_location_dependencies_.clear();
   delayed_location_successors_.clear();

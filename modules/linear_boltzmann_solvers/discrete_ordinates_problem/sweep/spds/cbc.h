@@ -31,7 +31,7 @@ public:
 
   void BuildGlobalSweepFAS();
 
-  void BuildGlobalSweepTDG();
+  void ApplyGlobalSweepFAS();
 
   std::vector<double> ComputeLocalLocationEdgeWeights() const;
 
