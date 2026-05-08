@@ -40,12 +40,21 @@ ReadMessageValue(char*& buffer)
   return value;
 }
 
-constexpr std::size_t CBC_MESSAGE_HEADER_SIZE =
-  sizeof(std::size_t) + sizeof(std::size_t) + sizeof(std::size_t) + sizeof(std::size_t);
+constexpr std::size_t CBC_MESSAGE_HEADER_SIZE = sizeof(std::uint8_t) + sizeof(std::size_t) +
+                                                sizeof(std::size_t) + sizeof(std::size_t) +
+                                                sizeof(std::size_t);
 constexpr std::size_t CBC_MAX_IMMEDIATE_MESSAGE_BYTES = 3072;
+
+enum class CBCMessageKind : std::uint8_t
+{
+  NORMAL_PAYLOAD = 0,
+  DELAYED_PAYLOAD = 1,
+  DELAYED_COMPLETION = 2
+};
 
 void
 AppendDownwindMessage(std::vector<char>& raw,
+                      CBCMessageKind kind,
                       size_t incoming_face_slot,
                       size_t total_size,
                       size_t offset,
@@ -60,6 +69,7 @@ AppendDownwindMessage(std::vector<char>& raw,
   raw.resize(required_size);
 
   auto* write_ptr = raw.data() + old_size;
+  WriteMessageValue(write_ptr, static_cast<std::uint8_t>(kind));
   WriteMessageValue(write_ptr, incoming_face_slot);
   WriteMessageValue(write_ptr, total_size);
   WriteMessageValue(write_ptr, offset);
@@ -107,8 +117,7 @@ CBC_AsynchronousCommunicator::StorePartialPayload(PartialIncomingPayload& partia
                                                   std::size_t chunk_offset,
                                                   std::size_t chunk_size,
                                                   std::size_t max_payload_chunk_size,
-                                                  const char* payload,
-                                                  const char* context)
+                                                  const char* payload)
 {
   if (partial.total_size == 0)
   {
@@ -160,6 +169,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
   open_send_buffer_indices_.assign(send_peers_.size(), INVALID_BUFFER_INDEX);
 
   const auto& delayed_location_successors = fluds_.GetSPDS().GetDelayedLocationSuccessors();
+  const auto& delayed_location_dependencies = fluds_.GetSPDS().GetDelayedLocationDependencies();
   delayed_peer_indices_by_location_.assign(static_cast<size_t>(opensn::mpi_comm.size()),
                                            INVALID_BUFFER_INDEX);
   delayed_send_peers_.reserve(delayed_location_successors.size());
@@ -172,6 +182,20 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
     delayed_peer_indices_by_location_[static_cast<size_t>(successor)] = peer_index;
   }
   open_delayed_send_buffer_indices_.assign(delayed_send_peers_.size(), INVALID_BUFFER_INDEX);
+
+  delayed_dependency_index_by_source_rank_.assign(static_cast<size_t>(opensn::mpi_comm.size()),
+                                                  INVALID_BUFFER_INDEX);
+  for (std::size_t dependency_index = 0; dependency_index < delayed_location_dependencies.size();
+       ++dependency_index)
+  {
+    const auto source_rank =
+      comm_set_.MapIonJ(delayed_location_dependencies[dependency_index], location_id_);
+    assert(source_rank >= 0);
+    const auto source_rank_index = static_cast<std::size_t>(source_rank);
+    if (source_rank_index >= delayed_dependency_index_by_source_rank_.size())
+      delayed_dependency_index_by_source_rank_.resize(source_rank_index + 1, INVALID_BUFFER_INDEX);
+    delayed_dependency_index_by_source_rank_[source_rank_index] = dependency_index;
+  }
 }
 
 CBC_AsynchronousCommunicator::BufferItem&
@@ -261,8 +285,12 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(size_t peer_index,
   {
     const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
     auto& raw = GetOpenSendBuffer(peer_index, DownwindMessageSize(chunk_size)).data;
-    AppendDownwindMessage(
-      raw, incoming_face_slot, total_size, offset, payload.subspan(offset, chunk_size));
+    AppendDownwindMessage(raw,
+                          CBCMessageKind::NORMAL_PAYLOAD,
+                          incoming_face_slot,
+                          total_size,
+                          offset,
+                          payload.subspan(offset, chunk_size));
   }
 }
 
@@ -282,8 +310,12 @@ CBC_AsynchronousCommunicator::QueueDelayedDownwindMessage(int destination_locati
   {
     const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
     auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, DownwindMessageSize(chunk_size)).data;
-    AppendDownwindMessage(
-      raw, delayed_face_slot, total_size, offset, payload.subspan(offset, chunk_size));
+    AppendDownwindMessage(raw,
+                          CBCMessageKind::DELAYED_PAYLOAD,
+                          delayed_face_slot,
+                          total_size,
+                          offset,
+                          payload.subspan(offset, chunk_size));
   }
 }
 
@@ -347,8 +379,12 @@ CBC_AsynchronousCommunicator::QueueDelayedCompletionMarkers()
        ++delayed_peer_index)
   {
     auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, DownwindMessageSize(0)).data;
-    AppendDownwindMessage(
-      raw, CBC_FLUDSCommonData::INVALID_FACE_SLOT, 0, 0, std::span<const double>());
+    AppendDownwindMessage(raw,
+                          CBCMessageKind::DELAYED_COMPLETION,
+                          CBC_FLUDSCommonData::INVALID_FACE_SLOT,
+                          0,
+                          0,
+                          std::span<const double>());
   }
   delayed_completion_markers_queued_ = true;
 }
@@ -395,64 +431,157 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
   if (cells_who_received_data.capacity() < num_receive_sources_)
     cells_who_received_data.reserve(num_receive_sources_);
 
-  const auto tag = static_cast<int>(angle_set_id_);
-  const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
-  for (const int locJ : location_dependencies)
+  ReceiveAvailableMessages(cells_who_received_data);
+}
+
+void
+CBC_AsynchronousCommunicator::MarkDelayedReceiveComplete(int source_rank)
+{
+  if (source_rank < 0)
+    throw std::logic_error("CBC received a delayed completion marker from an invalid source.");
+
+  const auto source_rank_index = static_cast<std::size_t>(source_rank);
+  if (source_rank_index >= delayed_dependency_index_by_source_rank_.size())
+    throw std::logic_error("CBC received a delayed completion marker from an unknown source.");
+
+  const auto dependency_index = delayed_dependency_index_by_source_rank_[source_rank_index];
+  if (dependency_index == INVALID_BUFFER_INDEX)
+    throw std::logic_error("CBC received a delayed completion marker from a non-delayed source.");
+
+  if (delayed_recv_done_.size() <= dependency_index)
+    delayed_recv_done_.resize(dependency_index + 1, 0);
+  delayed_recv_done_[dependency_index] = 1;
+}
+
+void
+CBC_AsynchronousCommunicator::StoreIncomingPayload(
+  size_t incoming_face_slot,
+  size_t total_size,
+  size_t chunk_offset,
+  size_t chunk_size,
+  const char* payload,
+  std::vector<std::uint32_t>& cells_who_received_data)
+{
+  assert(incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
+  assert(incoming_face_slot < incoming_partials_.size());
+  assert(total_size > 0);
+  assert(chunk_size > 0);
+  assert(chunk_offset < total_size);
+  assert(chunk_size <= total_size - chunk_offset);
+
+  const auto num_bytes = chunk_size * sizeof(double);
+  if (chunk_offset == 0 and chunk_size == total_size)
   {
-    const auto source_rank = comm_set_.MapIonJ(locJ, location_id_);
-    mpi::Status status;
-    while (receive_comm_.iprobe(source_rank, tag, status))
+    auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
+    if (num_bytes != 0)
+      std::memcpy(incoming.psi.data(), payload, num_bytes);
+    cells_who_received_data.push_back(incoming.cell_local_id);
+  }
+  else
+  {
+    auto& partial = incoming_partials_[incoming_face_slot];
+
+    if (StorePartialPayload(
+          partial, total_size, chunk_offset, chunk_size, max_payload_chunk_size_, payload))
     {
-      const auto num_items = status.count<char>();
-      receive_buffer_.resize(num_items);
-      receive_comm_.recv(status.source(), status.tag(), receive_buffer_.data(), num_items);
+      auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
+      std::copy(partial.data.begin(), partial.data.end(), incoming.psi.begin());
+      ResetPartialPayload(partial);
+      cells_who_received_data.push_back(incoming.cell_local_id);
+    }
+  }
+}
 
-      auto* read_ptr = receive_buffer_.data();
-      const auto* const read_end = read_ptr + receive_buffer_.size();
+void
+CBC_AsynchronousCommunicator::StoreDelayedPayload(size_t delayed_face_slot,
+                                                  size_t total_size,
+                                                  size_t chunk_offset,
+                                                  size_t chunk_size,
+                                                  const char* payload)
+{
+  assert(delayed_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
+  assert(delayed_face_slot < delayed_partials_.size());
+  assert(total_size > 0);
+  assert(chunk_size > 0);
+  assert(chunk_offset < total_size);
+  assert(chunk_size <= total_size - chunk_offset);
 
-      while (read_ptr < read_end)
+  const auto num_bytes = chunk_size * sizeof(double);
+  if (chunk_offset == 0 and chunk_size == total_size)
+  {
+    assert(delayed_payload_received_[delayed_face_slot] == 0);
+    auto incoming =
+      cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
+    if (num_bytes != 0)
+      std::memcpy(incoming.data(), payload, num_bytes);
+    delayed_payload_received_[delayed_face_slot] = 1;
+  }
+  else
+  {
+    auto& partial = delayed_partials_[delayed_face_slot];
+
+    if (StorePartialPayload(
+          partial, total_size, chunk_offset, chunk_size, max_payload_chunk_size_, payload))
+    {
+      assert(delayed_payload_received_[delayed_face_slot] == 0);
+
+      auto incoming =
+        cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
+      std::copy(partial.data.begin(), partial.data.end(), incoming.begin());
+      ResetPartialPayload(partial);
+      delayed_payload_received_[delayed_face_slot] = 1;
+    }
+  }
+}
+
+void
+CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
+  std::vector<std::uint32_t>& cells_who_received_data)
+{
+  const auto tag = static_cast<int>(angle_set_id_);
+  mpi::Status status;
+  while (receive_comm_.iprobe(ANY_SOURCE, tag, status))
+  {
+    const auto source_rank = status.source();
+    const auto num_items = status.count<char>();
+    receive_buffer_.resize(num_items);
+    receive_comm_.recv(status.source(), status.tag(), receive_buffer_.data(), num_items);
+
+    auto* read_ptr = receive_buffer_.data();
+    const auto* const read_end = read_ptr + receive_buffer_.size();
+
+    while (read_ptr < read_end)
+    {
+      assert(read_ptr + CBC_MESSAGE_HEADER_SIZE <= read_end);
+      const auto kind = static_cast<CBCMessageKind>(ReadMessageValue<std::uint8_t>(read_ptr));
+      const auto face_slot = ReadMessageValue<std::size_t>(read_ptr);
+      const auto total_size = ReadMessageValue<std::size_t>(read_ptr);
+      const auto chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
+      const auto chunk_size = ReadMessageValue<std::size_t>(read_ptr);
+
+      const auto num_bytes = chunk_size * sizeof(double);
+      assert(read_ptr + num_bytes <= read_end);
+
+      switch (kind)
       {
-        assert(read_ptr + CBC_MESSAGE_HEADER_SIZE <= read_end);
-        const auto incoming_face_slot = ReadMessageValue<std::size_t>(read_ptr);
-        const auto total_size = ReadMessageValue<std::size_t>(read_ptr);
-        const auto chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
-        const auto chunk_size = ReadMessageValue<std::size_t>(read_ptr);
-        assert(incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
-        assert(incoming_face_slot < incoming_partials_.size());
+        case CBCMessageKind::NORMAL_PAYLOAD:
+          StoreIncomingPayload(
+            face_slot, total_size, chunk_offset, chunk_size, read_ptr, cells_who_received_data);
+          break;
+        case CBCMessageKind::DELAYED_PAYLOAD:
+          StoreDelayedPayload(face_slot, total_size, chunk_offset, chunk_size, read_ptr);
+          break;
+        case CBCMessageKind::DELAYED_COMPLETION:
+          if (face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT or total_size != 0 or
+              chunk_offset != 0 or chunk_size != 0)
+            throw std::logic_error("CBC received a malformed delayed completion marker.");
+          MarkDelayedReceiveComplete(source_rank);
+          break;
+        default:
+          throw std::logic_error("CBC received a message with an unknown type.");
+      }
 
-        const auto num_bytes = chunk_size * sizeof(double);
-        assert(read_ptr + num_bytes <= read_end);
-
-        if (chunk_offset == 0 and chunk_size == total_size)
-        {
-          auto incoming =
-            cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
-          if (num_bytes != 0)
-            std::memcpy(incoming.psi.data(), read_ptr, num_bytes);
-          cells_who_received_data.push_back(incoming.cell_local_id);
-        }
-        else
-        {
-          auto& partial = incoming_partials_[incoming_face_slot];
-
-          if (StorePartialPayload(partial,
-                                  total_size,
-                                  chunk_offset,
-                                  chunk_size,
-                                  max_payload_chunk_size_,
-                                  read_ptr,
-                                  "CBC received a duplicate non-local psi chunk."))
-          {
-            auto incoming =
-              cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(incoming_face_slot, total_size);
-            std::copy(partial.data.begin(), partial.data.end(), incoming.psi.begin());
-            ResetPartialPayload(partial);
-            cells_who_received_data.push_back(incoming.cell_local_id);
-          }
-        }
-
-        read_ptr += num_bytes;
-      } // while not at end of buffer
+      read_ptr += num_bytes;
     }
   }
 }
@@ -466,81 +595,8 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
   if (delayed_recv_done_.size() != delayed_location_dependencies.size())
     delayed_recv_done_.assign(delayed_location_dependencies.size(), 0);
 
-  const auto tag = static_cast<int>(angle_set_id_);
-  for (std::size_t dependency_index = 0; dependency_index < delayed_location_dependencies.size();
-       ++dependency_index)
-  {
-    if (delayed_recv_done_[dependency_index] != 0)
-      continue;
-
-    const int locJ = delayed_location_dependencies[dependency_index];
-    const auto source_rank = comm_set_.MapIonJ(locJ, location_id_);
-    mpi::Status status;
-    while (receive_comm_.iprobe(source_rank, tag, status))
-    {
-      const auto num_items = status.count<char>();
-      receive_buffer_.resize(num_items);
-      receive_comm_.recv(status.source(), status.tag(), receive_buffer_.data(), num_items);
-
-      auto* read_ptr = receive_buffer_.data();
-      const auto* const read_end = read_ptr + receive_buffer_.size();
-
-      while (read_ptr < read_end)
-      {
-        assert(read_ptr + CBC_MESSAGE_HEADER_SIZE <= read_end);
-        const auto delayed_face_slot = ReadMessageValue<std::size_t>(read_ptr);
-        const auto total_size = ReadMessageValue<std::size_t>(read_ptr);
-        const auto chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
-        const auto chunk_size = ReadMessageValue<std::size_t>(read_ptr);
-
-        if (delayed_face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT)
-        {
-          if (total_size != 0 or chunk_offset != 0 or chunk_size != 0)
-            throw std::logic_error("CBC received a malformed delayed completion marker.");
-          delayed_recv_done_[dependency_index] = 1;
-          continue;
-        }
-
-        assert(delayed_face_slot < delayed_partials_.size());
-
-        const auto num_bytes = chunk_size * sizeof(double);
-        assert(read_ptr + num_bytes <= read_end);
-
-        if (chunk_offset == 0 and chunk_size == total_size)
-        {
-          assert(delayed_payload_received_[delayed_face_slot] == 0);
-          auto incoming =
-            cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
-          if (num_bytes != 0)
-            std::memcpy(incoming.data(), read_ptr, num_bytes);
-          delayed_payload_received_[delayed_face_slot] = 1;
-        }
-        else
-        {
-          auto& partial = delayed_partials_[delayed_face_slot];
-
-          if (StorePartialPayload(partial,
-                                  total_size,
-                                  chunk_offset,
-                                  chunk_size,
-                                  max_payload_chunk_size_,
-                                  read_ptr,
-                                  "CBC received a duplicate delayed non-local psi chunk."))
-          {
-            assert(delayed_payload_received_[delayed_face_slot] == 0);
-
-            auto incoming =
-              cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
-            std::copy(partial.data.begin(), partial.data.end(), incoming.begin());
-            ResetPartialPayload(partial);
-            delayed_payload_received_[delayed_face_slot] = 1;
-          }
-        }
-
-        read_ptr += num_bytes;
-      }
-    }
-  }
+  std::vector<std::uint32_t> received_tasks;
+  ReceiveAvailableMessages(received_tasks);
 
   return std::all_of(delayed_recv_done_.begin(),
                      delayed_recv_done_.end(),

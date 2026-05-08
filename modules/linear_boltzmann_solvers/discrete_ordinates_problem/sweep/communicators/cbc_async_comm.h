@@ -82,6 +82,23 @@ protected:
 
   void QueueDelayedCompletionMarkers();
 
+  void ReceiveAvailableMessages(std::vector<std::uint32_t>& cells_who_received_data);
+
+  void MarkDelayedReceiveComplete(int source_rank);
+
+  void StoreIncomingPayload(size_t incoming_face_slot,
+                            size_t total_size,
+                            size_t chunk_offset,
+                            size_t chunk_size,
+                            const char* payload,
+                            std::vector<std::uint32_t>& cells_who_received_data);
+
+  void StoreDelayedPayload(size_t delayed_face_slot,
+                           size_t total_size,
+                           size_t chunk_offset,
+                           size_t chunk_size,
+                           const char* payload);
+
   std::vector<BufferItem> send_buffer_;
   std::vector<mpi::Request> send_requests_;
   std::vector<BufferItem> reusable_send_buffers_;
@@ -97,6 +114,7 @@ protected:
   std::vector<size_t> delayed_peer_indices_by_location_;
   /// Completion flags for delayed predecessor receives.
   std::vector<unsigned char> delayed_recv_done_;
+  std::vector<size_t> delayed_dependency_index_by_source_rank_;
   struct PartialIncomingPayload
   {
     std::vector<double> data;
@@ -112,8 +130,7 @@ protected:
                                   size_t chunk_offset,
                                   size_t chunk_size,
                                   size_t max_payload_chunk_size,
-                                  const char* payload,
-                                  const char* context);
+                                  const char* payload);
 
   std::vector<PartialIncomingPayload> incoming_partials_;
   std::vector<PartialIncomingPayload> delayed_partials_;
