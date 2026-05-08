@@ -205,11 +205,6 @@ CBCSweepChunkRZ::Sweep_Generic(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunkRZ::Sweep");
 
-  OpenSnLogicalErrorIf(ctx_.cell == nullptr,
-                       "CBCSweepChunkRZ::Sweep called before a cell was bound.");
-  OpenSnLogicalErrorIf(ctx_.fluds == nullptr,
-                       "CBCSweepChunkRZ::Sweep called before an angle set was bound.");
-
   auto& fluds = *ctx_.fluds;
   const auto& common_data = fluds.GetCommonData();
   const auto& groupset = groupset_;
@@ -499,14 +494,6 @@ void
 CBCSweepChunkRZ::Sweep_FixedN(AngleSet& angle_set)
 {
   static_assert(NumNodes >= 2 and NumNodes <= 8);
-
-  OpenSnLogicalErrorIf(ctx_.cell == nullptr,
-                       "CBCSweepChunkRZ::Sweep_FixedN called before a cell was bound.");
-  OpenSnLogicalErrorIf(ctx_.fluds == nullptr,
-                       "CBCSweepChunkRZ::Sweep_FixedN called before an angle set was bound.");
-  OpenSnInvalidArgumentIf(ctx_.cell_num_nodes != static_cast<size_t>(NumNodes),
-                          "CBCSweepChunkRZ::Sweep_FixedN invoked for an incompatible cell "
-                          "topology.");
 
   auto& fluds = *ctx_.fluds;
   const auto& common_data = fluds.GetCommonData();
@@ -809,9 +796,6 @@ CBCSweepChunkRZ::Sweep_FixedN(AngleSet& angle_set)
       if (is_delayed_local_outgoing)
       {
         delayed_local_cell_local_id = face.GetNeighborLocalID(fluds.GetSPDS().GetGrid().get());
-        OpenSnLogicalErrorIf(face_nodal_mapping->associated_face_ < 0,
-                             "CBCSweepChunkRZ delayed local outgoing face is missing an "
-                             "associated face.");
         delayed_local_face_id = static_cast<unsigned int>(face_nodal_mapping->associated_face_);
       }
       const auto& int_f_shape_i = IntS_shapeI[f];

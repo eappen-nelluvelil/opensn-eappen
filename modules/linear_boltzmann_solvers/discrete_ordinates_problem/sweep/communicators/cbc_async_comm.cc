@@ -90,29 +90,6 @@ NumPayloadChunks(std::size_t payload_size, std::size_t max_payload_chunk_size)
   return (payload_size - 1) / max_payload_chunk_size + 1;
 }
 
-void
-ValidatePayloadChunk(std::size_t expected_size,
-                     std::size_t total_size,
-                     std::size_t chunk_offset,
-                     std::size_t chunk_size,
-                     std::size_t max_payload_chunk_size,
-                     const char* context)
-{
-  if (total_size != expected_size)
-    throw std::logic_error(context);
-
-  if (total_size == 0 or chunk_size == 0 or chunk_offset >= total_size or
-      chunk_size > total_size - chunk_offset)
-    throw std::logic_error(context);
-
-  if (chunk_offset % max_payload_chunk_size != 0)
-    throw std::logic_error(context);
-
-  const auto expected_chunk_size = std::min(max_payload_chunk_size, total_size - chunk_offset);
-  if (chunk_size != expected_chunk_size)
-    throw std::logic_error(context);
-}
-
 } // namespace
 
 void
@@ -140,21 +117,15 @@ CBC_AsynchronousCommunicator::StorePartialPayload(PartialIncomingPayload& partia
     partial.total_size = total_size;
     partial.received = 0;
   }
-  else if (partial.total_size != total_size)
-    throw std::logic_error(context);
-
+  assert(partial.total_size == total_size);
   const auto chunk_index = chunk_offset / max_payload_chunk_size;
-  if (chunk_index >= partial.received_chunks.size() or partial.received_chunks[chunk_index] != 0)
-    throw std::logic_error(context);
-
+  assert(chunk_index < partial.received_chunks.size());
+  assert(partial.received_chunks[chunk_index] == 0);
   const auto num_bytes = chunk_size * sizeof(double);
   std::memcpy(partial.data.data() + chunk_offset, payload, num_bytes);
   partial.received_chunks[chunk_index] = 1;
   partial.received += chunk_size;
-
-  if (partial.received > total_size)
-    throw std::logic_error(context);
-
+  assert(partial.received <= total_size);
   return partial.received == total_size;
 }
 
@@ -447,17 +418,7 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
         const auto chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
         const auto chunk_size = ReadMessageValue<std::size_t>(read_ptr);
         assert(incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
-
-        if (incoming_face_slot >= incoming_partials_.size())
-          throw std::logic_error("CBC received non-local psi for an unknown face slot.");
-
-        const auto expected_size = cbc_fluds_.GetIncomingNonlocalPsiSize(incoming_face_slot);
-        ValidatePayloadChunk(expected_size,
-                             total_size,
-                             chunk_offset,
-                             chunk_size,
-                             max_payload_chunk_size_,
-                             "CBC received a malformed non-local psi chunk.");
+        assert(incoming_face_slot < incoming_partials_.size());
 
         const auto num_bytes = chunk_size * sizeof(double);
         assert(read_ptr + num_bytes <= read_end);
@@ -540,25 +501,14 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
           continue;
         }
 
-        if (delayed_face_slot >= delayed_partials_.size())
-          throw std::logic_error("CBC received delayed non-local psi for an unknown face slot.");
-
-        const auto expected_size = cbc_fluds_.GetDelayedNonlocalPsiSize(delayed_face_slot);
-        ValidatePayloadChunk(expected_size,
-                             total_size,
-                             chunk_offset,
-                             chunk_size,
-                             max_payload_chunk_size_,
-                             "CBC received a malformed delayed non-local psi chunk.");
+        assert(delayed_face_slot < delayed_partials_.size());
 
         const auto num_bytes = chunk_size * sizeof(double);
         assert(read_ptr + num_bytes <= read_end);
 
         if (chunk_offset == 0 and chunk_size == total_size)
         {
-          if (delayed_payload_received_[delayed_face_slot] != 0)
-            throw std::logic_error("CBC received duplicate delayed non-local psi.");
-
+          assert(delayed_payload_received_[delayed_face_slot] == 0);
           auto incoming =
             cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);
           if (num_bytes != 0)
@@ -577,8 +527,7 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
                                   read_ptr,
                                   "CBC received a duplicate delayed non-local psi chunk."))
           {
-            if (delayed_payload_received_[delayed_face_slot] != 0)
-              throw std::logic_error("CBC received duplicate delayed non-local psi.");
+            assert(delayed_payload_received_[delayed_face_slot] == 0);
 
             auto incoming =
               cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(delayed_face_slot, total_size);

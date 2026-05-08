@@ -60,7 +60,7 @@ protected:
   CBC_FLUDS& cbc_fluds_;
   std::size_t num_receive_sources_ = 0;
 
-  /// Destination-batched nonblocking send buffer.
+  /// Destination-batched send buffer.
   struct BufferItem
   {
     size_t peer_index = 0;
