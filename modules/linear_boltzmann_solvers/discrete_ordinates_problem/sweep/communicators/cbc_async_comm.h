@@ -58,7 +58,6 @@ private:
   const int location_id_;
   const mpi::Communicator& receive_comm_;
   CBC_FLUDS& cbc_fluds_;
-  std::size_t num_receive_sources_ = 0;
 
   /// Destination-batched send buffer.
   struct BufferItem
@@ -93,14 +92,15 @@ private:
 
   static void AppendDownwindMessage(std::vector<char>& raw,
                                     MessageKind kind,
-                                    size_t incoming_face_slot,
+                                    size_t face_slot,
                                     size_t total_size,
                                     size_t offset,
                                     std::span<const double> payload);
 
-  BufferItem& GetOpenSendBuffer(size_t peer_index, size_t record_size);
-
-  BufferItem& GetOpenDelayedSendBuffer(size_t delayed_peer_index, size_t record_size);
+  BufferItem& GetOpenSendBuffer(size_t peer_index,
+                                size_t record_size,
+                                const std::vector<SendPeer>& peers,
+                                std::vector<size_t>& open_buffer_indices);
 
   void QueueDelayedCompletionMarkers();
 
@@ -108,23 +108,19 @@ private:
 
   void MarkDelayedReceiveComplete(int source_rank);
 
-  void StoreIncomingPayload(size_t incoming_face_slot,
-                            size_t total_size,
-                            size_t chunk_offset,
-                            size_t chunk_size,
-                            const char* payload,
-                            std::vector<std::uint32_t>& cells_who_received_data);
-
-  void StoreDelayedPayload(size_t delayed_face_slot,
-                           size_t total_size,
-                           size_t chunk_offset,
-                           size_t chunk_size,
-                           const char* payload);
+  void StorePayload(MessageKind kind,
+                    size_t face_slot,
+                    size_t total_size,
+                    size_t chunk_offset,
+                    size_t chunk_size,
+                    const char* payload,
+                    std::vector<std::uint32_t>& cells_who_received_data);
 
   std::vector<BufferItem> send_buffer_;
   std::vector<mpi::Request> send_requests_;
   std::vector<BufferItem> reusable_send_buffers_;
   std::vector<char> receive_buffer_;
+  std::vector<std::uint32_t> received_task_scratch_;
   std::vector<SendPeer> send_peers_;
   /// Delayed SPDS-successor-indexed routing cache.
   std::vector<SendPeer> delayed_send_peers_;
