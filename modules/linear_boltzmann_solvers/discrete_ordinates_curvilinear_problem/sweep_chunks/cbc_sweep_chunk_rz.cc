@@ -186,11 +186,12 @@ CBCSweepChunkRZ::QueueOutgoingNonlocalFaceBuffers()
   {
     const auto& buffer = ctx_.outgoing_nonlocal_face_buffers[i];
     const std::span<const double> payload(buffer.data.data(), buffer.data_size);
-    if (buffer.delayed)
-      async_comm.QueueDelayedDownwindMessage(
-        buffer.destination_location, buffer.incoming_face_slot, payload);
-    else
-      async_comm.QueueDownwindMessage(buffer.peer_index, buffer.incoming_face_slot, payload);
+    async_comm.QueueDownwindMessage(
+      buffer.delayed ? CBC_AsynchronousCommunicator::DownwindPayloadType::DELAYED
+                     : CBC_AsynchronousCommunicator::DownwindPayloadType::NORMAL,
+      buffer.delayed ? static_cast<size_t>(buffer.destination_location) : buffer.peer_index,
+      buffer.incoming_face_slot,
+      payload);
   }
 }
 

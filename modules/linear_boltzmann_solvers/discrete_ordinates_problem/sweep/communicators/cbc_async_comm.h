@@ -23,20 +23,22 @@ class CBC_FLUDS;
 class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
 {
 public:
+  enum class DownwindPayloadType : std::uint8_t
+  {
+    NORMAL,
+    DELAYED
+  };
+
   explicit CBC_AsynchronousCommunicator(size_t angle_set_id,
                                         FLUDS& fluds,
                                         int max_mpi_message_size,
                                         const MPICommunicatorSet& comm_set);
 
   /// Queue a complete downwind face payload for sending.
-  void QueueDownwindMessage(size_t peer_index,
-                            size_t incoming_face_slot,
+  void QueueDownwindMessage(DownwindPayloadType payload_type,
+                            size_t target,
+                            size_t face_slot,
                             std::span<const double> payload);
-
-  /// Queue a complete delayed downwind face payload for sending after the normal sweep.
-  void QueueDelayedDownwindMessage(int destination_location,
-                                   size_t delayed_face_slot,
-                                   std::span<const double> payload);
 
   void InitializeDelayedUpstreamData();
 

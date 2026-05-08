@@ -205,54 +205,37 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index,
 }
 
 void
-CBC_AsynchronousCommunicator::QueueDownwindMessage(size_t peer_index,
-                                                   size_t incoming_face_slot,
+CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPayloadType payload_type,
+                                                   size_t target,
+                                                   size_t face_slot,
                                                    std::span<const double> payload)
 {
+  const bool delayed = payload_type == DownwindPayloadType::DELAYED;
+  const auto kind = delayed ? MessageKind::DELAYED_PAYLOAD : MessageKind::NORMAL_PAYLOAD;
+  auto peer_index = target;
+  const auto* peers = &send_peers_;
+  auto* open_buffer_indices = &open_send_buffer_indices_;
+
+  if (delayed)
+  {
+    assert(target < delayed_peer_indices_by_location_.size());
+    peer_index = delayed_peer_indices_by_location_[target];
+    assert(peer_index != INVALID_BUFFER_INDEX);
+    peers = &delayed_send_peers_;
+    open_buffer_indices = &open_delayed_send_buffer_indices_;
+  }
+
   const auto total_size = payload.size();
   for (size_t offset = 0; offset < total_size; offset += max_payload_chunk_size_)
   {
     const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
     auto& raw = GetOpenSendBuffer(peer_index,
                                   CBC_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double),
-                                  send_peers_,
-                                  open_send_buffer_indices_)
+                                  *peers,
+                                  *open_buffer_indices)
                   .data;
-    AppendDownwindMessage(raw,
-                          MessageKind::NORMAL_PAYLOAD,
-                          incoming_face_slot,
-                          total_size,
-                          offset,
-                          payload.subspan(offset, chunk_size));
-  }
-}
-
-void
-CBC_AsynchronousCommunicator::QueueDelayedDownwindMessage(int destination_location,
-                                                          size_t delayed_face_slot,
-                                                          std::span<const double> payload)
-{
-  assert(destination_location >= 0);
-  const auto location = static_cast<size_t>(destination_location);
-  assert(location < delayed_peer_indices_by_location_.size());
-  const auto delayed_peer_index = delayed_peer_indices_by_location_[location];
-  assert(delayed_peer_index != INVALID_BUFFER_INDEX);
-
-  const auto total_size = payload.size();
-  for (size_t offset = 0; offset < total_size; offset += max_payload_chunk_size_)
-  {
-    const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
-    auto& raw = GetOpenSendBuffer(delayed_peer_index,
-                                  CBC_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double),
-                                  delayed_send_peers_,
-                                  open_delayed_send_buffer_indices_)
-                  .data;
-    AppendDownwindMessage(raw,
-                          MessageKind::DELAYED_PAYLOAD,
-                          delayed_face_slot,
-                          total_size,
-                          offset,
-                          payload.subspan(offset, chunk_size));
+    AppendDownwindMessage(
+      raw, kind, face_slot, total_size, offset, payload.subspan(offset, chunk_size));
   }
 }
 
@@ -406,7 +389,8 @@ CBC_AsynchronousCommunicator::StorePayload(MessageKind kind,
   assert(face_slot < partials.size());
 
   const auto num_bytes = chunk_size * sizeof(double);
-  const auto commit = [&](const char* bytes, const std::vector<double>* partial_data)
+  const auto store_complete_payload =
+    [&](const char* bytes, const std::vector<double>* partial_data)
   {
     if (delayed)
     {
@@ -430,14 +414,14 @@ CBC_AsynchronousCommunicator::StorePayload(MessageKind kind,
   };
 
   if (chunk_offset == 0 and chunk_size == total_size)
-    commit(payload, nullptr);
+    store_complete_payload(payload, nullptr);
   else
   {
     auto& partial = partials[face_slot];
     if (StorePartialPayload(
           partial, total_size, chunk_offset, chunk_size, max_payload_chunk_size_, payload))
     {
-      commit(nullptr, &partial.data);
+      store_complete_payload(nullptr, &partial.data);
       ResetPartialPayload(partial);
     }
   }
@@ -489,7 +473,7 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
           MarkDelayedReceiveComplete(source_rank);
           break;
         default:
-          assert(false and "Invalid CBC message kind.");
+          assert(false and "Invalid message kind.");
           break;
       }
 
