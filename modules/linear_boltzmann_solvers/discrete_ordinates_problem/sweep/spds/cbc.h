@@ -17,11 +17,12 @@ namespace opensn
 class CBC_SPDS : public SPDS
 {
 public:
-  CBC_SPDS(const Vector3& omega, const std::shared_ptr<MeshContinuum>& grid, bool allow_cycles);
+  CBC_SPDS(int id,
+           const Vector3& omega,
+           const std::shared_ptr<MeshContinuum>& grid,
+           bool allow_cycles);
 
   int GetId() const noexcept { return id_; }
-
-  void SetId(int id) noexcept { id_ = id; }
 
   const std::vector<Task>& GetTaskList() const;
 

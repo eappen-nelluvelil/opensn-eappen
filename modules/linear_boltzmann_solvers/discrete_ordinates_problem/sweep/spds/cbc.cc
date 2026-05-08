@@ -26,10 +26,11 @@ PackEdge(const std::uint32_t upwind_local_id, const std::uint32_t downwind_local
 
 } // namespace
 
-CBC_SPDS::CBC_SPDS(const Vector3& omega,
+CBC_SPDS::CBC_SPDS(int id,
+                   const Vector3& omega,
                    const std::shared_ptr<MeshContinuum>& grid,
                    bool allow_cycles)
-  : SPDS(omega, grid), allow_cycles_(allow_cycles)
+  : SPDS(omega, grid), id_(id), allow_cycles_(allow_cycles)
 {
   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
 
@@ -122,7 +123,10 @@ CBC_SPDS::BuildTaskList()
             if (IsDelayedLocalDependency(upwind_local_id, cell.local_id))
               continue;
           }
-          else if (std::find(delayed_location_dependencies_.begin(),            delayed_location_dependencies_.end(), face.GetNeighborPartitionID(&grid)) != delayed_location_dependencies_.end())
+          else if (std::find(delayed_location_dependencies_.begin(),
+                             delayed_location_dependencies_.end(),
+                             face.GetNeighborPartitionID(&grid)) !=
+                   delayed_location_dependencies_.end())
             continue;
 
           ++num_dependencies;
