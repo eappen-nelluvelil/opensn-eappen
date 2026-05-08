@@ -118,6 +118,13 @@ private:
                     const char* payload,
                     std::vector<std::uint32_t>& cells_who_received_data);
 
+  void StoreCompletePayload(MessageKind kind,
+                            size_t face_slot,
+                            size_t total_size,
+                            const char* payload,
+                            std::span<const double> assembled_payload,
+                            std::vector<std::uint32_t>& cells_who_received_data);
+
   std::vector<BufferItem> send_buffer_;
   std::vector<mpi::Request> send_requests_;
   std::vector<BufferItem> reusable_send_buffers_;

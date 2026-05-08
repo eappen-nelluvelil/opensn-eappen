@@ -347,15 +347,6 @@ CBC_AsynchronousCommunicator::Reset()
 }
 
 void
-CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_received_data)
-{
-  CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
-
-  cells_who_received_data.clear();
-  ReceiveAvailableMessages(cells_who_received_data);
-}
-
-void
 CBC_AsynchronousCommunicator::MarkDelayedReceiveComplete(int source_rank)
 {
   assert(source_rank >= 0);
@@ -366,6 +357,41 @@ CBC_AsynchronousCommunicator::MarkDelayedReceiveComplete(int source_rank)
   if (delayed_recv_done_.size() <= dependency_index)
     delayed_recv_done_.resize(dependency_index + 1, 0);
   delayed_recv_done_[dependency_index] = 1;
+}
+
+void
+CBC_AsynchronousCommunicator::StoreCompletePayload(
+  MessageKind kind,
+  size_t face_slot,
+  size_t total_size,
+  const char* payload,
+  std::span<const double> assembled_payload,
+  std::vector<std::uint32_t>& cells_who_received_data)
+{
+  assert(kind == MessageKind::NORMAL_PAYLOAD or kind == MessageKind::DELAYED_PAYLOAD);
+  assert((not assembled_payload.empty() and assembled_payload.size() == total_size) or
+         payload != nullptr);
+
+  const auto num_bytes = total_size * sizeof(double);
+  if (kind == MessageKind::DELAYED_PAYLOAD)
+  {
+    assert(delayed_payload_received_[face_slot] == 0);
+    auto incoming = cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(face_slot, total_size);
+    if (not assembled_payload.empty())
+      std::copy(assembled_payload.begin(), assembled_payload.end(), incoming.begin());
+    else
+      std::memcpy(incoming.data(), payload, num_bytes);
+    delayed_payload_received_[face_slot] = 1;
+  }
+  else
+  {
+    auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(face_slot, total_size);
+    if (not assembled_payload.empty())
+      std::copy(assembled_payload.begin(), assembled_payload.end(), incoming.psi.begin());
+    else
+      std::memcpy(incoming.psi.data(), payload, num_bytes);
+    cells_who_received_data.push_back(incoming.cell_local_id);
+  }
 }
 
 void
@@ -388,40 +414,21 @@ CBC_AsynchronousCommunicator::StorePayload(MessageKind kind,
   auto& partials = delayed ? delayed_partials_ : incoming_partials_;
   assert(face_slot < partials.size());
 
-  const auto num_bytes = chunk_size * sizeof(double);
-  const auto store_complete_payload =
-    [&](const char* bytes, const std::vector<double>* partial_data)
-  {
-    if (delayed)
-    {
-      assert(delayed_payload_received_[face_slot] == 0);
-      auto incoming = cbc_fluds_.PrepareIncomingDelayedNonlocalPsiBySlot(face_slot, total_size);
-      if (partial_data != nullptr)
-        std::copy(partial_data->begin(), partial_data->end(), incoming.begin());
-      else if (num_bytes != 0)
-        std::memcpy(incoming.data(), bytes, num_bytes);
-      delayed_payload_received_[face_slot] = 1;
-    }
-    else
-    {
-      auto incoming = cbc_fluds_.PrepareIncomingNonlocalPsiBySlot(face_slot, total_size);
-      if (partial_data != nullptr)
-        std::copy(partial_data->begin(), partial_data->end(), incoming.psi.begin());
-      else if (num_bytes != 0)
-        std::memcpy(incoming.psi.data(), bytes, num_bytes);
-      cells_who_received_data.push_back(incoming.cell_local_id);
-    }
-  };
-
   if (chunk_offset == 0 and chunk_size == total_size)
-    store_complete_payload(payload, nullptr);
+    StoreCompletePayload(
+      kind, face_slot, total_size, payload, std::span<const double>(), cells_who_received_data);
   else
   {
     auto& partial = partials[face_slot];
     if (StorePartialPayload(
           partial, total_size, chunk_offset, chunk_size, max_payload_chunk_size_, payload))
     {
-      store_complete_payload(nullptr, &partial.data);
+      StoreCompletePayload(kind,
+                           face_slot,
+                           total_size,
+                           nullptr,
+                           std::span<const double>(partial.data.data(), partial.data.size()),
+                           cells_who_received_data);
       ResetPartialPayload(partial);
     }
   }
@@ -480,6 +487,15 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
       read_ptr += num_bytes;
     }
   }
+}
+
+void
+CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_received_data)
+{
+  CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
+
+  cells_who_received_data.clear();
+  ReceiveAvailableMessages(cells_who_received_data);
 }
 
 bool
