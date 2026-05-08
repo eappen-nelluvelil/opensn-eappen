@@ -53,7 +53,7 @@ public:
 
   void Reset();
 
-protected:
+private:
   const size_t angle_set_id_;
   const int location_id_;
   const mpi::Communicator& receive_comm_;
@@ -75,6 +75,28 @@ protected:
     const mpi::Communicator* comm = nullptr;
     int rank = 0;
   };
+
+  enum class MessageKind : std::uint8_t
+  {
+    NORMAL_PAYLOAD = 0,
+    DELAYED_PAYLOAD = 1,
+    DELAYED_COMPLETION = 2
+  };
+
+  // Size of the packed CBC record header before payload data.
+  static constexpr std::size_t CBC_MESSAGE_HEADER_SIZE = sizeof(std::uint8_t) +
+                                                         sizeof(std::size_t) + sizeof(std::size_t) +
+                                                         sizeof(std::size_t) + sizeof(std::size_t);
+
+  // Upper bound for one packed CBC MPI send buffer before chunking.
+  static constexpr std::size_t CBC_MAX_IMMEDIATE_MESSAGE_BYTES = 3072;
+
+  static void AppendDownwindMessage(std::vector<char>& raw,
+                                    MessageKind kind,
+                                    size_t incoming_face_slot,
+                                    size_t total_size,
+                                    size_t offset,
+                                    std::span<const double> payload);
 
   BufferItem& GetOpenSendBuffer(size_t peer_index, size_t record_size);
 

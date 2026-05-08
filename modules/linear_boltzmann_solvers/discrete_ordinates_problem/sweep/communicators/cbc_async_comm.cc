@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -40,25 +39,15 @@ ReadMessageValue(char*& buffer)
   return value;
 }
 
-constexpr std::size_t CBC_MESSAGE_HEADER_SIZE = sizeof(std::uint8_t) + sizeof(std::size_t) +
-                                                sizeof(std::size_t) + sizeof(std::size_t) +
-                                                sizeof(std::size_t);
-constexpr std::size_t CBC_MAX_IMMEDIATE_MESSAGE_BYTES = 3072;
-
-enum class CBCMessageKind : std::uint8_t
-{
-  NORMAL_PAYLOAD = 0,
-  DELAYED_PAYLOAD = 1,
-  DELAYED_COMPLETION = 2
-};
+} // namespace
 
 void
-AppendDownwindMessage(std::vector<char>& raw,
-                      CBCMessageKind kind,
-                      size_t incoming_face_slot,
-                      size_t total_size,
-                      size_t offset,
-                      std::span<const double> payload)
+CBC_AsynchronousCommunicator::AppendDownwindMessage(std::vector<char>& raw,
+                                                    MessageKind kind,
+                                                    size_t incoming_face_slot,
+                                                    size_t total_size,
+                                                    size_t offset,
+                                                    std::span<const double> payload)
 {
   const auto chunk_size = payload.size();
   const auto old_size = raw.size();
@@ -77,30 +66,6 @@ AppendDownwindMessage(std::vector<char>& raw,
   if (num_bytes != 0)
     std::memcpy(write_ptr, payload.data(), num_bytes);
 }
-
-std::size_t
-DownwindMessageSize(std::size_t chunk_size)
-{
-  return CBC_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double);
-}
-
-std::size_t
-MaxPayloadChunkSize(std::size_t max_mpi_message_size)
-{
-  if (max_mpi_message_size <= CBC_MESSAGE_HEADER_SIZE + sizeof(double))
-    return 1;
-  return (max_mpi_message_size - CBC_MESSAGE_HEADER_SIZE) / sizeof(double);
-}
-
-std::size_t
-NumPayloadChunks(std::size_t payload_size, std::size_t max_payload_chunk_size)
-{
-  assert(max_payload_chunk_size > 0);
-  assert(payload_size > 0);
-  return (payload_size - 1) / max_payload_chunk_size + 1;
-}
-
-} // namespace
 
 void
 CBC_AsynchronousCommunicator::ResetPartialPayload(PartialIncomingPayload& partial)
@@ -122,7 +87,7 @@ CBC_AsynchronousCommunicator::StorePartialPayload(PartialIncomingPayload& partia
   if (partial.total_size == 0)
   {
     partial.data.assign(total_size, 0.0);
-    partial.received_chunks.assign(NumPayloadChunks(total_size, max_payload_chunk_size), 0);
+    partial.received_chunks.assign((total_size - 1) / max_payload_chunk_size + 1, 0);
     partial.total_size = total_size;
     partial.received = 0;
   }
@@ -150,7 +115,9 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
     max_mpi_message_size_(std::max(
       std::min(static_cast<std::size_t>(max_mpi_message_size), CBC_MAX_IMMEDIATE_MESSAGE_BYTES),
       CBC_MESSAGE_HEADER_SIZE + sizeof(double))),
-    max_payload_chunk_size_(MaxPayloadChunkSize(max_mpi_message_size_))
+    max_payload_chunk_size_(max_mpi_message_size_ <= CBC_MESSAGE_HEADER_SIZE + sizeof(double)
+                              ? 1
+                              : (max_mpi_message_size_ - CBC_MESSAGE_HEADER_SIZE) / sizeof(double))
 {
   const auto& location_dependencies = fluds_.GetSPDS().GetLocationDependencies();
   num_receive_sources_ = location_dependencies.size();
@@ -284,9 +251,10 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(size_t peer_index,
   for (size_t offset = 0; offset < total_size; offset += max_payload_chunk_size_)
   {
     const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
-    auto& raw = GetOpenSendBuffer(peer_index, DownwindMessageSize(chunk_size)).data;
+    auto& raw =
+      GetOpenSendBuffer(peer_index, CBC_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double)).data;
     AppendDownwindMessage(raw,
-                          CBCMessageKind::NORMAL_PAYLOAD,
+                          MessageKind::NORMAL_PAYLOAD,
                           incoming_face_slot,
                           total_size,
                           offset,
@@ -309,9 +277,11 @@ CBC_AsynchronousCommunicator::QueueDelayedDownwindMessage(int destination_locati
   for (size_t offset = 0; offset < total_size; offset += max_payload_chunk_size_)
   {
     const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
-    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, DownwindMessageSize(chunk_size)).data;
+    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index,
+                                         CBC_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double))
+                  .data;
     AppendDownwindMessage(raw,
-                          CBCMessageKind::DELAYED_PAYLOAD,
+                          MessageKind::DELAYED_PAYLOAD,
                           delayed_face_slot,
                           total_size,
                           offset,
@@ -378,9 +348,9 @@ CBC_AsynchronousCommunicator::QueueDelayedCompletionMarkers()
   for (std::size_t delayed_peer_index = 0; delayed_peer_index < delayed_send_peers_.size();
        ++delayed_peer_index)
   {
-    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, DownwindMessageSize(0)).data;
+    auto& raw = GetOpenDelayedSendBuffer(delayed_peer_index, CBC_MESSAGE_HEADER_SIZE).data;
     AppendDownwindMessage(raw,
-                          CBCMessageKind::DELAYED_COMPLETION,
+                          MessageKind::DELAYED_COMPLETION,
                           CBC_FLUDSCommonData::INVALID_FACE_SLOT,
                           0,
                           0,
@@ -546,7 +516,7 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
     while (read_ptr < read_end)
     {
       assert(read_ptr + CBC_MESSAGE_HEADER_SIZE <= read_end);
-      const auto kind = static_cast<CBCMessageKind>(ReadMessageValue<std::uint8_t>(read_ptr));
+      const auto kind = static_cast<MessageKind>(ReadMessageValue<std::uint8_t>(read_ptr));
       const auto face_slot = ReadMessageValue<std::size_t>(read_ptr);
       const auto total_size = ReadMessageValue<std::size_t>(read_ptr);
       const auto chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
@@ -557,16 +527,16 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
 
       switch (kind)
       {
-        case CBCMessageKind::NORMAL_PAYLOAD:
+        case MessageKind::NORMAL_PAYLOAD:
           StoreIncomingPayload(
             face_slot, total_size, chunk_offset, chunk_size, read_ptr, cells_who_received_data);
           break;
-        case CBCMessageKind::DELAYED_PAYLOAD:
+        case MessageKind::DELAYED_PAYLOAD:
           StoreDelayedPayload(face_slot, total_size, chunk_offset, chunk_size, read_ptr);
           break;
-        case CBCMessageKind::DELAYED_COMPLETION:
-          assert((face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT) and
-                 (total_size == 0) and (chunk_offset == 0) and (chunk_size == 0));
+        case MessageKind::DELAYED_COMPLETION:
+          assert((face_slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT) and (total_size == 0) and
+                 (chunk_offset == 0) and (chunk_size == 0));
           MarkDelayedReceiveComplete(source_rank);
           break;
         default:
