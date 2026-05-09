@@ -30,10 +30,9 @@ CBC_AngleSet::GetCommunicator()
 }
 
 AngleSetStatus
-CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus)
 {
   CALI_CXX_MARK_SCOPE("CBC_AngleSet::AngleSetAdvance");
-  (void)permission;
 
   if (executed_)
     return AngleSetStatus::FINISHED;

@@ -138,9 +138,8 @@ struct AVX2Ops
 template <class Ops, int N>
 struct GatherIndexBuilder
 {
-  static typename Ops::avx_index Build(int row)
+  static typename Ops::avx_index Build(int)
   {
-    (void)row;
     static_assert(sizeof(Ops) == 0, "SIMD gather index helper not implemented for this Ops type.");
     return typename Ops::avx_index{};
   }

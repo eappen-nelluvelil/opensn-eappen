@@ -70,19 +70,31 @@ CBCSweepChunkTD::SetAngleSet(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::SetAngleSet");
 
-  CBCBindAngleSetContext(ctx_, groupset_, IsSurfaceSourceActive(), angle_set);
+  fluds_ = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
+  async_comm_ = &dynamic_cast<CBC_AsynchronousCommunicator&>(*angle_set.GetCommunicator());
+  gs_size_ = groupset_.GetNumGroups();
+  gs_gi_ = groupset_.first_group;
+  num_angles_in_as_ = angle_set.GetNumAngles();
+  group_stride_ = angle_set.GetNumGroups();
+  group_angle_stride_ = group_stride_ * num_angles_in_as_;
 }
 
 void
-CBCSweepChunkTD::SetCell(const Cell* cell_ptr, AngleSet& angle_set)
+CBCSweepChunkTD::SetCell(const Cell* cell_ptr, AngleSet&)
 {
-  (void)angle_set;
-  CBCBindCellContext(ctx_,
-                     discretization_,
-                     unit_cell_matrices_,
-                     cell_transport_views_,
-                     cell_outflow_views_,
-                     cell_ptr);
+  cell_ = cell_ptr;
+  cell_local_id_ = cell_ptr->local_id;
+  cell_mapping_ = &discretization_.GetCellMapping(*cell_);
+  cell_transport_view_ = &cell_transport_views_[cell_local_id_];
+  cell_outflow_view_ = &cell_outflow_views_[cell_local_id_];
+  cell_num_faces_ = cell_->faces.size();
+  cell_num_nodes_ = cell_mapping_->GetNumNodes();
+
+  const auto& unit_mats = unit_cell_matrices_[cell_local_id_];
+  G_ = &unit_mats.intV_shapeI_gradshapeJ;
+  M_ = &unit_mats.intV_shapeI_shapeJ;
+  M_surf_ = &unit_mats.intS_shapeI_shapeJ;
+  IntS_shapeI_ = &unit_mats.intS_shapeI;
 }
 
 void
@@ -96,24 +108,7 @@ CBCSweepChunkTD::Sweep_Generic(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::Sweep_Generic");
 
-  auto data = MakeCBCSweepData(discretization_,
-                               source_moments_,
-                               groupset_,
-                               xs_,
-                               num_moments_,
-                               max_num_cell_dofs_,
-                               SaveAngularFluxEnabled(),
-                               groupset_angle_group_stride_,
-                               groupset_group_stride_,
-                               destination_phi_,
-                               destination_psi_,
-                               include_rhs_time_term_,
-                               problem_,
-                               &psi_old_,
-                               group_block_size_,
-                               ctx_);
-
-  CBC_Sweep_Generic<true>(data, angle_set);
+  CBC_Sweep_Generic<true>(*this, angle_set);
 }
 
 template <unsigned int NumNodes>
@@ -122,24 +117,7 @@ CBCSweepChunkTD::Sweep_FixedN(AngleSet& angle_set)
 {
   CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::Sweep_FixedN");
 
-  auto data = MakeCBCSweepData(discretization_,
-                               source_moments_,
-                               groupset_,
-                               xs_,
-                               num_moments_,
-                               max_num_cell_dofs_,
-                               SaveAngularFluxEnabled(),
-                               groupset_angle_group_stride_,
-                               groupset_group_stride_,
-                               destination_phi_,
-                               destination_psi_,
-                               include_rhs_time_term_,
-                               problem_,
-                               &psi_old_,
-                               group_block_size_,
-                               ctx_);
-
-  CBC_Sweep_FixedN<NumNodes, true>(data, angle_set);
+  CBC_Sweep_FixedN<NumNodes, true>(*this, angle_set);
 }
 
 template void CBCSweepChunkTD::Sweep_FixedN<2>(AngleSet&);

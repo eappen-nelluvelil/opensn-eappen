@@ -31,9 +31,9 @@ public:
 
   int GetMaxBufferMessages() const override { return 0; }
 
-  void SetMaxBufferMessages(int max_buffer_messages) override { (void)max_buffer_messages; }
+  void SetMaxBufferMessages(int) override {}
 
-  AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
+  AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus) override;
 
   AngleSetStatus FlushSendBuffers() override
   {
