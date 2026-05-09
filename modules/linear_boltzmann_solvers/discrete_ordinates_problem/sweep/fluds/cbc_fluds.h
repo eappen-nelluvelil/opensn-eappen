@@ -38,17 +38,50 @@ public:
 
   double* UpwindPsi(const Cell& face_neighbor, unsigned int adj_cell_node, size_t as_ss_idx);
 
+  double* DelayedUpwindPsi(std::uint32_t cell_local_id,
+                           unsigned int face_id,
+                           unsigned int face_node_mapped,
+                           size_t as_ss_idx);
+
   double* OutgoingPsi(const Cell& cell, unsigned int cell_node, size_t as_ss_idx);
 
+  double* DelayedLocalOutgoingPsi(std::uint32_t cell_local_id,
+                                  unsigned int face_id,
+                                  unsigned int face_node,
+                                  size_t as_ss_idx);
+
   double* NLUpwindPsi(size_t incoming_face_slot, unsigned int face_node_mapped, size_t as_ss_idx);
+
+  double* DelayedNLUpwindPsi(const CBC_FLUDSCommonData::DelayedNonlocalFaceInfo& info,
+                             unsigned int face_node_mapped,
+                             size_t as_ss_idx);
 
   double*
   NLOutgoingPsi(std::vector<double>* psi_nonlocal_outgoing, size_t face_node, size_t as_ss_idx);
 
   void ClearLocalAndReceivePsi() override;
 
+  void AllocateDelayedLocalPsi() override;
+
+  void AllocateDelayedPrelocIOutgoingPsi() override;
+
+  void SetDelayedLocalPsiOldToNew() override;
+
+  void SetDelayedLocalPsiNewToOld() override;
+
+  void SetDelayedOutgoingPsiOldToNew() override;
+
+  void SetDelayedOutgoingPsiNewToOld() override;
+
   /// Prepare storage for an incoming payload and return the local task it unlocks.
   IncomingNonlocalPsi PrepareIncomingNonlocalPsiBySlot(size_t incoming_face_slot, size_t data_size);
+
+  size_t GetIncomingNonlocalPsiSize(size_t incoming_face_slot) const;
+
+  size_t GetDelayedNonlocalPsiSize(size_t delayed_face_slot) const;
+
+  std::span<double> PrepareIncomingDelayedNonlocalPsiBySlot(size_t delayed_face_slot,
+                                                            size_t data_size);
 
 protected:
   const CBC_FLUDSCommonData& common_data_;
@@ -65,6 +98,10 @@ protected:
   std::vector<std::uint32_t> incoming_nonlocal_psi_generation_;
   std::uint32_t incoming_nonlocal_psi_current_generation_ = 1;
   std::vector<size_t> cell_psi_start_;
+  std::vector<double> delayed_local_psi_;
+  std::vector<double> delayed_local_psi_old_;
+  std::vector<std::vector<double>> delayed_prelocI_outgoing_psi_;
+  std::vector<std::vector<double>> delayed_prelocI_outgoing_psi_old_;
 };
 
 } // namespace opensn

@@ -9,14 +9,28 @@
 #include "caliper/cali.h"
 #include <boost/graph/topological_sort.hpp>
 #include <algorithm>
+#include <stdexcept>
 
 namespace opensn
 {
 
-CBC_SPDS::CBC_SPDS(const Vector3& omega,
+namespace
+{
+
+std::uint64_t
+PackEdge(const std::uint32_t upwind_local_id, const std::uint32_t downwind_local_id) noexcept
+{
+  return (static_cast<std::uint64_t>(upwind_local_id) << 32) |
+         static_cast<std::uint64_t>(downwind_local_id);
+}
+
+} // namespace
+
+CBC_SPDS::CBC_SPDS(int id,
+                   const Vector3& omega,
                    const std::shared_ptr<MeshContinuum>& grid,
                    bool allow_cycles)
-  : SPDS(omega, grid)
+  : SPDS(omega, grid), id_(id), allow_cycles_(allow_cycles)
 {
   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
 
@@ -49,8 +63,13 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
   if (allow_cycles) // NOLINT
   {
     auto edges_to_remove = RemoveCyclicDependencies(local_DG);
-    for (auto& edge_to_remove : edges_to_remove)
-      local_sweep_fas_.emplace_back(edge_to_remove.first, edge_to_remove.second);
+    for (const auto& edge_to_remove : edges_to_remove)
+    {
+      const auto upwind = static_cast<std::uint32_t>(edge_to_remove.first);
+      const auto downwind = static_cast<std::uint32_t>(edge_to_remove.second);
+      local_sweep_fas_.emplace_back(upwind, downwind);
+      delayed_local_dependency_set_.insert(PackEdge(upwind, downwind));
+    }
   }
 
   // Generate topological sorting
@@ -63,17 +82,27 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
                            "Cycles need to be allowed by the calling application.");
   }
 
-  // Create task list
-  std::vector<std::vector<int>> global_dependencies(opensn::mpi_comm.size());
-  CommunicateLocationDependencies(location_dependencies_, global_dependencies);
+  global_dependencies_.resize(opensn::mpi_comm.size());
+  CommunicateLocationDependencies(location_dependencies_, global_dependencies_);
 
+  BuildTaskList();
+}
+
+void
+CBC_SPDS::BuildTaskList()
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::BuildTaskList");
+
+  const auto& grid = *grid_;
   constexpr auto INCOMING = FaceOrientation::INCOMING;
   constexpr auto OUTGOING = FaceOrientation::OUTGOING;
 
-  // For each local cell create a task
-  task_list_.reserve(grid_->local_cells.size());
-  for (const auto& cell : grid_->local_cells)
+  task_list_.assign(grid.local_cells.size(), Task{});
+  for (const auto& cell : grid.local_cells)
   {
+    if (cell.local_id >= task_list_.size())
+      throw std::logic_error("CBC_SPDS: local cell ID is outside the task-list bounds.");
+
     const auto num_faces = cell.faces.size();
     unsigned int num_dependencies = 0;
     std::vector<std::uint32_t> successors;
@@ -87,16 +116,37 @@ CBC_SPDS::CBC_SPDS(const Vector3& omega,
       if (orientation == INCOMING)
       {
         if (face.has_neighbor)
+        {
+          if (face.IsNeighborLocal(&grid))
+          {
+            const auto upwind_local_id = grid.cells[face.neighbor_id].local_id;
+            if (IsDelayedLocalDependency(upwind_local_id, cell.local_id))
+              continue;
+          }
+          else if (std::find(delayed_location_dependencies_.begin(),
+                             delayed_location_dependencies_.end(),
+                             face.GetNeighborPartitionID(&grid)) !=
+                   delayed_location_dependencies_.end())
+            continue;
+
           ++num_dependencies;
+        }
       }
       else if (orientation == OUTGOING)
       {
-        if (face.has_neighbor and grid->IsCellLocal(face.neighbor_id))
-          successors.push_back(grid->cells[face.neighbor_id].local_id);
+        if (face.has_neighbor and face.IsNeighborLocal(&grid))
+        {
+          const auto successor_local_id = grid.cells[face.neighbor_id].local_id;
+          if (IsDelayedLocalDependency(cell.local_id, successor_local_id))
+            continue;
+
+          successors.push_back(successor_local_id);
+        }
       }
     }
 
-    task_list_.push_back({num_dependencies, successors, cell.local_id, &cell, false});
+    task_list_[cell.local_id] = {
+      num_dependencies, std::move(successors), cell.local_id, &cell, false};
   }
 }
 
@@ -104,6 +154,135 @@ const std::vector<Task>&
 CBC_SPDS::GetTaskList() const
 {
   return task_list_;
+}
+
+bool
+CBC_SPDS::IsDelayedLocalDependency(const std::uint32_t upwind_local_id,
+                                   const std::uint32_t downwind_local_id) const noexcept
+{
+  return delayed_local_dependency_set_.contains(PackEdge(upwind_local_id, downwind_local_id));
+}
+
+void
+CBC_SPDS::BuildGlobalSweepFAS()
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::BuildGlobalSweepFAS");
+
+  const int comm_size = opensn::mpi_comm.size();
+  Graph global_tdg(comm_size);
+
+  for (int loc = 0; loc < comm_size; ++loc)
+  {
+    for (const auto dep : global_dependencies_[loc])
+    {
+      double weight = 1.0;
+      if (not global_edge_weights_.empty())
+      {
+        const auto idx = static_cast<std::size_t>(dep) * static_cast<std::size_t>(comm_size) +
+                         static_cast<std::size_t>(loc);
+        if (idx < global_edge_weights_.size() and global_edge_weights_[idx] > 0.0)
+          weight = global_edge_weights_[idx];
+      }
+      boost::add_edge(dep, loc, weight, global_tdg);
+    }
+  }
+
+  global_sweep_fas_.clear();
+  if (allow_cycles_)
+  {
+    const auto edges_to_remove = RemoveCyclicDependencies(global_tdg);
+    for (const auto& [upwind, downwind] : edges_to_remove)
+    {
+      global_sweep_fas_.push_back(static_cast<int>(upwind));
+      global_sweep_fas_.push_back(static_cast<int>(downwind));
+    }
+  }
+}
+
+void
+CBC_SPDS::ApplyGlobalSweepFAS()
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::ApplyGlobalSweepFAS");
+
+  delayed_location_dependencies_.clear();
+  delayed_location_successors_.clear();
+
+  const int comm_size = opensn::mpi_comm.size();
+  if (comm_size <= 0)
+    return;
+
+  Graph global_tdg(comm_size);
+  for (int loc = 0; loc < comm_size; ++loc)
+    for (const auto dep : global_dependencies_[loc])
+      boost::add_edge(dep, loc, 1.0, global_tdg);
+
+  std::vector<std::pair<int, int>> edges_to_remove(global_sweep_fas_.size() / 2);
+  int edge_i = 0;
+  for (auto& edge : edges_to_remove)
+  {
+    edge.first = global_sweep_fas_[edge_i++];
+    edge.second = global_sweep_fas_[edge_i++];
+  }
+
+  for (const auto& [pred_loc, succ_loc] : edges_to_remove)
+  {
+    boost::remove_edge(pred_loc, succ_loc, global_tdg);
+
+    if (succ_loc == opensn::mpi_comm.rank())
+    {
+      const auto it =
+        std::find(location_dependencies_.begin(), location_dependencies_.end(), pred_loc);
+      if (it != location_dependencies_.end())
+        location_dependencies_.erase(it);
+      delayed_location_dependencies_.push_back(pred_loc);
+    }
+
+    if (pred_loc == opensn::mpi_comm.rank())
+      delayed_location_successors_.push_back(succ_loc);
+  }
+
+  std::vector<int> global_linear_sweep_order;
+  boost::topological_sort(global_tdg, std::back_inserter(global_linear_sweep_order)); // NOLINT
+  std::reverse(global_linear_sweep_order.begin(), global_linear_sweep_order.end());
+  if (global_linear_sweep_order.empty())
+  {
+    throw std::logic_error("CBC_SPDS: Cyclic dependencies found in the global sweep graph.\n"
+                           "Cycles need to be allowed by the calling application.");
+  }
+
+  BuildTaskList();
+}
+
+std::vector<double>
+CBC_SPDS::ComputeLocalLocationEdgeWeights() const
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeLocalLocationEdgeWeights");
+
+  const int comm_size = opensn::mpi_comm.size();
+  std::vector<double> row(comm_size, 0.0);
+
+  constexpr double tolerance = 1.0e-16;
+
+  for (const auto& cell : grid_->local_cells)
+  {
+    const auto& face_orientations = cell_face_orientations_[cell.local_id];
+    for (std::size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      if (face.has_neighbor and not face.IsNeighborLocal(grid_.get()) and
+          face_orientations[f] == FaceOrientation::OUTGOING)
+      {
+        const double mu = omega_.Dot(face.normal);
+        if (mu > tolerance)
+        {
+          const auto& adj_cell = grid_->cells[face.neighbor_id];
+          row[adj_cell.partition_id] += mu * mu * face.area;
+        }
+      }
+    }
+  }
+
+  return row;
 }
 
 } // namespace opensn
