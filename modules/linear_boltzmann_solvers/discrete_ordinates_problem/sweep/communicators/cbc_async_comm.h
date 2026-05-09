@@ -60,14 +60,6 @@ private:
   const mpi::Communicator& receive_comm_;
   CBC_FLUDS& cbc_fluds_;
 
-  struct BufferItem
-  {
-    const mpi::Communicator* comm = nullptr;
-    int rank = 0;
-    bool send_initiated = false;
-    std::vector<char> data;
-  };
-
   struct SendPeer
   {
     const mpi::Communicator* comm = nullptr;
@@ -81,18 +73,22 @@ private:
     DELAYED_COMPLETION = 2
   };
 
-  // Size of one packed CBC record header before optional payload data.
-  static constexpr std::size_t CBC_MESSAGE_HEADER_SIZE = sizeof(std::uint8_t) +
-                                                         sizeof(std::size_t) + sizeof(std::size_t) +
-                                                         sizeof(std::size_t) + sizeof(std::size_t);
+  struct BufferItem
+  {
+    const mpi::Communicator* comm = nullptr;
+    int rank = 0;
+    bool send_initiated = false;
+    std::vector<char> data;
+  };
 
-  static constexpr std::size_t CBC_MAX_IMMEDIATE_MESSAGE_BYTES = 3072;
+  static constexpr std::size_t CBC_MESSAGE_HEADER_SIZE =
+    sizeof(std::uint8_t) + sizeof(std::size_t) + sizeof(std::size_t);
+
+  int MessageTag() const noexcept;
 
   static void AppendDownwindMessage(std::vector<char>& raw,
                                     MessageKind kind,
                                     size_t face_slot,
-                                    size_t total_size,
-                                    size_t offset,
                                     std::span<const double> payload);
 
   BufferItem& GetOpenSendBuffer(size_t peer_index,
@@ -114,18 +110,9 @@ private:
 
   void StorePayload(MessageKind kind,
                     size_t face_slot,
-                    size_t total_size,
-                    size_t chunk_offset,
-                    size_t chunk_size,
                     const char* payload,
+                    size_t num_values,
                     std::vector<std::uint32_t>& cells_who_received_data);
-
-  void StoreCompletePayload(MessageKind kind,
-                            size_t face_slot,
-                            size_t total_size,
-                            const char* payload,
-                            std::span<const double> assembled_payload,
-                            std::vector<std::uint32_t>& cells_who_received_data);
 
   std::vector<BufferItem> send_buffer_;
   std::vector<mpi::Request> send_requests_;
@@ -144,29 +131,8 @@ private:
   /// Completion flags for delayed predecessor receives.
   std::vector<unsigned char> delayed_recv_done_;
   std::vector<size_t> delayed_dependency_index_by_source_rank_;
-  struct PartialIncomingPayload
-  {
-    std::vector<double> data;
-    std::vector<unsigned char> received_chunks;
-    size_t total_size = 0;
-    size_t received = 0;
-  };
-
-  static void ResetPartialPayload(PartialIncomingPayload& partial);
-
-  static bool StorePartialPayload(PartialIncomingPayload& partial,
-                                  size_t total_size,
-                                  size_t chunk_offset,
-                                  size_t chunk_size,
-                                  size_t max_payload_chunk_size,
-                                  const char* payload);
-
-  std::vector<PartialIncomingPayload> incoming_partials_;
-  std::vector<PartialIncomingPayload> delayed_partials_;
   std::vector<unsigned char> delayed_payload_received_;
   bool delayed_completion_markers_queued_ = false;
-  std::size_t max_mpi_message_size_ = 0;
-  std::size_t max_payload_chunk_size_ = 1;
   static constexpr size_t INVALID_BUFFER_INDEX = std::numeric_limits<size_t>::max();
 };
 
