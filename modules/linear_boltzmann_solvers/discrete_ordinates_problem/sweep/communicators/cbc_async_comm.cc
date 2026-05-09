@@ -5,6 +5,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/mpi_comm_set.h"
+#include "framework/mpi/mpi_utils.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
@@ -359,29 +360,19 @@ void
 CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
   std::vector<std::uint32_t>& cells_who_received_data)
 {
-  const auto comm = static_cast<MPI_Comm>(receive_comm_);
   const auto tag = MessageTag();
 
   for (;;)
   {
-    int message_available = 0;
-    MPI_Message message = MPI_MESSAGE_NULL;
-    MPI_Status status;
-    auto error_code = MPI_Improbe(MPI_ANY_SOURCE, tag, comm, &message_available, &message, &status);
-    assert(error_code == MPI_SUCCESS);
-    if (message_available == 0)
+    auto message = IProbeMatchedMessage(ANY_SOURCE, tag, receive_comm_);
+    if (not message)
       break;
 
-    int num_items = 0;
-    error_code = MPI_Get_count(&status, MPI_CHAR, &num_items);
-    assert(error_code == MPI_SUCCESS);
+    const auto num_items = message.count<char>();
     assert(num_items >= static_cast<int>(CBC_MESSAGE_HEADER_SIZE));
-    receive_buffer_.resize(static_cast<std::size_t>(num_items));
+    message.recv(receive_buffer_);
 
-    error_code = MPI_Mrecv(receive_buffer_.data(), num_items, MPI_CHAR, &message, &status);
-    assert(error_code == MPI_SUCCESS);
-
-    const auto source_rank = status.MPI_SOURCE;
+    const auto source_rank = message.source();
     auto* read_ptr = receive_buffer_.data();
     const auto* const read_end = read_ptr + receive_buffer_.size();
 
