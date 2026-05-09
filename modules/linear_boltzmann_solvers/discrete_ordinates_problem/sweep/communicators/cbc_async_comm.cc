@@ -109,16 +109,17 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
                                                            const MPICommunicatorSet& comm_set)
   : AsynchronousCommunicator(fluds, comm_set),
     angle_set_id_(angle_set_id),
-    location_id_(opensn::mpi_comm.rank()),
-    receive_comm_(comm_set.LocICommunicator(location_id_)),
+    receive_comm_(comm_set.LocICommunicator(opensn::mpi_comm.rank())),
     cbc_fluds_(dynamic_cast<CBC_FLUDS&>(fluds)),
-    max_mpi_message_size_(std::max(
-      std::min(static_cast<std::size_t>(max_mpi_message_size), CBC_MAX_IMMEDIATE_MESSAGE_BYTES),
-      CBC_MESSAGE_HEADER_SIZE + sizeof(double))),
+    max_mpi_message_size_(
+      std::max(std::min(static_cast<std::size_t>(std::max(max_mpi_message_size, 1)),
+                        CBC_MAX_IMMEDIATE_MESSAGE_BYTES),
+               CBC_MESSAGE_HEADER_SIZE + sizeof(double))),
     max_payload_chunk_size_(max_mpi_message_size_ <= CBC_MESSAGE_HEADER_SIZE + sizeof(double)
                               ? 1
                               : (max_mpi_message_size_ - CBC_MESSAGE_HEADER_SIZE) / sizeof(double))
 {
+  const int location_id = opensn::mpi_comm.rank();
   incoming_partials_.resize(cbc_fluds_.GetCommonData().GetNumIncomingNonlocalFaces());
   delayed_partials_.resize(cbc_fluds_.GetCommonData().GetNumDelayedNonlocalFaces());
   delayed_payload_received_.assign(cbc_fluds_.GetCommonData().GetNumDelayedNonlocalFaces(), 0);
@@ -154,7 +155,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(size_t angle_set_id,
        ++dependency_index)
   {
     const auto source_rank =
-      comm_set_.MapIonJ(delayed_location_dependencies[dependency_index], location_id_);
+      comm_set_.MapIonJ(delayed_location_dependencies[dependency_index], location_id);
     assert(source_rank >= 0);
     const auto source_rank_index = static_cast<std::size_t>(source_rank);
     if (source_rank_index >= delayed_dependency_index_by_source_rank_.size())
@@ -194,7 +195,6 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(size_t peer_index,
   const auto buffer_index = buffers.size() - 1;
   auto& buffer = buffers.back();
   const auto& peer = peers[peer_index];
-  buffer.peer_index = peer_index;
   buffer.comm = peer.comm;
   buffer.rank = peer.rank;
   buffer.send_initiated = false;

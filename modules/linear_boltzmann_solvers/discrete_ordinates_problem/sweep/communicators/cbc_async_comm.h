@@ -57,13 +57,11 @@ public:
 
 private:
   const size_t angle_set_id_;
-  const int location_id_;
   const mpi::Communicator& receive_comm_;
   CBC_FLUDS& cbc_fluds_;
 
   struct BufferItem
   {
-    size_t peer_index = 0;
     const mpi::Communicator* comm = nullptr;
     int rank = 0;
     bool send_initiated = false;
@@ -111,14 +109,6 @@ private:
   void QueueDelayedCompletionMarkers();
 
   void ReceiveAvailableMessages(std::vector<std::uint32_t>& cells_who_received_data);
-
-  void ProgressPayloadReadyAcks();
-
-  void ProgressPayloadReadyAckSends();
-
-  void ProgressPayloadReceives(std::vector<std::uint32_t>& cells_who_received_data);
-
-  void SendPayloadReadyAck(int source_rank, size_t message_id);
 
   void MarkDelayedReceiveComplete(int source_rank);
 
