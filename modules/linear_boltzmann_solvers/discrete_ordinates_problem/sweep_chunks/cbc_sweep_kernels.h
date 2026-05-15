@@ -44,26 +44,29 @@ struct CBCSweepScratch
   std::vector<double> face_mu_values;
 };
 
-/// Prepare reusable outgoing nonlocal face payload buffers for the current cell.
-template <class SweepChunkT>
 inline void
-PrepareOutgoingNonlocalFaceBuffers(SweepChunkT& sweep_chunk,
+PrepareOutgoingNonlocalFaceBuffers(CBCSweepScratch& scratch,
+                                   CBC_FLUDS& fluds,
+                                   const Cell& cell,
+                                   std::uint32_t cell_local_id,
+                                   const CellMapping& cell_mapping,
+                                   const CellLBSView& cell_transport_view,
+                                   size_t group_angle_stride,
                                    const std::vector<FaceOrientation>& face_orientations)
 {
-  auto& scratch = sweep_chunk.scratch_;
   auto& buffers = scratch.outgoing_nonlocal_face_buffers;
   auto& buffer_by_face = scratch.outgoing_nonlocal_face_buffer_by_face;
-  buffers.reserve(sweep_chunk.cell_num_faces_);
-  buffer_by_face.assign(sweep_chunk.cell_num_faces_, nullptr);
+  buffers.reserve(cell.faces.size());
+  buffer_by_face.assign(cell.faces.size(), nullptr);
   scratch.num_outgoing_nonlocal_face_buffers = 0;
 
-  for (size_t f = 0; f < sweep_chunk.cell_num_faces_; ++f)
+  for (size_t f = 0; f < cell.faces.size(); ++f)
   {
     if (face_orientations[f] != FaceOrientation::OUTGOING)
       continue;
 
-    const auto& face = sweep_chunk.cell_->faces[f];
-    if ((not face.has_neighbor) or sweep_chunk.cell_transport_view_->IsFaceLocal(f))
+    const auto& face = cell.faces[f];
+    if ((not face.has_neighbor) or cell_transport_view.IsFaceLocal(f))
       continue;
 
     const auto buffer_index = scratch.num_outgoing_nonlocal_face_buffers++;
@@ -71,32 +74,26 @@ PrepareOutgoingNonlocalFaceBuffers(SweepChunkT& sweep_chunk,
       buffers.emplace_back();
 
     auto& buffer = buffers[buffer_index];
-    buffer.incoming_face_slot =
-      sweep_chunk.fluds_->GetCommonData().GetOutgoingNonlocalFaceSlotByLocalFace(
-        sweep_chunk.cell_local_id_, static_cast<unsigned int>(f));
-    buffer.peer_index =
-      sweep_chunk.fluds_->GetCommonData().GetOutgoingNonlocalFacePeerIndexByLocalFace(
-        sweep_chunk.cell_local_id_, static_cast<unsigned int>(f));
+    buffer.incoming_face_slot = fluds.GetCommonData().GetOutgoingNonlocalFaceSlotByLocalFace(
+      cell_local_id, static_cast<unsigned int>(f));
+    buffer.peer_index = fluds.GetCommonData().GetOutgoingNonlocalFacePeerIndexByLocalFace(
+      cell_local_id, static_cast<unsigned int>(f));
     assert(buffer.incoming_face_slot != CBC_FLUDSCommonData::INVALID_FACE_SLOT);
     assert(buffer.peer_index != CBC_FLUDSCommonData::INVALID_PEER_INDEX);
-    buffer.Prepare(sweep_chunk.cell_mapping_->GetNumFaceNodes(f) * sweep_chunk.group_angle_stride_);
+    buffer.Prepare(cell_mapping.GetNumFaceNodes(f) * group_angle_stride);
     buffer_by_face[f] = &buffer;
   }
 }
 
-/// Queue prepared outgoing nonlocal face payloads.
-template <class SweepChunkT>
 inline void
-QueueOutgoingNonlocalFaceBuffers(SweepChunkT& sweep_chunk)
+QueueOutgoingNonlocalFaceBuffers(CBCSweepScratch& scratch, CBC_AsynchronousCommunicator& async_comm)
 {
-  const auto& scratch = sweep_chunk.scratch_;
   for (size_t i = 0; i < scratch.num_outgoing_nonlocal_face_buffers; ++i)
   {
     const auto& buffer = scratch.outgoing_nonlocal_face_buffers[i];
-    sweep_chunk.async_comm_->QueueDownwindMessage(
-      buffer.peer_index,
-      buffer.incoming_face_slot,
-      std::span<const double>(buffer.data.data(), buffer.data_size));
+    async_comm.QueueDownwindMessage(buffer.peer_index,
+                                    buffer.incoming_face_slot,
+                                    std::span<const double>(buffer.data.data(), buffer.data_size));
   }
 }
 
@@ -109,27 +106,33 @@ inline void
 CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
 {
   const auto& groupset = sweep_chunk.groupset_;
+  const auto gs_size = groupset.GetNumGroups();
+  const auto gs_gi = groupset.first_group;
+  const auto num_angles_in_as = angle_set.GetNumAngles();
+  const auto group_angle_stride = gs_size * num_angles_in_as;
   const auto& cell = *sweep_chunk.cell_;
-  const auto& cell_mapping = *sweep_chunk.cell_mapping_;
-  const auto& cell_transport_view = *sweep_chunk.cell_transport_view_;
-  auto& cell_outflow_view = *sweep_chunk.cell_outflow_view_;
+  const auto cell_local_id = cell.local_id;
+  const auto& cell_mapping = sweep_chunk.discretization_.GetCellMapping(cell);
+  const auto& cell_transport_view = sweep_chunk.cell_transport_views_[cell_local_id];
+  auto& cell_outflow_view = sweep_chunk.cell_outflow_views_[cell_local_id];
+  const size_t cell_num_faces = cell.faces.size();
+  const size_t cell_num_nodes = cell_mapping.GetNumNodes();
+  const auto& unit_mats = sweep_chunk.unit_cell_matrices_[cell_local_id];
   auto& fluds = *sweep_chunk.fluds_;
-  const auto& G = *sweep_chunk.G_;
-  const auto& M = *sweep_chunk.M_;
-  const auto& M_surf = *sweep_chunk.M_surf_;
-  const auto& IntS_shapeI = *sweep_chunk.IntS_shapeI_;
+  const auto& G = unit_mats.intV_shapeI_gradshapeJ;
+  const auto& M = unit_mats.intV_shapeI_shapeJ;
+  const auto& M_surf = unit_mats.intS_shapeI_shapeJ;
+  const auto& IntS_shapeI = unit_mats.intS_shapeI;
   const auto& m2d_op = groupset.quadrature->GetMomentToDiscreteOperator();
   const auto& d2m_op = groupset.quadrature->GetDiscreteToMomentOperator();
 
   DenseMatrix<double> Amat(sweep_chunk.max_num_cell_dofs_, sweep_chunk.max_num_cell_dofs_);
   DenseMatrix<double> Atemp(sweep_chunk.max_num_cell_dofs_, sweep_chunk.max_num_cell_dofs_);
-  std::vector<Vector<double>> b(sweep_chunk.gs_size_,
-                                Vector<double>(sweep_chunk.max_num_cell_dofs_));
+  std::vector<Vector<double>> b(gs_size, Vector<double>(sweep_chunk.max_num_cell_dofs_));
   std::vector<double> source(sweep_chunk.max_num_cell_dofs_);
-  std::vector<double> face_mu_values(sweep_chunk.cell_num_faces_);
+  std::vector<double> face_mu_values(cell_num_faces);
 
-  const auto& face_orientations =
-    angle_set.GetSPDS().GetCellFaceOrientations()[sweep_chunk.cell_local_id_];
+  const auto& face_orientations = angle_set.GetSPDS().GetCellFaceOrientations()[cell_local_id];
   const auto& sigma_t = sweep_chunk.xs_.at(cell.block_id)->GetSigmaTotal();
 
   std::vector<double> tau_gsg;
@@ -141,9 +144,9 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
     const double dt = sweep_chunk.problem_.GetTimeStep();
     const double inv_dt = 1.0 / dt;
 
-    tau_gsg.assign(sweep_chunk.gs_size_, 0.0);
-    for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
-      tau_gsg[gsg] = inv_velg[sweep_chunk.gs_gi_ + gsg] * inv_theta * inv_dt;
+    tau_gsg.assign(gs_size, 0.0);
+    for (size_t gsg = 0; gsg < gs_size; ++gsg)
+      tau_gsg[gsg] = inv_velg[gs_gi + gsg] * inv_theta * inv_dt;
   }
 
   const double* psi_old = nullptr;
@@ -153,26 +156,33 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
          .psi_old_[sweep_chunk.discretization_.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
 
   const auto& as_angle_indices = angle_set.GetAngleIndices();
-  PrepareOutgoingNonlocalFaceBuffers(sweep_chunk, face_orientations);
+  PrepareOutgoingNonlocalFaceBuffers(sweep_chunk.scratch_,
+                                     fluds,
+                                     cell,
+                                     cell_local_id,
+                                     cell_mapping,
+                                     cell_transport_view,
+                                     group_angle_stride,
+                                     face_orientations);
 
-  for (size_t as_ss_idx = 0; as_ss_idx < sweep_chunk.num_angles_in_as_; ++as_ss_idx)
+  for (size_t as_ss_idx = 0; as_ss_idx < num_angles_in_as; ++as_ss_idx)
   {
     const auto direction_num = as_angle_indices[as_ss_idx];
     const auto& omega = groupset.quadrature->GetOmega(direction_num);
     const auto wt = groupset.quadrature->GetWeight(direction_num);
 
-    for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
-      for (size_t i = 0; i < sweep_chunk.cell_num_nodes_; ++i)
+    for (size_t gsg = 0; gsg < gs_size; ++gsg)
+      for (size_t i = 0; i < cell_num_nodes; ++i)
         b[gsg](i) = 0.0;
 
-    for (size_t i = 0; i < sweep_chunk.cell_num_nodes_; ++i)
-      for (size_t j = 0; j < sweep_chunk.cell_num_nodes_; ++j)
+    for (size_t i = 0; i < cell_num_nodes; ++i)
+      for (size_t j = 0; j < cell_num_nodes; ++j)
         Amat(i, j) = omega.Dot(G(i, j));
 
-    for (size_t f = 0; f < sweep_chunk.cell_num_faces_; ++f)
+    for (size_t f = 0; f < cell_num_faces; ++f)
       face_mu_values[f] = omega.Dot(cell.faces[f].normal);
 
-    for (size_t f = 0; f < sweep_chunk.cell_num_faces_; ++f)
+    for (size_t f = 0; f < cell_num_faces; ++f)
     {
       if (face_orientations[f] != FaceOrientation::INCOMING)
         continue;
@@ -181,14 +191,14 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
       const bool is_local_face = cell_transport_view.IsFaceLocal(f);
       const bool is_boundary_face = not face.has_neighbor;
       const auto* face_nodal_mapping =
-        is_boundary_face ? nullptr
-                         : &fluds.GetCommonData().GetFaceNodalMapping(sweep_chunk.cell_local_id_,
-                                                                      static_cast<unsigned int>(f));
+        is_boundary_face
+          ? nullptr
+          : &fluds.GetCommonData().GetFaceNodalMapping(cell_local_id, static_cast<unsigned int>(f));
       const auto incoming_nonlocal_slot =
         (is_boundary_face or is_local_face)
           ? CBC_FLUDSCommonData::INVALID_FACE_SLOT
           : fluds.GetCommonData().GetIncomingNonlocalFaceSlotByLocalFace(
-              sweep_chunk.cell_local_id_, static_cast<unsigned int>(f));
+              cell_local_id, static_cast<unsigned int>(f));
 
       const size_t num_face_nodes = cell_mapping.GetNumFaceNodes(f);
       for (size_t fi = 0; fi < num_face_nodes; ++fi)
@@ -213,14 +223,14 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
           else
             psi = angle_set.PsiBoundary(face.neighbor_id,
                                         direction_num,
-                                        sweep_chunk.cell_local_id_,
+                                        cell_local_id,
                                         f,
                                         fj,
                                         0,
                                         sweep_chunk.IsSurfaceSourceActive());
 
           if (psi != nullptr)
-            for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
+            for (size_t gsg = 0; gsg < gs_size; ++gsg)
               b[gsg](i) += psi[gsg] * mu_Nij;
         }
       }
@@ -231,18 +241,18 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
     const double* m2d_row = m2d_op.data() + dir_moment_offset;
     const double* d2m_row = d2m_op.data() + dir_moment_offset;
 
-    for (unsigned int gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
+    for (unsigned int gsg = 0; gsg < gs_size; ++gsg)
     {
-      double sigma_tg = sigma_t[sweep_chunk.gs_gi_ + gsg];
+      double sigma_tg = sigma_t[gs_gi + gsg];
       if constexpr (time_dependent)
         sigma_tg += tau_gsg[gsg];
 
-      for (size_t i = 0; i < sweep_chunk.cell_num_nodes_; ++i)
+      for (size_t i = 0; i < cell_num_nodes; ++i)
       {
         double temp_src = 0.0;
         for (unsigned int m = 0; m < sweep_chunk.num_moments_; ++m)
         {
-          const auto ir = cell_transport_view.MapDOF(i, m, sweep_chunk.gs_gi_ + gsg);
+          const auto ir = cell_transport_view.MapDOF(i, m, gs_gi + gsg);
           temp_src += m2d_row[m] * sweep_chunk.source_moments_[ir];
         }
 
@@ -257,10 +267,10 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
         source[i] = temp_src;
       }
 
-      for (size_t i = 0; i < sweep_chunk.cell_num_nodes_; ++i)
+      for (size_t i = 0; i < cell_num_nodes; ++i)
       {
         double temp = 0.0;
-        for (size_t j = 0; j < sweep_chunk.cell_num_nodes_; ++j)
+        for (size_t j = 0; j < cell_num_nodes; ++j)
         {
           const double Mij = M(i, j);
           Atemp(i, j) = Amat(i, j) + Mij * sigma_tg;
@@ -269,16 +279,16 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
         b[gsg](i) += temp;
       }
 
-      GaussElimination(Atemp, b[gsg], static_cast<int>(sweep_chunk.cell_num_nodes_));
+      GaussElimination(Atemp, b[gsg], static_cast<int>(cell_num_nodes));
     }
 
     for (unsigned int m = 0; m < sweep_chunk.num_moments_; ++m)
     {
       const auto wn_d2m = d2m_row[m];
-      for (size_t i = 0; i < sweep_chunk.cell_num_nodes_; ++i)
+      for (size_t i = 0; i < cell_num_nodes; ++i)
       {
-        const auto ir = cell_transport_view.MapDOF(i, m, sweep_chunk.gs_gi_);
-        for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
+        const auto ir = cell_transport_view.MapDOF(i, m, gs_gi);
+        for (size_t gsg = 0; gsg < gs_size; ++gsg)
           sweep_chunk.destination_phi_[ir + gsg] += wn_d2m * b[gsg](i);
       }
     }
@@ -296,12 +306,12 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
         inv_theta = 1.0 / theta;
       }
 
-      for (size_t i = 0; i < sweep_chunk.cell_num_nodes_; ++i)
+      for (size_t i = 0; i < cell_num_nodes; ++i)
       {
         const size_t imap = i * sweep_chunk.groupset_angle_group_stride_ +
                             direction_num * sweep_chunk.groupset_group_stride_;
 
-        for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
+        for (size_t gsg = 0; gsg < gs_size; ++gsg)
         {
           const double psi_sol = b[gsg](i);
           if constexpr (time_dependent)
@@ -315,7 +325,7 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
       }
     }
 
-    for (size_t f = 0; f < sweep_chunk.cell_num_faces_; ++f)
+    for (size_t f = 0; f < cell_num_faces; ++f)
     {
       if (face_orientations[f] != FaceOrientation::OUTGOING)
         continue;
@@ -339,9 +349,9 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
 
         if (is_boundary_face)
         {
-          for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
+          for (size_t gsg = 0; gsg < gs_size; ++gsg)
             cell_outflow_view.Add(
-              f, sweep_chunk.gs_gi_ + gsg, wt * face_mu_values[f] * b[gsg](i) * IntF_shapeI(i));
+              f, gs_gi + gsg, wt * face_mu_values[f] * b[gsg](i) * IntF_shapeI(i));
         }
 
         double* psi = nullptr;
@@ -350,17 +360,16 @@ CBC_Sweep_Generic(SweepChunkT& sweep_chunk, AngleSet& angle_set)
         else if (not is_boundary_face)
           psi = fluds.NLOutgoingPsi(psi_nonlocal_outgoing, fi, as_ss_idx);
         else if (is_reflecting_boundary_face)
-          psi = angle_set.PsiReflected(
-            face.neighbor_id, direction_num, sweep_chunk.cell_local_id_, f, fi);
+          psi = angle_set.PsiReflected(face.neighbor_id, direction_num, cell_local_id, f, fi);
 
         if (psi != nullptr)
-          for (size_t gsg = 0; gsg < sweep_chunk.gs_size_; ++gsg)
+          for (size_t gsg = 0; gsg < gs_size; ++gsg)
             psi[gsg] = b[gsg](i);
       }
     }
   }
 
-  QueueOutgoingNonlocalFaceBuffers(sweep_chunk);
+  QueueOutgoingNonlocalFaceBuffers(sweep_chunk.scratch_, *sweep_chunk.async_comm_);
 }
 
 /**
