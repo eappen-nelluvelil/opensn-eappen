@@ -115,6 +115,30 @@ RecursiveAngleSort(AngleSet* angleset,
   }
 }
 
+void
+ValidateTimeDependentVelocities(const std::string& problem_name,
+                                unsigned int num_groups,
+                                const BlockID2XSMap& xs_map)
+{
+  for (const auto& [block_id, xs] : xs_map)
+  {
+    const auto& inv_velocity = xs->GetInverseVelocity();
+    OpenSnInvalidArgumentIf(
+      inv_velocity.size() < num_groups,
+      problem_name +
+        ": time-dependent transport requires inverse velocity data for every simulated group "
+        "for block id " +
+        std::to_string(block_id) + ".");
+  }
+}
+
+void
+ValidateTimeDependentVelocities(const DiscreteOrdinatesProblem& problem)
+{
+  ValidateTimeDependentVelocities(
+    problem.GetName(), problem.GetNumGroups(), problem.GetBlockID2XSMap());
+}
+
 } // namespace
 
 InputParameters
@@ -210,8 +234,6 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
 {
   if (params.GetParamValue<bool>("time_dependent"))
   {
-    if (UseGPUs())
-      throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
     if (options_.adjoint)
       throw std::runtime_error(GetName() + ": Time-dependent adjoint problems are not supported.");
     if (geometry_type_ == GeometryType::TWOD_CYLINDRICAL)
@@ -221,6 +243,7 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
                             GetName() + ": `time_dependent=true` requires "
                                         "`options.save_angular_flux=true`.");
 
+    ValidateTimeDependentVelocities(*this);
     SetSweepChunkMode(SweepChunkMode::TIME_DEPENDENT);
   }
   else
@@ -799,8 +822,6 @@ DiscreteOrdinatesProblem::ResetMode(SweepChunkMode target_mode)
 
   if (switching_to_transient)
   {
-    if (UseGPUs())
-      throw std::runtime_error(GetName() + ": Time dependent problems are not supported on GPUs.");
     if (options_.adjoint)
       throw std::runtime_error(GetName() + ": Time-dependent adjoint problems are not supported.");
     if (geometry_type_ == GeometryType::TWOD_CYLINDRICAL)
@@ -808,6 +829,7 @@ DiscreteOrdinatesProblem::ResetMode(SweepChunkMode target_mode)
     OpenSnInvalidArgumentIf(not options_.save_angular_flux,
                             GetName() +
                               ": Time-dependent mode requires `options.save_angular_flux=true`.");
+    ValidateTimeDependentVelocities(*this);
   }
 
   const bool default_to_transient = has_no_active_mode and switching_to_transient;
@@ -871,6 +893,10 @@ DiscreteOrdinatesProblem::ResetMode(SweepChunkMode target_mode)
 void
 DiscreteOrdinatesProblem::SetSaveAngularFlux(bool save)
 {
+  OpenSnInvalidArgumentIf(IsTimeDependent() and not save,
+                          GetName() +
+                            ": Time-dependent mode requires `options.save_angular_flux=true`.");
+
   options_.save_angular_flux = save;
 
   if (discretization_)
@@ -905,6 +931,9 @@ DiscreteOrdinatesProblem::ReinitializeSolverSchemes()
 void
 DiscreteOrdinatesProblem::SetBlockID2XSMap(const BlockID2XSMap& xs_map)
 {
+  if (IsTimeDependent())
+    ValidateTimeDependentVelocities(GetName(), GetNumGroups(), xs_map);
+
   LBSProblem::SetBlockID2XSMap(xs_map);
 
   for (auto& groupset : groupsets_)
@@ -950,6 +979,7 @@ DiscreteOrdinatesProblem::UpdateAngularFluxStorage()
     else
       std::vector<double>().swap(psi_old);
   }
+
 }
 
 void
@@ -1962,18 +1992,18 @@ DiscreteOrdinatesProblem::SetSweepChunk(LBSGroupset& groupset)
 
   if (sweep_type_ == "AAH")
   {
-    if (use_time_dependent_chunk)
-      return std::make_shared<AAHSweepChunkTD>(*this, groupset);
     if (use_gpus_)
       return CreateAAHD_SweepChunk(groupset);
+    if (use_time_dependent_chunk)
+      return std::make_shared<AAHSweepChunkTD>(*this, groupset);
     return std::make_shared<AAHSweepChunk>(*this, groupset);
   }
   else if (sweep_type_ == "CBC")
   {
-    if (use_time_dependent_chunk)
-      return std::make_shared<CBCSweepChunkTD>(*this, groupset);
     if (use_gpus_)
       return CreateCBCDSweepChunk(groupset);
+    if (use_time_dependent_chunk)
+      return std::make_shared<CBCSweepChunkTD>(*this, groupset);
     return std::make_shared<CBCSweepChunk>(*this, groupset);
   }
   else

@@ -38,11 +38,16 @@ public:
 
   std::vector<crb::Stream>& GetStreams() { return streams_list_; }
 
+  bool IsTimeDependent() const override { return time_dependent_; }
+
   using SweepChunk::Sweep;
   void Sweep(const std::vector<std::uint32_t>& cell_local_ids, std::size_t angle_set_id);
 
 private:
+  /// Owning discrete ordinates problem.
   DiscreteOrdinatesProblem& problem_;
+  /// Flag indicating theta-method transient sweep behavior.
+  const bool time_dependent_;
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<CBCD_FLUDS*> fluds_list_;
   std::vector<crb::Stream> streams_list_;

@@ -72,6 +72,9 @@ AAHD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
   aahd_fluds->CopyNonLocalIncomingPsiToDevice();
   aahd_fluds->AllocateSaveAngularFlux(aahd_sweep_chunk.GetProblem(),
                                       aahd_sweep_chunk.GetGroupset());
+  if (aahd_sweep_chunk.IsTimeDependent())
+    aahd_fluds->CopyPsiOldToDevice(
+      aahd_sweep_chunk.GetProblem(), aahd_sweep_chunk.GetGroupset(), *this);
   aahd_sweep_chunk.Sweep(*this);
   aahd_fluds->CopyPsiFromDevice();
   aahd_fluds->CopySaveAngularFluxFromDevice();

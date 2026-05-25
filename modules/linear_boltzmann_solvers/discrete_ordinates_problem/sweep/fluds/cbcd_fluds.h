@@ -20,6 +20,8 @@ namespace opensn
 {
 
 class CBCD_AngleSet;
+class DiscreteOrdinatesProblem;
+class LBSGroupset;
 class UnknownManager;
 class SpatialDiscretization;
 class Cell;
@@ -56,6 +58,14 @@ public:
 
   /// Get the saved angular-flux device pointer.
   double* GetSavedAngularFluxDevicePointer() { return device_saved_psi_.get(); }
+
+  /// Get the previous-time angular-flux device pointer.
+  double* GetPsiOldDevicePointer() { return GetSavedAngularFluxDevicePointer(); }
+
+  /// Stage host previous-time angular flux in the saved angular-flux bank.
+  void CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                          const LBSGroupset& groupset,
+                          CBCD_AngleSet* angle_set);
 
   /// Copy saved angular flux from device to host.
   void CopySavedPsiFromDevice();

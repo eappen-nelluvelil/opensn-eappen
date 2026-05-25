@@ -25,9 +25,13 @@ public:
   const LBSGroupset& GetGroupset() const { return groupset_; }
 
   void Sweep(AngleSet& angle_set) override;
+  bool IsTimeDependent() const override { return time_dependent_; }
 
 protected:
+  /// Owning discrete ordinates problem.
   DiscreteOrdinatesProblem& problem_;
+  /// Flag indicating theta-method transient sweep behavior.
+  const bool time_dependent_;
 };
 
 } // namespace opensn

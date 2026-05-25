@@ -34,8 +34,8 @@ MeshCarrier::ComputeSize(LBSProblem& lbs_problem)
   {
     // number of faces and nodes
     alloc_size += 2 * sizeof(std::uint32_t);
-    // pointer to total cross sections
-    alloc_size += sizeof(std::uintptr_t);
+    // pointers to total cross sections and inverse velocities
+    alloc_size += 2 * sizeof(std::uintptr_t);
     // phi address
     alloc_size += sizeof(std::uint64_t);
     // offset for saved angular flux
@@ -115,6 +115,10 @@ MeshCarrier::Assemble(LBSProblem& lbs_problem, TotalXSCarrier& xs, OutflowCarrie
     double** total_xs_data = reinterpret_cast<double**>(cell_data);
     *(total_xs_data++) = xs.GetXSGPUData(cell.block_id);
     cell_data = reinterpret_cast<char*>(total_xs_data);
+    // pointer to inverse velocity
+    double** inv_velocity_data = reinterpret_cast<double**>(cell_data);
+    *(inv_velocity_data++) = xs.GetInvVelocityGPUData(cell.block_id);
+    cell_data = reinterpret_cast<char*>(inv_velocity_data);
     // phi address
     std::uint64_t* phi_address_data = reinterpret_cast<std::uint64_t*>(cell_data);
     const CellLBSView& cell_transport_view = cell_transport_views[cell.local_id];

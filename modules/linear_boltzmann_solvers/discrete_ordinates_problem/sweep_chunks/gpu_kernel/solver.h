@@ -15,7 +15,7 @@ namespace opensn::gpu_kernel
 {
 
 /// Compute the sweep matrix from gradient, mass, and the source term
-template <std::size_t ndofs, SweepType t>
+template <std::size_t ndofs, SweepType t, bool time_dependent>
 __CRB_DEVICE_FUNC__ void
 ComputeGMS(double* sweep_matrix,
            double* psi,
@@ -24,10 +24,17 @@ ComputeGMS(double* sweep_matrix,
            DirectionView& direction,
            const unsigned int& group_idx,
            const std::uint32_t& num_moments,
-           const Arguments<t>& args)
+           const Arguments<t>& args,
+           const double* psi_old)
 {
   // get sigmaT
   double sigma_t = cell.total_xs[args.groupset_start + group_idx];
+  double tau_g = 0.0;
+  if constexpr (time_dependent)
+  {
+    tau_g = cell.inv_velocity[args.groupset_start + group_idx] * args.inv_theta * args.inv_dt;
+    sigma_t += tau_g;
+  }
   // compute source term
   const double* src_moment = args.src_moment + cell.phi_address + args.groupset_start + group_idx;
   _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
@@ -37,6 +44,11 @@ ComputeGMS(double* sweep_matrix,
     {
       src_per_moment += direction.m2d[m] * (*src_moment);
       src_moment += args.num_groups;
+    }
+    if constexpr (time_dependent)
+    {
+      if (args.include_rhs_time_term and psi_old != nullptr)
+        src_per_moment += tau_g * psi_old[i * args.flud_data.stride_size];
     }
     s[i] = src_per_moment;
   }
@@ -246,24 +258,34 @@ ComputePhi(double* psi,
 }
 
 /// Store the angular flux
-template <std::size_t ndofs>
+template <std::size_t ndofs, bool time_dependent>
 __CRB_DEVICE_FUNC__ void
 SaveAngularFlux(const double* psi,
                 double* saved_psi,
                 CellView& cell,
                 const unsigned int& angle_group_idx,
-                const std::uint64_t& stride_size)
+                const std::uint64_t& stride_size,
+                double inv_theta,
+                double theta_minus_one,
+                const double* psi_old)
 {
   saved_psi += cell.save_psi_index * stride_size + angle_group_idx;
   _Pragma("unroll") for (std::uint32_t i = 0; i < ndofs; ++i)
   {
-    *saved_psi = psi[i];
+    if constexpr (time_dependent)
+    {
+      const double psi_old_value =
+        (psi_old != nullptr) ? psi_old[i * stride_size] : 0.0;
+      *saved_psi = inv_theta * (psi[i] + theta_minus_one * psi_old_value);
+    }
+    else
+      *saved_psi = psi[i];
     saved_psi += stride_size;
   }
 }
 
 /// Template device function performing the sweep
-template <std::size_t ndofs, SweepType t>
+template <std::size_t ndofs, SweepType t, bool time_dependent>
 __CRB_DEVICE_FUNC__ void
 Sweep(const Arguments<t>& args,
       CellView& cell,
@@ -276,9 +298,21 @@ Sweep(const Arguments<t>& args,
 {
   // initialize buffer
   Buffer<ndofs> buffer;
+  const double* psi_old = nullptr;
+  if constexpr (time_dependent)
+    if (args.psi_old != nullptr)
+      psi_old =
+        args.psi_old + cell.save_psi_index * args.flud_data.stride_size + angle_group_idx;
   // prepare linear system to solve
-  ComputeGMS<ndofs, t>(
-    buffer.A(), buffer.b(), buffer.s(), cell, direction, group_idx, num_moments, args);
+  ComputeGMS<ndofs, t, time_dependent>(buffer.A(),
+                                       buffer.b(),
+                                       buffer.s(),
+                                       cell,
+                                       direction,
+                                       group_idx,
+                                       num_moments,
+                                       args,
+                                       psi_old);
   ComputeSurfaceIntegral<ndofs, t>(
     buffer.A(), buffer.b(), cell, direction, cell_edge_data, angle_group_idx, group_idx, args);
   // solve for the angular flux
@@ -289,8 +323,14 @@ Sweep(const Arguments<t>& args,
   ComputePhi<ndofs, t>(buffer.b(), cell, direction, group_idx, num_moments, args);
   if (saved_psi != nullptr)
   {
-    SaveAngularFlux<ndofs>(
-      buffer.b(), saved_psi, cell, angle_group_idx, args.flud_data.stride_size);
+    SaveAngularFlux<ndofs, time_dependent>(buffer.b(),
+                                           saved_psi,
+                                           cell,
+                                           angle_group_idx,
+                                           args.flud_data.stride_size,
+                                           args.inv_theta,
+                                           args.theta - 1.0,
+                                           psi_old);
   }
 }
 

@@ -13,9 +13,11 @@ namespace opensn
 {
 
 /**
- * \brief Object managing the total cross section map on GPU.
- * \details For each block ID, group-wise total cross sections are stored side-by-side in device
- * memory. The constructor initializes a map to record the stride associated with each block ID.
+ * Object managing material cross-section data on GPU.
+ *
+ * Group-wise total cross sections for all block IDs are stored first, followed by group-wise
+ * inverse velocities for all block IDs. The constructor initializes a map to record the stride
+ * associated with each block ID.
  */
 class TotalXSCarrier : public Carrier
 {
@@ -23,8 +25,11 @@ public:
   /// Constructor from a fully constructed LBS problem.
   TotalXSCarrier(LBSProblem& lbs_problem);
 
-  /// Retrive the pointer to the total cross section data on GPU for a given block ID.
+  /// Retrieve the pointer to the total cross section data on GPU for a given block ID.
   double* GetXSGPUData(int block_id);
+
+  /// Retrieve the pointer to the inverse velocity data on GPU for a given block ID.
+  double* GetInvVelocityGPUData(int block_id);
 
   /// Number of groups.
   std::size_t num_groups = std::numeric_limits<std::size_t>::max();

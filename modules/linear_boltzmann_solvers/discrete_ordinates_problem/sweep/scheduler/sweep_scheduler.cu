@@ -95,6 +95,11 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   auto& streams_list = cbcd_sweep_chunk.GetStreams();
 
   const size_t num_angle_sets = angle_sets.size();
+  if (cbcd_sweep_chunk.IsTimeDependent())
+    for (std::size_t i = 0; i < num_angle_sets; ++i)
+      fluds_list[i]->CopyPsiOldToDevice(
+        cbcd_sweep_chunk.GetProblem(), cbcd_sweep_chunk.GetGroupset(), angle_sets[i]);
+
   std::vector<bool> executed(num_angle_sets, 0);
   std::vector<bool> boundary_data_set(num_angle_sets, 0);
   std::vector<bool> kernel_in_flight(num_angle_sets, 0);

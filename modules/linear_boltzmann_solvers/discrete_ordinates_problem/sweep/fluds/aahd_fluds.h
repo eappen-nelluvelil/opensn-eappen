@@ -137,6 +137,11 @@ public:
   void AllocateSaveAngularFlux(DiscreteOrdinatesProblem& problem, const LBSGroupset& groupset);
   /// \}
 
+  /// Stage host previous-time angular flux in the saved angular-flux bank.
+  void CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                          const LBSGroupset& groupset,
+                          AngleSet& angle_set);
+
   /// \name Size getters
   /// \{
   /// Get size of non-local incoming bank.
@@ -196,6 +201,8 @@ public:
   double* GetSavedAngularFluxDevicePointer() { return save_angular_flux_.device_storage.get(); }
   /// Check if the FLUDS has save angular flux storage.
   bool HasSaveAngularFlux() const { return not save_angular_flux_.host_storage.empty(); }
+  /// Get previous-time angular flux device pointer.
+  double* GetPsiOldDevicePointer() { return GetSavedAngularFluxDevicePointer(); }
 
 protected:
   /// Reference to the common data.

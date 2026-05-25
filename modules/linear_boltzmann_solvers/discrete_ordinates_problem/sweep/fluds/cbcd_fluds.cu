@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2025 The OpenSn Authors <https://open-sn.github.io/opensn/>
 // SPDX-License-Identifier: MIT
 
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "framework/math/unknown_manager/unknown_manager.h"
 #include "framework/math/spatial_discretization/spatial_discretization.h"
@@ -95,6 +96,49 @@ CBCD_FLUDS::CreatePointerSet()
     assert(pointer_set_.nonlocal_outgoing_psi != nullptr);
 
   pointer_set_.stride_size = num_groups_and_angles_;
+}
+
+void
+CBCD_FLUDS::CopyPsiOldToDevice(DiscreteOrdinatesProblem& problem,
+                               const LBSGroupset& groupset,
+                               CBCD_AngleSet* angle_set)
+{
+  if (not save_angular_flux_)
+    return;
+
+  const auto& psi_old_host = problem.GetPsiOldLocal()[groupset.id];
+  if (psi_old_host.empty())
+    return;
+
+  auto* mesh = problem.GetMeshCarrier();
+  auto grid = problem.GetGrid();
+  const auto& discretization = problem.GetSpatialDiscretization();
+  const std::size_t groupset_angle_group_stride =
+    groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
+  const auto& angle_indices = angle_set->GetAngleIndices();
+  const auto num_angles = angle_set->GetNumAngles();
+
+  for (const auto& cell : grid->local_cells)
+  {
+    const double* src_psi = &psi_old_host[discretization.MapDOFLocal(cell, 0, psi_uk_man_, 0, 0)];
+    double* dst_psi =
+      host_saved_psi_.data() + mesh->saved_psi_offset[cell.local_id] * GetStrideSize();
+    const std::uint32_t cell_num_nodes = discretization.GetCellMapping(cell).GetNumNodes();
+    for (std::uint32_t i = 0; i < cell_num_nodes; ++i)
+    {
+      for (std::uint32_t as_ss_idx = 0; as_ss_idx < num_angles; ++as_ss_idx)
+      {
+        const auto direction_num = angle_indices[as_ss_idx];
+        const double* src = src_psi + direction_num * num_groups_;
+        double* dst = dst_psi + as_ss_idx * num_groups_;
+        std::copy(src, src + num_groups_, dst);
+      }
+      src_psi += groupset_angle_group_stride;
+      dst_psi += num_groups_and_angles_;
+    }
+  }
+
+  crb::copy(device_saved_psi_, host_saved_psi_, host_saved_psi_.size(), 0, 0, stream_);
 }
 
 void
