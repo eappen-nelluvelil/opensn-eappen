@@ -80,13 +80,18 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   cell_to_outgoing_boundary_node_offsets_.assign(num_local_cells + 1, 0);
   cell_to_incoming_nonlocal_face_offsets_.assign(num_local_cells + 1, 0);
   cell_to_outgoing_nonlocal_face_offsets_.assign(num_local_cells + 1, 0);
+  cell_to_delayed_incoming_nonlocal_face_offsets_.assign(num_local_cells + 1, 0);
+  cell_to_delayed_outgoing_nonlocal_face_offsets_.assign(num_local_cells + 1, 0);
 
   std::unordered_map<int, std::uint32_t> locality_to_dest_slot;
   std::unordered_map<int, std::uint32_t> source_partition_to_slot;
+  std::unordered_map<int, std::uint32_t> delayed_locality_to_dest_slot;
+  std::unordered_map<int, std::uint32_t> delayed_source_partition_to_slot;
   outgoing_localities_.reserve(num_local_cells);
   incoming_source_partitions_.reserve(num_local_cells);
   outgoing_boundary_nodes_.reserve(total_face_nodes);
   outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
+  delayed_outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
   struct OrderedIncomingFaceBuild
   {
     std::uint32_t source_slot = 0;
@@ -103,6 +108,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   };
   std::vector<OrderedIncomingFaceBuild> incoming_face_order;
   std::vector<OrderedOutgoingFaceBuild> outgoing_face_order;
+  std::vector<OrderedIncomingFaceBuild> delayed_incoming_face_order;
+  std::vector<OrderedOutgoingFaceBuild> delayed_outgoing_face_order;
   incoming_face_order.reserve(total_face_nodes);
   outgoing_face_order.reserve(total_face_nodes);
 
@@ -114,6 +121,10 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       static_cast<std::uint32_t>(incoming_nonlocal_faces_.size());
     cell_to_outgoing_nonlocal_face_offsets_[cell_local_id] =
       static_cast<std::uint32_t>(outgoing_nonlocal_faces_.size());
+    cell_to_delayed_incoming_nonlocal_face_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(delayed_incoming_nonlocal_faces_.size());
+    cell_to_delayed_outgoing_nonlocal_face_offsets_[cell_local_id] =
+      static_cast<std::uint32_t>(delayed_outgoing_nonlocal_faces_.size());
   };
 
   for (const auto& cell : grid.local_cells)
@@ -124,6 +135,8 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
     std::uint64_t num_cell_nodes = 0;
     std::vector<int> incoming_face_to_grouped_index(cell.faces.size(), -1);
     std::vector<int> outgoing_face_to_grouped_index(cell.faces.size(), -1);
+    std::vector<int> delayed_incoming_face_to_grouped_index(cell.faces.size(), -1);
+    std::vector<int> delayed_outgoing_face_to_grouped_index(cell.faces.size(), -1);
     for (size_t f = 0; f < cell.faces.size(); ++f)
     {
       const CellFace& face = cell.faces[f];
@@ -207,8 +220,40 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           }
           else if (is_delayed_nonlocal_face)
           {
+            // Delayed-incoming nonlocal faces are grouped in parallel with the normal
+            // tables so the receiver-side scatter can iterate by (source_slot, source_face)
+            // independently of the normal route.
             node_index = CBCD_NodeIndex::DelayedNonlocal(num_delayed_incoming_nonlocal_nodes_,
                                                          is_outgoing_face);
+            int& grouped_face_index = delayed_incoming_face_to_grouped_index[f];
+            if (grouped_face_index < 0)
+            {
+              grouped_face_index = static_cast<int>(
+                delayed_incoming_nonlocal_faces_.size() -
+                cell_to_delayed_incoming_nonlocal_face_offsets_[cell.local_id]);
+              auto& grouped_face = delayed_incoming_nonlocal_faces_.emplace_back();
+              const int source_partition = grid.cells[face.neighbor_id].partition_id;
+              auto [source_it, inserted] = delayed_source_partition_to_slot.try_emplace(
+                source_partition,
+                static_cast<std::uint32_t>(delayed_incoming_source_partitions_.size()));
+              if (inserted)
+                delayed_incoming_source_partitions_.push_back(source_partition);
+              grouped_face.cell_local_id = static_cast<std::uint32_t>(cell.local_id);
+              grouped_face.base_storage_index =
+                static_cast<std::uint32_t>(num_delayed_incoming_nonlocal_nodes_);
+              grouped_face.source_slot = source_it->second;
+              delayed_incoming_face_order.push_back(
+                {grouped_face.source_slot,
+                 cell.global_id,
+                 static_cast<unsigned int>(f),
+                 static_cast<std::uint32_t>(delayed_incoming_nonlocal_faces_.size() - 1)});
+            }
+
+            auto& grouped_face =
+              delayed_incoming_nonlocal_faces_
+                [cell_to_delayed_incoming_nonlocal_face_offsets_[cell.local_id] +
+                 grouped_face_index];
+            ++grouped_face.num_nodes;
             ++num_delayed_incoming_nonlocal_nodes_;
           }
           else if (not is_boundary_face)
@@ -289,11 +334,54 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           }
           else if (is_delayed_nonlocal_face)
           {
-            // Delayed-outgoing nonlocal node indices reserve a slot in the lagged outgoing
-            // bank.  Communication of these payloads is implemented in a subsequent commit;
-            // the bank itself is sized correctly here so the kernel can write into it.
+            // Delayed-outgoing nonlocal faces build a grouped table in parallel with the
+            // normal outgoing table.  Each face owns a slice of the delayed outgoing
+            // node-copy plan; the lagged outgoing bank is sized exactly to the total
+            // delayed outgoing nodes; remote face indices use their own deterministic
+            // sequence (assigned after the deferred sort below).
             node_index = CBCD_NodeIndex::DelayedNonlocal(num_delayed_outgoing_nonlocal_nodes_,
                                                          is_outgoing_face);
+            int& grouped_face_index = delayed_outgoing_face_to_grouped_index[f];
+            if (grouped_face_index < 0)
+            {
+              const int locality = grid.cells[face.neighbor_id].partition_id;
+              auto dest_slot_it = delayed_locality_to_dest_slot.find(locality);
+              std::uint32_t dest_slot = 0;
+              if (dest_slot_it == delayed_locality_to_dest_slot.end())
+              {
+                dest_slot = static_cast<std::uint32_t>(delayed_outgoing_localities_.size());
+                delayed_locality_to_dest_slot.emplace(locality, dest_slot);
+                delayed_outgoing_localities_.push_back(locality);
+              }
+              else
+                dest_slot = dest_slot_it->second;
+
+              const auto dest_cell_global_id = face.neighbor_id;
+              const auto dest_face_id =
+                static_cast<unsigned int>(face_nodal_mapping.associated_face_);
+              grouped_face_index = static_cast<int>(
+                delayed_outgoing_nonlocal_faces_.size() -
+                cell_to_delayed_outgoing_nonlocal_face_offsets_[cell.local_id]);
+              auto& grouped_face = delayed_outgoing_nonlocal_faces_.emplace_back();
+              grouped_face.dest_slot = dest_slot;
+              grouped_face.num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
+              grouped_face.node_copy_offset =
+                static_cast<std::uint32_t>(delayed_outgoing_nonlocal_face_node_copies_.size());
+              delayed_outgoing_face_order.push_back(
+                {dest_slot,
+                 dest_cell_global_id,
+                 dest_face_id,
+                 static_cast<std::uint32_t>(delayed_outgoing_nonlocal_faces_.size() - 1)});
+            }
+
+            auto& grouped_face =
+              delayed_outgoing_nonlocal_faces_
+                [cell_to_delayed_outgoing_nonlocal_face_offsets_[cell.local_id] +
+                 grouped_face_index];
+            delayed_outgoing_nonlocal_face_node_copies_.push_back(
+              {static_cast<std::uint32_t>(num_delayed_outgoing_nonlocal_nodes_),
+               static_cast<std::uint16_t>(face_nodal_mapping.face_node_mapping_[fn])});
+            ++grouped_face.num_node_copies;
             ++num_delayed_outgoing_nonlocal_nodes_;
           }
           else if (not is_boundary_face)
@@ -407,6 +495,55 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       first_outgoing_face = false;
     }
     outgoing_nonlocal_faces_[build.face_index].remote_face_index = remote_face_index++;
+  }
+
+  // Delayed-incoming face ordering and source-slot-major lookup tables.  Producer and
+  // consumer must agree on the (source_slot, source_face_index) -> grouped-face index
+  // mapping for delayed payloads.  The remote-face-index space is independent from the
+  // normal one.
+  std::sort(delayed_incoming_face_order.begin(),
+            delayed_incoming_face_order.end(),
+            [](const OrderedIncomingFaceBuild& lhs, const OrderedIncomingFaceBuild& rhs)
+            {
+              return std::tuple(lhs.source_slot, lhs.cell_global_id, lhs.face_id) <
+                     std::tuple(rhs.source_slot, rhs.cell_global_id, rhs.face_id);
+            });
+
+  delayed_source_to_incoming_face_offsets_.assign(
+    delayed_incoming_source_partitions_.size() + 1, 0);
+  for (const auto& build : delayed_incoming_face_order)
+    ++delayed_source_to_incoming_face_offsets_[build.source_slot + 1];
+  for (std::size_t i = 0; i < delayed_incoming_source_partitions_.size(); ++i)
+    delayed_source_to_incoming_face_offsets_[i + 1] +=
+      delayed_source_to_incoming_face_offsets_[i];
+
+  delayed_incoming_face_indices_by_source_.resize(delayed_incoming_face_order.size());
+  auto delayed_source_write_offsets = delayed_source_to_incoming_face_offsets_;
+  for (const auto& build : delayed_incoming_face_order)
+    delayed_incoming_face_indices_by_source_
+      [delayed_source_write_offsets[build.source_slot]++] = build.face_index;
+
+  std::sort(delayed_outgoing_face_order.begin(),
+            delayed_outgoing_face_order.end(),
+            [](const OrderedOutgoingFaceBuild& lhs, const OrderedOutgoingFaceBuild& rhs)
+            {
+              return std::tuple(lhs.dest_slot, lhs.cell_global_id, lhs.face_id) <
+                     std::tuple(rhs.dest_slot, rhs.cell_global_id, rhs.face_id);
+            });
+
+  current_dest_slot = 0;
+  remote_face_index = 0;
+  first_outgoing_face = true;
+  for (const auto& build : delayed_outgoing_face_order)
+  {
+    if (first_outgoing_face or (build.dest_slot != current_dest_slot))
+    {
+      current_dest_slot = build.dest_slot;
+      remote_face_index = 0;
+      first_outgoing_face = false;
+    }
+    delayed_outgoing_nonlocal_faces_[build.face_index].remote_face_index =
+      remote_face_index++;
   }
 
   if (local_map.empty())

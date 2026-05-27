@@ -319,13 +319,29 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
       [this](const IncomingFaceBatch& batch)
       {
         const auto* psi_base = batch.psi_data.data();
-        for (const auto& entry : batch.entries)
+        if (batch.kind == CBCDMessageKind::NORMAL_FACE_PSI)
         {
-          const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-            batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
-          if (--remaining_deps_[cell_local_id] == 0)
-            cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
-              .push_back(static_cast<std::uint32_t>(cell_local_id));
+          // Normal traffic populates the active task graph: each face payload unblocks the
+          // owning cell once its incoming dependency count reaches zero.
+          for (const auto& entry : batch.entries)
+          {
+            const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
+              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
+            if (--remaining_deps_[cell_local_id] == 0)
+              cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+                .push_back(static_cast<std::uint32_t>(cell_local_id));
+          }
+        }
+        else
+        {
+          // Delayed traffic only populates the lagged-incoming `_new` bank — it must not
+          // touch dependency counters because the corresponding edge is, by construction,
+          // not part of the current-iteration task graph.  Bank rotation `_new -> _old`
+          // is performed by the scheduler after every delayed-completion marker arrives.
+          assert(batch.kind == CBCDMessageKind::DELAYED_FACE_PSI);
+          for (const auto& entry : batch.entries)
+            cbcd_fluds_.ScatterReceivedDelayedFaceData(
+              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
         }
       });
   }

@@ -129,16 +129,20 @@ public:
    *
    * \param angle_sets Angle sets served by the communicator.
    * \param comm_set MPI communicator set used for point-to-point exchanges.
-   * \param incoming_source_partitions Incoming source partitions grouped by angle set.
+   * \param incoming_source_partitions Normal-incoming source partitions grouped by angle set.
+   * \param delayed_incoming_source_partitions Delayed-incoming source partitions grouped by
+   * angle set.  Empty for acyclic SPDSes.
    * \param max_message_bytes Maximum serialized MPI payload size. A value of zero disables
    * message-size splitting.
    * \param capacities Queue-capacity summary for each angle set.
    */
-  CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
-                                const MPICommunicatorSet& comm_set,
-                                const std::vector<std::vector<int>>& incoming_source_partitions,
-                                std::size_t max_message_bytes,
-                                const std::vector<AngleSetCapacity>& capacities);
+  CBCD_AsynchronousCommunicator(
+    const std::vector<AngleSet*>& angle_sets,
+    const MPICommunicatorSet& comm_set,
+    const std::vector<std::vector<int>>& incoming_source_partitions,
+    const std::vector<std::vector<int>>& delayed_incoming_source_partitions,
+    std::size_t max_message_bytes,
+    const std::vector<AngleSetCapacity>& capacities);
 
   ~CBCD_AsynchronousCommunicator();
 
@@ -259,8 +263,11 @@ private:
   std::vector<int> source_partitions_;
   /// Source ranks mapped into the local communicator for receives.
   std::vector<int> source_ranks_;
-  /// Source-partition to source-slot map grouped by angle set.
+  /// Source-partition to source-slot map grouped by angle set (normal traffic).
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set_;
+  /// Source-partition to source-slot map grouped by angle set (delayed traffic).
+  std::vector<std::unordered_map<int, std::uint32_t>>
+    delayed_source_partition_to_slot_by_angle_set_;
   /// Outgoing destination queues.
   std::vector<std::unique_ptr<DestinationQueue>> outgoing_queues_;
   /// Destination-rank to outgoing-queue index map.

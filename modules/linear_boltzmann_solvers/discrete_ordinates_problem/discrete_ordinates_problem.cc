@@ -1506,8 +1506,13 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
       }
     }
 
-    if (not use_gpus_)
     {
+      // The host CBC and device CBCD paths both consume the interpartition feedback-arc
+      // set produced below.  Host CBC takes the broken edges as delayed nonlocal flux in
+      // `delayed_prelocI_outgoing_psi_{,_old}` and host CBC communicator's normal/delayed
+      // streams; device CBCD takes them as delayed `CBCD_NodeIndex` routes into the
+      // lagged nonlocal banks and the `CBCDMessageKind::DELAYED_FACE_PSI` /
+      // `DELAYED_COMPLETION` sections of the aggregated communicator wire format.
       const int comm_size = opensn::mpi_comm.size();
 
       // Accumulate sparse global edge weights for each CBC SPDS on the owning rank only.
@@ -1604,9 +1609,8 @@ DiscreteOrdinatesProblem::InitializeSweepDataStructures()
     }
 
     // Compute the exact minimum local-face slot plan for every CBC SPDS.  The planner
-    // operates on the reduced same-iteration task graph, so it must run after the global
-    // FAS has been applied (host CBC) or, for the GPU path, on the as-constructed graph
-    // (CBCD currently does not use the global FAS path).
+    // operates on the reduced same-iteration task graph, so it runs after the global FAS
+    // has been applied for both host CBC and device CBCD.
     log.Log0Verbose1() << program_timer.GetTimeString()
                        << " Compute local-face slot plan for CBC SPDS.";
     for (const auto& spds : cbc_spds_list)

@@ -71,6 +71,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
   const MPICommunicatorSet& comm_set,
   const std::vector<std::vector<int>>& incoming_source_partitions,
+  const std::vector<std::vector<int>>& delayed_incoming_source_partitions,
   const std::size_t max_message_bytes,
   const std::vector<AngleSetCapacity>& capacities)
   : comm_set_(comm_set),
@@ -80,6 +81,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     angle_set_done_(angle_sets.size())
 {
   assert(incoming_source_partitions.size() == angle_sets.size());
+  assert(delayed_incoming_source_partitions.size() == angle_sets.size());
   assert(capacities.size() == angle_sets.size());
 
   std::set<int> sources;
@@ -101,15 +103,17 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
     // Cycle-aware: delayed nonlocal traffic also flows along the dependency-removed edges,
     // so every delayed-source rank must appear in our incoming `sources` set and every
-    // delayed-destination rank must appear in `destinations`.  Recording them per angle
-    // set lets the communicator track delayed-completion markers and route delayed sends.
-    const auto& delayed_deps = spds.GetDelayedLocationDependencies();
+    // delayed-destination rank must appear in `destinations`.  The per-angle-set delayed
+    // source partition list comes from the caller (matches `CBCD_FLUDSCommonData`'s
+    // delayed-incoming source enumeration so slot indices agree between this map and the
+    // delayed face-table lookup).  Delayed destinations come from the SPDS — they only
+    // affect outgoing-completion enqueueing, not slot indexing.
     const auto& delayed_succs = spds.GetDelayedLocationSuccessors();
-    for (const int dep : delayed_deps)
+    for (const int dep : delayed_incoming_source_partitions[i])
       sources.insert(dep);
     for (const int succ : delayed_succs)
       destinations.insert(succ);
-    delayed_source_partitions_by_angle_set_[i].assign(delayed_deps.begin(), delayed_deps.end());
+    delayed_source_partitions_by_angle_set_[i] = delayed_incoming_source_partitions[i];
     delayed_destination_partitions_by_angle_set_[i].assign(delayed_succs.begin(),
                                                            delayed_succs.end());
 
@@ -146,6 +150,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
 
   source_partition_to_slot_by_angle_set_.resize(angle_sets.size());
+  delayed_source_partition_to_slot_by_angle_set_.resize(angle_sets.size());
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
   {
     auto& source_to_slot = source_partition_to_slot_by_angle_set_[angle_set_id];
@@ -154,6 +159,14 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     for (std::size_t source_slot = 0; source_slot < source_partitions.size(); ++source_slot)
       source_to_slot.emplace(source_partitions[source_slot],
                              static_cast<std::uint32_t>(source_slot));
+
+    auto& delayed_source_to_slot = delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
+    const auto& delayed_source_partitions = delayed_incoming_source_partitions[angle_set_id];
+    delayed_source_to_slot.reserve(delayed_source_partitions.size());
+    for (std::size_t source_slot = 0; source_slot < delayed_source_partitions.size();
+         ++source_slot)
+      delayed_source_to_slot.emplace(delayed_source_partitions[source_slot],
+                                     static_cast<std::uint32_t>(source_slot));
   }
 
   outgoing_queues_.reserve(destinations.size());
@@ -454,9 +467,15 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto num_entries = reader.LoadSize();
         assert(angle_set_id < num_angle_sets_);
 
-        const auto slot_it =
-          source_partition_to_slot_by_angle_set_[angle_set_id].find(source_partition);
-        assert(slot_it != source_partition_to_slot_by_angle_set_[angle_set_id].end());
+        // Normal and delayed traffic use disjoint per-(angle_set) source-slot spaces; the
+        // kind tag selects which map to consult.  `DELAYED_COMPLETION` markers use the
+        // delayed map because the counter table is keyed by the delayed-source slot index.
+        const auto& slot_map =
+          (kind == CBCDMessageKind::NORMAL_FACE_PSI)
+            ? source_partition_to_slot_by_angle_set_[angle_set_id]
+            : delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
+        const auto slot_it = slot_map.find(source_partition);
+        assert(slot_it != slot_map.end());
         const auto source_slot = slot_it->second;
 
         if (kind == CBCDMessageKind::DELAYED_COMPLETION)

@@ -54,7 +54,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   if (not angle_sets_.empty())
   {
     std::vector<std::vector<int>> incoming_source_partitions_by_angle_set;
+    std::vector<std::vector<int>> delayed_incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
+    delayed_incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     std::unordered_map<int, std::vector<std::size_t>> source_as_section_bytes;
     std::vector<AngleSetCapacity> capacities(angle_sets_.size());
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
@@ -62,12 +64,28 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
       const auto& common_data = fluds_list[as_ss_idx]->GetCommonData();
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
-      capacities[as_ss_idx].outgoing_faces = common_data.GetNumOutgoingNonlocalFaces();
-      capacities[as_ss_idx].incoming_faces = common_data.GetNumIncomingNonlocalFaces();
+      delayed_incoming_source_partitions_by_angle_set.push_back(
+        common_data.GetDelayedIncomingSourcePartitions());
+      // Outgoing queue capacity includes (a) normal outgoing face payloads, (b) delayed
+      // outgoing face payloads, and (c) one delayed-completion marker per
+      // delayed-destination locality.  Each item occupies one queue slot.
+      capacities[as_ss_idx].outgoing_faces =
+        common_data.GetNumOutgoingNonlocalFaces() +
+        common_data.GetNumDelayedOutgoingNonlocalFaces() +
+        common_data.GetDelayedOutgoingLocalities().size();
+      capacities[as_ss_idx].incoming_faces =
+        common_data.GetNumIncomingNonlocalFaces() +
+        common_data.GetNumDelayedIncomingNonlocalFaces();
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
         for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
+        {
+          capacities[as_ss_idx].max_outgoing_face_values =
+            std::max(capacities[as_ss_idx].max_outgoing_face_values,
+                     static_cast<std::size_t>(face_info.num_face_nodes) * stride);
+        }
+        for (const auto& face_info : common_data.GetDelayedOutgoingNonlocalFaces(cell_local_id))
         {
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
@@ -89,6 +107,27 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             static_cast<std::size_t>(face_info.num_nodes) * stride;
           const auto source_partition =
             common_data.GetIncomingSourcePartitions()[face_info.source_slot];
+          auto& per_as_bytes = source_as_section_bytes[source_partition];
+          if (per_as_bytes.empty())
+            per_as_bytes.assign(angle_sets_.size(), 0);
+          per_as_bytes[as_ss_idx] +=
+            sizeof(std::uint32_t) + sizeof(std::size_t) +
+            static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
+        }
+        // Mirror the sizing loop for delayed incoming faces so the receiver's mailbox
+        // batches are big enough to hold delayed-face-psi sections too.  The
+        // delayed-source-slot indices are independent from normal source-slot indices,
+        // but the same `(angle_set, source_partition)` key counts toward the message-size
+        // estimate because the wire format may carry delayed sections alongside normal.
+        for (const auto& face_info : common_data.GetDelayedIncomingNonlocalFaces(cell_local_id))
+        {
+          if (face_info.num_nodes == 0)
+            continue;
+          ++incoming_entries_by_source_slot[face_info.source_slot];
+          incoming_values_by_source_slot[face_info.source_slot] +=
+            static_cast<std::size_t>(face_info.num_nodes) * stride;
+          const auto source_partition =
+            common_data.GetDelayedIncomingSourcePartitions()[face_info.source_slot];
           auto& per_as_bytes = source_as_section_bytes[source_partition];
           if (per_as_bytes.empty())
             per_as_bytes.assign(angle_sets_.size(), 0);
@@ -123,6 +162,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
                                                       angle_sets_.front()->GetCommunicatorSet(),
                                                       incoming_source_partitions_by_angle_set,
+                                                      delayed_incoming_source_partitions_by_angle_set,
                                                       max_message_bytes,
                                                       capacities);
     for (auto* angle_set : angle_sets_)

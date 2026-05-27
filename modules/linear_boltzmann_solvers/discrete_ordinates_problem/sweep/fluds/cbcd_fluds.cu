@@ -76,6 +76,24 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
       }
     }
   }
+
+  // Parallel memcpy plan for the lagged outgoing nonlocal bank.  Source offsets index
+  // into `delayed_nonlocal_outgoing_psi_`; destination offsets are the receiver-side
+  // face-local layout consumed by `EnqueueOutgoing`.
+  delayed_outgoing_node_memcpy_plan_.reserve(common_data_.GetNumDelayedOutgoingNonlocalNodes());
+  for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
+       ++cell_local_id)
+  {
+    for (const auto& face_info : common_data_.GetDelayedOutgoingNonlocalFaces(cell_local_id))
+    {
+      for (const auto& node : common_data_.GetDelayedOutgoingNodeCopies(face_info))
+      {
+        delayed_outgoing_node_memcpy_plan_.push_back(
+          {static_cast<std::size_t>(node.storage_index) * num_groups_and_angles_,
+           static_cast<std::size_t>(node.face_node) * num_groups_and_angles_});
+      }
+    }
+  }
 }
 
 CBCD_FLUDS::~CBCD_FLUDS()
@@ -297,7 +315,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
                                       std::span<const std::uint32_t> cell_local_ids)
 {
   if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and
-      common_data_.GetNumOutgoingNonlocalFaces() == 0)
+      common_data_.GetNumOutgoingNonlocalFaces() == 0 and
+      common_data_.GetNumDelayedOutgoingNonlocalNodes() == 0)
     return;
 
   CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyOutgoingPsiBackToHost");
@@ -349,6 +368,35 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
             std::memcpy(dst, src, stride_bytes);
           }
         });
+    }
+
+    // Stage every delayed outgoing nonlocal payload for this cell through the same queue,
+    // tagged `DELAYED_FACE_PSI` so the receiver routes it into the lagged-incoming `_new`
+    // bank rather than the normal nonlocal bank.  Producer-side memcpy reads from
+    // `delayed_nonlocal_outgoing_psi_` via the delayed node-copy plan built at construction.
+    for (const auto& face_info : common_data_.GetDelayedOutgoingNonlocalFaces(cell_local_id))
+    {
+      const std::size_t face_data_size =
+        static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      const int dest_rank = common_data_.GetDelayedOutgoingLocalities()[face_info.dest_slot];
+      async_comm.EnqueueOutgoing(
+        dest_rank,
+        angle_set_id,
+        face_info.remote_face_index,
+        face_data_size,
+        [this, &face_info, stride_bytes](double* dst_base)
+        {
+          const auto* node_plan =
+            delayed_outgoing_node_memcpy_plan_.data() + face_info.node_copy_offset;
+          const auto* node_plan_end = node_plan + face_info.num_node_copies;
+          for (; node_plan != node_plan_end; ++node_plan)
+          {
+            auto* dst = dst_base + node_plan->dest_offset;
+            const double* src = delayed_nonlocal_outgoing_psi_.data() + node_plan->src_offset;
+            std::memcpy(dst, src, stride_bytes);
+          }
+        },
+        CBCDMessageKind::DELAYED_FACE_PSI);
     }
   }
 }
@@ -415,6 +463,20 @@ CBCD_FLUDS::ScatterReceivedFaceData(const std::uint32_t source_slot,
     static_cast<std::size_t>(face_info.num_nodes) * num_groups_and_angles_;
   std::memcpy(dst, psi_data, face_values * sizeof(double));
   return face_info.cell_local_id;
+}
+
+void
+CBCD_FLUDS::ScatterReceivedDelayedFaceData(const std::uint32_t source_slot,
+                                           const std::uint32_t source_face_index,
+                                           const double* psi_data)
+{
+  const auto& face_info =
+    common_data_.GetDelayedIncomingNonlocalFace(source_slot, source_face_index);
+  double* dst = delayed_nonlocal_incoming_psi_new_.data() +
+                static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
+  const std::size_t face_values =
+    static_cast<std::size_t>(face_info.num_nodes) * num_groups_and_angles_;
+  std::memcpy(dst, psi_data, face_values * sizeof(double));
 }
 
 void

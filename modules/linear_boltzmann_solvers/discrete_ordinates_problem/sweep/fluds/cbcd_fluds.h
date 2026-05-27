@@ -171,6 +171,21 @@ public:
                                         std::uint32_t source_face_index,
                                         const double* psi_data);
 
+  /**
+   * Scatter one received delayed non-local face payload into the lagged-incoming `_new` bank.
+   *
+   * The delayed scatter populates next-iteration storage and must not decrement any
+   * current-iteration task dependency.  The bank rotation from `_new` to `_old` runs in
+   * the scheduler after every delayed source's completion marker has been received.
+   *
+   * \param source_slot Delayed-source-locality slot for the sending partition.
+   * \param source_face_index Source-slot-local delayed face index carried on the wire.
+   * \param psi_data Packed payload doubles.
+   */
+  void ScatterReceivedDelayedFaceData(std::uint32_t source_slot,
+                                      std::uint32_t source_face_index,
+                                      const double* psi_data);
+
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
@@ -237,6 +252,8 @@ private:
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Flat byte-level memcpy descriptors referenced by outgoing faces.
   std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
+  /// Flat byte-level memcpy descriptors referenced by delayed outgoing faces.
+  std::vector<OutgoingNodeMemcpy> delayed_outgoing_node_memcpy_plan_;
 
   /// Build the device pointer set exposed to the CBCD sweep kernel.
   void CreatePointerSet();
