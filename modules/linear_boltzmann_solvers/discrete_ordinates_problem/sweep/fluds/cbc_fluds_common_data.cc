@@ -228,6 +228,43 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       }
     }
   }
+
+  // Build the per-cell-face node-offset table for the compact normal-local face-slot bank.
+  // Each non-delayed local face is mapped through CBC_SPDS's directed-face task IDs and
+  // slot assignment to obtain its node offset into the compact bank.  Boundary faces,
+  // nonlocal faces, and delayed-local faces remain at INVALID_FACE_SLOT because they do not
+  // use the compact local bank.
+  total_local_face_slot_nodes_ = cbc_spds.GetTotalLocalFaceSlotNodes();
+  local_face_slot_node_offsets_by_face_.assign(num_local_faces, INVALID_FACE_SLOT);
+  const auto& slot_ids = cbc_spds.GetLocalFaceSlotIDs();
+  const auto& slot_node_offsets = cbc_spds.GetLocalFaceSlotNodeOffsets();
+
+  for (const auto& cell : grid.local_cells)
+  {
+    const auto face_offset = face_offsets_[cell.local_id];
+    for (std::size_t f = 0; f < cell.faces.size(); ++f)
+    {
+      const auto& face = cell.faces[f];
+      if ((not face.has_neighbor) or (not face.IsNeighborLocal(&grid)))
+        continue;
+
+      const auto orientation = face_orientations[cell.local_id][f];
+      std::uint32_t face_task_id = CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID;
+      if (orientation == FaceOrientation::OUTGOING)
+        face_task_id =
+          cbc_spds.GetOutgoingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+      else if (orientation == FaceOrientation::INCOMING)
+        face_task_id =
+          cbc_spds.GetIncomingLocalFaceTaskID(cell.local_id, static_cast<unsigned int>(f));
+
+      if (face_task_id == CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID)
+        continue;
+
+      const auto slot_id = slot_ids[face_task_id];
+      local_face_slot_node_offsets_by_face_[face_offset + f] =
+        static_cast<std::size_t>(slot_node_offsets[slot_id]);
+    }
+  }
 }
 
 std::size_t
@@ -317,6 +354,13 @@ std::uint32_t
 CBC_FLUDSCommonData::IncomingFaceCell(std::size_t incoming_face_slot) const
 {
   return incoming_face_cells_[incoming_face_slot];
+}
+
+std::size_t
+CBC_FLUDSCommonData::LocalFaceSlotNodeOffset(std::uint32_t cell_local_id,
+                                             unsigned int face_id) const noexcept
+{
+  return local_face_slot_node_offsets_by_face_[face_offsets_[cell_local_id] + face_id];
 }
 
 } // namespace opensn
