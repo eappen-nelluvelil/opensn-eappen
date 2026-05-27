@@ -42,7 +42,7 @@ def build_problem_options(grid, xs, source, quadrature, options, time_dependent=
         ],
         "options": options,
         "time_dependent": time_dependent,
-        "sweep_type": "AAH",
+        "sweep_type": "CBC",
         "use_gpus": True,
     }
 
@@ -96,7 +96,9 @@ if __name__ == "__main__":
 
     for write_angular_flux in (False, True):
         for write_delayed_psi in (False, True):
-            restart_base = f"steady_ic_af{int(write_angular_flux)}_dpsi{int(write_delayed_psi)}"
+            restart_base = (
+                f"steady_ic_cbc_af{int(write_angular_flux)}_dpsi{int(write_delayed_psi)}"
+            )
             steady_options = {
                 **common_options,
                 "restart_writes_enabled": True,
