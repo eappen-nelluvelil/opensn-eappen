@@ -3,135 +3,161 @@
 
 #pragma once
 
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/async_comm.h"
 #include "framework/data_types/byte_array.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
 #include "mpicpp-lite/mpicpp-lite.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+namespace mpi = mpicpp_lite;
 
 namespace opensn
 {
 
-namespace mpi = mpicpp_lite;
-
+class AngleSet;
 class MPICommunicatorSet;
-class ByteArray;
-class FLUDS;
-class CBCD_FLUDS;
 
-/// Device CBC asynchronous communicator.
-class CBCD_AsynchronousCommunicator : public AsynchronousCommunicator
+/// Metadata for one received non-local face payload inside an incoming batch.
+struct IncomingFaceBatchEntry
+{
+  std::uint32_t source_face_index = 0;
+  std::size_t payload_offset = 0;
+  std::size_t payload_size = 0;
+};
+
+/// One received mailbox payload grouped by sending source slot and angle set.
+struct IncomingFaceBatch
+{
+  std::uint32_t source_slot = 0;
+  std::vector<IncomingFaceBatchEntry> entries;
+  std::vector<double> psi_data;
+};
+
+/// One outgoing non-local face payload published by a sweep worker.
+struct OutgoingFaceData
+{
+  std::size_t angle_set_id = 0;
+  std::uint32_t remote_face_index = 0;
+  std::vector<double> psi_data;
+};
+
+/// Exact outgoing-record capacity contributed by one angle set to one destination.
+struct OutgoingDestinationCapacity
+{
+  int dest_rank = -1;
+  std::size_t face_count = 0;
+};
+
+/// Queue-capacity summary for one angle set.
+struct AngleSetCapacity
+{
+  std::size_t incoming_faces = 0;
+  std::size_t max_outgoing_face_values = 0;
+  std::size_t max_incoming_batch_entries = 0;
+  std::size_t max_incoming_batch_values = 0;
+  std::vector<OutgoingDestinationCapacity> outgoing_faces_by_destination;
+};
+
+/** Aggregated CBCD communicator with per-worker SPSC queues and one MPI progress thread. */
+class CBCD_AsynchronousCommunicator
 {
 public:
-  explicit CBCD_AsynchronousCommunicator(std::size_t angle_set_id,
-                                         FLUDS& fluds,
-                                         const MPICommunicatorSet& comm_set);
+  CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
+                                const MPICommunicatorSet& comm_set,
+                                const std::vector<std::vector<int>>& incoming_source_partitions,
+                                std::size_t max_message_bytes,
+                                const std::vector<AngleSetCapacity>& capacities);
 
-  /**
-   * Return writable outgoing face-psi storage for a downwind face.
-   *
-   * The storage is zero-initialized only when a destination-face entry is first created.
-   *
-   * \param location_id Destination location ID.
-   * \param cell_global_id Downstream cell global ID.
-   * \param face_id Downstream face ID.
-   * \param data_size Number of psi values for the destination face.
-   * \return Outgoing face-psi storage for the specified destination face.
-   */
-  std::vector<double>& InitGetDownwindMessageData(int location_id,
-                                                  std::uint64_t cell_global_id,
-                                                  unsigned int face_id,
-                                                  std::size_t data_size);
+  ~CBCD_AsynchronousCommunicator();
 
-  /// Start or progress pending nonblocking sends.
-  bool SendData();
-
-  /// Receive available nonlocal face psi and return cells with newly received face data.
-  std::vector<std::uint64_t> ReceiveData();
-
-  /// Clear queued outgoing messages and send buffers.
-  void Reset()
+  template <typename FillCallback>
+  void EnqueueOutgoing(int dest_rank,
+                       std::size_t producer_id,
+                       std::size_t angle_set_id,
+                       std::uint32_t remote_face_index,
+                       std::size_t data_size,
+                       FillCallback&& fill)
   {
-    outgoing_message_queue_.clear();
-    send_buffer_.clear();
+    const auto it = dest_to_queue_index_.find(dest_rank);
+    auto& queue = *outgoing_queues_[it->second].producer_queues[producer_id];
+    auto& slot = queue.ReserveSlot();
+    slot.payload.angle_set_id = angle_set_id;
+    slot.payload.remote_face_index = remote_face_index;
+    slot.payload.psi_data.resize(data_size);
+    fill(slot.payload.psi_data.data());
+    queue.PublishSlot();
   }
 
-protected:
-  /// Angle-set MPI message tag.
-  const std::size_t angle_set_id_;
-  /// CBCD FLUDS receiving nonlocal face psi.
-  CBCD_FLUDS& cbcd_fluds_;
-
-  /// Key for one outgoing nonlocal face message.
-  struct MessageKey
+  template <typename Callback>
+  bool ProcessIncoming(std::size_t angle_set_id, Callback&& callback)
   {
-    /// Destination location.
-    int location_id = 0;
-    /// Downstream cell global ID.
-    std::uint64_t cell_global_id = 0;
-    /// Downstream face ID.
-    unsigned int face_id = 0;
-    bool operator==(const MessageKey&) const = default;
+    return incoming_mailboxes_[angle_set_id]->ProcessReady(std::forward<Callback>(callback)) > 0;
+  }
+
+  bool HasIncoming(std::size_t angle_set_id) const
+  {
+    return not incoming_mailboxes_[angle_set_id]->Empty();
+  }
+
+  void SignalAngleSetComplete(std::size_t angle_set_id);
+  void Start(std::size_t num_producers);
+  void Stop();
+
+private:
+  using OutgoingQueue = LockFreeSPSCSlotQueue<OutgoingFaceData>;
+
+  struct DestinationQueue
+  {
+    int dest_rank = 0;
+    std::vector<std::unique_ptr<OutgoingQueue>> producer_queues;
+    /// Producers owning at least one outgoing face toward this destination.
+    std::vector<std::size_t> realized_producers;
   };
 
-  /**
-   * Hash functor for `MessageKey`.
-   *
-   * Adapted from Wolfgang Brehm's answer to mitigate systematic hash collisions in unordered maps
-   * keyed by aggregate types (https://stackoverflow.com/a/50978188).
-   */
-  struct MessageKeyHash
+  struct InFlightSend
   {
-    /// Return a mixed hash for a message key.
-    std::size_t operator()(const MessageKey& key) const noexcept
-    {
-      auto seed = Mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(key.location_id)));
-      seed = Combine(seed, Mix(key.cell_global_id));
-      seed = Combine(seed, Mix(static_cast<std::uint64_t>(key.face_id)));
-      return static_cast<std::size_t>(seed);
-    }
-
-  private:
-    static std::uint64_t Combine(std::uint64_t seed, std::uint64_t value) noexcept
-    {
-      constexpr std::uint64_t offset = 0x9e3779b97f4a7c15ULL;
-      return Mix(seed ^ (value + offset + (seed << 6) + (seed >> 2)));
-    }
-
-    static std::uint64_t Mix(std::uint64_t value) noexcept
-    {
-      constexpr std::uint64_t multiplier = 0xe9846afb1a615dULL;
-      value ^= value >> 32;
-      value *= multiplier;
-      value ^= value >> 32;
-      value *= multiplier;
-      value ^= value >> 28;
-      return value;
-    }
+    mpi::Request request;
+    ByteArray data;
   };
 
-  /// Queued outgoing face psi by destination face.
-  std::unordered_map<MessageKey, std::vector<double>, MessageKeyHash> outgoing_message_queue_;
+  void CommThreadLoop();
+  void ConfigureProducerQueues(std::size_t num_producers);
+  bool FlushDestination(std::size_t destination_queue_index);
+  bool SerializeAndSend();
+  bool ProbeAndReceive();
+  bool PollInFlightSends();
+  bool AllAngleSetsComplete() const;
 
-  /// Destination-batched nonblocking send buffer.
-  struct BufferItem
-  {
-    /// Destination location.
-    int destination = 0;
-    /// Active nonblocking send request.
-    mpi::Request mpi_request;
-    /// Nonblocking-send state.
-    bool send_initiated = false;
-    /// Send completion state.
-    bool completed = false;
-    /// Serialized face-psi data.
-    ByteArray data_array;
-  };
-
-  /// Active nonblocking send buffers.
-  std::vector<BufferItem> send_buffer_;
+  const MPICommunicatorSet& comm_set_;
+  std::size_t num_angle_sets_;
+  std::vector<AngleSetCapacity> capacities_;
+  std::size_t num_producers_ = 0;
+  int mpi_tag_;
+  std::size_t message_limit_ = 0;
+  int my_rank_ = 0;
+  std::vector<int> source_partitions_;
+  std::vector<int> source_ranks_;
+  std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set_;
+  std::vector<int> destination_ranks_;
+  std::vector<DestinationQueue> outgoing_queues_;
+  std::unordered_map<int, std::size_t> dest_to_queue_index_;
+  std::vector<std::unique_ptr<LockFreeSPSCSlotQueue<IncomingFaceBatch>>> incoming_mailboxes_;
+  std::vector<std::vector<const OutgoingFaceData*>> send_batch_by_angle_set_;
+  /// Angle sets holding records for the message currently being packed.
+  std::vector<std::size_t> active_section_ids_;
+  ByteArray recv_buffer_;
+  std::vector<InFlightSend> in_flight_sends_;
+  std::atomic<bool> stop_requested_{false};
+  std::vector<std::atomic<bool>> angle_set_done_;
+  std::thread comm_thread_;
+  std::vector<OutgoingQueue::Slot*> slot_cache_;
+  std::vector<std::pair<OutgoingQueue*, std::size_t>> deferred_slot_releases_;
 };
 
 } // namespace opensn
