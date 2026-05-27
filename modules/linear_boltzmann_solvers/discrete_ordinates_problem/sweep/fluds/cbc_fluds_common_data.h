@@ -55,6 +55,18 @@ public:
   /// Return the total number of delayed local face nodes.
   std::size_t NumDelayedLocalFaceNodes() const { return num_delayed_local_face_nodes_; }
 
+  /// Return the total number of nodes spanned by the compact normal-local face-slot bank.
+  std::size_t TotalLocalFaceSlotNodes() const noexcept { return total_local_face_slot_nodes_; }
+
+  /**
+   * Return the node offset for a normal-local face in the compact local-slot bank.
+   *
+   * For local faces that are not part of the same-iteration task graph (boundary, nonlocal,
+   * or delayed-local), the returned value is `INVALID_FACE_SLOT`.
+   */
+  std::size_t LocalFaceSlotNodeOffset(std::uint32_t cell_local_id,
+                                      unsigned int face_id) const noexcept;
+
   /// Return the delayed nonlocal face-node count for a delayed upstream location.
   std::size_t DelayedPrelocIFaceNodeCount(std::size_t prelocI) const;
 
@@ -181,6 +193,10 @@ private:
   std::vector<std::size_t> delayed_prelocI_face_node_counts_;
   /// Bit-packed delayed-face classifications indexed by local face.
   std::vector<std::uint8_t> delayed_face_flags_;
+  /// Total number of nodes spanned by the compact normal-local face-slot bank.
+  std::size_t total_local_face_slot_nodes_ = 0;
+  /// Local-face-indexed node offsets into the compact normal-local face-slot bank.
+  std::vector<std::size_t> local_face_slot_node_offsets_by_face_;
 };
 
 } // namespace opensn
