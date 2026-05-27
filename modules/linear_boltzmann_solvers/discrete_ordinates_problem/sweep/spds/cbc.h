@@ -5,7 +5,9 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep.h"
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <span>
 #include <unordered_map>
@@ -15,7 +17,15 @@
 namespace opensn
 {
 
-/// CBC sweep-plane data structure.
+/**
+ * Cell-by-cell sweep-plane data structure with cycle-aware task scheduling and exact
+ * local-face slot metadata.
+ *
+ * The same-iteration local cell graph is a partial order after local feedback edges are
+ * removed. Local angular-flux storage is planned over the directed-face reuse poset induced
+ * by that cell order. `ComputeMaxNumLocalPsiSlots` computes an exact minimum chain cover of
+ * the face poset, so its cardinality is the minimum safe number of reusable face slots.
+ */
 class CBC_SPDS : public SPDS
 {
 public:
@@ -29,6 +39,10 @@ public:
     /// Accumulated sweep-graph edge weight.
     double weight = 0.0;
   };
+
+  /// Sentinel for a face that has no local directed-face task.
+  static constexpr std::uint32_t INVALID_LOCAL_FACE_TASK_ID =
+    std::numeric_limits<std::uint32_t>::max();
 
   /**
    * Construct a cell-by-cell sweep-plane data structure for the given direction and grid.
@@ -106,6 +120,44 @@ public:
   bool IsDelayedLocalDependency(std::uint32_t upwind_local_id,
                                 std::uint32_t downwind_local_id) const noexcept;
 
+  /// Compute the exact minimum safe local-face psi slot assignment.
+  void ComputeMaxNumLocalPsiSlots();
+
+  /// Return the minimum number of reusable local-face psi slots.
+  std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
+
+  /// Return the static slot assignment indexed by local directed-face task ID.
+  const std::vector<std::uint32_t>& GetLocalFaceSlotIDs() const noexcept
+  {
+    return local_face_slot_ids_;
+  }
+
+  /// Return prefix offsets into the compact local-face slot bank.
+  const std::vector<std::uint32_t>& GetLocalFaceSlotNodeOffsets() const noexcept
+  {
+    return local_face_slot_node_offsets_;
+  }
+
+  /// Return slot-local node extents indexed by slot ID.
+  const std::vector<std::uint16_t>& GetLocalFaceSlotNodeCounts() const noexcept
+  {
+    return local_face_slot_node_counts_;
+  }
+
+  /// Return the total number of nodes spanned by the compact local-face slot bank.
+  std::size_t GetTotalLocalFaceSlotNodes() const noexcept { return total_local_face_slot_nodes_; }
+
+  /// Return the maximum node count among local directed faces.
+  std::size_t GetMaxLocalFaceNodeCount() const noexcept { return max_local_face_node_count_; }
+
+  /// Return the local directed-face task ID for an outgoing local face.
+  std::uint32_t GetOutgoingLocalFaceTaskID(std::uint32_t cell_local_id,
+                                           unsigned int face_id) const noexcept;
+
+  /// Return the local directed-face task ID for an incoming local face.
+  std::uint32_t GetIncomingLocalFaceTaskID(std::uint32_t cell_local_id,
+                                           unsigned int face_id) const noexcept;
+
 protected:
   /// Approximate a minimum-weight FAS using a deterministic weighted vertex ordering.
   static std::vector<std::pair<Vertex, Vertex>>
@@ -117,6 +169,15 @@ protected:
 
   /// Build local sweep tasks from current local and delayed dependencies.
   void BuildTaskList();
+
+  /// Build topological-rank successor adjacency for the local task DAG.
+  void BuildTaskSuccessorAdjacency();
+
+  /// Enumerate non-delayed local directed faces and their endpoint task ranks.
+  void BuildLocalFaceTaskGraph();
+
+  /// Recompute compact slot-node extents and prefix offsets for the current assignment.
+  void UpdateLocalFaceSlotLayout();
 
   /// Process-independent ordinal used to order CBC collectives.
   int id_ = 0;
@@ -138,6 +199,39 @@ protected:
   std::set<std::uint64_t> delayed_local_dependency_set_;
   /// MPI-rank-indexed flags for delayed incoming location dependencies.
   std::vector<unsigned char> delayed_location_dependency_flags_;
+
+  /// Topological task rank keyed by local cell ID.
+  std::vector<std::uint32_t> topo_rank_by_cell_local_id_;
+  /// Offsets into `task_successor_ranks_` keyed by topological task rank.
+  std::vector<std::uint32_t> task_successor_rank_offsets_;
+  /// Flat successor task ranks grouped by producer task rank.
+  std::vector<std::uint32_t> task_successor_ranks_;
+  /// Flat face-table offsets keyed by local cell ID.
+  std::vector<std::uint32_t> cell_face_offsets_;
+  /// Directed-face task IDs for outgoing local faces.
+  std::vector<std::uint32_t> outgoing_local_face_task_ids_;
+  /// Directed-face task IDs for incoming local faces.
+  std::vector<std::uint32_t> incoming_local_face_task_ids_;
+  /// Directed-face offsets grouped by producer task rank.
+  std::vector<std::uint32_t> producer_cell_face_offsets_;
+  /// Producer task rank for each local directed face.
+  std::vector<std::uint32_t> local_face_producer_ranks_;
+  /// Consumer task rank for each local directed face.
+  std::vector<std::uint32_t> local_face_consumer_ranks_;
+  /// Node count for each local directed face.
+  std::vector<std::uint16_t> local_face_node_counts_;
+  /// Static face-to-slot assignment.
+  std::vector<std::uint32_t> local_face_slot_ids_;
+  /// Maximum node extent for each slot.
+  std::vector<std::uint16_t> local_face_slot_node_counts_;
+  /// Prefix offsets into the compact slot bank.
+  std::vector<std::uint32_t> local_face_slot_node_offsets_;
+  /// Exact minimum number of reusable local-face slots.
+  std::size_t max_num_local_psi_slots_ = 0;
+  /// Total number of nodes spanned by the compact local-face slot bank.
+  std::size_t total_local_face_slot_nodes_ = 0;
+  /// Maximum node count among local directed faces.
+  std::size_t max_local_face_node_count_ = 0;
 };
 
 } // namespace opensn
