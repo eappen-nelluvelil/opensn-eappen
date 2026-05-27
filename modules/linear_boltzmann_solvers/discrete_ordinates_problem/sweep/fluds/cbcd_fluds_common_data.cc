@@ -53,4 +53,14 @@ CBCD_FLUDSCommonData::GetIncomingNonlocalFace(const std::uint32_t source_slot,
   return incoming_nonlocal_faces_[incoming_face_indices_by_source_[begin + source_face_index]];
 }
 
+const GroupedIncomingNonlocalFace&
+CBCD_FLUDSCommonData::GetDelayedIncomingNonlocalFace(
+  const std::uint32_t source_slot, const std::uint32_t source_face_index) const
+{
+  const auto begin = delayed_source_to_incoming_face_offsets_[source_slot];
+  assert(begin + source_face_index < delayed_source_to_incoming_face_offsets_[source_slot + 1]);
+  return delayed_incoming_nonlocal_faces_[delayed_incoming_face_indices_by_source_
+                                            [begin + source_face_index]];
+}
+
 } // namespace opensn
