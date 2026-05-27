@@ -10,6 +10,7 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include <algorithm>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace opensn
@@ -60,6 +61,22 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   {
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
+  }
+  else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    if (opensn_num_threads < 2)
+      throw std::logic_error("CBCD requires OPENSN_NUM_THREADS to be at least 2 (one sweep "
+                             "worker and one communication-progress thread).");
+
+    constexpr std::size_t num_communicator_threads = 1;
+    const auto worker_limit = opensn_num_threads - num_communicator_threads;
+    const auto num_workers =
+      std::max<std::size_t>(1, std::min(angle_agg_.GetNumAngleSets(), worker_limit));
+
+    log.Log0Verbose1() << "CBCD scheduler: policy=resource-aware, workers=" << num_workers
+                       << ", communicator_threads=" << num_communicator_threads
+                       << ", thread_budget=" << opensn_num_threads << " from OPENSN_NUM_THREADS.";
+    pool_.Resize(num_workers);
   }
 
   // Initialize delayed upstream data
