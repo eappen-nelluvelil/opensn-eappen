@@ -42,7 +42,7 @@ struct AAHD_Bank
   void DownloadToHost(crb::Stream& stream);
 
   /// Check if the bank is not initialized.
-  bool IsNotInitialized() { return device_storage.get() == nullptr; }
+  bool IsNotInitialized() const { return device_storage.get() == nullptr; }
 
   /// Host storage for the bank.
   crb::HostVector<double> host_storage;
@@ -137,6 +137,11 @@ public:
   void AllocateSaveAngularFlux(DiscreteOrdinatesProblem& problem, const LBSGroupset& groupset);
   /// \}
 
+  /// Stage host previous-time angular flux in the device old-psi bank.
+  void CopyPsiOldToDevice(const DiscreteOrdinatesProblem& problem,
+                          const LBSGroupset& groupset,
+                          AngleSet& angle_set);
+
   /// \name Size getters
   /// \{
   /// Get size of non-local incoming bank.
@@ -196,6 +201,8 @@ public:
   double* GetSavedAngularFluxDevicePointer() { return save_angular_flux_.device_storage.get(); }
   /// Check if the FLUDS has save angular flux storage.
   bool HasSaveAngularFlux() const { return not save_angular_flux_.host_storage.empty(); }
+  /// Get previous-time angular flux device pointer.
+  const double* GetPsiOldDevicePointer() const { return psi_old_bank_.device_storage.get(); }
 
 protected:
   /// Reference to the common data.
@@ -218,6 +225,8 @@ protected:
 
   /// Storage for saved angular fluxes.
   AAHD_Bank save_angular_flux_;
+  /// Device-readable previous-time angular fluxes for transient sweeps.
+  AAHD_Bank psi_old_bank_;
 
   /// Stream for asynchronous operations.
   crb::Stream stream_ = crb::Stream::get_null_stream();

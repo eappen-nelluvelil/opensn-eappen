@@ -32,7 +32,8 @@ AAHDSweepChunk::AAHDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetNumMoments(),
                problem.GetMaxCellDOFCount(),
                problem.GetMinCellDOFCount()),
-    problem_(problem)
+    problem_(problem),
+    time_dependent_(problem.IsTimeDependent())
 {
 }
 
@@ -44,7 +45,7 @@ AAHDSweepChunk::Sweep(AngleSet& angle_set)
   auto& fluds = static_cast<AAHD_FLUDS&>(aahd_angle_set.GetFLUDS());
   auto& stream = aahd_angle_set.GetStream();
   gpu_kernel::Arguments<gpu_kernel::SweepType::AAH> args(
-    problem_, groupset_, aahd_angle_set, fluds, surface_source_active_);
+    problem_, groupset_, aahd_angle_set, fluds, surface_source_active_, include_rhs_time_term_);
   double* saved_psi = fluds.GetSavedAngularFluxDevicePointer();
   // retrieve SPDS levels
   const auto& spds = static_cast<const AAH_SPDS&>(aahd_angle_set.GetSPDS());
@@ -65,15 +66,29 @@ AAHDSweepChunk::Sweep(AngleSet& angle_set)
     // perform the sweep on device
     const std::uint32_t* level_data = spds.GetDeviceLevelVector(level);
 #if defined(__NVCC__) || defined(__HIPCC__)
-    gpu_kernel::SweepKernel<gpu_kernel::SweepType::AAH><<<grid_size, block_size, 0, stream>>>(
-      args, level_data, static_cast<unsigned int>(level_size), saved_psi);
+    if (time_dependent_)
+      gpu_kernel::SweepKernel<gpu_kernel::SweepType::AAH, true>
+        <<<grid_size, block_size, 0, stream>>>(
+          args, level_data, static_cast<unsigned int>(level_size), saved_psi);
+    else
+      gpu_kernel::SweepKernel<gpu_kernel::SweepType::AAH, false>
+        <<<grid_size, block_size, 0, stream>>>(
+          args, level_data, static_cast<unsigned int>(level_size), saved_psi);
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
-    stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
-                        [=](sycl::nd_item<3> work_index)
-                        {
-                          gpu_kernel::SweepKernel<gpu_kernel::SweepType::AAH>(
-                            args, level_data, static_cast<unsigned int>(level_size), saved_psi);
-                        });
+    if (time_dependent_)
+      stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
+                          [=](sycl::nd_item<3> work_index)
+                          {
+                            gpu_kernel::SweepKernel<gpu_kernel::SweepType::AAH, true>(
+                              args, level_data, static_cast<unsigned int>(level_size), saved_psi);
+                          });
+    else
+      stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
+                          [=](sycl::nd_item<3> work_index)
+                          {
+                            gpu_kernel::SweepKernel<gpu_kernel::SweepType::AAH, false>(
+                              args, level_data, static_cast<unsigned int>(level_size), saved_psi);
+                          });
 #endif
   }
 }

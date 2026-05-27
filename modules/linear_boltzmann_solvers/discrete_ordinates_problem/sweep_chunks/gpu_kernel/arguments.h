@@ -54,7 +54,8 @@ struct Arguments
             const LBSGroupset& groupset,
             AngleSetType& angle_set,
             FLUDSType& fluds,
-            bool is_active)
+            bool is_active,
+            bool include_rhs_time_term = true)
   {
     // Get mesh and quadrature data
     auto* mesh = problem.GetMeshCarrier();
@@ -82,6 +83,12 @@ struct Arguments
     flud_index = fluds.GetCommonData().GetDeviceIndex();
     // Copy surface source active
     is_surface_source_active = is_active;
+    // Transient data
+    this->include_rhs_time_term = include_rhs_time_term;
+    theta = problem.GetTheta();
+    inv_theta = 1.0 / theta;
+    inv_dt = 1.0 / problem.GetTimeStep();
+    psi_old = fluds.GetPsiOldDevicePointer();
   }
 
   // Mesh and quadrature
@@ -105,6 +112,12 @@ struct Arguments
   FLUDSPointerSetType flud_data;
   // Source active
   bool is_surface_source_active;
+  // Transient data
+  bool include_rhs_time_term;
+  double theta;
+  double inv_theta;
+  double inv_dt;
+  const double* __restrict__ psi_old;
 };
 
 } // namespace opensn::gpu_kernel

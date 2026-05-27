@@ -88,7 +88,7 @@ public:
   /// Read access to newest updated angular flux vector.
   const std::vector<std::vector<double>>& GetPsiNewLocal() const;
 
-  /// Read/write access to newest updated angular flux vector.
+  /// Read/write access to previous angular flux vector.
   std::vector<std::vector<double>>& GetPsiOldLocal();
 
   /// Read access to previous angular flux vector.

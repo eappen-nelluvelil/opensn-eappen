@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/total_xs_carrier.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_structs.h"
+#include <algorithm>
 
 namespace opensn
 {
@@ -23,8 +24,9 @@ TotalXSCarrier::ComputeSize(LBSProblem& lbs_problem)
   std::uint64_t alloc_size = 0;
   const BlockID2XSMap& xs_map = lbs_problem.GetBlockID2XSMap();
   // check if all cross sections have the same number of group
-  for (const auto& [block_id, xs] : xs_map)
+  for (const auto& entry : xs_map)
   {
+    const auto& xs = entry.second;
     if (num_groups == std::numeric_limits<size_t>::max())
     {
       num_groups = xs->GetNumGroups();
@@ -34,9 +36,9 @@ TotalXSCarrier::ComputeSize(LBSProblem& lbs_problem)
       throw std::runtime_error("Provided cross sections don't have the same number of groups.\n");
     }
   }
-  // compute size
+  // compute size: total cross section followed by inverse velocity for each block
   num_block_ids = xs_map.size();
-  alloc_size += num_block_ids * num_groups * sizeof(double);
+  alloc_size += 2 * num_block_ids * num_groups * sizeof(double);
   return alloc_size;
 }
 
@@ -54,6 +56,22 @@ TotalXSCarrier::Assemble(LBSProblem& lbs_problem)
     std::copy(sigma_total.begin(), sigma_total.end(), total_xs_data);
     data = reinterpret_cast<char*>(total_xs_data + sigma_total.size());
   }
+  // copy inverse velocity data
+  for (const auto& entry : xs_map)
+  {
+    const auto& xs = entry.second;
+    double* inv_velocity_data = reinterpret_cast<double*>(data);
+    const std::vector<double>& inv_velocity = xs->GetInverseVelocity();
+    if (inv_velocity.empty())
+      std::fill_n(inv_velocity_data, num_groups, 0.0);
+    else
+    {
+      if (inv_velocity.size() != num_groups)
+        throw std::runtime_error("Provided inverse velocities don't match the number of groups.\n");
+      std::copy(inv_velocity.begin(), inv_velocity.end(), inv_velocity_data);
+    }
+    data = reinterpret_cast<char*>(inv_velocity_data + num_groups);
+  }
 }
 
 double*
@@ -61,6 +79,14 @@ TotalXSCarrier::GetXSGPUData(int block_id)
 {
   char* gpu_data = device_memory_.get();
   return reinterpret_cast<double*>(gpu_data) + block_id_to_index[block_id] * num_groups;
+}
+
+double*
+TotalXSCarrier::GetInvVelocityGPUData(int block_id)
+{
+  char* gpu_data = device_memory_.get();
+  return reinterpret_cast<double*>(gpu_data) + num_block_ids * num_groups +
+         block_id_to_index[block_id] * num_groups;
 }
 
 } // namespace opensn

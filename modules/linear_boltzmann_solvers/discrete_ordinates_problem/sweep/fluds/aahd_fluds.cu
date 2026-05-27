@@ -169,6 +169,56 @@ AAHD_FLUDS::AllocateSaveAngularFlux(DiscreteOrdinatesProblem& problem, const LBS
 }
 
 void
+AAHD_FLUDS::CopyPsiOldToDevice(const DiscreteOrdinatesProblem& problem,
+                               const LBSGroupset& groupset,
+                               AngleSet& angle_set)
+{
+  auto* mesh_carrier = problem.GetMeshCarrier();
+  const std::size_t bank_size = mesh_carrier->num_nodes_total * num_groups_and_angles_;
+  const auto& psi_old_host = problem.GetPsiOldLocal()[groupset.id];
+  if (psi_old_host.empty())
+  {
+    psi_old_bank_.Clear();
+    return;
+  }
+
+  // The saved angular-flux bank is overwritten by each sweep iteration. Keep the
+  // theta-method RHS state in a separate device bank for the full time step.
+  if (psi_old_bank_.host_storage.size() != bank_size)
+    psi_old_bank_ = AAHD_Bank(bank_size);
+
+  auto grid = problem.GetGrid();
+  const auto& discretization = problem.GetSpatialDiscretization();
+  const std::size_t groupset_angle_group_stride =
+    groupset.psi_uk_man_.GetNumberOfUnknowns() * groupset.GetNumGroups();
+  const auto& angle_indices = angle_set.GetAngleIndices();
+
+  for (const Cell& cell : grid->local_cells)
+  {
+    const double* src_psi =
+      &psi_old_host[discretization.MapDOFLocal(cell, 0, groupset.psi_uk_man_, 0, 0)];
+    double* dst_psi = psi_old_bank_.host_storage.data() +
+                      mesh_carrier->saved_psi_offset[cell.local_id] * num_groups_and_angles_;
+    const std::uint32_t cell_num_nodes = discretization.GetCellMapping(cell).GetNumNodes();
+
+    for (std::uint32_t i = 0; i < cell_num_nodes; ++i)
+    {
+      for (std::uint32_t as_ss_idx = 0; as_ss_idx < angle_set.GetNumAngles(); ++as_ss_idx)
+      {
+        const auto direction_num = angle_indices[as_ss_idx];
+        const double* src = src_psi + direction_num * num_groups_;
+        double* dst = dst_psi + as_ss_idx * num_groups_;
+        std::memcpy(dst, src, num_groups_ * sizeof(double));
+      }
+      src_psi += groupset_angle_group_stride;
+      dst_psi += num_groups_and_angles_;
+    }
+  }
+
+  psi_old_bank_.UploadToDevice(stream_);
+}
+
+void
 AAHD_FLUDS::SetDelayedOutgoingPsiOldToNew()
 {
   nonlocal_delayed_incoming_psi_bank_.SetOldToNew();

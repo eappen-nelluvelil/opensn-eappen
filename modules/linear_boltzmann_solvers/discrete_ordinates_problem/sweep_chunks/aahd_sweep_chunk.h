@@ -25,9 +25,11 @@ public:
   const LBSGroupset& GetGroupset() const { return groupset_; }
 
   void Sweep(AngleSet& angle_set) override;
+  bool IsTimeDependent() const override { return time_dependent_; }
 
 protected:
   DiscreteOrdinatesProblem& problem_;
+  const bool time_dependent_;
 };
 
 } // namespace opensn

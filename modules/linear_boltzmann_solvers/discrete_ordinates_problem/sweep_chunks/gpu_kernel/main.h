@@ -31,7 +31,7 @@ ForDOFs1ToMax(F&& f)
               std::forward<F>(f));
 }
 
-template <SweepType t, class... Args>
+template <SweepType t, bool time_dependent, class... Args>
 __CRB_DEVICE_FUNC__ void
 SweepDispatch(std::uint32_t n, Args&&... args)
 {
@@ -42,13 +42,13 @@ SweepDispatch(std::uint32_t n, Args&&... args)
       constexpr std::uint32_t dof = decltype(dof_c)::value;
       if (!done && n == dof)
       {
-        gpu_kernel::Sweep<dof, t>(std::forward<Args>(args)...);
+        gpu_kernel::Sweep<dof, t, time_dependent>(std::forward<Args>(args)...);
         done = true;
       }
     });
 }
 
-template <SweepType t>
+template <SweepType t, bool time_dependent>
 __CRB_GLOBAL_FUNC__ void
 SweepKernel(Arguments<t> args,
             const std::uint32_t* cells_to_sweep,
@@ -81,15 +81,15 @@ SweepKernel(Arguments<t> args,
     num_moments = quadrature.num_moments;
     quadrature.GetDirectionView(direction, direction_num);
   }
-  opensn::gpu_kernel::SweepDispatch<t>(cell.num_nodes,
-                                       args,
-                                       cell,
-                                       direction,
-                                       cell_edge_data,
-                                       angle_group_idx,
-                                       group_idx,
-                                       num_moments,
-                                       saved_psi);
+  opensn::gpu_kernel::SweepDispatch<t, time_dependent>(cell.num_nodes,
+                                                       args,
+                                                       cell,
+                                                       direction,
+                                                       cell_edge_data,
+                                                       angle_group_idx,
+                                                       group_idx,
+                                                       num_moments,
+                                                       saved_psi);
 }
 
 } // namespace opensn::gpu_kernel
