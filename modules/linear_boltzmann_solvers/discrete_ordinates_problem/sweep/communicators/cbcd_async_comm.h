@@ -6,6 +6,7 @@
 #include "framework/data_types/byte_array.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
 #include "mpicpp-lite/mpicpp-lite.h"
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,23 @@ namespace opensn
 class AngleSet;
 class MPICommunicatorSet;
 
+/**
+ * Kind of one wire-format section in a CBCD aggregated message.
+ *
+ * The aggregated wire format carries a sequence of sections, each tagged with a kind byte.
+ * `NORMAL_FACE_PSI` sections feed the normal incoming non-local bank and decrement the
+ * receiving angle set's task dependencies.  `DELAYED_FACE_PSI` sections populate the
+ * lagged incoming non-local "new" bank without touching dependency counters.
+ * `DELAYED_COMPLETION` sections carry no face entries and only signal that the sending
+ * angle set has finished publishing its delayed outgoing data.
+ */
+enum class CBCDMessageKind : std::uint8_t
+{
+  NORMAL_FACE_PSI = 0,
+  DELAYED_FACE_PSI = 1,
+  DELAYED_COMPLETION = 2,
+};
+
 /// Metadata for one received non-local face payload inside an incoming batch.
 struct IncomingFaceBatchEntry
 {
@@ -36,6 +54,8 @@ struct IncomingFaceBatchEntry
 /// One received mailbox payload grouped by sending source slot and angle set.
 struct IncomingFaceBatch
 {
+  /// Wire-format section kind that produced this batch.
+  CBCDMessageKind kind = CBCDMessageKind::NORMAL_FACE_PSI;
   /// Source-locality slot for the sending partition.
   std::uint32_t source_slot = 0;
   /// Per-face metadata for the packed payload block.
@@ -47,6 +67,8 @@ struct IncomingFaceBatch
 /// One outgoing non-local face payload published by a sweep worker.
 struct OutgoingFaceData
 {
+  /// Stream kind for this payload.
+  CBCDMessageKind kind = CBCDMessageKind::NORMAL_FACE_PSI;
   /// Producing angle-set ID.
   std::size_t angle_set_id = 0;
   /// Receiver-local face index understood by the destination rank.
@@ -128,24 +150,42 @@ public:
    * \param remote_face_index Receiver-local face index.
    * \param data_size Number of doubles in the payload.
    * \param fill Callback that fills the reserved payload buffer.
+   * \param kind Wire-format section kind: `NORMAL_FACE_PSI` (default) for normal traffic
+   * unlocking task dependencies on the receiver, `DELAYED_FACE_PSI` for lagged traffic
+   * that populates the receiver's delayed-incoming bank.
    */
   template <typename FillCallback>
   void EnqueueOutgoing(int dest_rank,
                        std::size_t angle_set_id,
                        std::uint32_t remote_face_index,
                        std::size_t data_size,
-                       FillCallback&& fill)
+                       FillCallback&& fill,
+                       CBCDMessageKind kind = CBCDMessageKind::NORMAL_FACE_PSI)
   {
     const auto it = dest_to_queue_index_.find(dest_rank);
     assert(it != dest_to_queue_index_.end());
     auto& queue = *outgoing_queues_[it->second]->queue;
     auto& slot = queue.ReserveSlot();
+    slot.payload.kind = kind;
     slot.payload.angle_set_id = angle_set_id;
     slot.payload.remote_face_index = remote_face_index;
     slot.payload.psi_data.resize(data_size);
     fill(slot.payload.psi_data.data());
     queue.PublishSlot(slot);
   }
+
+  /**
+   * Publish a delayed-completion marker for one angle set toward one destination rank.
+   *
+   * Completion markers carry no face entries; they only signal to the receiver that the
+   * sending rank has finished publishing every delayed outgoing payload for the given
+   * angle set.  The receiver uses these markers to decide when its lagged incoming bank
+   * can be promoted from `new` to `old`.
+   */
+  void EnqueueDelayedCompletion(int dest_rank, std::size_t angle_set_id);
+
+  /// Report whether every expected delayed-completion marker for one angle set has arrived.
+  bool AreDelayedReceivesComplete(std::size_t angle_set_id) const noexcept;
 
   /**
    * Drain all currently ready incoming batches for one angle set.
@@ -227,8 +267,10 @@ private:
   std::unordered_map<int, int> dest_to_queue_index_;
   /// Per-angle-set incoming mailboxes.
   std::vector<std::unique_ptr<LockFreeRingBuffer<IncomingFaceBatch>>> incoming_mailboxes_;
-  /// Per-angle-set transient send batches assembled by the communication thread.
-  std::vector<std::vector<const OutgoingFaceData*>> send_batch_by_angle_set_;
+  /// Transient send batches assembled by the communication thread, indexed first by
+  /// `CBCDMessageKind` (cast to its underlying integer) and then by angle-set id.
+  std::array<std::vector<std::vector<const OutgoingFaceData*>>, 3>
+    send_batch_by_kind_and_angle_set_;
   /// Reusable receive buffer for one incoming MPI payload.
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
@@ -237,6 +279,12 @@ private:
   std::atomic<bool> stop_requested_{false};
   /// Per-angle-set local completion flags.
   std::vector<std::atomic<bool>> angle_set_done_;
+  /// Delayed source partitions expected to send completion markers for each angle set.
+  std::vector<std::vector<int>> delayed_source_partitions_by_angle_set_;
+  /// Delayed destination partitions to send completion markers to for each angle set.
+  std::vector<std::vector<int>> delayed_destination_partitions_by_angle_set_;
+  /// Number of delayed-completion markers received per `(angle_set_id, source_slot)`.
+  std::vector<std::vector<std::atomic<std::uint32_t>>> delayed_completion_received_by_angle_set_;
   /// Dedicated communication thread.
   std::thread comm_thread_;
   /// Scratch vector used while gathering ready outgoing queue slots.
