@@ -3,6 +3,8 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/sweep_scheduler.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/aahd_angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aahd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
@@ -125,6 +127,18 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   cbcd_sweep_chunk.StopCommunicator();
 
   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
+
+  // Promote the lagged old/new banks for cycle-aware angle sets.  When the SPDS has no
+  // delayed faces these calls are no-ops (the banks are zero-sized).  When delayed-local
+  // edges exist the kernel wrote `delayed_local_psi_new` during this sweep; rotating it
+  // into `delayed_local_psi_old` makes the values available to the next sweep's downwind
+  // reads.  The corresponding rotation for delayed-incoming non-local banks runs after
+  // delayed-flux communication is wired up in a subsequent commit.
+  for (auto* angle_set : angle_sets)
+  {
+    auto& cbcd_fluds = static_cast<CBCD_FLUDS&>(angle_set->GetFLUDS());
+    cbcd_fluds.SwapDelayedLocalBanks();
+  }
 
   for (auto* angle_set : angle_sets)
     angle_set->ResetSweepBuffers();

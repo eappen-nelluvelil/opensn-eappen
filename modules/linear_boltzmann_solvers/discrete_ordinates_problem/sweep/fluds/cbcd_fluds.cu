@@ -44,6 +44,18 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
+    // Lagged nonlocal banks: zero-sized when the SPDS is acyclic, otherwise sized exactly
+    // to the delayed-face-node count.  Allocated as mapped host vectors so the kernel can
+    // read/write them via the same pointer-set mechanism as the normal nonlocal banks.
+    delayed_nonlocal_incoming_psi_old_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
+                                       num_groups_and_angles_,
+                                       0.0),
+    delayed_nonlocal_incoming_psi_new_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
+                                       num_groups_and_angles_,
+                                       0.0),
+    delayed_nonlocal_outgoing_psi_(common_data_.GetNumDelayedOutgoingNonlocalNodes() *
+                                   num_groups_and_angles_,
+                                   0.0),
     save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
@@ -167,7 +179,77 @@ CBCD_FLUDS::CreatePointerSet()
   if (common_data_.GetNumOutgoingNonlocalNodes() > 0)
     assert(pointer_set_.nonlocal_outgoing_psi != nullptr);
 
+  // Lagged banks — populated only when the SPDS has at least one delayed face.  When the
+  // SPDS is acyclic these pointers stay `nullptr` and the kernel's `IsDelayed()` branch in
+  // `CBCD_FLUDSPointerSet` is never reached because every node-index has the delayed bit
+  // clear.
+  pointer_set_.delayed_local_psi_old = delayed_local_psi_old_.get();
+  pointer_set_.delayed_local_psi_new = delayed_local_psi_new_.get();
+  pointer_set_.delayed_nonlocal_incoming_psi_old = delayed_nonlocal_incoming_psi_old_.data();
+  pointer_set_.delayed_nonlocal_outgoing_psi = delayed_nonlocal_outgoing_psi_.data();
+  if (common_data_.GetNumDelayedLocalNodes() > 0)
+  {
+    assert(pointer_set_.delayed_local_psi_old != nullptr);
+    assert(pointer_set_.delayed_local_psi_new != nullptr);
+  }
+  if (common_data_.GetNumDelayedIncomingNonlocalNodes() > 0)
+    assert(pointer_set_.delayed_nonlocal_incoming_psi_old != nullptr);
+  if (common_data_.GetNumDelayedOutgoingNonlocalNodes() > 0)
+    assert(pointer_set_.delayed_nonlocal_outgoing_psi != nullptr);
+
   pointer_set_.stride_size = num_groups_and_angles_;
+}
+
+void
+CBCD_FLUDS::AllocateDelayedPsiBanks()
+{
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::AllocateDelayedPsiBanks");
+
+  if (not common_data_.HasDelayedFluxes())
+    return;
+
+  const auto delayed_local_size =
+    common_data_.GetNumDelayedLocalNodes() * num_groups_and_angles_;
+  if (delayed_local_size > 0)
+  {
+    delayed_local_psi_old_ = crb::DeviceMemory<double>(delayed_local_size);
+    delayed_local_psi_new_ = crb::DeviceMemory<double>(delayed_local_size);
+    crb::fill(delayed_local_psi_old_, 0.0, delayed_local_size);
+    crb::fill(delayed_local_psi_new_, 0.0, delayed_local_size);
+  }
+
+  const auto delayed_incoming_nonlocal_size =
+    common_data_.GetNumDelayedIncomingNonlocalNodes() * num_groups_and_angles_;
+  if (delayed_incoming_nonlocal_size > 0)
+  {
+    delayed_nonlocal_incoming_psi_old_ =
+      crb::MappedHostVector<double>(delayed_incoming_nonlocal_size, 0.0);
+    delayed_nonlocal_incoming_psi_new_ =
+      crb::MappedHostVector<double>(delayed_incoming_nonlocal_size, 0.0);
+  }
+
+  const auto delayed_outgoing_nonlocal_size =
+    common_data_.GetNumDelayedOutgoingNonlocalNodes() * num_groups_and_angles_;
+  if (delayed_outgoing_nonlocal_size > 0)
+    delayed_nonlocal_outgoing_psi_ =
+      crb::MappedHostVector<double>(delayed_outgoing_nonlocal_size, 0.0);
+
+  CreatePointerSet();
+}
+
+void
+CBCD_FLUDS::SwapDelayedLocalBanks() noexcept
+{
+  std::swap(delayed_local_psi_old_, delayed_local_psi_new_);
+  pointer_set_.delayed_local_psi_old = delayed_local_psi_old_.get();
+  pointer_set_.delayed_local_psi_new = delayed_local_psi_new_.get();
+}
+
+void
+CBCD_FLUDS::SwapDelayedNonlocalIncomingBanks() noexcept
+{
+  std::swap(delayed_nonlocal_incoming_psi_old_, delayed_nonlocal_incoming_psi_new_);
+  pointer_set_.delayed_nonlocal_incoming_psi_old = delayed_nonlocal_incoming_psi_old_.data();
 }
 
 void

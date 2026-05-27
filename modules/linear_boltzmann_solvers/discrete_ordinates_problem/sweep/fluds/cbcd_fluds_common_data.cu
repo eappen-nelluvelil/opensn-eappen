@@ -17,6 +17,19 @@ namespace crb = caribou;
 namespace opensn
 {
 
+namespace
+{
+
+/// Pack a directed local edge `(producer_cell_local_id, producer_face_id)` into one 64-bit key.
+constexpr std::uint64_t
+PackProducerFaceKey(std::uint32_t producer_cell_local_id, unsigned int producer_face_id) noexcept
+{
+  return (static_cast<std::uint64_t>(producer_cell_local_id) << 32) |
+         static_cast<std::uint64_t>(producer_face_id);
+}
+
+} // namespace
+
 void
 CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization& sdm)
 {
@@ -26,6 +39,31 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   const auto& face_orientations = spds_.GetCellFaceOrientations();
   const auto local_face_slot_ids = cbc_spds.GetLocalFaceSlotIDs();
   const auto local_face_slot_node_offsets = cbc_spds.GetLocalFaceSlotNodeOffsets();
+
+  // Cycle-aware metadata.  When the CBC SPDS has been built with `allow_cycles = true` these
+  // lists hold the upstream/downstream ranks whose dependency was removed by the global
+  // feedback-arc set; otherwise both lists are empty and the delayed routes below are never
+  // taken.
+  const auto& delayed_location_dependencies = spds_.GetDelayedLocationDependencies();
+  const auto& delayed_location_successors = spds_.GetDelayedLocationSuccessors();
+  const auto is_delayed_source_partition = [&](int partition) noexcept
+  {
+    return std::find(delayed_location_dependencies.begin(),
+                     delayed_location_dependencies.end(),
+                     partition) != delayed_location_dependencies.end();
+  };
+  const auto is_delayed_dest_partition = [&](int partition) noexcept
+  {
+    return std::find(delayed_location_successors.begin(),
+                     delayed_location_successors.end(),
+                     partition) != delayed_location_successors.end();
+  };
+
+  // Canonical (producer_cell, producer_face) -> delayed-local-bank node offset.  The same
+  // directed edge appears once as a producer's outgoing face and once as a consumer's
+  // incoming face; both sides must use the same offset so the kernel's outgoing write hits
+  // the bank slot that the next sweep's downwind read consumes.
+  std::unordered_map<std::uint64_t, std::uint32_t> delayed_local_offset_by_producer_face;
   std::uint64_t total_face_nodes = 0;
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
@@ -97,6 +135,39 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       const bool is_local_face = face.IsNeighborLocal(&grid);
       const bool is_boundary_face = not face.has_neighbor;
 
+      // Cycle-aware classification: identify faces whose dependency was removed by the
+      // local or interpartition feedback-arc set and routed through the lagged banks.
+      bool is_delayed_local_face = false;
+      std::uint64_t delayed_local_producer_face_key = 0;
+      if (is_local_face and (is_incoming_face or is_outgoing_face))
+      {
+        const auto adj_cell_local_id =
+          static_cast<std::uint32_t>(grid.cells[face.neighbor_id].local_id);
+        const auto producer_cell_local_id =
+          is_outgoing_face ? static_cast<std::uint32_t>(cell.local_id) : adj_cell_local_id;
+        const auto consumer_cell_local_id =
+          is_outgoing_face ? adj_cell_local_id : static_cast<std::uint32_t>(cell.local_id);
+        if (cbc_spds.IsDelayedLocalDependency(producer_cell_local_id, consumer_cell_local_id))
+        {
+          is_delayed_local_face = true;
+          const auto producer_face_id = is_outgoing_face
+                                          ? static_cast<unsigned int>(f)
+                                          : static_cast<unsigned int>(
+                                              face_nodal_mapping.associated_face_);
+          delayed_local_producer_face_key =
+            PackProducerFaceKey(producer_cell_local_id, producer_face_id);
+        }
+      }
+      bool is_delayed_nonlocal_face = false;
+      if ((not is_local_face) and (not is_boundary_face))
+      {
+        const int neighbor_partition = grid.cells[face.neighbor_id].partition_id;
+        if (is_incoming_face)
+          is_delayed_nonlocal_face = is_delayed_source_partition(neighbor_partition);
+        else if (is_outgoing_face)
+          is_delayed_nonlocal_face = is_delayed_dest_partition(neighbor_partition);
+      }
+
       for (size_t fn = 0; fn < num_face_nodes; ++fn)
       {
         CBCD_NodeIndex node_index;
@@ -105,15 +176,40 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
         {
           if (is_local_face)
           {
-            const auto task_id = cbc_spds.GetIncomingLocalFaceTaskID(
-              static_cast<std::uint32_t>(cell.local_id), static_cast<unsigned int>(f));
-            const auto slot_id = local_face_slot_ids[task_id];
-            const auto local_face_node =
-              static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
-            node_index = CBCD_NodeIndex(
-              static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) + local_face_node,
-              is_outgoing_face,
-              true);
+            if (is_delayed_local_face)
+            {
+              // Resolve (producer_cell, producer_face) -> delayed-local bank offset.  The
+              // producer-side outgoing iteration may run before or after this consumer-side
+              // incoming iteration; whichever side encounters the directed face first assigns
+              // the canonical offset, which the other side then reuses.
+              auto [it, inserted] = delayed_local_offset_by_producer_face.try_emplace(
+                delayed_local_producer_face_key,
+                static_cast<std::uint32_t>(num_delayed_local_nodes_));
+              if (inserted)
+                num_delayed_local_nodes_ += num_face_nodes;
+              const auto local_face_node =
+                static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
+              node_index = CBCD_NodeIndex::DelayedLocal(
+                static_cast<std::uint64_t>(it->second) + local_face_node, is_outgoing_face);
+            }
+            else
+            {
+              const auto task_id = cbc_spds.GetIncomingLocalFaceTaskID(
+                static_cast<std::uint32_t>(cell.local_id), static_cast<unsigned int>(f));
+              const auto slot_id = local_face_slot_ids[task_id];
+              const auto local_face_node =
+                static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
+              node_index = CBCD_NodeIndex::Local(
+                static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
+                  local_face_node,
+                is_outgoing_face);
+            }
+          }
+          else if (is_delayed_nonlocal_face)
+          {
+            node_index = CBCD_NodeIndex::DelayedNonlocal(num_delayed_incoming_nonlocal_nodes_,
+                                                         is_outgoing_face);
+            ++num_delayed_incoming_nonlocal_nodes_;
           }
           else if (not is_boundary_face)
           {
@@ -169,14 +265,36 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
         {
           if (is_local_face)
           {
-            const auto task_id = cbc_spds.GetOutgoingLocalFaceTaskID(
-              static_cast<std::uint32_t>(cell.local_id), static_cast<unsigned int>(f));
-            const auto slot_id = local_face_slot_ids[task_id];
-            node_index =
-              CBCD_NodeIndex(static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
-                               static_cast<std::uint64_t>(fn),
-                             is_outgoing_face,
-                             true);
+            if (is_delayed_local_face)
+            {
+              auto [it, inserted] = delayed_local_offset_by_producer_face.try_emplace(
+                delayed_local_producer_face_key,
+                static_cast<std::uint32_t>(num_delayed_local_nodes_));
+              if (inserted)
+                num_delayed_local_nodes_ += num_face_nodes;
+              node_index = CBCD_NodeIndex::DelayedLocal(
+                static_cast<std::uint64_t>(it->second) + static_cast<std::uint64_t>(fn),
+                is_outgoing_face);
+            }
+            else
+            {
+              const auto task_id = cbc_spds.GetOutgoingLocalFaceTaskID(
+                static_cast<std::uint32_t>(cell.local_id), static_cast<unsigned int>(f));
+              const auto slot_id = local_face_slot_ids[task_id];
+              node_index = CBCD_NodeIndex::Local(
+                static_cast<std::uint64_t>(local_face_slot_node_offsets[slot_id]) +
+                  static_cast<std::uint64_t>(fn),
+                is_outgoing_face);
+            }
+          }
+          else if (is_delayed_nonlocal_face)
+          {
+            // Delayed-outgoing nonlocal node indices reserve a slot in the lagged outgoing
+            // bank.  Communication of these payloads is implemented in a subsequent commit;
+            // the bank itself is sized correctly here so the kernel can write into it.
+            node_index = CBCD_NodeIndex::DelayedNonlocal(num_delayed_outgoing_nonlocal_nodes_,
+                                                         is_outgoing_face);
+            ++num_delayed_outgoing_nonlocal_nodes_;
           }
           else if (not is_boundary_face)
           {

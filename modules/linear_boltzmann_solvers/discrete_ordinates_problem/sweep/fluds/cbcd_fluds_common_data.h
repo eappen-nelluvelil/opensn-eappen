@@ -55,6 +55,36 @@ public:
   /// Get number of outgoing non-local faces.
   std::size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
 
+  /// Get number of delayed-local face nodes spanning the lagged local-slot bank.
+  std::size_t GetNumDelayedLocalNodes() const noexcept { return num_delayed_local_nodes_; }
+
+  /// Get number of delayed-incoming non-local face nodes.
+  std::size_t GetNumDelayedIncomingNonlocalNodes() const noexcept
+  {
+    return num_delayed_incoming_nonlocal_nodes_;
+  }
+
+  /// Get number of delayed-outgoing non-local face nodes.
+  std::size_t GetNumDelayedOutgoingNonlocalNodes() const noexcept
+  {
+    return num_delayed_outgoing_nonlocal_nodes_;
+  }
+
+  /**
+   * Return whether the SPDS has any delayed local or delayed nonlocal faces.
+   *
+   * `true` means the owning angle set must allocate its lagged old/new banks and that
+   * the device kernel will see at least one node index with the delayed bit set.  When
+   * `false` the CBCD path is byte-identical to the pre-cycle-support behaviour because
+   * every node-index delayed bit is zero and the runtime branch in the pointer-set
+   * accessors collapses to its non-delayed target.
+   */
+  bool HasDelayedFluxes() const noexcept
+  {
+    return num_delayed_local_nodes_ > 0 or num_delayed_incoming_nonlocal_nodes_ > 0 or
+           num_delayed_outgoing_nonlocal_nodes_ > 0;
+  }
+
   /// Return grouped incoming-boundary faces.
   const std::vector<IncomingBoundaryFacePlan>& GetIncomingBoundaryFaces() const
   {
@@ -163,6 +193,12 @@ private:
   std::vector<std::uint32_t> source_to_incoming_face_offsets_;
   /// Source-major ordered incoming grouped-face indices.
   std::vector<std::uint32_t> incoming_face_indices_by_source_;
+  /// Number of nodes in the lagged local-slot bank.
+  std::size_t num_delayed_local_nodes_ = 0;
+  /// Number of nodes in the lagged incoming non-local bank.
+  std::size_t num_delayed_incoming_nonlocal_nodes_ = 0;
+  /// Number of nodes in the lagged outgoing non-local bank.
+  std::size_t num_delayed_outgoing_nonlocal_nodes_ = 0;
 
   /**
    * Build and upload the flattened cell-face-node index map.

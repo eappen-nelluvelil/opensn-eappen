@@ -70,6 +70,36 @@ public:
   void AllocateLocalAndSavedPsi();
 
   /**
+   * Allocate the lagged old/new banks used by cycle-aware sweeps.
+   *
+   * No-op when the owning common data has no delayed-local or delayed-nonlocal faces.
+   * Otherwise sizes the lagged local banks against
+   * `CBCD_FLUDSCommonData::GetNumDelayedLocalNodes()` and the lagged nonlocal banks
+   * against the corresponding incoming/outgoing delayed counts, then refreshes the
+   * pointer set with the new device/mapped-host pointers.
+   */
+  void AllocateDelayedPsiBanks();
+
+  /**
+   * Swap the lagged local old/new banks after delayed-data finalization.
+   *
+   * The kernel reads `delayed_local_psi_old` during the current sweep and writes
+   * `delayed_local_psi_new`.  After the scheduler has signalled that all delayed
+   * downstream/upstream communication is complete, the new bank becomes the old bank for
+   * the next sweep application.  Reflects the pointer-swap into the device pointer set.
+   */
+  void SwapDelayedLocalBanks() noexcept;
+
+  /**
+   * Swap the lagged incoming non-local old/new banks after delayed-data finalization.
+   *
+   * Mirrors `SwapDelayedLocalBanks` for the nonlocal incoming pair.  The kernel reads
+   * `_old` during the current sweep; the communicator writes `_new` during the delayed
+   * receive phase; after barrier `_new` becomes `_old`.
+   */
+  void SwapDelayedNonlocalIncomingBanks() noexcept;
+
+  /**
    * Build reflecting-boundary copy plans for this angle set.
    *
    * \param boundaries Sweep-boundary table indexed by boundary ID.
@@ -188,6 +218,14 @@ private:
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.
   crb::DeviceMemory<double> local_psi_;
+  /// Lagged local face-slot banks (consulted by the cycle-aware sweep route).
+  crb::DeviceMemory<double> delayed_local_psi_old_;
+  crb::DeviceMemory<double> delayed_local_psi_new_;
+  /// Lagged incoming non-local banks (consulted by the cycle-aware sweep route).
+  crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_old_;
+  crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_new_;
+  /// Lagged outgoing non-local bank (written by the kernel; drained by the communicator).
+  crb::MappedHostVector<double> delayed_nonlocal_outgoing_psi_;
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
   crb::HostVector<double> host_saved_psi_;
