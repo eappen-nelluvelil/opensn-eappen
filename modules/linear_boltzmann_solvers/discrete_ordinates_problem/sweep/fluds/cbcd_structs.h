@@ -4,9 +4,12 @@
 #pragma once
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds_structs.h"
+#include <cstddef>
 
 namespace opensn
 {
+
+class SweepBoundary;
 
 /**
  * Node index specific to CBCD FLUDS.
@@ -33,8 +36,6 @@ public:
    */
   CBCD_NodeIndex(std::uint64_t index, bool is_outgoing, bool is_local)
   {
-    if (index >= (std::uint64_t{1} << 61) - 1)
-      throw std::runtime_error("Cannot hold an index greater than 2^61.");
     SetInOut(is_outgoing);
     SetLocal(is_local);
     SetBoundary(false);
@@ -48,8 +49,6 @@ public:
    */
   CBCD_NodeIndex(std::uint64_t index, bool is_outgoing)
   {
-    if (index >= (std::uint64_t{1} << 61) - 1)
-      throw std::runtime_error("Cannot hold an index greater than 2^61.");
     SetInOut(is_outgoing);
     SetLocal(true);
     SetBoundary(true);
@@ -99,10 +98,22 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   double* __restrict__ incoming_boundary_psi = nullptr;
   /// Pointer to outgoing boundary angular fluxes.
   double* __restrict__ outgoing_boundary_psi = nullptr;
+  /// Reflecting flags indexed by outgoing boundary node; null when none reflect.
+  const std::uint8_t* __restrict__ outgoing_boundary_reflecting = nullptr;
+
+  /// Whether a defined outgoing face node has a downwind angular-flux consumer.
+  constexpr bool ShouldStoreOutgoingFlux(const CBCD_NodeIndex& node_index) const noexcept
+  {
+    if (node_index.IsUndefined() or not node_index.IsOutgoing())
+      return false;
+    return not node_index.IsBoundary() or
+           (outgoing_boundary_reflecting != nullptr and
+            outgoing_boundary_reflecting[node_index.GetIndex()] != 0);
+  }
 
   /// Get pointer to the incoming angular flux (if the face is not incoming, a nullptr is returned).
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index,
-                                           unsigned int angle_group_idx) const noexcept
+                                           const unsigned int angle_group_idx) const noexcept
   {
     // Undefined case (corresponds to a parallel face)
     if (node_index.IsUndefined())
@@ -131,7 +142,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 
   /// Get pointer to the outgoing angular flux (if the face is not outgoing, a nullptr is returned).
   constexpr double* GetOutgoingFluxPointer(const CBCD_NodeIndex& node_index,
-                                           unsigned int angle_group_idx) const noexcept
+                                           const unsigned int angle_group_idx) const noexcept
   {
     // Undefined case (corresponds to a parallel face)
     if (node_index.IsUndefined())
@@ -159,29 +170,61 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   }
 };
 
-/**
- * Metadata for boundary face nodes.
- */
-struct BoundaryNodeInfo
+/// Host metadata for one outgoing boundary face.
+struct OutgoingBoundaryFace
 {
-  std::uint64_t cell_local_id;
-  unsigned int face_id;
-  size_t face_node;
-  std::uint64_t storage_index;
-  std::uint64_t boundary_id;
+  std::uint64_t boundary_id = 0;
+  unsigned int face_id = 0;
+  /// Node offset in outgoing boundary storage.
+  std::uint32_t storage_offset = 0;
+  std::uint16_t num_face_nodes = 0;
 };
 
-/**
- * Metadata for non-local face nodes.
- */
-struct NonlocalNodeInfo
+/// Grouped incoming-boundary face copy plan.
+struct IncomingBoundaryFacePlan
 {
-  std::uint64_t cell_local_id;
-  std::uint64_t cell_global_id;
-  unsigned int face_id;
-  size_t face_node;
-  short face_node_mapped;
-  std::uint64_t storage_index;
+  std::uint64_t boundary_id = 0;
+  std::uint32_t cell_local_id = 0;
+  unsigned int face_id = 0;
+  /// Node offset in incoming boundary storage.
+  std::uint32_t storage_offset = 0;
+  std::uint16_t num_face_nodes = 0;
+};
+
+/// Receive metadata for one incoming nonlocal face.
+struct IncomingNonlocalFace
+{
+  /// Local downwind cell identifier.
+  std::uint32_t cell_local_id = 0;
+  /// Node offset in incoming nonlocal storage.
+  std::uint32_t storage_offset = 0;
+  /// Index into the source-partition array.
+  std::uint32_t source_partition_index = 0;
+  std::uint16_t num_face_nodes = 0;
+};
+
+/// Send metadata for one outgoing nonlocal face.
+struct OutgoingNonlocalFace
+{
+  /// Index into the destination-rank array.
+  std::uint32_t destination_index = 0;
+  std::uint32_t destination_face_index = 0;
+  /// Node offset in outgoing nonlocal storage, in destination-node order.
+  std::uint32_t storage_offset = 0;
+  /// Number of nodes in the serialized destination face.
+  std::uint16_t num_face_nodes = 0;
+};
+
+/// Reflecting-boundary face copy plan.
+struct ReflectingBoundaryFacePlan
+{
+  /// Reflecting boundary receiving the outgoing psi.
+  SweepBoundary* boundary = nullptr;
+  std::uint32_t cell_local_id = 0;
+  unsigned int face_id = 0;
+  /// Value offset in outgoing boundary storage.
+  std::size_t source_offset = 0;
+  std::uint16_t num_face_nodes = 0;
 };
 
 } // namespace opensn

@@ -9,7 +9,6 @@
 #include <memory>
 #include <mutex>
 #include <new>
-#include <semaphore>
 #include <thread>
 #include <vector>
 
@@ -130,5 +129,14 @@ private:
    */
   std::function<void(std::size_t)> task_;
 };
+
+/// Run one task per worker on this caller's reusable pool and wait for completion.
+/// The task must not throw. No task captures are retained after return.
+/// Pools are caller-thread-local, including for nested calls. Idle workers and
+/// their thread-local scratch persist until release or caller-thread exit.
+void RunParallelForWorkers(std::size_t num_threads, std::function<void(std::size_t)> task);
+
+/// Join this caller's idle workers before runtime finalization or on demand.
+void ReleaseParallelForWorkers();
 
 } // namespace opensn

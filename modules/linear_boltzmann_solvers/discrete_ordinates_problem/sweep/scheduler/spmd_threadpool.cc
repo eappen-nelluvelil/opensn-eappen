@@ -3,9 +3,15 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
 #include <cassert>
+#include <memory>
+#include <utility>
 
 namespace opensn
 {
+namespace
+{
+thread_local std::unique_ptr<SPMD_ThreadPool> parallel_for_workers;
+}
 
 SPMD_ThreadPool::SPMD_ThreadPool(std::size_t n)
 {
@@ -37,10 +43,17 @@ SPMD_ThreadPool::Start(std::size_t n)
   epoch_states_.assign(n, EpochState{0, 0});
   outstanding_ = 0;
 
-  for (std::size_t i = 0; i < n; ++i)
-    worker_threads_.emplace_back(&SPMD_ThreadPool::InfiniteLoop, this, i);
-
   workers_initialized_ = true;
+  try
+  {
+    for (std::size_t i = 0; i < n; ++i)
+      worker_threads_.emplace_back(&SPMD_ThreadPool::InfiniteLoop, this, i);
+  }
+  catch (...)
+  {
+    Stop();
+    throw;
+  }
 }
 
 void
@@ -109,6 +122,22 @@ SPMD_ThreadPool::InfiniteLoop(std::size_t thread_idx)
         cv_done_.notify_all();
     }
   }
+}
+
+void
+RunParallelForWorkers(std::size_t num_threads, std::function<void(std::size_t)> task)
+{
+  if (not parallel_for_workers)
+    parallel_for_workers = std::make_unique<SPMD_ThreadPool>();
+  parallel_for_workers->Resize(num_threads);
+  parallel_for_workers->ExecuteBatch(std::move(task));
+  parallel_for_workers->AssignTask(nullptr);
+}
+
+void
+ReleaseParallelForWorkers()
+{
+  parallel_for_workers.reset();
 }
 
 } // namespace opensn

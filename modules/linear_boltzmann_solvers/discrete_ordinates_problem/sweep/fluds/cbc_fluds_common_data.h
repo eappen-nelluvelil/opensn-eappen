@@ -52,10 +52,10 @@ public:
   /// Return the total number of delayed local face nodes.
   std::size_t NumDelayedLocalFaceNodes() const { return num_delayed_local_face_nodes_; }
 
-  /// Return the total number of nodes spanned by the compact normal-local face-slot bank.
+  /// Number of nodes in the compact, non-delayed local slot bank.
   std::size_t TotalLocalFaceSlotNodes() const noexcept { return total_local_face_slot_nodes_; }
 
-  /// Return a normal-local face's node offset in the compact face-slot bank.
+  /// Node offset in the compact bank, not a face-slot ID.
   std::size_t LocalFaceSlotNodeOffset(std::uint32_t cell_local_id,
                                       unsigned int face_id) const noexcept;
 

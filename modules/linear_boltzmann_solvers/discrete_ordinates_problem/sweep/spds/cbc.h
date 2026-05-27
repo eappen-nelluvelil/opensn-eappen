@@ -128,7 +128,6 @@ public:
     return local_face_slot_node_offsets_;
   }
 
-  /// Return the total number of local-face nodes spanned by the compact slot bank.
   std::size_t GetTotalLocalFaceSlotNodes() const noexcept { return total_local_face_slot_nodes_; }
 
   /// Return the directed-face ID for an outgoing local face.
@@ -173,7 +172,6 @@ protected:
   void BuildTaskSuccessorAdjacency();
   /// Build producer-consumer lifetimes for non-delayed local faces.
   void BuildLocalFaceReuseData();
-  /// Build compact slot offsets for a face-to-slot assignment.
   void BuildLocalFaceSlotLayout(std::size_t num_slots);
 
   /// Process-independent ordinal used to order CBC collectives.
