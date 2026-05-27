@@ -6,7 +6,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/fluds.h"
-#include "modules/linear_boltzmann_solvers/lbs_problem/device/storage.h"
 #include "caribou/main.hpp"
 #include <array>
 #include <cstddef>
@@ -68,6 +67,36 @@ public:
 
   /// Allocate buffers asynchronously on the associated stream.
   void AllocateLocalAndSavedPsi();
+
+  /**
+   * Allocate the lagged old/new banks used by cycle-aware sweeps.
+   *
+   * No-op when the owning common data has no delayed-local or delayed-nonlocal faces.
+   * Otherwise sizes the lagged local banks against
+   * `CBCD_FLUDSCommonData::GetNumDelayedLocalNodes()` and the lagged nonlocal banks
+   * against the corresponding incoming/outgoing delayed counts, then refreshes the
+   * pointer set with the new device/mapped-host pointers.
+   */
+  void AllocateDelayedPsiBanks();
+
+  /**
+   * Swap the lagged local old/new banks after delayed-data finalization.
+   *
+   * The kernel reads `delayed_local_psi_old` during the current sweep and writes
+   * `delayed_local_psi_new`.  After the scheduler has signalled that all delayed
+   * downstream/upstream communication is complete, the new bank becomes the old bank for
+   * the next sweep application.  Reflects the pointer-swap into the device pointer set.
+   */
+  void SwapDelayedLocalBanks() noexcept;
+
+  /**
+   * Swap the lagged incoming non-local old/new banks after delayed-data finalization.
+   *
+   * Mirrors `SwapDelayedLocalBanks` for the nonlocal incoming pair.  The kernel reads
+   * `_old` during the current sweep; the communicator writes `_new` during the delayed
+   * receive phase; after barrier `_new` becomes `_old`.
+   */
+  void SwapDelayedNonlocalIncomingBanks() noexcept;
 
   /**
    * Build reflecting-boundary copy plans for this angle set.
@@ -141,6 +170,21 @@ public:
                                         std::uint32_t source_face_index,
                                         const double* psi_data);
 
+  /**
+   * Scatter one received delayed non-local face payload into the lagged-incoming `_new` bank.
+   *
+   * The delayed scatter populates next-iteration storage and must not decrement any
+   * current-iteration task dependency.  The bank rotation from `_new` to `_old` runs in
+   * the scheduler after every delayed source's completion marker has been received.
+   *
+   * \param source_slot Delayed-source-locality slot for the sending partition.
+   * \param source_face_index Source-slot-local delayed face index carried on the wire.
+   * \param psi_data Packed payload doubles.
+   */
+  void ScatterReceivedDelayedFaceData(std::uint32_t source_slot,
+                                      std::uint32_t source_face_index,
+                                      const double* psi_data);
+
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
   void AllocateInternalLocalPsi() override {}
@@ -188,6 +232,14 @@ private:
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.
   crb::DeviceMemory<double> local_psi_;
+  /// Lagged local face-slot banks (consulted by the cycle-aware sweep route).
+  crb::DeviceMemory<double> delayed_local_psi_old_;
+  crb::DeviceMemory<double> delayed_local_psi_new_;
+  /// Lagged incoming non-local banks (consulted by the cycle-aware sweep route).
+  crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_old_;
+  crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_new_;
+  /// Lagged outgoing non-local bank (written by the kernel; drained by the communicator).
+  crb::MappedHostVector<double> delayed_nonlocal_outgoing_psi_;
   /// Host and device buffers for saved angular fluxes.
   crb::DeviceMemory<double> device_saved_psi_;
   crb::HostVector<double> host_saved_psi_;
@@ -199,6 +251,8 @@ private:
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Flat byte-level memcpy descriptors referenced by outgoing faces.
   std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
+  /// Flat byte-level memcpy descriptors referenced by delayed outgoing faces.
+  std::vector<OutgoingNodeMemcpy> delayed_outgoing_node_memcpy_plan_;
 
   /// Build the device pointer set exposed to the CBCD sweep kernel.
   void CreatePointerSet();

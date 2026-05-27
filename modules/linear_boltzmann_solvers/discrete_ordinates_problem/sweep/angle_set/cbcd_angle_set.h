@@ -20,6 +20,7 @@ class CBCD_FLUDS;
 class CBC_SPDS;
 class CBCDSweepChunk;
 class CellFace;
+class LBSGroupset;
 
 /**
  * CBCD angle set with task-graph-driven batched execution.
@@ -91,7 +92,7 @@ public:
    * Construct one CBCD angle set.
    *
    * \param id Angle-set ID.
-   * \param num_groups Number of groups in the angle set.
+   * \param groupset Groupset that owns this angle set; supplies the group count and id.
    * \param spds Sweep plane data structure for this angle set.
    * \param fluds Device FLUDS for this angle set.
    * \param angle_indices Global angle indices represented by this angle set.
@@ -99,7 +100,7 @@ public:
    * \param comm_set MPI communicator set used to build the aggregated communicator.
    */
   CBCD_AngleSet(size_t id,
-                size_t num_groups,
+                const LBSGroupset& groupset,
                 const SPDS& spds,
                 std::shared_ptr<FLUDS>& fluds,
                 const std::vector<size_t>& angle_indices,
@@ -107,9 +108,6 @@ public:
                 const MPICommunicatorSet& comm_set);
 
   ~CBCD_AngleSet();
-
-  /// Register following angle sets and initialize their startup dependency counts.
-  void UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets) override;
 
   /// Reset the unresolved angle-set dependency counter before a sweep.
   void ResetDependencyCounter();
@@ -164,20 +162,6 @@ public:
   /// Report whether delayed upstream data has been received.
   bool ReceiveDelayedData() override { return true; }
 
-  const double* PsiBoundary(uint64_t boundary_id,
-                            unsigned int angle_num,
-                            uint64_t cell_local_id,
-                            unsigned int face_num,
-                            unsigned int fi,
-                            unsigned int g,
-                            bool surface_source_active) override;
-
-  double* PsiReflected(uint64_t boundary_id,
-                       unsigned int angle_num,
-                       uint64_t cell_local_id,
-                       unsigned int face_num,
-                       unsigned int fi) override;
-
   /// Return the stream associated with this angle set.
   crb::Stream& GetStream() { return stream_; }
 
@@ -213,16 +197,12 @@ private:
   std::vector<std::uint32_t> initial_ready_cell_ids_;
   /// Cached total number of local cells/tasks in task graph.
   std::size_t num_tasks_ = 0;
-  /// Number of unresolved angleset dependencies at startup.
-  std::size_t num_dependencies_ = 0;
-  /// Atomic counter for unresolved angleset dependencies.
+  /// Atomic counter for unresolved angle-set dependencies.  Shadows the base's non-atomic
+  /// counter because CBCD's worker-batch scheduler decrements followers' counters from
+  /// concurrent worker threads, which requires atomic read-modify-write semantics.
   std::atomic<std::size_t> dependency_counter_;
-  /// Following anglesets that depend on this angleset.
-  std::vector<CBCD_AngleSet*> following_angle_sets_;
   /// Cached boundary lookup table.
   std::unordered_map<std::uint64_t, SweepBoundary*> boundary_ptrs_;
-  /// Reflecting boundaries touched by this angleset.
-  std::vector<SweepBoundary*> reflecting_boundaries_;
   /// Explicit launch/completion state for the current sweep batch.
   BatchState batch_state_;
   /// Cached reflecting-boundary producer mask by local cell ID.

@@ -55,6 +55,48 @@ public:
   /// Get number of outgoing non-local faces.
   std::size_t GetNumOutgoingNonlocalFaces() const { return num_outgoing_nonlocal_faces_; }
 
+  /// Get number of grouped delayed-incoming non-local faces.
+  std::size_t GetNumDelayedIncomingNonlocalFaces() const noexcept
+  {
+    return delayed_incoming_nonlocal_faces_.size();
+  }
+
+  /// Get number of grouped delayed-outgoing non-local faces.
+  std::size_t GetNumDelayedOutgoingNonlocalFaces() const noexcept
+  {
+    return delayed_outgoing_nonlocal_faces_.size();
+  }
+
+  /// Get number of delayed-local face nodes spanning the lagged local-slot bank.
+  std::size_t GetNumDelayedLocalNodes() const noexcept { return num_delayed_local_nodes_; }
+
+  /// Get number of delayed-incoming non-local face nodes.
+  std::size_t GetNumDelayedIncomingNonlocalNodes() const noexcept
+  {
+    return num_delayed_incoming_nonlocal_nodes_;
+  }
+
+  /// Get number of delayed-outgoing non-local face nodes.
+  std::size_t GetNumDelayedOutgoingNonlocalNodes() const noexcept
+  {
+    return num_delayed_outgoing_nonlocal_nodes_;
+  }
+
+  /**
+   * Return whether the SPDS has any delayed local or delayed nonlocal faces.
+   *
+   * `true` means the owning angle set must allocate its lagged old/new banks and that
+   * the device kernel will see at least one node index with the delayed bit set.  When
+   * `false` the CBCD path is byte-identical to the pre-cycle-support behaviour because
+   * every node-index delayed bit is zero and the runtime branch in the pointer-set
+   * accessors collapses to its non-delayed target.
+   */
+  bool HasDelayedFluxes() const noexcept
+  {
+    return num_delayed_local_nodes_ > 0 or num_delayed_incoming_nonlocal_nodes_ > 0 or
+           num_delayed_outgoing_nonlocal_nodes_ > 0;
+  }
+
   /// Return grouped incoming-boundary faces.
   const std::vector<IncomingBoundaryFacePlan>& GetIncomingBoundaryFaces() const
   {
@@ -94,6 +136,24 @@ public:
     return {incoming_nonlocal_faces_.data() + begin, end - begin};
   }
 
+  /// Return grouped delayed outgoing non-local faces for one cell.
+  std::span<const GroupedOutgoingNonlocalFace>
+  GetDelayedOutgoingNonlocalFaces(std::uint64_t cell_local_id) const
+  {
+    const auto begin = cell_to_delayed_outgoing_nonlocal_face_offsets_[cell_local_id];
+    const auto end = cell_to_delayed_outgoing_nonlocal_face_offsets_[cell_local_id + 1];
+    return {delayed_outgoing_nonlocal_faces_.data() + begin, end - begin};
+  }
+
+  /// Return grouped delayed incoming non-local faces for one cell.
+  std::span<const GroupedIncomingNonlocalFace>
+  GetDelayedIncomingNonlocalFaces(std::uint64_t cell_local_id) const
+  {
+    const auto begin = cell_to_delayed_incoming_nonlocal_face_offsets_[cell_local_id];
+    const auto end = cell_to_delayed_incoming_nonlocal_face_offsets_[cell_local_id + 1];
+    return {delayed_incoming_nonlocal_faces_.data() + begin, end - begin};
+  }
+
   /// Return the number of local cells represented in the grouped-face tables.
   std::size_t GetNumLocalCells() const
   {
@@ -109,15 +169,40 @@ public:
     return incoming_source_partitions_;
   }
 
+  /// Return the ordered table of delayed-outgoing destination localities.
+  const std::vector<int>& GetDelayedOutgoingLocalities() const
+  {
+    return delayed_outgoing_localities_;
+  }
+
+  /// Return the ordered table of delayed-incoming source partitions.
+  const std::vector<int>& GetDelayedIncomingSourcePartitions() const
+  {
+    return delayed_incoming_source_partitions_;
+  }
+
   /// Resolve one grouped incoming non-local face by source-slot-local face index.
   const GroupedIncomingNonlocalFace& GetIncomingNonlocalFace(std::uint32_t source_slot,
                                                              std::uint32_t source_face_index) const;
+
+  /// Resolve one grouped delayed-incoming non-local face by source-slot-local face index.
+  const GroupedIncomingNonlocalFace&
+  GetDelayedIncomingNonlocalFace(std::uint32_t source_slot,
+                                 std::uint32_t source_face_index) const;
 
   /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
   std::span<const OutgoingNodeCopy>
   GetOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
   {
     return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset,
+            face.num_node_copies};
+  }
+
+  /// Return the delayed-outgoing-node-copy descriptors for one grouped delayed outgoing face.
+  std::span<const OutgoingNodeCopy>
+  GetDelayedOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
+  {
+    return {delayed_outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset,
             face.num_node_copies};
   }
 
@@ -163,6 +248,30 @@ private:
   std::vector<std::uint32_t> source_to_incoming_face_offsets_;
   /// Source-major ordered incoming grouped-face indices.
   std::vector<std::uint32_t> incoming_face_indices_by_source_;
+  /// Number of nodes in the lagged local-slot bank.
+  std::size_t num_delayed_local_nodes_ = 0;
+  /// Number of nodes in the lagged incoming non-local bank.
+  std::size_t num_delayed_incoming_nonlocal_nodes_ = 0;
+  /// Number of nodes in the lagged outgoing non-local bank.
+  std::size_t num_delayed_outgoing_nonlocal_nodes_ = 0;
+  /// Cell-to-delayed-incoming-face offset table.
+  std::vector<std::uint32_t> cell_to_delayed_incoming_nonlocal_face_offsets_;
+  /// Cell-to-delayed-outgoing-face offset table.
+  std::vector<std::uint32_t> cell_to_delayed_outgoing_nonlocal_face_offsets_;
+  /// Grouped delayed incoming nonlocal faces, sized by `num_delayed_incoming_nonlocal_nodes_`.
+  std::vector<GroupedIncomingNonlocalFace> delayed_incoming_nonlocal_faces_;
+  /// Grouped delayed outgoing nonlocal faces, sized by `num_delayed_outgoing_nonlocal_nodes_`.
+  std::vector<GroupedOutgoingNonlocalFace> delayed_outgoing_nonlocal_faces_;
+  /// Flat outgoing-node-copy metadata for delayed outgoing faces.
+  std::vector<OutgoingNodeCopy> delayed_outgoing_nonlocal_face_node_copies_;
+  /// Distinct delayed-destination localities (separate slot space from `outgoing_localities_`).
+  std::vector<int> delayed_outgoing_localities_;
+  /// Distinct delayed-source partitions (separate slot space from `incoming_source_partitions_`).
+  std::vector<int> delayed_incoming_source_partitions_;
+  /// Delayed-source-major incoming grouped-face spans.
+  std::vector<std::uint32_t> delayed_source_to_incoming_face_offsets_;
+  /// Delayed-source-major ordered incoming grouped-face indices.
+  std::vector<std::uint32_t> delayed_incoming_face_indices_by_source_;
 
   /**
    * Build and upload the flattened cell-face-node index map.

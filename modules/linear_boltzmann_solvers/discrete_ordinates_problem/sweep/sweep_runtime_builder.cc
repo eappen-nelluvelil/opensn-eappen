@@ -326,8 +326,7 @@ BuildCBCSPDS(SweepRuntime& runtime,
              const std::vector<LBSGroupset>& groupsets,
              const std::shared_ptr<MeshContinuum>& grid,
              const SPDSFaceNeighborInfoVec& face_neighbor_info,
-             const std::map<std::shared_ptr<AngularQuadrature>, bool>& allow_cycles_map,
-             bool use_gpus)
+             const std::map<std::shared_ptr<AngularQuadrature>, bool>& allow_cycles_map)
 {
   struct WorkItem
   {
@@ -366,15 +365,11 @@ BuildCBCSPDS(SweepRuntime& runtime,
                                                        work[i].omega,
                                                        grid,
                                                        face_neighbor_info,
-                                                       allow_cycles_map.at(work[i].quadrature) and
-                                                         not use_gpus);
+                                                       allow_cycles_map.at(work[i].quadrature));
               });
   for (size_t i = 0; i < work.size(); ++i)
     runtime.quadrature_spds_map[work[i].quadrature].push_back(std::move(result[i]));
   log.Log() << program_timer.GetTimeString() << " SPDS construction done.";
-
-  if (use_gpus)
-    return;
 
   const auto spds_list = GetCBCSPDSList(runtime);
   std::vector<std::vector<int>> local_dependencies(spds_list.size());
@@ -802,10 +797,10 @@ BuildSweepRuntime(const std::string& problem_name,
   }
   else if (sweep_type == "CBC")
   {
-    BuildCBCSPDS(
-      runtime, groupsets, grid, face_neighbor_info, quadrature_allow_cycles_map, use_gpus);
-    if (not use_gpus)
-      BuildCBCGlobalSweepGraph(runtime);
+    BuildCBCSPDS(runtime, groupsets, grid, face_neighbor_info, quadrature_allow_cycles_map);
+    // CBC and CBCD both require the global feedback arc set. CBCD routes each removed
+    // interpartition edge through its delayed nonlocal banks and delayed communicator stream.
+    BuildCBCGlobalSweepGraph(runtime);
     BuildCBCLocalFaceSlotPlans(runtime);
   }
   else

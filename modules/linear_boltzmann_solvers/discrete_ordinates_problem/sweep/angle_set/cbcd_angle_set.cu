@@ -7,6 +7,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/boundary/sweep_boundary.h"
+#include "modules/linear_boltzmann_solvers/lbs_problem/groupset/lbs_groupset.h"
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "caliper/cali.h"
 #include <algorithm>
@@ -18,13 +19,13 @@ namespace opensn
 {
 
 CBCD_AngleSet::CBCD_AngleSet(size_t id,
-                             size_t num_groups,
+                             const LBSGroupset& groupset,
                              const SPDS& spds,
                              std::shared_ptr<FLUDS>& fluds,
                              const std::vector<size_t>& angle_indices,
                              std::map<uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                              const MPICommunicatorSet& comm_set)
-  : AngleSet(id, num_groups, spds, fluds, angle_indices, boundaries),
+  : AngleSet(id, groupset, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds)),
     comm_set_(comm_set),
     cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_)),
@@ -39,6 +40,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
   cbcd_fluds_.GetStream() = stream_;
   cbcd_fluds_.AllocateLocalAndSavedPsi();
+  cbcd_fluds_.AllocateDelayedPsiBanks();
   cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_);
   InitializeTaskGraphData();
   InitializeReflectingTaskMask();
@@ -55,19 +57,12 @@ CBCD_AngleSet::GetCommunicator()
 }
 
 void
-CBCD_AngleSet::UpdateSweepDependencies(std::set<AngleSet*>& following_angle_sets)
-{
-  for (auto* as : following_angle_sets)
-  {
-    auto* cbcd_as = static_cast<CBCD_AngleSet*>(as);
-    following_angle_sets_.push_back(cbcd_as);
-    ++(cbcd_as->num_dependencies_);
-  }
-}
-
-void
 CBCD_AngleSet::ResetDependencyCounter()
 {
+  // The base `AngleSet::UpdateSweepDependencies` (invoked once per angle set during
+  // `AngleAggregation` setup) populated `following_angle_sets_` and incremented this
+  // angle set's `num_dependencies_`.  Seed the CBCD atomic counter from that value so
+  // worker threads can decrement it in `TryNotifyFollowingAngleSets` without locking.
   dependency_counter_.store(num_dependencies_, std::memory_order_relaxed);
 }
 
@@ -88,11 +83,6 @@ CBCD_AngleSet::InitializeReflectingTaskMask()
 {
   const auto& task_list = cbc_spds_.GetTaskList();
   cell_has_outgoing_reflecting_boundary_.assign(task_list.size(), 0);
-  reflecting_boundaries_.clear();
-  reflecting_boundaries_.reserve(boundaries_.size());
-  for (auto& [_, bndry] : boundaries_)
-    if (bndry->IsReflecting())
-      reflecting_boundaries_.push_back(bndry.get());
 
   for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
   {
@@ -254,12 +244,19 @@ CBCD_AngleSet::TryNotifyFollowingAngleSets()
   if (pending_reflecting_tasks_ != 0)
     return;
 
-  for (auto* boundary : reflecting_boundaries_)
-    boundary->UpdateAnglesReadyStatus(angles_);
-  for (auto* following_angle_set : following_angle_sets_)
+  // Cycles-4 manages reflecting-boundary lifecycle through the per-groupset
+  // `CopyDelayedAngularFluxOldToNew`/`CopyDelayedAngularFluxNewToOld` rotation instead of
+  // the previous per-angle-set ready-status protocol, so no extra notification of the
+  // reflecting boundaries is required here.
+  //
+  // `following_angle_sets_` (inherited from `AngleSet`) is populated by the base's
+  // `UpdateSweepDependencies`.  Each follower is a `CBCD_AngleSet`, so the static_cast
+  // is safe and gives access to the atomic dependency counter.
+  for (auto* angle_set : following_angle_sets_)
   {
+    auto* cbcd_angle_set = static_cast<CBCD_AngleSet*>(angle_set);
     const auto old_value =
-      following_angle_set->dependency_counter_.fetch_sub(1, std::memory_order_release);
+      cbcd_angle_set->dependency_counter_.fetch_sub(1, std::memory_order_release);
     assert(old_value > 0);
   }
   following_angle_sets_notified_ = true;
@@ -318,13 +315,29 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
       [this](const IncomingFaceBatch& batch)
       {
         const auto* psi_base = batch.psi_data.data();
-        for (const auto& entry : batch.entries)
+        if (batch.kind == CBCDMessageKind::NORMAL_FACE_PSI)
         {
-          const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-            batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
-          if (--remaining_deps_[cell_local_id] == 0)
-            cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
-              .push_back(static_cast<std::uint32_t>(cell_local_id));
+          // Normal traffic populates the active task graph: each face payload unblocks the
+          // owning cell once its incoming dependency count reaches zero.
+          for (const auto& entry : batch.entries)
+          {
+            const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
+              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
+            if (--remaining_deps_[cell_local_id] == 0)
+              cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
+                .push_back(static_cast<std::uint32_t>(cell_local_id));
+          }
+        }
+        else
+        {
+          // Delayed traffic only populates the lagged-incoming `_new` bank — it must not
+          // touch dependency counters because the corresponding edge is, by construction,
+          // not part of the current-iteration task graph.  Bank rotation `_new -> _old`
+          // is performed by the scheduler after every delayed-completion marker arrives.
+          assert(batch.kind == CBCDMessageKind::DELAYED_FACE_PSI);
+          for (const auto& entry : batch.entries)
+            cbcd_fluds_.ScatterReceivedDelayedFaceData(
+              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
         }
       });
   }
@@ -399,35 +412,6 @@ CBCD_AngleSet::ResetSweepBuffers()
   following_angle_sets_notified_ = false;
   ResetDependencyCounter();
   executed_ = false;
-}
-
-const double*
-CBCD_AngleSet::PsiBoundary(uint64_t boundary_id,
-                           unsigned int angle_num,
-                           uint64_t cell_local_id,
-                           unsigned int face_num,
-                           unsigned int fi,
-                           unsigned int g,
-                           bool surface_source_active)
-{
-  const auto boundary_it = boundary_ptrs_.find(boundary_id);
-  assert(boundary_it != boundary_ptrs_.end());
-  auto* boundary = boundary_it->second;
-  if (not boundary->IsReflecting() and (not surface_source_active))
-    return boundary->ZeroFlux(g);
-  return boundary->PsiIncoming(cell_local_id, face_num, fi, angle_num, g);
-}
-
-double*
-CBCD_AngleSet::PsiReflected(uint64_t boundary_id,
-                            unsigned int angle_num,
-                            uint64_t cell_local_id,
-                            unsigned int face_num,
-                            unsigned int fi)
-{
-  const auto boundary_it = boundary_ptrs_.find(boundary_id);
-  assert(boundary_it != boundary_ptrs_.end());
-  return boundary_it->second->PsiOutgoing(cell_local_id, face_num, fi, angle_num);
 }
 
 } // namespace opensn
