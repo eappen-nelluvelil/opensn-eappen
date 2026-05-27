@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 The OpenSn Authors <https://open-sn.github.io/opensn/>
+# SPDX-License-Identifier: MIT
+
+"""One fixed-work, 64-group device CBC scaling trial."""
+
+grid = DistributedMeshGenerator(inputs=[FromFileMeshGenerator(filename=@MESH@)]).Execute()
+grid.SetOrthogonalBoundaries()
+xs = MultiGroupXS()
+xs.LoadFromOpenSn(@XS@)
+quadrature = GLCProductQuadrature3DXYZ(n_polar=14, n_azimuthal=32, scattering_order=0)
+problem = DiscreteOrdinatesProblem(
+    mesh=grid, num_groups=64, sweep_type="CBC", use_gpus=True,
+    groupsets=[{
+        "groups_from_to": (0, 63), "angular_quadrature": quadrature,
+        "angle_aggregation_type": "single", "allow_cycles": False,
+        "inner_linear_method": "petsc_richardson", "l_abs_tol": 1.0e-18,
+        "l_max_its": @ITERATIONS@,
+    }],
+    xs_map=[{"block_ids": [1], "xs": xs}],
+    boundary_conditions=[{
+        "name": "xmin", "type": "isotropic", "group_strength": [1.0] + [0.0] * 63,
+    }],
+    options={"max_mpi_message_size": 256 * 1024, "save_angular_flux": False},
+)
+solver = SteadyStateSourceSolver(problem=problem)
+solver.Initialize()
+solver.Execute()
+
+fluxes = problem.GetScalarFluxFieldFunction(only_scalar_flux=False)
+domain = RPPLogicalVolume(infx=True, infy=True, infz=True)
+for group in (0, 63):
+    interpolation = FieldFunctionInterpolationVolume()
+    interpolation.SetOperationType("max")
+    interpolation.SetLogicalVolume(domain)
+    interpolation.AddFieldFunction(fluxes[group][0])
+    interpolation.Execute()
+    if rank == 0:
+        print(f"OPENSN_STUDY_FLUX_MAX group={group} value={interpolation.GetValue():.17e}")
+if rank == 0:
+    print("OPENSN_STUDY_TRIAL_COMPLETE", flush=True)
