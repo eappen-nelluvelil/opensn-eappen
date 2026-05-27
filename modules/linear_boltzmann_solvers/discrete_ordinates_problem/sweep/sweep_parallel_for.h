@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "framework/utils/parallel_for.h"
 #include <exception>
 #include <thread>
 #include <vector>
@@ -12,29 +13,34 @@ namespace opensn
 
 /// Run `function(i)` for i in [0, count) across `num_threads` threads, strided.
 /// Exceptions thrown by any worker are propagated to the caller (first wins).
+/// One worker executes inline. Larger pools are reused on subsequent calls.
 template <typename Function>
 void
 ParallelFor(size_t count, size_t num_threads, Function function)
 {
-  std::vector<std::exception_ptr> exceptions(num_threads);
+  if (count == 0)
+    return;
+  if (num_threads <= 1)
   {
-    std::vector<std::jthread> workers;
-    workers.reserve(num_threads);
-    for (size_t thread_id = 0; thread_id < num_threads; ++thread_id)
-      workers.emplace_back(
-        [&, thread_id]()
-        {
-          try
-          {
-            for (size_t i = thread_id; i < count; i += num_threads)
-              function(i);
-          }
-          catch (...)
-          {
-            exceptions[thread_id] = std::current_exception();
-          }
-        });
+    for (size_t i = 0; i < count; ++i)
+      function(i);
+    return;
   }
+
+  std::vector<std::exception_ptr> exceptions(num_threads);
+  RunParallelForWorkers(num_threads,
+                        [&](size_t thread_id)
+                        {
+                          try
+                          {
+                            for (size_t i = thread_id; i < count; i += num_threads)
+                              function(i);
+                          }
+                          catch (...)
+                          {
+                            exceptions[thread_id] = std::current_exception();
+                          }
+                        });
 
   for (const auto& exception : exceptions)
     if (exception)
