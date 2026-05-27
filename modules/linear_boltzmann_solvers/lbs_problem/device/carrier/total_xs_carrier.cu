@@ -65,11 +65,7 @@ TotalXSCarrier::Assemble(LBSProblem& lbs_problem)
     if (inv_velocity.empty())
       std::fill_n(inv_velocity_data, num_groups, 0.0);
     else
-    {
-      if (inv_velocity.size() != num_groups)
-        throw std::runtime_error("Provided inverse velocities don't match the number of groups.\n");
       std::copy(inv_velocity.begin(), inv_velocity.end(), inv_velocity_data);
-    }
     data = reinterpret_cast<char*>(inv_velocity_data + num_groups);
   }
 }
