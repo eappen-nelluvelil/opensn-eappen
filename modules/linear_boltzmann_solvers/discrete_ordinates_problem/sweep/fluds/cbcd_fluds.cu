@@ -311,7 +311,7 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 }
 
 void
-CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
+CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       CBCD_AsynchronousCommunicator& async_comm,
                                       const std::size_t angle_set_id,
                                       const std::vector<std::uint32_t>& angle_indices,
