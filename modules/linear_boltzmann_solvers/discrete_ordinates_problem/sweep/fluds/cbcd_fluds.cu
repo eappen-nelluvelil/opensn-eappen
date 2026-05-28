@@ -328,6 +328,9 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
   const auto& grid = *(GetSPDS().GetGrid());
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
   const std::size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
+  // Cycles-4 boundary lookups carry the owning groupset id so that boundaries that hold
+  // per-groupset state (notably ReflectingBoundary) can resolve the correct sub-bank.
+  const int groupset_id = sweep_chunk.GetGroupset().id;
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto reflecting_faces = GetReflectingOutgoingBoundaryFaces(cell_local_id);
@@ -344,7 +347,8 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk&,
             face_plan.cell_local_id,
             face_plan.face_id,
             static_cast<unsigned int>(face_plan.first_face_node + n),
-            direction_num);
+            direction_num,
+            groupset_id);
           std::memcpy(dst, src_face + n * num_groups_and_angles_, groups_bytes);
         }
       }
