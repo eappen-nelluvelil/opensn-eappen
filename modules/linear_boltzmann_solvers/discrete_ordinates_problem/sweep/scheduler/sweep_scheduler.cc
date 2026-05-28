@@ -10,6 +10,7 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include <algorithm>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -133,10 +134,26 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   if (scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH)
     InitializeAlgoDOG();
 
+  if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE ||
+      scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH ||
+      scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    angle_agg_.SetupAngleSetDependencies();
+  }
+
   if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE)
   {
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
+  }
+  else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    const std::size_t hardware_concurrency = std::thread::hardware_concurrency();
+    const auto num_workers = std::max<std::size_t>(
+      1,
+      std::min(angle_agg_.GetNumAngleSets(),
+               hardware_concurrency == 0 ? std::size_t{1} : hardware_concurrency));
+    pool_.Resize(num_workers);
   }
 
   // Initialize delayed upstream data
