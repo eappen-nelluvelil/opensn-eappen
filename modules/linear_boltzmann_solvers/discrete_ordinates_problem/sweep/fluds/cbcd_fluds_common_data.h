@@ -87,9 +87,8 @@ public:
    *
    * `true` means the owning angle set must allocate its lagged old/new banks and that
    * the device kernel will see at least one node index with the delayed bit set.  When
-   * `false` the CBCD path is byte-identical to the pre-cycle-support behaviour because
-   * every node-index delayed bit is zero and the runtime branch in the pointer-set
-   * accessors collapses to its non-delayed target.
+   * `false` every node-index delayed bit is zero and the pointer-set accessors route all
+   * local and nonlocal faces to their normal banks.
    */
   bool HasDelayedFluxes() const noexcept
   {
@@ -187,24 +186,7 @@ public:
 
   /// Resolve one grouped delayed-incoming non-local face by source-slot-local face index.
   const GroupedIncomingNonlocalFace&
-  GetDelayedIncomingNonlocalFace(std::uint32_t source_slot,
-                                 std::uint32_t source_face_index) const;
-
-  /// Return the outgoing-node-copy descriptors for one grouped outgoing face.
-  std::span<const OutgoingNodeCopy>
-  GetOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
-  {
-    return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset,
-            face.num_node_copies};
-  }
-
-  /// Return the delayed-outgoing-node-copy descriptors for one grouped delayed outgoing face.
-  std::span<const OutgoingNodeCopy>
-  GetDelayedOutgoingNodeCopies(const GroupedOutgoingNonlocalFace& face) const
-  {
-    return {delayed_outgoing_nonlocal_face_node_copies_.data() + face.node_copy_offset,
-            face.num_node_copies};
-  }
+  GetDelayedIncomingNonlocalFace(std::uint32_t source_slot, std::uint32_t source_face_index) const;
 
   /// Get pointer to cell-face-node map on device.
   const std::uint64_t* GetDeviceIndex() const { return device_cell_face_node_map_; }
@@ -238,8 +220,6 @@ private:
   std::vector<GroupedIncomingNonlocalFace> incoming_nonlocal_faces_;
   /// Flat grouped outgoing nonlocal faces.
   std::vector<GroupedOutgoingNonlocalFace> outgoing_nonlocal_faces_;
-  /// Flat outgoing-node-copy metadata referenced by grouped outgoing faces.
-  std::vector<OutgoingNodeCopy> outgoing_nonlocal_face_node_copies_;
   /// Ordered table of distinct outgoing localities.
   std::vector<int> outgoing_localities_;
   /// Ordered table of incoming source localities.
@@ -262,8 +242,6 @@ private:
   std::vector<GroupedIncomingNonlocalFace> delayed_incoming_nonlocal_faces_;
   /// Grouped delayed outgoing nonlocal faces, sized by `num_delayed_outgoing_nonlocal_nodes_`.
   std::vector<GroupedOutgoingNonlocalFace> delayed_outgoing_nonlocal_faces_;
-  /// Flat outgoing-node-copy metadata for delayed outgoing faces.
-  std::vector<OutgoingNodeCopy> delayed_outgoing_nonlocal_face_node_copies_;
   /// Distinct delayed-destination localities (separate slot space from `outgoing_localities_`).
   std::vector<int> delayed_outgoing_localities_;
   /// Distinct delayed-source partitions (separate slot space from `incoming_source_partitions_`).

@@ -3,151 +3,161 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <limits>
 #include <new>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace opensn
 {
 
+inline constexpr std::size_t QueueHardwareInterferenceSize =
+#ifdef __cpp_lib_hardware_interference_size
+  std::hardware_destructive_interference_size;
+#else
+  64;
+#endif
+
 /**
- * Bounded lock-free multi-producer, single-consumer ring buffer.
+ * Bounded lock-free single-producer, single-consumer slot queue.
  *
- * Producers reserve slots through an atomic head counter and publish them with a per-slot
- * ready flag. The single consumer drains in FIFO order through the tail index. The queue
- * is bounded and reuses preallocated slots; it performs no dynamic allocation once the
- * storage has been initialized.
+ * The producer writes directly into a reserved slot and then publishes the advanced
+ * head sequence. The consumer peeks published slots in FIFO order and releases them
+ * after processing. The queue is bounded, performs no allocation after `Preallocate`,
+ * and preserves slot payload capacity across publications.
  *
- * In the CBCD aggregated communicator, LockFreeRingBuffer serves two roles:
- * 1. an outgoing per-destination queue written by sweep worker threads and drained by the
- *    communication thread,
- * 2. an incoming per-angle-set queue written by the communication thread and drained by the
- *    owning angleset worker thread.
- *
- * LockFreeRingBuffer works under the following assumptions:
- * - producers reserve one slot, write the payload in place, and publish the slot exactly
- *   once
- * - the consumer drains published slots in FIFO order and returns them to the ring for
- *   reuse.
- *
- * This yields a fixed-capacity queue with explicit slot reuse.
+ * This queue is intended for CBCD ownership patterns in which one worker thread is
+ * the sole producer for an outgoing shard, or the communication thread is the sole
+ * producer for an incoming mailbox.
  */
 template <typename T>
-class LockFreeRingBuffer
+class LockFreeSPSCSlotQueue
 {
 public:
-  /// Slot payload with a publication flag.
+  /// Slot payload stored in the bounded ring.
   struct Slot
   {
     /// Stored payload.
     T payload;
-    /// Publication flag visible to the single consumer.
-    std::atomic<bool> ready{false};
   };
 
   /**
    * Allocate storage for the requested number of slots.
    *
-   * \param capacity Number of ring-buffer slots.
+   * \param capacity Number of queue slots.
    */
-  void Preallocate(const std::size_t capacity) { buffer_ = std::vector<Slot>(capacity); }
+  void Preallocate(const std::size_t capacity)
+  {
+    buffer_ = std::vector<Slot>(capacity);
+    producer_head_ = 0;
+    consumer_tail_ = 0;
+    producer_tail_cache_ = 0;
+    consumer_head_cache_ = 0;
+    published_head_.store(0, std::memory_order_relaxed);
+    consumed_tail_.store(0, std::memory_order_relaxed);
+  }
 
   /**
    * Initialize every slot payload in place.
    *
    * \tparam Callback Callable invoked once per slot payload.
-   * \param cb Initialization callback.
+   * \param callback Initialization callback.
    */
   template <typename Callback>
-  void InitializeSlots(Callback&& cb)
+  void InitializeSlots(Callback&& callback)
   {
     for (auto& slot : buffer_)
-      cb(slot.payload);
+      callback(slot.payload);
   }
 
   /**
-   * Reserve one slot for a producer.
+   * Reserve one writable slot for the producer.
    *
    * \return Writable slot reference.
    */
   Slot& ReserveSlot()
   {
-    const auto idx = head_.fetch_add(1, std::memory_order_relaxed) % buffer_.size();
-    while (buffer_[idx].ready.load(std::memory_order_acquire))
+    if (buffer_.empty())
+      throw std::logic_error("SPSC queue: cannot reserve from an empty queue.");
+    const auto capacity = buffer_.size();
+    while ((producer_head_ - producer_tail_cache_) >= capacity)
+    {
+      producer_tail_cache_ = consumed_tail_.load(std::memory_order_acquire);
+      if ((producer_head_ - producer_tail_cache_) < capacity)
+        break;
       std::this_thread::yield();
-    return buffer_[idx];
+    }
+    return buffer_[producer_head_ % capacity];
+  }
+
+  /// Publish the slot reserved by the last `ReserveSlot()` call.
+  void PublishSlot()
+  {
+    ++producer_head_;
+    published_head_.store(producer_head_, std::memory_order_release);
   }
 
   /**
-   * Publish one reserved slot to the consumer.
-   *
-   * \param slot Slot to publish.
-   */
-  void PublishSlot(Slot& slot) { slot.ready.store(true, std::memory_order_release); }
-
-  /**
-   * Gather currently ready slots without consuming them.
+   * Gather currently published slots without consuming them.
    *
    * \param out Output vector of ready slot pointers.
+   * \param max_slots Maximum number of slots to gather.
    */
-  void GetReadySlots(std::vector<Slot*>& out)
+  void PeekReadySlots(std::vector<Slot*>& out,
+                      const std::size_t max_slots = std::numeric_limits<std::size_t>::max())
   {
     out.clear();
     if (buffer_.empty())
       return;
 
+    consumer_head_cache_ = published_head_.load(std::memory_order_acquire);
+    const auto ready_count = std::min(consumer_head_cache_ - consumer_tail_, max_slots);
+    out.reserve(ready_count);
     const auto capacity = buffer_.size();
-    auto current_tail = tail_;
-    while (buffer_[current_tail % capacity].ready.load(std::memory_order_acquire))
-    {
-      out.push_back(&buffer_[current_tail % capacity]);
-      ++current_tail;
-    }
+    for (std::size_t i = 0; i < ready_count; ++i)
+      out.push_back(&buffer_[(consumer_tail_ + i) % capacity]);
   }
 
   /**
    * Release the next `count` ready slots after they have been consumed.
    *
-   * \param count Number of slots to free.
+   * \param count Number of slots to release.
    */
-  void FreeSlots(const std::size_t count)
+  void ReleaseReadySlots(const std::size_t count)
   {
-    const auto capacity = buffer_.size();
-    for (std::size_t i = 0; i < count; ++i)
-    {
-      buffer_[tail_ % capacity].ready.store(false, std::memory_order_release);
-      ++tail_;
-    }
+    if (count == 0)
+      return;
+    if (count > consumer_head_cache_ - consumer_tail_)
+      throw std::logic_error("SPSC queue: release exceeds the published slot count.");
+
+    consumer_tail_ += count;
+    consumed_tail_.store(consumer_tail_, std::memory_order_release);
   }
 
   /**
    * Consume all ready slots in FIFO order.
    *
    * \tparam Callback Callable invoked with each slot payload.
-   * \param cb Consumer callback.
+   * \param callback Consumer callback.
    * \return Number of consumed slots.
    */
   template <typename Callback>
-  std::size_t ProcessReady(Callback&& cb)
+  std::size_t ProcessReady(Callback&& callback)
   {
     if (buffer_.empty())
       return 0;
 
+    consumer_head_cache_ = published_head_.load(std::memory_order_acquire);
+    const auto ready_count = consumer_head_cache_ - consumer_tail_;
     const auto capacity = buffer_.size();
-    std::size_t count = 0;
-    while (true)
-    {
-      auto& slot = buffer_[tail_ % capacity];
-      if (not slot.ready.load(std::memory_order_acquire))
-        break;
-      cb(slot.payload);
-      slot.ready.store(false, std::memory_order_release);
-      ++tail_;
-      ++count;
-    }
-    return count;
+    for (std::size_t i = 0; i < ready_count; ++i)
+      callback(buffer_[(consumer_tail_ + i) % capacity].payload);
+    ReleaseReadySlots(ready_count);
+    return ready_count;
   }
 
   /// Check whether the queue currently has no published slots.
@@ -155,16 +165,24 @@ public:
   {
     if (buffer_.empty())
       return true;
-    return not buffer_[tail_ % buffer_.size()].ready.load(std::memory_order_acquire);
+    return published_head_.load(std::memory_order_acquire) == consumer_tail_;
   }
 
 private:
-  /// Ring-buffer storage.
+  /// Ring storage reused across all publications.
   std::vector<Slot> buffer_;
-  /// Producer reservation index.
-  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> head_{0};
-  /// Consumer drain index.
-  alignas(std::hardware_destructive_interference_size) std::size_t tail_{0};
+  /// Producer-owned next unpublished sequence number.
+  alignas(QueueHardwareInterferenceSize) std::size_t producer_head_ = 0;
+  /// Consumer-owned next unreleased sequence number.
+  alignas(QueueHardwareInterferenceSize) std::size_t consumer_tail_ = 0;
+  /// Producer-side cached consumer tail used to avoid repeated atomic loads.
+  std::size_t producer_tail_cache_ = 0;
+  /// Consumer-side cached published head used to avoid repeated atomic loads.
+  std::size_t consumer_head_cache_ = 0;
+  /// Producer-published head visible to the consumer.
+  alignas(QueueHardwareInterferenceSize) std::atomic<std::size_t> published_head_{0};
+  /// Consumer-released tail visible to the producer.
+  alignas(QueueHardwareInterferenceSize) std::atomic<std::size_t> consumed_tail_{0};
 };
 
 } // namespace opensn

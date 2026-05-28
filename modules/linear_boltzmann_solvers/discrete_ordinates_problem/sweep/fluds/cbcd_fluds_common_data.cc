@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds_common_data.h"
-#include "framework/utils/error.h"
-#include <cassert>
 #include <algorithm>
+#include <stdexcept>
 
 namespace opensn
 {
@@ -48,19 +47,27 @@ const GroupedIncomingNonlocalFace&
 CBCD_FLUDSCommonData::GetIncomingNonlocalFace(const std::uint32_t source_slot,
                                               const std::uint32_t source_face_index) const
 {
+  const auto source_end = static_cast<std::size_t>(source_slot) + 1;
+  if (source_end >= source_to_incoming_face_offsets_.size())
+    throw std::out_of_range("CBCD FLUDS: invalid incoming source slot.");
   const auto begin = source_to_incoming_face_offsets_[source_slot];
-  assert(begin + source_face_index < source_to_incoming_face_offsets_[source_slot + 1]);
+  if (source_face_index >= source_to_incoming_face_offsets_[source_end] - begin)
+    throw std::out_of_range("CBCD FLUDS: invalid incoming source-face index.");
   return incoming_nonlocal_faces_[incoming_face_indices_by_source_[begin + source_face_index]];
 }
 
 const GroupedIncomingNonlocalFace&
-CBCD_FLUDSCommonData::GetDelayedIncomingNonlocalFace(
-  const std::uint32_t source_slot, const std::uint32_t source_face_index) const
+CBCD_FLUDSCommonData::GetDelayedIncomingNonlocalFace(const std::uint32_t source_slot,
+                                                     const std::uint32_t source_face_index) const
 {
+  const auto source_end = static_cast<std::size_t>(source_slot) + 1;
+  if (source_end >= delayed_source_to_incoming_face_offsets_.size())
+    throw std::out_of_range("CBCD FLUDS: invalid delayed source slot.");
   const auto begin = delayed_source_to_incoming_face_offsets_[source_slot];
-  assert(begin + source_face_index < delayed_source_to_incoming_face_offsets_[source_slot + 1]);
-  return delayed_incoming_nonlocal_faces_[delayed_incoming_face_indices_by_source_
-                                            [begin + source_face_index]];
+  if (source_face_index >= delayed_source_to_incoming_face_offsets_[source_end] - begin)
+    throw std::out_of_range("CBCD FLUDS: invalid delayed source-face index.");
+  return delayed_incoming_nonlocal_faces_
+    [delayed_incoming_face_indices_by_source_[begin + source_face_index]];
 }
 
 } // namespace opensn

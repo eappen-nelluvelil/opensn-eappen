@@ -5,6 +5,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "caliper/cali.h"
+#include <stdexcept>
 
 namespace opensn
 {
@@ -46,9 +47,19 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
   async_comm_.ReceiveData(received_task_buffer_);
 
-  for (const auto task_number : received_task_buffer_)
-    if (--remaining_dependencies_[task_number] == 0)
+  const auto consume_dependency = [this](const std::uint32_t task_number)
+  {
+    if (task_number >= remaining_dependencies_.size())
+      throw std::out_of_range("CBC angle set: dependency references an invalid local task.");
+    auto& remaining = remaining_dependencies_[task_number];
+    if (remaining == 0)
+      throw std::logic_error("CBC angle set: dependency counter underflow.");
+    if (--remaining == 0)
       ready_tasks_.push_back(task_number);
+  };
+
+  for (const auto task_number : received_task_buffer_)
+    consume_dependency(task_number);
 
   if (async_comm_.HasPendingCommunication())
     async_comm_.SendData();
@@ -72,8 +83,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     sweep_chunk.Sweep(*this);
 
     for (const auto& local_task_num : cell_task.successors)
-      if (--remaining_dependencies_[local_task_num] == 0)
-        ready_tasks_.push_back(local_task_num);
+      consume_dependency(local_task_num);
 
     ++num_completed_tasks_;
     if (async_comm_.HasPendingCommunication())

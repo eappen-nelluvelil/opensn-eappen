@@ -14,6 +14,7 @@
 #include "framework/runtime.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep_parallel_for.h"
 #include "framework/utils/error.h"
+#include "framework/utils/thread_utils.h"
 #include "framework/utils/timer.h"
 #include <algorithm>
 #include <cstddef>
@@ -691,13 +692,48 @@ BuildCBCGlobalSweepGraph(SweepRuntime& runtime)
 }
 
 void
-BuildCBCLocalFaceSlotPlans(SweepRuntime& runtime)
+BuildCBCLocalFaceSlotPlans(SweepRuntime& runtime,
+                           const std::vector<CellFaceNodalMapping>& grid_nodal_mappings)
 {
   const auto spds_list = GetCBCSPDSList(runtime);
+  if (spds_list.empty())
+    return;
+
+  const auto& grid = *spds_list.front()->GetGrid();
+  std::size_t num_local_faces = 0;
+  for (const auto& cell : grid.local_cells)
+  {
+    if (cell.local_id >= grid_nodal_mappings.size() or
+        grid_nodal_mappings[cell.local_id].size() != cell.faces.size() or
+        cell.faces.size() > std::numeric_limits<std::size_t>::max() - num_local_faces)
+      throw std::logic_error("CBC slot planning: inconsistent local face-nodal mappings.");
+    num_local_faces += cell.faces.size();
+  }
+
+  std::vector<std::uint32_t> face_node_counts(num_local_faces);
+  std::size_t face_offset = 0;
+  for (const auto& cell : grid.local_cells)
+  {
+    const auto& cell_mappings = grid_nodal_mappings[cell.local_id];
+    for (std::size_t face = 0; face < cell.faces.size(); ++face)
+    {
+      const auto count = cell_mappings[face].face_node_mapping_.size();
+      if (count > std::numeric_limits<std::uint32_t>::max())
+        throw std::length_error("CBC slot planning: face-node count exceeds 32-bit storage.");
+      face_node_counts[face_offset + face] = static_cast<std::uint32_t>(count);
+    }
+    face_offset += cell.faces.size();
+  }
+
+  const auto thread_info = GetThreadResourceInfo();
+  const auto num_threads = std::min(spds_list.size(), thread_info.available_threads);
   log.Log0Verbose1() << program_timer.GetTimeString()
-                     << " Compute local-face slot plans for CBC SPDS.";
-  for (const auto& spds : spds_list)
-    spds->ComputeMaxNumLocalPsiSlots();
+                     << " Compute local-face slot plans for CBC SPDS (" << num_threads
+                     << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
+  ParallelFor(spds_list.size(),
+              num_threads,
+              [&spds_list, &face_node_counts](const std::size_t i)
+              { spds_list[i]->ComputeMaxNumLocalPsiSlots(face_node_counts); });
 }
 
 void
@@ -801,7 +837,7 @@ BuildSweepRuntime(const std::string& problem_name,
     // CBC and CBCD both require the global feedback arc set. CBCD routes each removed
     // interpartition edge through its delayed nonlocal banks and delayed communicator stream.
     BuildCBCGlobalSweepGraph(runtime);
-    BuildCBCLocalFaceSlotPlans(runtime);
+    BuildCBCLocalFaceSlotPlans(runtime, grid_nodal_mappings);
   }
   else
     OpenSnInvalidArgument("Unsupported sweep type \"" + sweep_type + "\"");

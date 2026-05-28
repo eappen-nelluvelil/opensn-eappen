@@ -9,6 +9,7 @@
 #include "framework/math/quadratures/angular/curvilinear_product_quadrature.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include "framework/utils/thread_utils.h"
 #include <algorithm>
 #include <unordered_map>
 
@@ -56,10 +57,45 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   if (scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH)
     InitializeAlgoDOG();
 
+  if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE ||
+      scheduler_type_ == SchedulingAlgorithm::DEPTH_OF_GRAPH ||
+      scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    angle_agg_.SetupAngleSetDependencies();
+  }
+
   if (scheduler_type_ == SchedulingAlgorithm::ALL_AT_ONCE)
   {
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
+  }
+  else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    const auto thread_info = GetThreadResourceInfo();
+    const auto worker_override = GetPositiveEnvironmentValue("OPENSN_CBCD_NUM_WORKERS");
+    const bool uses_communication =
+      std::any_of(angle_agg_.begin(),
+                  angle_agg_.end(),
+                  [](const auto& angle_set)
+                  {
+                    const auto& spds = angle_set->GetSPDS();
+                    return not spds.GetLocationDependencies().empty() or
+                           not spds.GetLocationSuccessors().empty() or
+                           not spds.GetDelayedLocationDependencies().empty() or
+                           not spds.GetDelayedLocationSuccessors().empty();
+                  });
+    // The communicator owns one persistent progress thread. Keep that thread inside the
+    // rank's allocation rather than oversubscribing every CPU in the process affinity mask.
+    const std::size_t communication_threads =
+      uses_communication and thread_info.available_threads > 1 ? 1 : 0;
+    const auto default_worker_limit = thread_info.available_threads - communication_threads;
+    const auto worker_limit = worker_override > 0 ? worker_override : default_worker_limit;
+    const auto num_workers =
+      std::max<std::size_t>(1, std::min(angle_agg_.GetNumAngleSets(), worker_limit));
+    log.Log0Verbose1() << "CBCD scheduler: " << num_workers << " worker(s)"
+                       << (worker_override > 0 ? " from OPENSN_CBCD_NUM_WORKERS; " : "; ")
+                       << FormatThreadResourceInfo(thread_info) << ".";
+    pool_.Resize(num_workers);
   }
 
   // Initialize delayed upstream data

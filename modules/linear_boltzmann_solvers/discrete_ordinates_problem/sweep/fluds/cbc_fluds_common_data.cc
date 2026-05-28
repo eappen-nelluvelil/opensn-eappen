@@ -8,10 +8,12 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "framework/mpi/mpi_utils.h"
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <algorithm>
 #include <cassert>
 #include <limits>
 #include <map>
 #include <memory>
+#include <stdexcept>
 
 namespace opensn
 {
@@ -24,11 +26,32 @@ static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t),
 
 constexpr std::size_t FACE_SLOT_RECORD_SIZE = 4;
 
+std::size_t
+CheckedAdd(const std::size_t lhs, const std::size_t rhs, const char* const message)
+{
+  if (rhs > std::numeric_limits<std::size_t>::max() - lhs)
+    throw std::overflow_error(message);
+  return lhs + rhs;
+}
+
 struct RemoteFaceSlot
 {
   std::size_t slot = CBC_FLUDSCommonData::INVALID_FACE_SLOT;
   bool delayed = false;
 };
+
+template <typename NodeMap>
+void
+ValidateFaceNodePermutation(const NodeMap& node_map, const std::size_t num_face_nodes)
+{
+  std::vector<std::uint8_t> mapped(num_face_nodes, 0);
+  for (const auto node : node_map)
+  {
+    if (node < 0 or static_cast<std::size_t>(node) >= num_face_nodes or mapped[node] != 0)
+      throw std::logic_error("CBC FLUDS: face-node mapping is not a permutation.");
+    mapped[node] = 1;
+  }
+}
 
 } // namespace
 
@@ -58,7 +81,8 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
   {
     assert(cell.local_id < face_offsets_.size());
     face_offsets_[cell.local_id] = num_local_faces;
-    num_local_faces += cell.faces.size();
+    num_local_faces =
+      CheckedAdd(num_local_faces, cell.faces.size(), "CBC FLUDS: local-face count overflow.");
 
     for (std::size_t f = 0; f < cell.faces.size(); ++f)
     {
@@ -68,9 +92,11 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
 
       const auto orientation = face_orientations[cell.local_id][f];
       if (orientation == FaceOrientation::INCOMING)
-        ++num_incoming_faces;
+        num_incoming_faces =
+          CheckedAdd(num_incoming_faces, 1, "CBC FLUDS: incoming-face count overflow.");
       else if (orientation == FaceOrientation::OUTGOING)
-        ++num_outgoing_faces_;
+        num_outgoing_faces_ =
+          CheckedAdd(num_outgoing_faces_, 1, "CBC FLUDS: outgoing-face count overflow.");
     }
   }
 
@@ -101,12 +127,31 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       const auto& face = cell.faces[f];
       const auto orientation = face_orientations[cell.local_id][f];
       const auto face_index = face_offset + f;
-      const auto num_face_nodes =
-        GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f)).face_node_mapping_.size();
+      const auto& face_nodal_mapping =
+        GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f));
+      const auto num_face_nodes = face_nodal_mapping.face_node_mapping_.size();
+      if (face.has_neighbor and num_face_nodes == 0)
+        throw std::logic_error("CBC FLUDS: neighboring face has no discretization nodes.");
+      if (face.has_neighbor)
+      {
+        if (face_nodal_mapping.associated_face_ < 0 or
+            static_cast<std::size_t>(face_nodal_mapping.associated_face_) >=
+              grid.cells[face.neighbor_id].faces.size())
+          throw std::logic_error("CBC FLUDS: invalid neighboring face mapping.");
+        ValidateFaceNodePermutation(face_nodal_mapping.face_node_mapping_, num_face_nodes);
+      }
 
       if (face.has_neighbor and face.IsNeighborLocal(&grid))
       {
         const auto& adj_cell = grid.cells[face.neighbor_id];
+        if (adj_cell.local_id >= grid_nodal_mappings_.size() or
+            static_cast<std::size_t>(face_nodal_mapping.associated_face_) >=
+              grid_nodal_mappings_[adj_cell.local_id].size())
+          throw std::logic_error("CBC FLUDS: adjacent face mapping is out of range.");
+        const auto& adjacent_mapping = GetFaceNodalMapping(
+          adj_cell.local_id, static_cast<unsigned int>(face_nodal_mapping.associated_face_));
+        if (adjacent_mapping.face_node_mapping_.size() != num_face_nodes)
+          throw std::logic_error("CBC FLUDS: local face-node counts do not match.");
         const bool delayed_incoming =
           orientation == FaceOrientation::INCOMING and
           cbc_spds.IsDelayedLocalDependency(adj_cell.local_id, cell.local_id);
@@ -119,7 +164,10 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
           delayed_face_flags_[face_index] |= LOCAL_INCOMING;
           delayed_local_face_info_by_face_[face_index] =
             DelayedLocalFaceInfo{num_delayed_local_face_nodes_, num_face_nodes};
-          num_delayed_local_face_nodes_ += num_face_nodes;
+          num_delayed_local_face_nodes_ =
+            CheckedAdd(num_delayed_local_face_nodes_,
+                       num_face_nodes,
+                       "CBC FLUDS: delayed local-face extent overflow.");
         }
         if (delayed_outgoing)
           delayed_face_flags_[face_index] |= LOCAL_OUTGOING;
@@ -149,7 +197,10 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
           delayed_nonlocal_face_info_by_face_[face_index] = info;
           delayed_nonlocal_face_info_by_slot_.push_back(info);
           delayed_face_flags_[face_index] |= NONLOCAL_INCOMING;
-          delayed_prelocI_face_node_counts_[prelocI] += num_face_nodes;
+          delayed_prelocI_face_node_counts_[prelocI] =
+            CheckedAdd(delayed_prelocI_face_node_counts_[prelocI],
+                       num_face_nodes,
+                       "CBC FLUDS: delayed nonlocal-face extent overflow.");
           records.push_back(cell.global_id);
           records.push_back(static_cast<std::uint64_t>(f));
           records.push_back(static_cast<std::uint64_t>(slot));
@@ -164,7 +215,8 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
         records.push_back(static_cast<std::uint64_t>(f));
         records.push_back(static_cast<std::uint64_t>(slot));
         records.push_back(0);
-        ++num_incoming_faces_;
+        num_incoming_faces_ =
+          CheckedAdd(num_incoming_faces_, 1, "CBC FLUDS: incoming-face slot count overflow.");
       }
     }
   }
@@ -199,8 +251,16 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       if (face_task_id == CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID)
         continue;
 
-      local_face_slot_node_offsets_by_face_[face_offset + f] =
-        slot_node_offsets[slot_ids[face_task_id]];
+      const auto num_face_nodes =
+        GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f)).face_node_mapping_.size();
+      if (orientation == FaceOrientation::OUTGOING and
+          cbc_spds.GetLocalFaceNodeCount(face_task_id) != num_face_nodes)
+        throw std::logic_error("CBC FLUDS: outgoing local-face extent is inconsistent.");
+
+      const auto slot_id = slot_ids[face_task_id];
+      if (static_cast<std::size_t>(slot_id) + 1 >= slot_node_offsets.size())
+        throw std::logic_error("CBC FLUDS: local face has an invalid slot.");
+      local_face_slot_node_offsets_by_face_[face_offset + f] = slot_node_offsets[slot_id];
     }
   }
 }
@@ -226,18 +286,24 @@ CBC_FLUDSCommonData::FinalizeBeta()
   for (const auto& location_records : downstream_slot_records)
   {
     const auto& records = location_records.second;
-    assert(records.size() % FACE_SLOT_RECORD_SIZE == 0);
+    if (records.size() % FACE_SLOT_RECORD_SIZE != 0)
+      throw std::logic_error("CBC FLUDS: malformed downstream face-slot records.");
     for (std::size_t i = 0; i < records.size(); i += FACE_SLOT_RECORD_SIZE)
     {
       const auto face_id = records[i + 1];
-      assert(face_id <= std::numeric_limits<unsigned int>::max());
+      if (face_id > std::numeric_limits<unsigned int>::max())
+        throw std::logic_error("CBC FLUDS: downstream face index is out of range.");
       const auto slot_record = records[i + 2];
       if constexpr (sizeof(std::size_t) < sizeof(std::uint64_t))
-        assert(slot_record <= std::numeric_limits<std::size_t>::max());
+        if (slot_record > std::numeric_limits<std::size_t>::max())
+          throw std::logic_error("CBC FLUDS: downstream face slot is out of range.");
+      if (records[i + 3] > 1)
+        throw std::logic_error("CBC FLUDS: invalid delayed-face marker.");
 
       const CellFaceKey key{records[i], static_cast<unsigned int>(face_id)};
       const RemoteFaceSlot slot{static_cast<std::size_t>(slot_record), records[i + 3] != 0};
-      downstream_slot_by_face.try_emplace(key, slot);
+      if (not downstream_slot_by_face.try_emplace(key, slot).second)
+        throw std::logic_error("CBC FLUDS: duplicate downstream face-slot record.");
     }
   }
 
@@ -255,11 +321,13 @@ CBC_FLUDSCommonData::FinalizeBeta()
 
       const auto& face_nodal_mapping =
         GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f));
-      assert(face_nodal_mapping.associated_face_ >= 0);
+      if (face_nodal_mapping.associated_face_ < 0)
+        throw std::logic_error("CBC FLUDS: invalid downstream face mapping.");
       const CellFaceKey key{face.neighbor_id,
                             static_cast<unsigned int>(face_nodal_mapping.associated_face_)};
       const auto slot_it = downstream_slot_by_face.find(key);
-      assert(slot_it != downstream_slot_by_face.end());
+      if (slot_it == downstream_slot_by_face.end())
+        throw std::logic_error("CBC FLUDS: downstream face-slot record was not received.");
 
       const auto face_index = face_offset + f;
       const auto neighbor_location = face.GetNeighborPartitionID(&grid);
@@ -271,7 +339,8 @@ CBC_FLUDSCommonData::FinalizeBeta()
       if (not slot_it->second.delayed)
       {
         const auto peer_it = outgoing_peer_index_by_location.find(neighbor_location);
-        assert(peer_it != outgoing_peer_index_by_location.end());
+        if (peer_it == outgoing_peer_index_by_location.end())
+          throw std::logic_error("CBC FLUDS: downstream location has no successor slot.");
         outgoing_peer_indices_[face_index] = peer_it->second;
       }
     }

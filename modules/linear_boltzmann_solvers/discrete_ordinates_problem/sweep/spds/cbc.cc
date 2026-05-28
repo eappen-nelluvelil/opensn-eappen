@@ -67,6 +67,8 @@ CBC_SPDS::CBC_SPDS(int id,
   CALI_CXX_MARK_SCOPE("CBC_SPDS::CBC_SPDS");
 
   const auto num_loc_cells = grid->local_cells.size();
+  if (num_loc_cells > std::numeric_limits<std::uint32_t>::max())
+    throw std::length_error("CBC_SPDS: local cell count exceeds the 32-bit task-index range.");
 
   // Populate cell relationships
   std::vector<std::vector<std::pair<std::uint32_t, double>>> cell_successors(num_loc_cells);
@@ -356,8 +358,11 @@ CBC_SPDS::BuildTaskList()
   initial_ready_tasks_.clear();
   for (const auto& cell : grid.local_cells)
   {
+    if (cell.local_id >= task_list_.size())
+      throw std::logic_error("CBC_SPDS: local cell ID is outside the task-list bounds.");
+
     const auto num_faces = cell.faces.size();
-    unsigned int num_dependencies = 0;
+    std::size_t num_dependencies = 0;
     std::vector<std::uint32_t> successors;
     successors.reserve(num_faces);
 
@@ -395,14 +400,20 @@ CBC_SPDS::BuildTaskList()
           if (IsDelayedLocalDependency(cell.local_id, successor_local_id))
             continue;
 
-          successors.push_back(successor_local_id);
+          successors.push_back(static_cast<std::uint32_t>(successor_local_id));
         }
       }
     }
 
-    task_list_[cell.local_id] = {
-      num_dependencies, std::move(successors), cell.local_id, &cell, false};
-    initial_task_dependencies_[cell.local_id] = num_dependencies;
+    if (num_dependencies > std::numeric_limits<unsigned int>::max())
+      throw std::length_error("CBC_SPDS: task dependency count exceeds its storage range.");
+    const auto stored_dependencies = static_cast<unsigned int>(num_dependencies);
+    task_list_[cell.local_id] = {stored_dependencies,
+                                 std::move(successors),
+                                 cell.local_id,
+                                 &cell,
+                                 false};
+    initial_task_dependencies_[cell.local_id] = stored_dependencies;
   }
 
   for (std::uint32_t task = 0; task < initial_task_dependencies_.size(); ++task)
@@ -425,7 +436,11 @@ CBC_SPDS::BuildTaskSuccessorAdjacency()
 
   std::size_t successor_storage = 0;
   for (const auto& task : task_list_)
+  {
+    if (task.successors.size() > std::numeric_limits<std::uint32_t>::max() - successor_storage)
+      throw std::length_error("CBC_SPDS: successor count exceeds the 32-bit CSR-index range.");
     successor_storage += task.successors.size();
+  }
   task_successor_ranks_.reserve(successor_storage);
 
   for (std::size_t rank = 0; rank < spls_.size(); ++rank)
@@ -452,6 +467,9 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
   std::size_t total_num_faces = 0;
   for (const auto& cell : grid_->local_cells)
   {
+    if (cell.faces.size() > std::numeric_limits<std::uint32_t>::max() or
+        total_num_faces > std::numeric_limits<std::uint32_t>::max() - cell.faces.size())
+      throw std::length_error("CBC_SPDS: face count exceeds the 32-bit face-index range.");
     cell_face_offsets_[cell.local_id] = static_cast<std::uint32_t>(total_num_faces);
     total_num_faces += cell.faces.size();
   }
@@ -486,16 +504,14 @@ CBC_SPDS::BuildLocalFaceTaskGraph()
                                    static_cast<std::uint32_t>(consumer_cell_local_id)))
         continue;
 
-      const auto consumer_face_id =
-        static_cast<std::uint16_t>(face.GetNeighborAdjacentFaceIndex(grid_.get()));
-      const auto num_face_nodes = static_cast<std::uint32_t>(face.vertex_ids.size());
-      max_local_face_node_count_ =
-        std::max(max_local_face_node_count_, static_cast<std::size_t>(num_face_nodes));
+      const auto consumer_face_id = face.GetNeighborAdjacentFaceIndex(grid_.get());
+      if (local_face_producer_ranks_.size() >= std::numeric_limits<std::uint32_t>::max())
+        throw std::length_error("CBC_SPDS: local directed-face count exceeds the 32-bit range.");
 
       const auto face_task_id = static_cast<std::uint32_t>(local_face_producer_ranks_.size());
       local_face_producer_ranks_.push_back(static_cast<std::uint32_t>(producer_rank));
       local_face_consumer_ranks_.push_back(topo_rank_by_cell_local_id_[consumer_cell_local_id]);
-      local_face_node_counts_.push_back(static_cast<std::uint16_t>(num_face_nodes));
+      local_face_node_counts_.push_back(0);
       outgoing_local_face_task_ids_[cell_face_offsets_[producer_cell_local_id] + f] = face_task_id;
       incoming_local_face_task_ids_[cell_face_offsets_[consumer_cell_local_id] + consumer_face_id] =
         face_task_id;
@@ -516,8 +532,8 @@ CBC_SPDS::UpdateLocalFaceSlotLayout()
   // assigned to each slot. This preserves O(1) indexing and avoids padding every slot to the
   // largest local face. The chain cover minimizes slot cardinality; it does not independently
   // optimize the sum of these nonuniform slot extents.
-  local_face_slot_node_counts_.assign(max_num_local_psi_slots_, std::uint16_t{0});
-  local_face_slot_node_offsets_.assign(max_num_local_psi_slots_ + 1, std::uint32_t{0});
+  local_face_slot_node_counts_.assign(max_num_local_psi_slots_, std::uint32_t{0});
+  local_face_slot_node_offsets_.assign(max_num_local_psi_slots_ + 1, std::size_t{0});
   total_local_face_slot_nodes_ = 0;
 
   bool is_identity_layout = max_num_local_psi_slots_ == local_face_slot_ids_.size();
@@ -531,11 +547,13 @@ CBC_SPDS::UpdateLocalFaceSlotLayout()
     for (std::size_t slot_id = 0; slot_id < local_face_node_counts_.size(); ++slot_id)
     {
       local_face_slot_node_counts_[slot_id] = local_face_node_counts_[slot_id];
-      local_face_slot_node_offsets_[slot_id] =
-        static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+      local_face_slot_node_offsets_[slot_id] = total_local_face_slot_nodes_;
+      if (local_face_node_counts_[slot_id] >
+          std::numeric_limits<std::size_t>::max() - total_local_face_slot_nodes_)
+        throw std::length_error("CBC_SPDS: local face-slot node-count overflow.");
       total_local_face_slot_nodes_ += local_face_node_counts_[slot_id];
     }
-    local_face_slot_node_offsets_.back() = static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+    local_face_slot_node_offsets_.back() = total_local_face_slot_nodes_;
     return;
   }
 
@@ -548,17 +566,34 @@ CBC_SPDS::UpdateLocalFaceSlotLayout()
 
   for (std::size_t slot_id = 0; slot_id < local_face_slot_node_counts_.size(); ++slot_id)
   {
-    local_face_slot_node_offsets_[slot_id] =
-      static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+    local_face_slot_node_offsets_[slot_id] = total_local_face_slot_nodes_;
+    if (local_face_slot_node_counts_[slot_id] >
+        std::numeric_limits<std::size_t>::max() - total_local_face_slot_nodes_)
+      throw std::length_error("CBC_SPDS: local face-slot node-count overflow.");
     total_local_face_slot_nodes_ += local_face_slot_node_counts_[slot_id];
   }
-  local_face_slot_node_offsets_.back() = static_cast<std::uint32_t>(total_local_face_slot_nodes_);
+  local_face_slot_node_offsets_.back() = total_local_face_slot_nodes_;
 }
 
 void
-CBC_SPDS::ComputeMaxNumLocalPsiSlots()
+CBC_SPDS::ComputeMaxNumLocalPsiSlots(const std::span<const std::uint32_t> face_node_counts)
 {
   CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+  if (face_node_counts.size() != outgoing_local_face_task_ids_.size())
+    throw std::invalid_argument("CBC_SPDS: local face-node table has an invalid size.");
+
+  std::fill(local_face_node_counts_.begin(), local_face_node_counts_.end(), 0);
+  max_local_face_node_count_ = 0;
+  for (std::size_t face = 0; face < outgoing_local_face_task_ids_.size(); ++face)
+  {
+    const auto task_id = outgoing_local_face_task_ids_[face];
+    if (task_id == INVALID_LOCAL_FACE_TASK_ID)
+      continue;
+    local_face_node_counts_[task_id] = face_node_counts[face];
+    max_local_face_node_count_ =
+      std::max(max_local_face_node_count_, static_cast<std::size_t>(face_node_counts[face]));
+  }
 
   if (task_list_.empty() or local_face_producer_ranks_.empty())
   {
@@ -569,24 +604,16 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots()
   }
 
   // Solve the exact minimum chain cover of the local-face reuse poset, then turn that chain
-  // decomposition into a static slot assignment and compact slot-bank layout.  When the
-  // planner's verifier rejects the chain cover, the planner itself writes an identity
-  // assignment into `local_face_slot_ids_` and returns the identity slot count, so the
-  // assignment is always self-consistent.  In that case we only need to log the fallback.
-  const auto result = detail::ComputeLocalFaceSlotPlan(task_successor_rank_offsets_,
-                                                       task_successor_ranks_,
-                                                       local_face_producer_ranks_,
-                                                       local_face_consumer_ranks_,
-                                                       producer_cell_face_offsets_,
-                                                       local_face_slot_ids_);
-  max_num_local_psi_slots_ = result.slot_count;
+  // decomposition into a static slot assignment and compact slot-bank layout. The planner
+  // verifies every chain handoff and throws on any internal inconsistency; an unverified or
+  // merely conservative assignment is never exposed as an optimal plan.
+  max_num_local_psi_slots_ = detail::ComputeLocalFaceSlotPlan(task_successor_rank_offsets_,
+                                                              task_successor_ranks_,
+                                                              local_face_producer_ranks_,
+                                                              local_face_consumer_ranks_,
+                                                              producer_cell_face_offsets_,
+                                                              local_face_slot_ids_);
   UpdateLocalFaceSlotLayout();
-
-  if (result.verifier_rejected)
-    opensn::log.LogAllWarning()
-      << "CBC_SPDS::ComputeMaxNumLocalPsiSlots: local cell-face slot assignment verifier "
-      << "rejected the computed slot count; falling back to the identity assignment "
-      << "(one slot per local directed face, no reuse).";
 }
 
 const std::vector<Task>&

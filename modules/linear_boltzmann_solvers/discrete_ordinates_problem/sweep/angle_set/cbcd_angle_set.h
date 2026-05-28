@@ -8,7 +8,9 @@
 #include "caribou/main.hpp"
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <set>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace crb = caribou;
@@ -72,7 +74,8 @@ public:
     /// Acquire one free mapped-host cell-ID buffer.
     std::uint8_t AcquireFreeBuffer()
     {
-      assert(num_free_buffers > 0);
+      if (num_free_buffers == 0)
+        throw std::logic_error("CBCD angle set: no free launch buffer.");
       return free_buffer_indices[--num_free_buffers];
     }
 
@@ -83,7 +86,8 @@ public:
      */
     void ReleaseBuffer(const std::uint8_t buffer_index)
     {
-      assert(num_free_buffers < free_buffer_indices.size());
+      if (num_free_buffers >= free_buffer_indices.size())
+        throw std::logic_error("CBCD angle set: launch buffer released more than once.");
       free_buffer_indices[num_free_buffers++] = buffer_index;
     }
   };
@@ -107,7 +111,7 @@ public:
                 std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                 const MPICommunicatorSet& comm_set);
 
-  ~CBCD_AngleSet();
+  ~CBCD_AngleSet() override = default;
 
   /// Reset the unresolved angle-set dependency counter before a sweep.
   void ResetDependencyCounter();
@@ -147,9 +151,10 @@ public:
    * next ready batch, flush completed outgoing data, or finalize the angle set.
    *
    * \param sweep_chunk Owning CBCD sweep chunk.
+   * \param worker_id Worker ID that owns this angle set in the current sweep schedule.
    * \return True when any forward progress was made.
    */
-  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk);
+  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
@@ -190,9 +195,9 @@ private:
   /// Successor local cell IDs stored in CSR order.
   std::vector<std::uint32_t> successor_data_;
   /// Initial dependency counts per local cell.
-  std::vector<int> initial_deps_;
+  std::vector<std::uint32_t> initial_deps_;
   /// Per-sweep dependency counts per local cell.
-  std::vector<int> remaining_deps_;
+  std::vector<std::uint32_t> remaining_deps_;
   /// Local cell IDs with zero initial dependencies.
   std::vector<std::uint32_t> initial_ready_cell_ids_;
   /// Cached total number of local cells/tasks in task graph.
@@ -217,6 +222,8 @@ private:
   bool boundary_data_initialized_ = false;
   /// Flag indicating if following anglesets have been notified of completion.
   bool following_angle_sets_notified_ = false;
+  /// Flag indicating that local work is complete and delayed-output markers were published.
+  bool local_completion_signaled_ = false;
 
   /// Build the reflecting-boundary producer mask from the CBC task graph.
   void InitializeReflectingTaskMask();
@@ -239,7 +246,7 @@ private:
   bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
 
   /// Pack and send deferred outgoing data for the completed batch.
-  void FlushCompletedBatch(CBCDSweepChunk& sweep_chunk);
+  void FlushCompletedBatch(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
 
   /// Notify following angle sets once all reflecting-boundary producers have completed.
   void TryNotifyFollowingAngleSets();

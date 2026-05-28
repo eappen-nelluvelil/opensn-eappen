@@ -37,8 +37,26 @@ SPMD_ThreadPool::Start(std::size_t n)
   epoch_states_.assign(n, EpochState{0, 0});
   outstanding_ = 0;
 
-  for (std::size_t i = 0; i < n; ++i)
-    worker_threads_.emplace_back(&SPMD_ThreadPool::InfiniteLoop, this, i);
+  try
+  {
+    for (std::size_t i = 0; i < n; ++i)
+      worker_threads_.emplace_back(&SPMD_ThreadPool::InfiniteLoop, this, i);
+  }
+  catch (...)
+  {
+    {
+      std::scoped_lock<std::mutex> lock(mutex_);
+      stop_workers_ = true;
+    }
+    cv_start_.notify_all();
+    for (auto& worker : worker_threads_)
+      if (worker.joinable())
+        worker.join();
+    worker_threads_.clear();
+    epoch_states_.clear();
+    stop_workers_ = false;
+    throw;
+  }
 
   workers_initialized_ = true;
 }

@@ -10,15 +10,6 @@
 namespace opensn::detail
 {
 
-/// Result of an exact local-face slot-planning solve.
-struct SlotSolveResult
-{
-  /// Exact number of reusable slots required by the computed chain cover.
-  std::size_t slot_count = 0;
-  /// Flag indicating that the post-solve verifier rejected the computed assignment.
-  bool verifier_rejected = false;
-};
-
 /**
  * Compute the exact minimum safe local-face slot assignment.
  *
@@ -49,12 +40,11 @@ struct SlotSolveResult
  *    b. BFS layer construction,
  *    c. iterative DFS augmentation.
  * 4. Extract one slot chain per unmatched right-side face.
- * 5. Verify the extracted assignment and report whether the caller should fall back to the
- * identity assignment.
+ * 5. Verify the extracted assignment before returning it.
  *
  * After chain extraction, the assignment is verified by checking each consecutive reuse
- * handoff in face enumeration order. If the verifier rejects the result, the caller may
- * conservatively fall back to the identity assignment.
+ * handoff in face enumeration order. A rejected assignment is an internal correctness error;
+ * the planner throws rather than exposing an assignment that is safe but not proven optimal.
  *
  * \param successor_rank_offsets Offsets into the flat successor-rank adjacency list of the
  * local CBC task DAG.
@@ -64,14 +54,13 @@ struct SlotSolveResult
  * \param producer_cell_face_offsets Offsets grouping local faces by producer-cell topological
  * rank.
  * \param face_slot_ids Output slot assignment keyed by local face rank.
- * \return Exact slot count and verifier status for the computed assignment.
+ * \return Exact minimum slot count for the computed assignment.
  */
-SlotSolveResult
-ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offsets,
-                         const std::vector<std::uint32_t>& successor_ranks,
-                         const std::vector<std::uint32_t>& face_producer_ranks,
-                         const std::vector<std::uint32_t>& face_consumer_ranks,
-                         const std::vector<std::uint32_t>& producer_cell_face_offsets,
-                         std::vector<std::uint32_t>& face_slot_ids);
+std::size_t ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offsets,
+                                     const std::vector<std::uint32_t>& successor_ranks,
+                                     const std::vector<std::uint32_t>& face_producer_ranks,
+                                     const std::vector<std::uint32_t>& face_consumer_ranks,
+                                     const std::vector<std::uint32_t>& producer_cell_face_offsets,
+                                     std::vector<std::uint32_t>& face_slot_ids);
 
 } // namespace opensn::detail

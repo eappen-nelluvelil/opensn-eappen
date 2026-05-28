@@ -54,8 +54,8 @@ public:
   /// Return the CBCD angle sets coordinated by this sweep chunk.
   const std::vector<CBCD_AngleSet*>& GetAngleSets() const { return angle_sets_; }
 
-  /// Start the aggregated communicator thread.
-  void StartCommunicator();
+  /// Start the aggregated communicator thread for the given number of sweep workers.
+  void StartCommunicator(std::size_t num_workers);
 
   /// Stop the aggregated communicator thread.
   void StopCommunicator();

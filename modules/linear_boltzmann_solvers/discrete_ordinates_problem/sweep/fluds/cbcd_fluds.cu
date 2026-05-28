@@ -16,13 +16,28 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include "caliper/cali.h"
 
 namespace opensn
 {
+
+namespace
+{
+
+std::size_t
+CheckedBufferSize(const std::size_t num_nodes, const std::size_t stride)
+{
+  if (num_nodes != 0 and stride > std::numeric_limits<std::size_t>::max() / num_nodes)
+    throw std::length_error("CBCD FLUDS: angular-flux buffer size overflow.");
+  return num_nodes * stride;
+}
+
+} // namespace
 
 CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
                        std::size_t num_angles,
@@ -38,76 +53,22 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     sdm_(sdm),
     num_local_spatial_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_) / psi_uk_man_.GetNumberOfUnknowns() /
                             num_groups_),
-    local_psi_data_size_(cbc_spds_.GetTotalLocalFaceSlotNodes() * num_groups_and_angles_),
-    saved_psi_data_size_(num_local_spatial_dofs_ * num_groups_and_angles_),
-    incoming_boundary_psi_(common_data_.GetNumIncomingBoundaryNodes() * num_groups_and_angles_),
-    outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
-    incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
-    outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
-    save_angular_flux_(save_angular_flux),
-    // Lagged nonlocal banks: zero-sized when the SPDS is acyclic, otherwise sized exactly
-    // to the delayed-face-node count.  Allocated as mapped host vectors so the kernel can
-    // read/write them via the same pointer-set mechanism as the normal nonlocal banks.
-    delayed_nonlocal_incoming_psi_old_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
-                                       num_groups_and_angles_,
-                                       0.0),
-    delayed_nonlocal_incoming_psi_new_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
-                                       num_groups_and_angles_,
-                                       0.0),
-    delayed_nonlocal_outgoing_psi_(common_data_.GetNumDelayedOutgoingNonlocalNodes() *
-                                   num_groups_and_angles_,
-                                   0.0)
+    local_psi_data_size_(
+      CheckedBufferSize(cbc_spds_.GetTotalLocalFaceSlotNodes(), num_groups_and_angles_)),
+    saved_psi_data_size_(CheckedBufferSize(num_local_spatial_dofs_, num_groups_and_angles_)),
+    incoming_boundary_psi_(
+      CheckedBufferSize(common_data_.GetNumIncomingBoundaryNodes(), num_groups_and_angles_)),
+    outgoing_boundary_psi_(
+      CheckedBufferSize(common_data_.GetNumOutgoingBoundaryNodes(), num_groups_and_angles_)),
+    incoming_nonlocal_psi_(
+      CheckedBufferSize(common_data_.GetNumIncomingNonlocalNodes(), num_groups_and_angles_)),
+    outgoing_nonlocal_psi_(
+      CheckedBufferSize(common_data_.GetNumOutgoingNonlocalNodes(), num_groups_and_angles_)),
+    save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
   for (auto& local_cell_ids : local_cell_ids_)
     local_cell_ids.reserve(num_local_cells);
-
-  outgoing_node_memcpy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
-  for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
-       ++cell_local_id)
-  {
-    for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
-    {
-      for (const auto& node : common_data_.GetOutgoingNodeCopies(face_info))
-      {
-        outgoing_node_memcpy_plan_.push_back(
-          {static_cast<std::size_t>(node.storage_index) * num_groups_and_angles_,
-           static_cast<std::size_t>(node.face_node) * num_groups_and_angles_});
-      }
-    }
-  }
-
-  // Parallel memcpy plan for the lagged outgoing nonlocal bank.  Source offsets index
-  // into `delayed_nonlocal_outgoing_psi_`; destination offsets are the receiver-side
-  // face-local layout consumed by `EnqueueOutgoing`.
-  delayed_outgoing_node_memcpy_plan_.reserve(common_data_.GetNumDelayedOutgoingNonlocalNodes());
-  for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
-       ++cell_local_id)
-  {
-    for (const auto& face_info : common_data_.GetDelayedOutgoingNonlocalFaces(cell_local_id))
-    {
-      for (const auto& node : common_data_.GetDelayedOutgoingNodeCopies(face_info))
-      {
-        delayed_outgoing_node_memcpy_plan_.push_back(
-          {static_cast<std::size_t>(node.storage_index) * num_groups_and_angles_,
-           static_cast<std::size_t>(node.face_node) * num_groups_and_angles_});
-      }
-    }
-  }
-}
-
-CBCD_FLUDS::~CBCD_FLUDS()
-{
-  if (not host_saved_psi_.empty())
-  {
-    host_saved_psi_.clear();
-  }
-  for (auto& local_cell_ids : local_cell_ids_)
-    local_cell_ids.clear();
-  incoming_boundary_psi_.clear();
-  outgoing_boundary_psi_.clear();
-  incoming_nonlocal_psi_.clear();
-  outgoing_nonlocal_psi_.clear();
 }
 
 void
@@ -227,30 +188,34 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
     return;
 
   const auto delayed_local_size =
-    common_data_.GetNumDelayedLocalNodes() * num_groups_and_angles_;
+    CheckedBufferSize(common_data_.GetNumDelayedLocalNodes(), num_groups_and_angles_);
   if (delayed_local_size > 0)
   {
     delayed_local_psi_old_ = crb::DeviceMemory<double>(delayed_local_size);
     delayed_local_psi_new_ = crb::DeviceMemory<double>(delayed_local_size);
-    // Zero the lagged-local banks at allocation time so the first sweep iteration reads
-    // a well-defined initial state (the cycle-aware sweep route reads `_old` before any
-    // delayed producer has written it).
+    host_delayed_local_psi_old_ = crb::HostVector<double>(delayed_local_size, 0.0);
+    host_delayed_local_psi_new_ = crb::HostVector<double>(delayed_local_size, 0.0);
+    delayed_local_psi_old_view_ = std::span<double>(host_delayed_local_psi_old_);
+    delayed_local_psi_view_ = std::span<double>(host_delayed_local_psi_new_);
     delayed_local_psi_old_.zero_fill();
     delayed_local_psi_new_.zero_fill();
   }
 
   const auto delayed_incoming_nonlocal_size =
-    common_data_.GetNumDelayedIncomingNonlocalNodes() * num_groups_and_angles_;
+    CheckedBufferSize(common_data_.GetNumDelayedIncomingNonlocalNodes(), num_groups_and_angles_);
   if (delayed_incoming_nonlocal_size > 0)
   {
     delayed_nonlocal_incoming_psi_old_ =
       crb::MappedHostVector<double>(delayed_incoming_nonlocal_size, 0.0);
     delayed_nonlocal_incoming_psi_new_ =
       crb::MappedHostVector<double>(delayed_incoming_nonlocal_size, 0.0);
+    delayed_prelocI_outgoing_psi_old_view_ = {
+      std::span<double>(delayed_nonlocal_incoming_psi_old_)};
+    delayed_prelocI_outgoing_psi_view_ = {std::span<double>(delayed_nonlocal_incoming_psi_new_)};
   }
 
   const auto delayed_outgoing_nonlocal_size =
-    common_data_.GetNumDelayedOutgoingNonlocalNodes() * num_groups_and_angles_;
+    CheckedBufferSize(common_data_.GetNumDelayedOutgoingNonlocalNodes(), num_groups_and_angles_);
   if (delayed_outgoing_nonlocal_size > 0)
     delayed_nonlocal_outgoing_psi_ =
       crb::MappedHostVector<double>(delayed_outgoing_nonlocal_size, 0.0);
@@ -259,18 +224,66 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
 }
 
 void
-CBCD_FLUDS::SwapDelayedLocalBanks() noexcept
+CBCD_FLUDS::CopyDelayedPsiToDevice()
 {
-  std::swap(delayed_local_psi_old_, delayed_local_psi_new_);
-  pointer_set_.delayed_local_psi_old = delayed_local_psi_old_.get();
-  pointer_set_.delayed_local_psi_new = delayed_local_psi_new_.get();
+  if (not host_delayed_local_psi_old_.empty())
+    crb::copy(delayed_local_psi_old_,
+              host_delayed_local_psi_old_,
+              host_delayed_local_psi_old_.size(),
+              0,
+              0,
+              stream_);
 }
 
 void
-CBCD_FLUDS::SwapDelayedNonlocalIncomingBanks() noexcept
+CBCD_FLUDS::CopyDelayedLocalPsiFromDevice()
 {
-  std::swap(delayed_nonlocal_incoming_psi_old_, delayed_nonlocal_incoming_psi_new_);
-  pointer_set_.delayed_nonlocal_incoming_psi_old = delayed_nonlocal_incoming_psi_old_.data();
+  if (not host_delayed_local_psi_new_.empty())
+    crb::copy(host_delayed_local_psi_new_,
+              delayed_local_psi_new_,
+              host_delayed_local_psi_new_.size(),
+              0,
+              0,
+              stream_);
+}
+
+void
+CBCD_FLUDS::SynchronizeHostData()
+{
+  if (not host_delayed_local_psi_new_.empty() or save_angular_flux_)
+    stream_.synchronize();
+}
+
+void
+CBCD_FLUDS::SetDelayedLocalPsiOldToNew()
+{
+  std::copy(host_delayed_local_psi_old_.begin(),
+            host_delayed_local_psi_old_.end(),
+            host_delayed_local_psi_new_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedLocalPsiNewToOld()
+{
+  std::copy(host_delayed_local_psi_new_.begin(),
+            host_delayed_local_psi_new_.end(),
+            host_delayed_local_psi_old_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedOutgoingPsiOldToNew()
+{
+  std::copy(delayed_nonlocal_incoming_psi_old_.begin(),
+            delayed_nonlocal_incoming_psi_old_.end(),
+            delayed_nonlocal_incoming_psi_new_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedOutgoingPsiNewToOld()
+{
+  std::copy(delayed_nonlocal_incoming_psi_new_.begin(),
+            delayed_nonlocal_incoming_psi_new_.end(),
+            delayed_nonlocal_incoming_psi_old_.begin());
 }
 
 void
@@ -312,7 +325,8 @@ CBCD_FLUDS::CopyIncomingBoundaryPsiToDevice(CBCDSweepChunk& sweep_chunk, CBCD_An
 
 void
 CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
-                                      CBCD_AsynchronousCommunicator& async_comm,
+                                      CBCD_AsynchronousCommunicator* const async_comm,
+                                      const std::size_t producer_id,
                                       const std::size_t angle_set_id,
                                       const std::vector<std::uint32_t>& angle_indices,
                                       std::span<const std::uint32_t> cell_local_ids)
@@ -324,10 +338,13 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
 
   CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyOutgoingPsiBackToHost");
 
+  if (async_comm == nullptr and (common_data_.GetNumOutgoingNonlocalFaces() > 0 or
+                                 common_data_.GetNumDelayedOutgoingNonlocalFaces() > 0))
+    throw std::logic_error("CBCD FLUDS: non-local output requires a communicator.");
+
   const auto num_angles = angle_indices.size();
   const auto& grid = *(GetSPDS().GetGrid());
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
-  const std::size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
   // Cycles-4 boundary lookups carry the owning groupset id so that boundaries that hold
   // per-groupset state (notably ReflectingBoundary) can resolve the correct sub-bank.
   const int groupset_id = sweep_chunk.GetGroupset().id;
@@ -356,54 +373,39 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
 
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
+      assert(async_comm != nullptr);
       const std::size_t face_data_size =
         static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      const auto source_offset =
+        static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
       const int dest_rank = common_data_.GetOutgoingLocalities()[face_info.dest_slot];
-      async_comm.EnqueueOutgoing(
-        dest_rank,
-        angle_set_id,
-        face_info.remote_face_index,
-        face_data_size,
-        [this, &face_info, stride_bytes](double* dst_base)
-        {
-          const auto* node_plan = outgoing_node_memcpy_plan_.data() + face_info.node_copy_offset;
-          const auto* node_plan_end = node_plan + face_info.num_node_copies;
-          for (; node_plan != node_plan_end; ++node_plan)
-          {
-            auto* dst = dst_base + node_plan->dest_offset;
-            const double* src = outgoing_nonlocal_psi_.data() + node_plan->src_offset;
-            std::memcpy(dst, src, stride_bytes);
-          }
-        });
+      async_comm->EnqueueOutgoing(dest_rank,
+                                  producer_id,
+                                  angle_set_id,
+                                  face_info.remote_face_index,
+                                  face_data_size,
+                                  outgoing_nonlocal_psi_.data() + source_offset);
     }
 
     // Stage every delayed outgoing nonlocal payload for this cell through the same queue,
     // tagged `DELAYED_FACE_PSI` so the receiver routes it into the lagged-incoming `_new`
-    // bank rather than the normal nonlocal bank.  Producer-side memcpy reads from
-    // `delayed_nonlocal_outgoing_psi_` via the delayed node-copy plan built at construction.
+    // bank rather than the normal nonlocal bank. The device index map has already placed
+    // the face contiguously in receiver-node order, so staging requires one copy.
     for (const auto& face_info : common_data_.GetDelayedOutgoingNonlocalFaces(cell_local_id))
     {
+      assert(async_comm != nullptr);
       const std::size_t face_data_size =
         static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
+      const auto source_offset =
+        static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
       const int dest_rank = common_data_.GetDelayedOutgoingLocalities()[face_info.dest_slot];
-      async_comm.EnqueueOutgoing(
-        dest_rank,
-        angle_set_id,
-        face_info.remote_face_index,
-        face_data_size,
-        [this, &face_info, stride_bytes](double* dst_base)
-        {
-          const auto* node_plan =
-            delayed_outgoing_node_memcpy_plan_.data() + face_info.node_copy_offset;
-          const auto* node_plan_end = node_plan + face_info.num_node_copies;
-          for (; node_plan != node_plan_end; ++node_plan)
-          {
-            auto* dst = dst_base + node_plan->dest_offset;
-            const double* src = delayed_nonlocal_outgoing_psi_.data() + node_plan->src_offset;
-            std::memcpy(dst, src, stride_bytes);
-          }
-        },
-        CBCDMessageKind::DELAYED_FACE_PSI);
+      async_comm->EnqueueOutgoing(dest_rank,
+                                  producer_id,
+                                  angle_set_id,
+                                  face_info.remote_face_index,
+                                  face_data_size,
+                                  delayed_nonlocal_outgoing_psi_.data() + source_offset,
+                                  CBCDMessageKind::DELAYED_FACE_PSI);
     }
   }
 }
@@ -424,8 +426,6 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
     return;
 
   CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiToDestinationPsi");
-
-  stream_.synchronize();
 
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();
@@ -461,13 +461,16 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 std::uint32_t
 CBCD_FLUDS::ScatterReceivedFaceData(const std::uint32_t source_slot,
                                     const std::uint32_t source_face_index,
-                                    const double* psi_data)
+                                    const double* psi_data,
+                                    const std::size_t data_size)
 {
   const auto& face_info = common_data_.GetIncomingNonlocalFace(source_slot, source_face_index);
-  double* dst = incoming_nonlocal_psi_.data() +
-                static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   const std::size_t face_values =
     static_cast<std::size_t>(face_info.num_nodes) * num_groups_and_angles_;
+  if (data_size != face_values)
+    throw std::length_error("CBCD FLUDS: incoming face payload has an invalid extent.");
+  double* dst = incoming_nonlocal_psi_.data() +
+                static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   std::memcpy(dst, psi_data, face_values * sizeof(double));
   return face_info.cell_local_id;
 }
@@ -475,14 +478,17 @@ CBCD_FLUDS::ScatterReceivedFaceData(const std::uint32_t source_slot,
 void
 CBCD_FLUDS::ScatterReceivedDelayedFaceData(const std::uint32_t source_slot,
                                            const std::uint32_t source_face_index,
-                                           const double* psi_data)
+                                           const double* psi_data,
+                                           const std::size_t data_size)
 {
   const auto& face_info =
     common_data_.GetDelayedIncomingNonlocalFace(source_slot, source_face_index);
-  double* dst = delayed_nonlocal_incoming_psi_new_.data() +
-                static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   const std::size_t face_values =
     static_cast<std::size_t>(face_info.num_nodes) * num_groups_and_angles_;
+  if (data_size != face_values)
+    throw std::length_error("CBCD FLUDS: delayed face payload has an invalid extent.");
+  double* dst = delayed_nonlocal_incoming_psi_new_.data() +
+                static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   std::memcpy(dst, psi_data, face_values * sizeof(double));
 }
 

@@ -6,12 +6,29 @@
 #include "framework/mesh/mesh_continuum/mesh_continuum.h"
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 namespace opensn
 {
 
 namespace
 {
+
+std::size_t
+CheckedAdd(const std::size_t lhs, const std::size_t rhs)
+{
+  if (rhs > std::numeric_limits<std::size_t>::max() - lhs)
+    throw std::length_error("CBC FLUDS: angular-flux buffer size overflow.");
+  return lhs + rhs;
+}
+
+std::size_t
+CheckedMultiply(const std::size_t lhs, const std::size_t rhs)
+{
+  if (lhs != 0 and rhs > std::numeric_limits<std::size_t>::max() / lhs)
+    throw std::length_error("CBC FLUDS: angular-flux buffer size overflow.");
+  return lhs * rhs;
+}
 
 void
 UpdateSpanVector(std::vector<std::vector<double>>& data, std::vector<std::span<double>>& views)
@@ -28,7 +45,7 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
                      const CBC_FLUDSCommonData& common_data)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    local_psi_data_(common_data.TotalLocalFaceSlotNodes() * num_groups_and_angles_),
+    local_psi_data_(CheckedMultiply(common_data.TotalLocalFaceSlotNodes(), num_groups_and_angles_)),
     incoming_nonlocal_psi_offsets_(common_data.NumIncomingFaces() + 1, 0),
     incoming_psi_epoch_(common_data.NumIncomingFaces(), 0)
 {
@@ -43,15 +60,16 @@ CBC_FLUDS::CBC_FLUDS(unsigned int num_groups,
       if (slot == CBC_FLUDSCommonData::INVALID_FACE_SLOT)
         continue;
 
-      incoming_nonlocal_psi_offsets_[slot + 1] =
+      incoming_nonlocal_psi_offsets_[slot + 1] = CheckedMultiply(
         common_data_.GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f))
-          .face_node_mapping_.size() *
-        num_groups_and_angles_;
+          .face_node_mapping_.size(),
+        num_groups_and_angles_);
     }
   }
 
   for (std::size_t slot = 0; slot + 1 < incoming_nonlocal_psi_offsets_.size(); ++slot)
-    incoming_nonlocal_psi_offsets_[slot + 1] += incoming_nonlocal_psi_offsets_[slot];
+    incoming_nonlocal_psi_offsets_[slot + 1] =
+      CheckedAdd(incoming_nonlocal_psi_offsets_[slot], incoming_nonlocal_psi_offsets_[slot + 1]);
   incoming_nonlocal_psi_.resize(incoming_nonlocal_psi_offsets_.back());
 }
 
@@ -161,7 +179,8 @@ CBC_FLUDS::ClearLocalAndReceivePsi()
 void
 CBC_FLUDS::AllocateDelayedLocalPsi()
 {
-  const auto size = common_data_.NumDelayedLocalFaceNodes() * num_groups_and_angles_;
+  const auto size =
+    CheckedMultiply(common_data_.NumDelayedLocalFaceNodes(), num_groups_and_angles_);
   delayed_local_psi_.assign(size, 0.0);
   delayed_local_psi_old_.assign(size, 0.0);
   delayed_local_psi_view_ = std::span<double>(delayed_local_psi_);
@@ -177,7 +196,8 @@ CBC_FLUDS::AllocateDelayedPrelocIOutgoingPsi()
 
   for (std::size_t prelocI = 0; prelocI < num_delayed_dependencies; ++prelocI)
   {
-    const auto size = common_data_.DelayedPrelocIFaceNodeCount(prelocI) * num_groups_and_angles_;
+    const auto size =
+      CheckedMultiply(common_data_.DelayedPrelocIFaceNodeCount(prelocI), num_groups_and_angles_);
     delayed_prelocI_outgoing_psi_[prelocI].assign(size, 0.0);
     delayed_prelocI_outgoing_psi_old_[prelocI].assign(size, 0.0);
   }

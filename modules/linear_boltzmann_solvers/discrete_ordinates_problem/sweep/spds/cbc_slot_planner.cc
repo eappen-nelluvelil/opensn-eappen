@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
 #include <vector>
 
 namespace opensn::detail
@@ -35,6 +36,9 @@ public:
     n_ = n;
     active_words_per_row_ = (n + 63) / 64;
     padded_words_per_row_ = (active_words_per_row_ + 7) & ~std::size_t{7};
+    if (padded_words_per_row_ > 0 and
+        n_ > std::numeric_limits<std::size_t>::max() / padded_words_per_row_)
+      throw std::length_error("CBC slot planner: reachability matrix size overflow.");
     const std::size_t required_words = n_ * padded_words_per_row_;
     if (data_.size() < required_words)
       data_.resize(required_words);
@@ -186,6 +190,54 @@ struct ThreadLocalWorkspace
 namespace
 {
 
+void
+ValidatePlannerInputs(const std::vector<std::uint32_t>& successor_rank_offsets,
+                      const std::vector<std::uint32_t>& successor_ranks,
+                      const std::vector<std::uint32_t>& face_producer_ranks,
+                      const std::vector<std::uint32_t>& face_consumer_ranks,
+                      const std::vector<std::uint32_t>& producer_cell_face_offsets)
+{
+  if (successor_rank_offsets.empty())
+    throw std::invalid_argument("CBC slot planner: successor offsets must contain one entry.");
+
+  const auto num_tasks = successor_rank_offsets.size() - 1;
+  if (num_tasks > std::numeric_limits<std::uint32_t>::max())
+    throw std::length_error("CBC slot planner: task count exceeds the 32-bit index range.");
+  if (successor_rank_offsets.front() != 0 or
+      successor_rank_offsets.back() != successor_ranks.size() or
+      not std::is_sorted(successor_rank_offsets.begin(), successor_rank_offsets.end()))
+    throw std::invalid_argument("CBC slot planner: malformed successor CSR offsets.");
+
+  for (std::size_t task = 0; task < num_tasks; ++task)
+    for (auto i = successor_rank_offsets[task]; i < successor_rank_offsets[task + 1]; ++i)
+      if (successor_ranks[i] <= task or successor_ranks[i] >= num_tasks)
+        throw std::invalid_argument(
+          "CBC slot planner: successor ranks are not a strict topological adjacency.");
+
+  if (face_producer_ranks.size() != face_consumer_ranks.size())
+    throw std::invalid_argument("CBC slot planner: face endpoint tables have unequal lengths.");
+  if (face_producer_ranks.size() > std::numeric_limits<std::uint32_t>::max())
+    throw std::length_error("CBC slot planner: face count exceeds the 32-bit index range.");
+  if (producer_cell_face_offsets.size() != num_tasks + 1 or
+      producer_cell_face_offsets.front() != 0 or
+      producer_cell_face_offsets.back() != face_producer_ranks.size() or
+      not std::is_sorted(producer_cell_face_offsets.begin(), producer_cell_face_offsets.end()))
+    throw std::invalid_argument("CBC slot planner: malformed producer-face CSR offsets.");
+
+  for (std::size_t producer = 0; producer < num_tasks; ++producer)
+    for (auto face = producer_cell_face_offsets[producer];
+         face < producer_cell_face_offsets[producer + 1];
+         ++face)
+      if (face_producer_ranks[face] != producer)
+        throw std::invalid_argument("CBC slot planner: face producer does not match its CSR row.");
+
+  for (std::size_t face = 0; face < face_producer_ranks.size(); ++face)
+    if (face_producer_ranks[face] >= num_tasks or face_consumer_ranks[face] >= num_tasks or
+        face_producer_ranks[face] >= face_consumer_ranks[face])
+      throw std::invalid_argument(
+        "CBC slot planner: directed face is not a strict task-DAG dependency.");
+}
+
 // Build the reflexive transitive closure of the local cell DAG in topological-rank space.
 void
 BuildReachability(const std::uint32_t num_tasks,
@@ -247,12 +299,12 @@ public:
     PrepareGreedyOrder();
   }
 
-  SlotSolveResult Solve()
+  std::size_t Solve()
   {
     if (num_faces_ == 0)
     {
       face_slot_ids_.clear();
-      return {};
+      return 0;
     }
 
     // Greedy seeding to increase the initial matching size and reduces the
@@ -269,11 +321,9 @@ public:
 
     ExtractSlotAssignment();
     const std::size_t slot_count = static_cast<std::size_t>(num_faces_) - matching_size;
-    if (VerifySlotAssignment(slot_count))
-      return {slot_count, false};
-
-    std::iota(face_slot_ids_.begin(), face_slot_ids_.end(), std::uint32_t{0});
-    return {static_cast<std::size_t>(num_faces_), true};
+    if (not VerifySlotAssignment(slot_count))
+      throw std::logic_error("CBC slot planner: minimum chain-cover verification failed.");
+    return slot_count;
   }
 
 private:
@@ -346,7 +396,9 @@ private:
         return false;
       ws_.face_last_rank_for_slot[slot_id] = rank;
     }
-    return true;
+    return std::all_of(ws_.face_last_rank_for_slot.begin(),
+                       ws_.face_last_rank_for_slot.begin() + slot_count,
+                       [](const std::uint32_t face) { return face != INVALID_INDEX; });
   }
 
   std::size_t GreedyInit()
@@ -529,6 +581,9 @@ private:
         if (face_begin == face_end)
           continue;
 
+        if (ws_.candidate_producer_ranks.size() >= std::numeric_limits<std::uint32_t>::max())
+          throw std::length_error(
+            "CBC slot planner: candidate-rank cache exceeds the 32-bit offset range.");
         ws_.candidate_producer_ranks.push_back(static_cast<std::uint32_t>(producer_rank));
         candidate_face_count += face_end - face_begin;
       }
@@ -601,7 +656,7 @@ private:
   int dist_null_ = 0;
 };
 
-SlotSolveResult
+std::size_t
 ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offsets,
                          const std::vector<std::uint32_t>& successor_ranks,
                          const std::vector<std::uint32_t>& face_producer_ranks,
@@ -609,10 +664,16 @@ ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offset
                          const std::vector<std::uint32_t>& producer_cell_face_offsets,
                          std::vector<std::uint32_t>& face_slot_ids)
 {
+  ValidatePlannerInputs(successor_rank_offsets,
+                        successor_ranks,
+                        face_producer_ranks,
+                        face_consumer_ranks,
+                        producer_cell_face_offsets);
+
   if (face_producer_ranks.empty())
   {
     face_slot_ids.clear();
-    return {};
+    return 0;
   }
 
   static thread_local ThreadLocalWorkspace workspace;

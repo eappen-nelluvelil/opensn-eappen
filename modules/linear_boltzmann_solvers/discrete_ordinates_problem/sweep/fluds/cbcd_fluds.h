@@ -54,7 +54,7 @@ public:
              const SpatialDiscretization& sdm,
              bool save_angular_flux);
 
-  ~CBCD_FLUDS();
+  ~CBCD_FLUDS() override = default;
 
   /// Return the shared CBCD FLUDS metadata.
   const CBCD_FLUDSCommonData& GetCommonData() const { return common_data_; }
@@ -72,31 +72,21 @@ public:
    * Allocate the lagged old/new banks used by cycle-aware sweeps.
    *
    * No-op when the owning common data has no delayed-local or delayed-nonlocal faces.
-   * Otherwise sizes the lagged local banks against
+   * Otherwise sizes the device and host lagged-local banks against
    * `CBCD_FLUDSCommonData::GetNumDelayedLocalNodes()` and the lagged nonlocal banks
-   * against the corresponding incoming/outgoing delayed counts, then refreshes the
-   * pointer set with the new device/mapped-host pointers.
+   * against the corresponding incoming/outgoing delayed counts. The host old/new views
+   * expose the complete lagged state to the transport iteration and restart machinery.
    */
   void AllocateDelayedPsiBanks();
 
-  /**
-   * Swap the lagged local old/new banks after delayed-data finalization.
-   *
-   * The kernel reads `delayed_local_psi_old` during the current sweep and writes
-   * `delayed_local_psi_new`.  After the scheduler has signalled that all delayed
-   * downstream/upstream communication is complete, the new bank becomes the old bank for
-   * the next sweep application.  Reflects the pointer-swap into the device pointer set.
-   */
-  void SwapDelayedLocalBanks() noexcept;
+  /// Copy host lagged-local old data to its device bank before a sweep application.
+  void CopyDelayedPsiToDevice();
 
-  /**
-   * Swap the lagged incoming non-local old/new banks after delayed-data finalization.
-   *
-   * Mirrors `SwapDelayedLocalBanks` for the nonlocal incoming pair.  The kernel reads
-   * `_old` during the current sweep; the communicator writes `_new` during the delayed
-   * receive phase; after barrier `_new` becomes `_old`.
-   */
-  void SwapDelayedNonlocalIncomingBanks() noexcept;
+  /// Enqueue the device-to-host copy of the newly computed lagged-local data.
+  void CopyDelayedLocalPsiFromDevice();
+
+  /// Synchronize pending delayed-local and saved-psi host transfers.
+  void SynchronizeHostData();
 
   /**
    * Build reflecting-boundary copy plans for this angle set.
@@ -147,13 +137,16 @@ public:
    * non-local face data is enqueued directly into the aggregated communicator.
    *
    * \param sweep_chunk Owning CBCD sweep chunk.
-   * \param async_comm Aggregated communicator used to enqueue non-local face payloads.
+   * \param async_comm Aggregated communicator used to enqueue non-local face payloads, or
+   * `nullptr` when the sweep has no non-local traffic.
+   * \param producer_id Worker ID that owns the publishing angle set.
    * \param angle_set_id Producing angle-set ID.
    * \param angle_indices Global angle indices carried by this angle set.
    * \param cell_local_ids Local cells in the just-completed batch.
    */
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
-                                 CBCD_AsynchronousCommunicator& async_comm,
+                                 CBCD_AsynchronousCommunicator* async_comm,
+                                 std::size_t producer_id,
                                  std::size_t angle_set_id,
                                  const std::vector<std::uint32_t>& angle_indices,
                                  std::span<const std::uint32_t> cell_local_ids);
@@ -164,26 +157,30 @@ public:
    * \param source_slot Source-locality slot for the sending partition.
    * \param source_face_index Source-slot-local face index carried on the wire.
    * \param psi_data Packed payload doubles.
+   * \param data_size Number of doubles in `psi_data`.
    * \return Local cell ID whose dependency count should be updated.
    */
   std::uint32_t ScatterReceivedFaceData(std::uint32_t source_slot,
                                         std::uint32_t source_face_index,
-                                        const double* psi_data);
+                                        const double* psi_data,
+                                        std::size_t data_size);
 
   /**
    * Scatter one received delayed non-local face payload into the lagged-incoming `_new` bank.
    *
-   * The delayed scatter populates next-iteration storage and must not decrement any
-   * current-iteration task dependency.  The bank rotation from `_new` to `_old` runs in
-   * the scheduler after every delayed source's completion marker has been received.
+   * The delayed scatter populates the current operator output and must not decrement any
+   * current-iteration task dependency. The transport iteration controls the subsequent
+   * new-to-old state copy through the common FLUDS interface.
    *
    * \param source_slot Delayed-source-locality slot for the sending partition.
    * \param source_face_index Source-slot-local delayed face index carried on the wire.
    * \param psi_data Packed payload doubles.
+   * \param data_size Number of doubles in `psi_data`.
    */
   void ScatterReceivedDelayedFaceData(std::uint32_t source_slot,
                                       std::uint32_t source_face_index,
-                                      const double* psi_data);
+                                      const double* psi_data,
+                                      std::size_t data_size);
 
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
@@ -193,6 +190,11 @@ public:
   void AllocateDelayedLocalPsi() override {}
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
+
+  void SetDelayedLocalPsiOldToNew() override;
+  void SetDelayedLocalPsiNewToOld() override;
+  void SetDelayedOutgoingPsiOldToNew() override;
+  void SetDelayedOutgoingPsiNewToOld() override;
 
   std::span<const ReflectingBoundaryFacePlan>
   GetReflectingOutgoingBoundaryFaces(const std::uint64_t cell_local_id) const
@@ -235,6 +237,9 @@ private:
   /// Lagged local face-slot banks (consulted by the cycle-aware sweep route).
   crb::DeviceMemory<double> delayed_local_psi_old_;
   crb::DeviceMemory<double> delayed_local_psi_new_;
+  /// Host-visible lagged-local state used by transport iterations and restart I/O.
+  crb::HostVector<double> host_delayed_local_psi_old_;
+  crb::HostVector<double> host_delayed_local_psi_new_;
   /// Lagged incoming non-local banks (consulted by the cycle-aware sweep route).
   crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_old_;
   crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_new_;
@@ -249,11 +254,6 @@ private:
   std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
   /// Flat reflecting-boundary face plans.
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
-  /// Flat byte-level memcpy descriptors referenced by outgoing faces.
-  std::vector<OutgoingNodeMemcpy> outgoing_node_memcpy_plan_;
-  /// Flat byte-level memcpy descriptors referenced by delayed outgoing faces.
-  std::vector<OutgoingNodeMemcpy> delayed_outgoing_node_memcpy_plan_;
-
   /// Build the device pointer set exposed to the CBCD sweep kernel.
   void CreatePointerSet();
 };

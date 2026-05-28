@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 #include <thread>
 
 namespace opensn
@@ -44,10 +46,6 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_);
   InitializeTaskGraphData();
   InitializeReflectingTaskMask();
-}
-
-CBCD_AngleSet::~CBCD_AngleSet()
-{
 }
 
 AsynchronousCommunicator*
@@ -123,7 +121,7 @@ CBCD_AngleSet::InitializeTaskGraphData()
   for (std::size_t task_idx = 0; task_idx < task_list.size(); ++task_idx)
   {
     const auto& task = task_list[task_idx];
-    initial_deps_[task_idx] = static_cast<int>(task.num_dependencies);
+    initial_deps_[task_idx] = task.num_dependencies;
     successor_offsets_[task_idx + 1] = static_cast<std::uint32_t>(task.successors.size());
     if (task.num_dependencies == 0)
       initial_ready_cell_ids_.push_back(static_cast<std::uint32_t>(task_idx));
@@ -169,19 +167,26 @@ CBCD_AngleSet::TryRetireCompletedBatch()
     const auto succ_end = successor_offsets_[cell_local_id + 1];
     for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
     {
-      if (--remaining_deps_[successor_data_[succ_i]] == 0)
-        cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
-          .push_back(successor_data_[succ_i]);
+      const auto successor = successor_data_[succ_i];
+      auto& remaining = remaining_deps_[successor];
+      if (remaining == 0)
+        throw std::logic_error("CBCD angle set: local dependency counter underflow.");
+      if (--remaining == 0)
+        cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index).push_back(successor);
     }
 
     if ((not following_angle_sets_.empty()) and (not following_angle_sets_notified_) and
         (cell_has_outgoing_reflecting_boundary_[cell_local_id] != 0))
     {
-      assert(pending_reflecting_tasks_ > 0);
+      if (pending_reflecting_tasks_ == 0)
+        throw std::logic_error("CBCD angle set: reflecting task counter underflow.");
       --pending_reflecting_tasks_;
     }
   }
 
+  if (num_completed_tasks_ > num_tasks_ or
+      batch_state_.launch_count > num_tasks_ - num_completed_tasks_)
+    throw std::logic_error("CBCD angle set: completed task count exceeds the task graph.");
   num_completed_tasks_ += batch_state_.launch_count;
   batch_state_.completed_buffer_index = batch_state_.launch_buffer_index;
   batch_state_.completed_count = batch_state_.launch_count;
@@ -198,6 +203,8 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
   if (batch_state_.kernel_in_flight or ready_cell_ids.empty())
     return false;
 
+  if (ready_cell_ids.size() > std::numeric_limits<std::uint32_t>::max())
+    throw std::length_error("CBCD angle set: ready batch exceeds the kernel count range.");
   const auto launch_count = static_cast<std::uint32_t>(ready_cell_ids.size());
   batch_state_.launch_buffer_index = batch_state_.ready_buffer_index;
   batch_state_.launch_count = launch_count;
@@ -209,7 +216,7 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
 }
 
 void
-CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
+CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::size_t worker_id)
 {
   if (not batch_state_.completed_batch_pending)
     return;
@@ -217,7 +224,8 @@ CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
   auto& completed_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.completed_buffer_index);
   cbcd_fluds_.CopyOutgoingPsiBackToHost(
     sweep_chunk,
-    *async_comm_,
+    async_comm_,
+    worker_id,
     GetID(),
     GetAngleIndices(),
     {completed_cell_ids.data(), static_cast<std::size_t>(batch_state_.completed_count)});
@@ -255,9 +263,13 @@ CBCD_AngleSet::TryNotifyFollowingAngleSets()
   for (auto* angle_set : following_angle_sets_)
   {
     auto* cbcd_angle_set = static_cast<CBCD_AngleSet*>(angle_set);
-    const auto old_value =
-      cbcd_angle_set->dependency_counter_.fetch_sub(1, std::memory_order_release);
-    assert(old_value > 0);
+    auto remaining = cbcd_angle_set->dependency_counter_.load(std::memory_order_relaxed);
+    do
+    {
+      if (remaining == 0)
+        throw std::logic_error("CBCD angle set: angle-set dependency counter underflow.");
+    } while (not cbcd_angle_set->dependency_counter_.compare_exchange_weak(
+      remaining, remaining - 1, std::memory_order_release, std::memory_order_relaxed));
   }
   following_angle_sets_notified_ = true;
 }
@@ -272,6 +284,7 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
 
+  cbcd_fluds_.CopyDelayedPsiToDevice();
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
   boundary_data_initialized_ = true;
@@ -279,7 +292,7 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 }
 
 bool
-CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
+CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::size_t worker_id)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
@@ -288,13 +301,19 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
 
   auto& ready_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index);
   const bool kernel_completed = batch_state_.kernel_in_flight and stream_.is_completed();
-  const bool has_incoming = async_comm_->HasIncoming(GetID());
-  const bool can_finalize = (num_completed_tasks_ == num_tasks_) and
-                            (not batch_state_.kernel_in_flight) and
-                            (not batch_state_.completed_batch_pending);
+  const bool has_incoming = async_comm_ != nullptr and async_comm_->HasIncoming(GetID());
+  const bool local_work_complete = (num_completed_tasks_ == num_tasks_) and
+                                   (not batch_state_.kernel_in_flight) and
+                                   (not batch_state_.completed_batch_pending);
+  const bool can_signal_completion = local_work_complete and (not local_completion_signaled_);
+  const bool can_finalize =
+    local_work_complete and local_completion_signaled_ and
+    (async_comm_ == nullptr or (async_comm_->AreDelayedReceivesComplete(GetID()) and
+                                (not async_comm_->HasIncoming(GetID()))));
 
   if ((not kernel_completed) and (not batch_state_.completed_batch_pending) and
-      ready_cell_ids.empty() and (not has_incoming) and (not can_finalize))
+      ready_cell_ids.empty() and (not has_incoming) and (not can_signal_completion) and
+      (not can_finalize))
     return false;
 
   bool work_done = false;
@@ -321,23 +340,30 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
           // owning cell once its incoming dependency count reaches zero.
           for (const auto& entry : batch.entries)
           {
-            const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
-            if (--remaining_deps_[cell_local_id] == 0)
+            const auto cell_local_id =
+              cbcd_fluds_.ScatterReceivedFaceData(batch.source_slot,
+                                                  entry.source_face_index,
+                                                  psi_base + entry.payload_offset,
+                                                  entry.payload_size);
+            auto& remaining = remaining_deps_[cell_local_id];
+            if (remaining == 0)
+              throw std::logic_error("CBCD angle set: nonlocal dependency counter underflow.");
+            if (--remaining == 0)
               cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
                 .push_back(static_cast<std::uint32_t>(cell_local_id));
           }
         }
         else
         {
-          // Delayed traffic only populates the lagged-incoming `_new` bank — it must not
+          // Delayed traffic only populates the lagged-incoming `_new` bank. It must not
           // touch dependency counters because the corresponding edge is, by construction,
-          // not part of the current-iteration task graph.  Bank rotation `_new -> _old`
-          // is performed by the scheduler after every delayed-completion marker arrives.
+          // not part of the current-iteration task graph.
           assert(batch.kind == CBCDMessageKind::DELAYED_FACE_PSI);
           for (const auto& entry : batch.entries)
-            cbcd_fluds_.ScatterReceivedDelayedFaceData(
-              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
+            cbcd_fluds_.ScatterReceivedDelayedFaceData(batch.source_slot,
+                                                       entry.source_face_index,
+                                                       psi_base + entry.payload_offset,
+                                                       entry.payload_size);
         }
       });
   }
@@ -354,19 +380,38 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
   if (batch_state_.completed_batch_pending)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
-    FlushCompletedBatch(cbcd_sweep_chunk);
+    FlushCompletedBatch(cbcd_sweep_chunk, worker_id);
     work_done = true;
   }
 
-  // Finalize once all tasks are done and no kernel is in flight.
-  if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight) and
-      (not batch_state_.completed_batch_pending))
+  // Publish delayed-output completion as soon as local work is done. This must precede
+  // waiting for delayed input; otherwise a distributed cycle can make every rank wait
+  // before any rank emits the marker that breaks the wait.
+  const bool all_local_work_complete = (num_completed_tasks_ == num_tasks_) and
+                                       (not batch_state_.kernel_in_flight) and
+                                       (not batch_state_.completed_batch_pending);
+  if (all_local_work_complete and (not local_completion_signaled_))
+  {
+    if (async_comm_ != nullptr)
+      async_comm_->SignalAngleSetComplete(GetID(), worker_id);
+    local_completion_signaled_ = true;
+    work_done = true;
+  }
+
+  // Keep the angle set assigned to its worker until every delayed payload has been
+  // published before its source's completion marker and drained from this mailbox. The
+  // completion acquire followed by the mailbox check closes the publish/observe ordering.
+  const bool communication_complete =
+    async_comm_ == nullptr or
+    (async_comm_->AreDelayedReceivesComplete(GetID()) and (not async_comm_->HasIncoming(GetID())));
+  if (all_local_work_complete and local_completion_signaled_ and communication_complete)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
-    async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
     executed_ = true;
+    cbcd_fluds_.CopyDelayedLocalPsiFromDevice();
     cbcd_fluds_.CopySavedPsiFromDevice();
+    cbcd_fluds_.SynchronizeHostData();
     cbcd_fluds_.CopySavedPsiToDestinationPsi(cbcd_sweep_chunk, this);
     return true;
   }
@@ -391,7 +436,7 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 
   while (not executed_)
   {
-    if (TryAdvanceOneStep(cbcd_sweep_chunk))
+    if (TryAdvanceOneStep(cbcd_sweep_chunk, 0))
       continue;
     std::this_thread::yield();
   }
@@ -410,6 +455,7 @@ CBCD_AngleSet::ResetSweepBuffers()
   pending_reflecting_tasks_ = 0;
   boundary_data_initialized_ = false;
   following_angle_sets_notified_ = false;
+  local_completion_signaled_ = false;
   ResetDependencyCounter();
   executed_ = false;
 }

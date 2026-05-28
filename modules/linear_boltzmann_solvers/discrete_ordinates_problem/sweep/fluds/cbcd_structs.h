@@ -25,10 +25,9 @@ class SweepBoundary;
  *           When boundary, reserved (currently unused).
  * - Bits 0-59: flat bank index (capacity ~1.15e18).
  *
- * Delayed indices route through the lagged old/new banks managed by `CBCD_FLUDS` and are
- * consumed only by the cycle-aware kernel specialization `SweepKernel<SweepKind::CBC, true>`.
- * The acyclic specialization `SweepKernel<SweepKind::CBC, false>` never inspects bit 60, so
- * for problems without cycles the generated device code is identical to the pre-cycle path.
+ * Delayed indices route through the lagged old/new banks managed by `CBCD_FLUDS`. The CBC
+ * kernel uses the precomputed bit on each node index to select the lagged or normal bank;
+ * it does not inspect graph-level cycle metadata.
  */
 class CBCD_NodeIndex : public NodeIndex
 {
@@ -156,10 +155,9 @@ private:
  * when the owning angle set has at least one delayed-local or delayed-nonlocal face; they
  * are `nullptr` otherwise.  The flux-pointer accessors always check the delayed bit of the
  * supplied node index and dispatch to the appropriate bank.  For acyclic problems every
- * face's node index has the delayed bit cleared and the branch is single-target predicted,
- * so there is no measurable overhead relative to a non-cycle-aware kernel.  This mirrors
- * AAHD's approach: the device kernel follows precomputed routes encoded in the node index
- * and never inspects graph-level cycle metadata.
+ * face's node index has the delayed bit cleared, so the runtime route resolves to the normal
+ * bank. This mirrors AAHD's approach: the device kernel follows precomputed routes encoded
+ * in the node index and never inspects graph-level cycle metadata.
  */
 struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
@@ -261,21 +259,14 @@ struct GroupedIncomingNonlocalFace
   std::uint16_t num_nodes = 0;
 };
 
-/// Outgoing node-copy descriptor.
-struct OutgoingNodeCopy
-{
-  std::uint32_t storage_index = 0;
-  std::uint16_t face_node = 0;
-};
-
 /// Grouped outgoing non-local face.
 struct GroupedOutgoingNonlocalFace
 {
   std::uint32_t dest_slot = 0;
   std::uint32_t remote_face_index = 0;
-  std::uint32_t node_copy_offset = 0;
+  /// Base index of the contiguous receiver-node-ordered face payload.
+  std::uint32_t base_storage_index = 0;
   std::uint16_t num_face_nodes = 0;
-  std::uint16_t num_node_copies = 0;
 };
 
 /// Reflecting-boundary face copy plan.
@@ -287,13 +278,6 @@ struct ReflectingBoundaryFacePlan
   std::uint16_t first_face_node = 0;
   std::size_t src_base_offset = 0;
   std::uint16_t num_nodes = 0;
-};
-
-/// Outgoing node-copy plan entry.
-struct OutgoingNodeMemcpy
-{
-  std::size_t src_offset = 0;
-  std::size_t dest_offset = 0;
 };
 
 } // namespace opensn
