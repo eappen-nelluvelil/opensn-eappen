@@ -44,6 +44,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
+    save_angular_flux_(save_angular_flux),
     // Lagged nonlocal banks: zero-sized when the SPDS is acyclic, otherwise sized exactly
     // to the delayed-face-node count.  Allocated as mapped host vectors so the kernel can
     // read/write them via the same pointer-set mechanism as the normal nonlocal banks.
@@ -55,8 +56,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
                                        0.0),
     delayed_nonlocal_outgoing_psi_(common_data_.GetNumDelayedOutgoingNonlocalNodes() *
                                    num_groups_and_angles_,
-                                   0.0),
-    save_angular_flux_(save_angular_flux)
+                                   0.0)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
   for (auto& local_cell_ids : local_cell_ids_)
@@ -232,8 +232,11 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
   {
     delayed_local_psi_old_ = crb::DeviceMemory<double>(delayed_local_size);
     delayed_local_psi_new_ = crb::DeviceMemory<double>(delayed_local_size);
-    crb::fill(delayed_local_psi_old_, 0.0, delayed_local_size);
-    crb::fill(delayed_local_psi_new_, 0.0, delayed_local_size);
+    // Zero the lagged-local banks at allocation time so the first sweep iteration reads
+    // a well-defined initial state (the cycle-aware sweep route reads `_old` before any
+    // delayed producer has written it).
+    delayed_local_psi_old_.zero_fill();
+    delayed_local_psi_new_.zero_fill();
   }
 
   const auto delayed_incoming_nonlocal_size =

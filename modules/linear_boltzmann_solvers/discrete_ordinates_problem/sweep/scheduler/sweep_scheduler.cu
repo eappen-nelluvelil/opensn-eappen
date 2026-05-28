@@ -144,8 +144,10 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   for (auto* angle_set : angle_sets)
     angle_set->ResetSweepBuffers();
 
-  for (const auto& [bid, bndry] : angle_agg_.GetSimBoundaries())
-    bndry->ResetAnglesReadyStatus();
+  // Reflecting-boundary state rotation in cycles-4 is driven through the per-groupset
+  // `CopyDelayedAngularFluxOldToNew`/`CopyDelayedAngularFluxNewToOld` rotation invoked by
+  // the host sweep driver, not through a per-angle-set ready-status protocol, so nothing
+  // extra is required here.
 }
 
 } // namespace opensn

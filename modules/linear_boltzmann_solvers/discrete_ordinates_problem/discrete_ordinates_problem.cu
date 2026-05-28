@@ -145,7 +145,7 @@ DiscreteOrdinatesProblem::CreateCBCD_AngleSet(
   const MPICommunicatorSet& in_comm_set)
 {
   return std::make_shared<CBCD_AngleSet>(
-    id, groupset.GetNumGroups(), spds, fluds, angle_indices, boundaries, in_comm_set);
+    id, groupset, spds, fluds, angle_indices, boundaries, in_comm_set);
 }
 
 std::shared_ptr<SweepChunk>
