@@ -8,6 +8,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <cstdint>
 #include <set>
 #include <unordered_map>
 
@@ -64,6 +65,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     {
       const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
       const auto& common_data = fluds_list[as_ss_idx]->GetCommonData();
+      std::unordered_map<int, std::size_t> outgoing_records_by_destination;
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
       delayed_incoming_source_partitions_by_angle_set.push_back(
         common_data.GetDelayedIncomingSourcePartitions());
@@ -82,17 +84,27 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       {
         for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
         {
+          const int dest_rank = common_data.GetOutgoingLocalities()[face_info.dest_slot];
+          ++outgoing_records_by_destination[dest_rank];
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
                      static_cast<std::size_t>(face_info.num_face_nodes) * stride);
         }
         for (const auto& face_info : common_data.GetDelayedOutgoingNonlocalFaces(cell_local_id))
         {
+          const int dest_rank = common_data.GetDelayedOutgoingLocalities()[face_info.dest_slot];
+          ++outgoing_records_by_destination[dest_rank];
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
                      static_cast<std::size_t>(face_info.num_face_nodes) * stride);
         }
       }
+      for (const int dest_rank : common_data.GetDelayedOutgoingLocalities())
+        ++outgoing_records_by_destination[dest_rank];
+      capacities[as_ss_idx].outgoing_faces_by_destination.reserve(
+        outgoing_records_by_destination.size());
+      for (const auto& [dest_rank, face_count] : outgoing_records_by_destination)
+        capacities[as_ss_idx].outgoing_faces_by_destination.push_back({dest_rank, face_count});
 
       std::unordered_map<std::uint32_t, std::size_t> incoming_entries_by_source_slot;
       std::unordered_map<std::uint32_t, std::size_t> incoming_values_by_source_slot;
@@ -153,7 +165,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       {
         if (section_bytes == 0)
           continue;
-        msg_size_in_bytes += 2 * sizeof(std::size_t) + section_bytes;
+        msg_size_in_bytes += sizeof(std::uint8_t) + 2 * sizeof(std::size_t) + section_bytes;
       }
       max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
     }
@@ -177,10 +189,10 @@ CBCDSweepChunk::~CBCDSweepChunk()
 }
 
 void
-CBCDSweepChunk::StartCommunicator()
+CBCDSweepChunk::StartCommunicator(const std::size_t num_workers)
 {
   if (async_comm_)
-    async_comm_->Start();
+    async_comm_->Start(num_workers);
 }
 
 void

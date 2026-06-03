@@ -209,7 +209,7 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
 }
 
 void
-CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
+CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::size_t worker_id)
 {
   if (not batch_state_.completed_batch_pending)
     return;
@@ -218,6 +218,7 @@ CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
   cbcd_fluds_.CopyOutgoingPsiBackToHost(
     sweep_chunk,
     *async_comm_,
+    worker_id,
     GetID(),
     GetAngleIndices(),
     {completed_cell_ids.data(), static_cast<std::size_t>(batch_state_.completed_count)});
@@ -279,7 +280,7 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 }
 
 bool
-CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
+CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::size_t worker_id)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
@@ -354,7 +355,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
   if (batch_state_.completed_batch_pending)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
-    FlushCompletedBatch(cbcd_sweep_chunk);
+    FlushCompletedBatch(cbcd_sweep_chunk, worker_id);
     work_done = true;
   }
 
@@ -363,7 +364,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
       (not batch_state_.completed_batch_pending))
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
-    async_comm_->SignalAngleSetComplete(GetID());
+    async_comm_->SignalAngleSetComplete(GetID(), worker_id);
     TryNotifyFollowingAngleSets();
     executed_ = true;
     cbcd_fluds_.CopySavedPsiFromDevice();
@@ -391,7 +392,7 @@ CBCD_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permissio
 
   while (not executed_)
   {
-    if (TryAdvanceOneStep(cbcd_sweep_chunk))
+    if (TryAdvanceOneStep(cbcd_sweep_chunk, 0))
       continue;
     std::this_thread::yield();
   }

@@ -148,12 +148,14 @@ public:
    *
    * \param sweep_chunk Owning CBCD sweep chunk.
    * \param async_comm Aggregated communicator used to enqueue non-local face payloads.
+   * \param producer_id Worker ID that owns the publishing angle set.
    * \param angle_set_id Producing angle-set ID.
    * \param angle_indices Global angle indices carried by this angle set.
    * \param cell_local_ids Local cells in the just-completed batch.
    */
   void CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                  CBCD_AsynchronousCommunicator& async_comm,
+                                 std::size_t producer_id,
                                  std::size_t angle_set_id,
                                  const std::vector<std::uint32_t>& angle_indices,
                                  std::span<const std::uint32_t> cell_local_ids);
