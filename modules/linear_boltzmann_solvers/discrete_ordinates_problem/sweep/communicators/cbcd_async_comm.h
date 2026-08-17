@@ -367,16 +367,20 @@ private:
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
   std::vector<InFlightSend> in_flight_sends_;
+  /// Completed aggregate buffers retained for capacity-preserving reuse.
+  std::vector<ByteArray> available_send_buffers_;
   /// Termination flag for the communication thread.
   std::atomic<bool> stop_requested_{false};
   /// Per-angle-set local completion flags.
   std::vector<std::atomic<bool>> angle_set_done_;
+  /// Number of delayed source slots still incomplete for each angle set.
+  std::vector<std::atomic<std::uint32_t>> delayed_sources_remaining_by_angle_set_;
   /// Delayed source partitions expected to send completion markers for each angle set.
   std::vector<std::vector<int>> delayed_source_partitions_by_angle_set_;
   /// Delayed destination partitions to send completion markers to for each angle set.
   std::vector<std::vector<int>> delayed_destination_partitions_by_angle_set_;
-  /// Number of delayed-completion markers received per `(angle_set_id, source_slot)`.
-  std::vector<std::vector<std::atomic<std::uint32_t>>> delayed_completion_received_by_angle_set_;
+  /// Communication-thread-local delayed-completion flags by angle set and source slot.
+  std::vector<std::vector<std::uint8_t>> delayed_completion_received_by_angle_set_;
   /// Dedicated communication thread.
   std::thread comm_thread_;
   /// Scratch vector used while gathering ready outgoing queue slots.

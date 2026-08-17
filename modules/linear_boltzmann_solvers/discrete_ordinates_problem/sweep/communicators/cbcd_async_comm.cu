@@ -122,7 +122,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     capacities_(capacities),
     mpi_tag_(detail::CheckedMpiTag(angle_sets.size())),
     max_message_bytes_(max_message_bytes),
-    angle_set_done_(angle_sets.size())
+    angle_set_done_(angle_sets.size()),
+    delayed_sources_remaining_by_angle_set_(angle_sets.size())
 {
   if (angle_sets.empty() or incoming_source_partitions.size() != angle_sets.size() or
       delayed_incoming_source_partitions.size() != angle_sets.size() or
@@ -234,13 +235,12 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (auto& done : angle_set_done_)
     done.store(false, std::memory_order_relaxed);
 
-  // One atomic per `(angle_set, delayed_source)` pair so the receiver can count completion
-  // markers without taking a lock.  Each atomic is initialised to zero; `Start` resets them
-  // before every sweep.
+  // Only the communication thread accesses the per-source flags. Workers observe the
+  // aggregate remaining-source count.
   delayed_completion_received_by_angle_set_.resize(num_angle_sets_);
   for (std::size_t i = 0; i < num_angle_sets_; ++i)
-    delayed_completion_received_by_angle_set_[i] =
-      std::vector<std::atomic<std::uint32_t>>(delayed_source_partitions_by_angle_set_[i].size());
+    delayed_completion_received_by_angle_set_[i].resize(
+      delayed_source_partitions_by_angle_set_[i].size());
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -296,11 +296,7 @@ CBCD_AsynchronousCommunicator::AreDelayedReceivesComplete(
   const std::size_t angle_set_id) const noexcept
 {
   assert(angle_set_id < num_angle_sets_);
-  const auto& counters = delayed_completion_received_by_angle_set_[angle_set_id];
-  for (const auto& counter : counters)
-    if (counter.load(std::memory_order_acquire) == 0)
-      return false;
-  return true;
+  return delayed_sources_remaining_by_angle_set_[angle_set_id].load(std::memory_order_acquire) == 0;
 }
 
 void
@@ -389,9 +385,13 @@ CBCD_AsynchronousCommunicator::Start(const std::size_t num_producers)
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& done : angle_set_done_)
     done.store(false, std::memory_order_relaxed);
-  for (auto& per_angle_set : delayed_completion_received_by_angle_set_)
-    for (auto& counter : per_angle_set)
-      counter.store(0, std::memory_order_relaxed);
+  for (std::size_t angle_set_id = 0; angle_set_id < num_angle_sets_; ++angle_set_id)
+  {
+    auto& received = delayed_completion_received_by_angle_set_[angle_set_id];
+    std::fill(received.begin(), received.end(), std::uint8_t{0});
+    delayed_sources_remaining_by_angle_set_[angle_set_id].store(
+      detail::CheckedSourceSlot(received.size()), std::memory_order_relaxed);
+  }
   in_flight_sends_.clear();
   active_destinations_.clear();
   std::fill(destination_active_local_.begin(), destination_active_local_.end(), 0);
@@ -512,6 +512,11 @@ CBCD_AsynchronousCommunicator::FlushActiveDestination(const std::size_t destinat
     //     repeated entries (none if kind == DELAYED_COMPLETION):
     //     [remote_face_index: u32][payload_size: size_t][payload doubles...]
     InFlightSend in_flight;
+    if (not available_send_buffers_.empty())
+    {
+      in_flight.data = std::move(available_send_buffers_.back());
+      available_send_buffers_.pop_back();
+    }
     in_flight.data.Data().resize(current_payload_bytes);
     std::size_t offset = 0;
 
@@ -748,49 +753,39 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         if (num_entries != 0 or
             source_slot >= delayed_completion_received_by_angle_set_[angle_set_id].size())
           throw std::runtime_error("CBCD communicator: invalid delayed-completion section.");
-        // Mark this `(angle_set_id, source_slot)` as complete.  The atomic value carries
-        // the number of completion markers received; for the current protocol only one
-        // marker per `(angle_set, source)` per sweep is emitted, so any non-zero value
-        // counts as complete.
-        delayed_completion_received_by_angle_set_[angle_set_id][source_slot].fetch_add(
-          1, std::memory_order_release);
+        auto& received = delayed_completion_received_by_angle_set_[angle_set_id][source_slot];
+        if (received == 0)
+        {
+          received = 1;
+          const auto previous = delayed_sources_remaining_by_angle_set_[angle_set_id].fetch_sub(
+            1, std::memory_order_release);
+          if (previous == 0)
+            throw std::logic_error("CBCD communicator: delayed-completion counter underflow.");
+        }
         continue;
       }
-
-      const auto* const section_ptr = reader.Data();
-      std::size_t total_values = 0;
-      for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-      {
-        reader.LoadFaceIndex();
-        const auto data_size = reader.LoadSize();
-        if (data_size > std::numeric_limits<std::size_t>::max() / sizeof(double) or
-            total_values > std::numeric_limits<std::size_t>::max() - data_size)
-          throw std::runtime_error("CBCD communicator: wire face-payload size overflow.");
-        reader.SkipBytes(data_size * sizeof(double));
-        total_values += data_size;
-      }
-      const auto section_num_bytes = static_cast<std::size_t>(reader.Data() - section_ptr);
 
       auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
       auto& batch = slot.payload;
       batch.kind = kind;
       batch.source_slot = source_slot;
       batch.entries.resize(num_entries);
-      batch.psi_data.resize(total_values);
-      detail::BufferReader section_reader{section_ptr, section_num_bytes};
+      batch.psi_data.clear();
       std::size_t value_offset = 0;
-      // Walk the compact mailbox payload with per-face offsets into one contiguous
-      // `psi_data` block.
       for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
       {
         auto& entry = batch.entries[entry_index];
-        entry.source_face_index = section_reader.LoadFaceIndex();
+        entry.source_face_index = reader.LoadFaceIndex();
         entry.payload_offset = value_offset;
-        entry.payload_size = section_reader.LoadSize();
-        std::memcpy(batch.psi_data.data() + value_offset,
-                    section_reader.Data(),
-                    entry.payload_size * sizeof(double));
-        section_reader.SkipBytes(entry.payload_size * sizeof(double));
+        entry.payload_size = reader.LoadSize();
+        if (entry.payload_size > std::numeric_limits<std::size_t>::max() / sizeof(double) or
+            value_offset > std::numeric_limits<std::size_t>::max() - entry.payload_size)
+          throw std::runtime_error("CBCD communicator: wire face-payload size overflow.");
+        const auto payload_bytes = entry.payload_size * sizeof(double);
+        reader.Require(payload_bytes);
+        batch.psi_data.resize(value_offset + entry.payload_size);
+        std::memcpy(batch.psi_data.data() + value_offset, reader.Data(), payload_bytes);
+        reader.SkipBytes(payload_bytes);
         value_offset += entry.payload_size;
       }
 
@@ -816,6 +811,7 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
     if (mpi::test(in_flight_sends_[i].request))
     {
       completed_any = true;
+      available_send_buffers_.push_back(std::move(in_flight_sends_[i].data));
       if (i + 1 != in_flight_sends_.size())
         in_flight_sends_[i] = std::move(in_flight_sends_.back());
       in_flight_sends_.pop_back();

@@ -212,8 +212,10 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       for (const auto& [dest_rank, face_count] : outgoing_records_by_destination)
         capacities[as_ss_idx].outgoing_faces_by_destination.push_back({dest_rank, face_count});
 
-      std::unordered_map<std::uint32_t, std::size_t> incoming_entries_by_source_slot;
-      std::unordered_map<std::uint32_t, std::size_t> incoming_values_by_source_slot;
+      std::array<std::unordered_map<std::uint32_t, std::size_t>, 2>
+        incoming_entries_by_kind_and_source_slot;
+      std::array<std::unordered_map<std::uint32_t, std::size_t>, 2>
+        incoming_values_by_kind_and_source_slot;
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -223,44 +225,39 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             continue;
           if (face_info.source_slot >= common_data.GetIncomingSourcePartitions().size())
             throw std::logic_error("CBCD sweep chunk: invalid incoming source slot.");
-          ++incoming_entries_by_source_slot[face_info.source_slot];
+          ++incoming_entries_by_kind_and_source_slot[0][face_info.source_slot];
           const auto num_values =
             CheckedMultiply(static_cast<std::size_t>(face_info.num_nodes),
                             stride,
                             "CBCD sweep chunk: incoming face-value count overflow.");
-          incoming_values_by_source_slot[face_info.source_slot] =
-            CheckedAdd(incoming_values_by_source_slot[face_info.source_slot],
-                       num_values,
-                       "CBCD sweep chunk: incoming batch-value count overflow.");
+          auto& value_count = incoming_values_by_kind_and_source_slot[0][face_info.source_slot];
+          value_count = CheckedAdd(
+            value_count, num_values, "CBCD sweep chunk: incoming batch-value count overflow.");
         }
-        // Mirror the sizing loop for delayed incoming faces so the receiver's mailbox
-        // batches are big enough to hold delayed-face-psi sections too.  The
-        // delayed-source-slot indices are independent from normal source-slot indices. The
-        // message model retains a distinct section for each kind because normal, delayed,
-        // and delayed-completion records may be aggregated into the same MPI payload.
         for (const auto& face_info : common_data.GetDelayedIncomingNonlocalFaces(cell_local_id))
         {
           if (face_info.num_nodes == 0)
             continue;
           if (face_info.source_slot >= common_data.GetDelayedIncomingSourcePartitions().size())
             throw std::logic_error("CBCD sweep chunk: invalid delayed source slot.");
-          ++incoming_entries_by_source_slot[face_info.source_slot];
+          ++incoming_entries_by_kind_and_source_slot[1][face_info.source_slot];
           const auto num_values =
             CheckedMultiply(static_cast<std::size_t>(face_info.num_nodes),
                             stride,
                             "CBCD sweep chunk: delayed face-value count overflow.");
-          incoming_values_by_source_slot[face_info.source_slot] =
-            CheckedAdd(incoming_values_by_source_slot[face_info.source_slot],
-                       num_values,
-                       "CBCD sweep chunk: delayed batch-value count overflow.");
+          auto& value_count = incoming_values_by_kind_and_source_slot[1][face_info.source_slot];
+          value_count = CheckedAdd(
+            value_count, num_values, "CBCD sweep chunk: delayed batch-value count overflow.");
         }
       }
-      for (const auto& [_, count] : incoming_entries_by_source_slot)
-        capacities[as_ss_idx].max_incoming_batch_entries =
-          std::max(capacities[as_ss_idx].max_incoming_batch_entries, count);
-      for (const auto& [_, values] : incoming_values_by_source_slot)
-        capacities[as_ss_idx].max_incoming_batch_values =
-          std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
+      for (const auto& entries_by_source_slot : incoming_entries_by_kind_and_source_slot)
+        for (const auto& [_, count] : entries_by_source_slot)
+          capacities[as_ss_idx].max_incoming_batch_entries =
+            std::max(capacities[as_ss_idx].max_incoming_batch_entries, count);
+      for (const auto& values_by_source_slot : incoming_values_by_kind_and_source_slot)
+        for (const auto& [_, values] : values_by_source_slot)
+          capacities[as_ss_idx].max_incoming_batch_values =
+            std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
     }
 
     std::size_t max_message_bytes = 0;
