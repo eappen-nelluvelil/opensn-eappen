@@ -108,10 +108,7 @@ public:
   constexpr bool IsLocal() const noexcept { return (value_ & local_bit_mask) != 0; }
 
   /// Check if the current non-boundary index routes through a lagged bank.
-  constexpr bool IsDelayed() const noexcept
-  {
-    return (not IsBoundary()) and ((value_ & delayed_bit_mask) != 0);
-  }
+  constexpr bool IsDelayed() const noexcept { return (value_ & delayed_bit_mask) != 0; }
 
   /// Get the index into the bank.
   constexpr std::uint64_t GetIndex() const noexcept { return value_ & index_bit_mask; }
@@ -177,18 +174,12 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   /**
    * Return the angular-flux pointer for one face node on the incoming side.
    *
-   * Returns `nullptr` when the index is undefined or refers to an outgoing face.  For
-   * boundary faces returns the incoming-boundary bank.  Otherwise consults the node-index
-   * delayed bit and routes to the lagged-old bank when set, the normal bank when clear.
+   * The caller supplies a defined incoming index. For boundary faces this returns the
+   * incoming-boundary bank. Otherwise the delayed and local bits select the flux bank.
    */
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index,
                                            unsigned int angle_group_idx) const noexcept
   {
-    if (node_index.IsUndefined())
-      return nullptr;
-    if (node_index.IsOutgoing())
-      return nullptr;
-
     const auto offset = node_index.GetIndex() * stride_size + angle_group_idx;
 
     if (node_index.IsBoundary())
@@ -204,18 +195,12 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   /**
    * Return the angular-flux pointer for one face node on the outgoing side.
    *
-   * Returns `nullptr` when the index is undefined or refers to an incoming face.  For
-   * boundary faces returns the outgoing-boundary bank.  Otherwise consults the node-index
-   * delayed bit and routes to the lagged-new bank when set, the normal bank when clear.
+   * The caller supplies a defined outgoing index. For boundary faces this returns the
+   * outgoing-boundary bank. Otherwise the delayed and local bits select the flux bank.
    */
   constexpr double* GetOutgoingFluxPointer(const CBCD_NodeIndex& node_index,
                                            unsigned int angle_group_idx) const noexcept
   {
-    if (node_index.IsUndefined())
-      return nullptr;
-    if (not node_index.IsOutgoing())
-      return nullptr;
-
     const auto offset = node_index.GetIndex() * stride_size + angle_group_idx;
 
     if (node_index.IsBoundary())

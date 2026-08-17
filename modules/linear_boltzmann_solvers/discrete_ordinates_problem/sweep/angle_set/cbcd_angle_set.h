@@ -240,7 +240,7 @@ private:
   void InitializeTaskState();
 
   /// Retire the completed kernel batch and update successor dependency state.
-  bool TryRetireCompletedBatch();
+  void RetireCompletedBatch();
 
   /// Launch the next ready-cell batch when the current stream is idle.
   bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);

@@ -153,11 +153,10 @@ CBCD_AngleSet::InitializeTaskState()
   pending_reflecting_tasks_ = following_angle_sets_.empty() ? 0 : initial_reflecting_task_count_;
 }
 
-bool
-CBCD_AngleSet::TryRetireCompletedBatch()
+void
+CBCD_AngleSet::RetireCompletedBatch()
 {
-  if ((not batch_state_.kernel_in_flight) or (not stream_.is_completed()))
-    return false;
+  assert(batch_state_.kernel_in_flight);
 
   auto& completed_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.launch_buffer_index);
   for (std::uint32_t i = 0; i < batch_state_.launch_count; ++i)
@@ -193,7 +192,6 @@ CBCD_AngleSet::TryRetireCompletedBatch()
   batch_state_.completed_batch_pending = true;
   batch_state_.launch_count = 0;
   batch_state_.kernel_in_flight = false;
-  return true;
 }
 
 bool
@@ -263,13 +261,10 @@ CBCD_AngleSet::TryNotifyFollowingAngleSets()
   for (auto* angle_set : following_angle_sets_)
   {
     auto* cbcd_angle_set = static_cast<CBCD_AngleSet*>(angle_set);
-    auto remaining = cbcd_angle_set->dependency_counter_.load(std::memory_order_relaxed);
-    do
-    {
-      if (remaining == 0)
-        throw std::logic_error("CBCD angle set: angle-set dependency counter underflow.");
-    } while (not cbcd_angle_set->dependency_counter_.compare_exchange_weak(
-      remaining, remaining - 1, std::memory_order_release, std::memory_order_relaxed));
+    const auto previous =
+      cbcd_angle_set->dependency_counter_.fetch_sub(1, std::memory_order_release);
+    if (previous == 0)
+      throw std::logic_error("CBCD angle set: angle-set dependency counter underflow.");
   }
   following_angle_sets_notified_ = true;
 }
@@ -322,7 +317,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   if (kernel_completed)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
-    work_done |= TryRetireCompletedBatch();
+    RetireCompletedBatch();
+    work_done = true;
   }
 
   // Consume any newly received non-local face data and release newly ready cells.
