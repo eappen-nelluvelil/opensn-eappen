@@ -39,16 +39,20 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
   if (task_list_ == nullptr)
   {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/InitializeTaskState");
     task_list_ = &cbc_spds_.GetTaskList();
     remaining_dependencies_ = cbc_spds_.GetInitialTaskDependencies();
     ready_tasks_ = cbc_spds_.GetInitialReadyTasks();
   }
 
-  async_comm_.ReceiveData(received_task_buffer_);
+  {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/ReceiveAndReleaseTasks");
+    async_comm_.ReceiveData(received_task_buffer_);
 
-  for (const auto task_number : received_task_buffer_)
-    if (--remaining_dependencies_[task_number] == 0)
-      ready_tasks_.push_back(task_number);
+    for (const auto task_number : received_task_buffer_)
+      if (--remaining_dependencies_[task_number] == 0)
+        ready_tasks_.push_back(task_number);
+  }
 
   if (async_comm_.HasPendingCommunication())
     async_comm_.SendData();
@@ -60,24 +64,30 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
     return AngleSetStatus::READY_TO_EXECUTE;
 
   if (not ready_tasks_.empty())
-    sweep_chunk.SetAngleSet(*this);
-
-  while (not ready_tasks_.empty())
   {
-    const auto task_idx = ready_tasks_.back();
-    ready_tasks_.pop_back();
-    const auto& cell_task = (*task_list_)[task_idx];
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/BindAngleSet");
+    sweep_chunk.SetAngleSet(*this);
+  }
 
-    sweep_chunk.SetCell(cell_task.cell_ptr);
-    sweep_chunk.Sweep(*this);
+  {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/ReadyTaskDrain");
+    while (not ready_tasks_.empty())
+    {
+      const auto task_idx = ready_tasks_.back();
+      ready_tasks_.pop_back();
+      const auto& cell_task = (*task_list_)[task_idx];
 
-    for (const auto& local_task_num : cell_task.successors)
-      if (--remaining_dependencies_[local_task_num] == 0)
-        ready_tasks_.push_back(local_task_num);
+      sweep_chunk.SetCell(cell_task.cell_ptr);
+      sweep_chunk.Sweep(*this);
 
-    ++num_completed_tasks_;
-    if (async_comm_.HasPendingCommunication())
-      async_comm_.SendData();
+      for (const auto& local_task_num : cell_task.successors)
+        if (--remaining_dependencies_[local_task_num] == 0)
+          ready_tasks_.push_back(local_task_num);
+
+      ++num_completed_tasks_;
+      if (async_comm_.HasPendingCommunication())
+        async_comm_.SendData();
+    }
   }
 
   const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
@@ -98,6 +108,8 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 void
 CBC_AngleSet::ResetSweepBuffers()
 {
+  CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/AngleSetReset");
+
   task_list_ = nullptr;
   remaining_dependencies_.clear();
   ready_tasks_.clear();

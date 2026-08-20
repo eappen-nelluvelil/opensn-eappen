@@ -284,41 +284,93 @@ scp "${REMOTE_HOST}:${REMOTE_RESULTS}/production-$REVISION/summary.md" \
 
 ## 5. Profile CBC interactively
 
-No C++ source modification is required for the first profiling pass. OpenSn
-already contains Caliper regions for sweep construction, CBC SPDS processing,
-angle-set advancement, asynchronous sends/receives, and sweep kernels. Caliper
-is enabled only by the profile command, so the scaling jobs remain
-uninstrumented.
+Use the `cbc-cycles-update-profiling` branch for attribution runs. It adds
+coarse Caliper regions around CBC scheduler scans, task release, ready-task
+draining, delayed-data completion, and sweep reset. The regions do not change
+the sweep algorithm, but their overhead makes the profiling binary unsuitable
+for scaling timings.
 
-Use the prepared production study and one allocation at a time:
+Build that branch in a separate build directory while reusing the dependency
+prefix from the production build:
 
 ```zsh
-salloc -N 1 -p pdebug --exclusive -t 01:00:00
-REMOTE_ROOT=/usr/workspace/nelluvelil1/opensn-dane/opensn-profiling
+SOURCE=/usr/workspace/$USER/opensn-dane/opensn-profiling/source
+SCALING_WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
+PROFILE_TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
+PROFILE_BUILD=$SCALING_WORK/build-profile-$PROFILE_TAG
+export OPENSN_SOURCE=$SOURCE
+export OPENSN_DANE_ROOT=$SCALING_WORK
+export OPENSN_DANE_BUILD=$PROFILE_BUILD
+
+zsh "$SOURCE/tools/scaling/dane/bootstrap.zsh" build-opensn
+test -x "$PROFILE_BUILD/python/opensn"
+```
+
+Profile the strong case in separate two- and four-node allocations:
+
+```zsh
+salloc -N 2 -p pdebug --exclusive -t 01:00:00
+REMOTE_ROOT=/usr/workspace/$USER/opensn-dane/opensn-profiling
 SOURCE=$REMOTE_ROOT/source
 RESULTS=$REMOTE_ROOT/results
-TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
-WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-$TAG
-source "$WORK/env.zsh"
+SCALING_WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
+PROFILE_TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
+PROFILE_BUILD=$SCALING_WORK/build-profile-$PROFILE_TAG
 DRIVER=$SOURCE/tools/scaling/dane/study.py
-REVISION=$(git -C "$SOURCE" rev-parse HEAD)
+REVISION=026d69f6d108f65ca68fa3c589f303eb950b53f6
+source "$SCALING_WORK/env.zsh"
 python "$DRIVER" profile \
   --study "$RESULTS/production-$REVISION" \
-  --algorithm CBC --mode summary
+  --binary "$PROFILE_BUILD/python/opensn" \
+  --algorithm CBC --kind strong --mode summary
 python "$DRIVER" profile \
   --study "$RESULTS/production-$REVISION" \
-  --algorithm CBC --mode hatchet
+  --binary "$PROFILE_BUILD/python/opensn" \
+  --algorithm CBC --kind strong --mode hatchet
 exit
 ```
 
-Repeat with `salloc -N 2` and `salloc -N 4`. Dane permits at most eight pdebug
-nodes per user and pdebug allocations last one hour. The profile command infers
-the allocation size, uses the matching strong-scaling input, and launches 64
-ranks per node. Text summaries and `.cali` files are written under
-`profiles/nodes-N/` in the study directory and can be downloaded with the same
-result-transfer command above.
+Repeat with `salloc -N 4` and the same setup block. For a one-node profile,
+prepare but do not submit a one-node study, then profile its weak case; the
+one-node strong CBC case exceeds the memory available with the full FLUDS:
 
-Use the production scaling outputs for timing. Caliper profiles attribute time
-and count MPI/region events but include profiling overhead. If additional C++
-regions are later justified, build them in a separate tree and pass that binary
-only to `study.py profile --binary`; do not reuse it for production scaling.
+```zsh
+salloc -N 1 -p pdebug --exclusive -t 01:00:00
+REMOTE_ROOT=/usr/workspace/$USER/opensn-dane/opensn-profiling
+SOURCE=$REMOTE_ROOT/source
+RESULTS=$REMOTE_ROOT/results
+SCALING_WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
+PROFILE_TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
+PROFILE_BUILD=$SCALING_WORK/build-profile-$PROFILE_TAG
+DRIVER=$SOURCE/tools/scaling/dane/study.py
+REVISION=026d69f6d108f65ca68fa3c589f303eb950b53f6
+source "$SCALING_WORK/env.zsh"
+PROFILE_INPUTS=$RESULTS/profile-inputs-$REVISION
+python "$DRIVER" prepare \
+  --binary "$PROFILE_BUILD/python/opensn" \
+  --environment "$SCALING_WORK/env.zsh" \
+  --output "$PROFILE_INPUTS" \
+  --mesh-cache "$SCALING_WORK/mesh-cache-v2" \
+  --gmsh "$(command -v gmsh)" \
+  --label cbc-profile-inputs --revision "$REVISION" \
+  --nodes 1 --repetitions 1
+
+python "$DRIVER" profile --study "$PROFILE_INPUTS" \
+  --binary "$PROFILE_BUILD/python/opensn" \
+  --algorithm CBC --kind weak --mode summary
+python "$DRIVER" profile --study "$PROFILE_INPUTS" \
+  --binary "$PROFILE_BUILD/python/opensn" \
+  --algorithm CBC --kind weak --mode hatchet
+exit
+```
+
+Dane permits at most eight pdebug nodes per user and pdebug allocations last
+one hour. The profile command infers the allocation size and launches 64 ranks
+per node. Text summaries and `.cali` files are written under
+`profiles/KIND/nodes-N/` and can be downloaded with the result-transfer command
+above.
+
+Use the production scaling outputs for timing. The summary report identifies
+the dominant aggregate phases and rank minima/maxima; the Hatchet `.cali` file
+retains the call tree needed to separate cell-kernel work from scheduler and
+communication wait. Do not reuse the profiling binary for production scaling.

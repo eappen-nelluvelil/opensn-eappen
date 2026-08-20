@@ -384,18 +384,27 @@ def profile(args):
         (
             item
             for item in manifest["cases"]
-            if item["kind"] == "strong" and item["nodes"] == allocation_nodes
+            if item["kind"] == args.kind and item["nodes"] == allocation_nodes
         ),
         None,
     )
     if case is None:
-        raise RuntimeError(f"study has no {allocation_nodes}-node strong-scaling input")
+        raise RuntimeError(
+            f"study has no {allocation_nodes}-node {args.kind}-scaling input"
+        )
 
     binary = args.binary or Path(manifest["binary"])
     binary = binary.expanduser().resolve()
     algorithm = args.algorithm.upper()
     input_path = Path(case["inputs"][algorithm])
-    output_dir = study / "profiles" / f"nodes-{allocation_nodes}" / args.mode / algorithm.lower()
+    output_dir = (
+        study
+        / "profiles"
+        / args.kind
+        / f"nodes-{allocation_nodes}"
+        / args.mode
+        / algorithm.lower()
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     caliper_output = output_dir / ("profile.txt" if args.mode == "summary" else "profile.cali")
     common = "profile.mpi,mpi.message.count,mpi.message.size,comm.stats,region.count,region.stats"
@@ -472,6 +481,7 @@ def parser():
     profile_parser = commands.add_parser("profile", help="profile one algorithm in the current allocation")
     profile_parser.add_argument("--study", type=Path, required=True)
     profile_parser.add_argument("--algorithm", choices=("AAH", "CBC"), default="CBC")
+    profile_parser.add_argument("--kind", choices=("strong", "weak"), default="strong")
     profile_parser.add_argument("--mode", choices=("summary", "hatchet"), default="summary")
     profile_parser.add_argument("--binary", type=executable)
     profile_parser.set_defaults(function=profile)

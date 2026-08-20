@@ -9,6 +9,7 @@
 #include "framework/math/quadratures/angular/curvilinear_product_quadrature.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include "caliper/cali.h"
 #include <algorithm>
 #include <unordered_map>
 
@@ -209,14 +210,18 @@ SweepScheduler::ScheduleAlgoDOG(SweepChunk& sweep_chunk)
 void
 SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
 {
-  // Reset dependency counter
-  for (auto& angle_set : angle_agg_)
-    angle_set->ResetDependencyCounter();
+  CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/Scheduler");
 
-  // Loop over AngleSetGroups
+  {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/ResetDependencies");
+    for (auto& angle_set : angle_agg_)
+      angle_set->ResetDependencyCounter();
+  }
+
   bool finished = false;
   while (not finished)
   {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/SchedulerScan");
     finished = true;
 
     for (auto& angle_set : angle_agg_)
@@ -227,26 +232,34 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
     } // for angleset
   } // while not finished
 
-  // Receive delayed data
-  opensn::mpi_comm.barrier();
-  bool received_delayed_data = false;
-  while (not received_delayed_data)
   {
-    received_delayed_data = true;
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/DelayedDataBarrier");
+    opensn::mpi_comm.barrier();
+  }
 
-    for (auto& angle_set : angle_agg_)
+  {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/DelayedDataDrain");
+    bool received_delayed_data = false;
+    while (not received_delayed_data)
     {
-      if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
-        received_delayed_data = false;
+      received_delayed_data = true;
 
-      if (not angle_set->ReceiveDelayedData())
-        received_delayed_data = false;
+      for (auto& angle_set : angle_agg_)
+      {
+        if (angle_set->FlushSendBuffers() == AngleSetStatus::MESSAGES_PENDING)
+          received_delayed_data = false;
+
+        if (not angle_set->ReceiveDelayedData())
+          received_delayed_data = false;
+      }
     }
   }
 
-  // Reset all
-  for (auto& angle_set : angle_agg_)
-    angle_set->ResetSweepBuffers();
+  {
+    CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/ResetSweepBuffers");
+    for (auto& angle_set : angle_agg_)
+      angle_set->ResetSweepBuffers();
+  }
 }
 
 #ifndef __OPENSN_WITH_GPU__
