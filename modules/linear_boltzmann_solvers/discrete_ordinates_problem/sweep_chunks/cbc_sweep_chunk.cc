@@ -4,7 +4,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/avx_sweep_chunk_utils.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk.h"
-#include "caliper/cali.h"
 
 namespace opensn
 {
@@ -62,8 +61,6 @@ CBCSweepChunk::CBCSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& gro
 void
 CBCSweepChunk::SetAngleSet(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunk::SetAngleSet");
-
   fluds_ = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
   async_comm_ = &dynamic_cast<CBC_AsynchronousCommunicator&>(*angle_set.GetCommunicator());
 }
@@ -77,8 +74,6 @@ CBCSweepChunk::Sweep(AngleSet& angle_set)
 void
 CBCSweepChunk::Sweep_Generic(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunk::Sweep_Generic");
-
   CBC_Sweep_Generic<false>(*this, angle_set);
 }
 

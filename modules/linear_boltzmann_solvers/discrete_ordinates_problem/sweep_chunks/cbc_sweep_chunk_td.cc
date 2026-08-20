@@ -5,7 +5,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/avx_sweep_chunk_utils.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk_td.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_kernels.h"
-#include "caliper/cali.h"
 #include <stdexcept>
 
 namespace opensn
@@ -69,8 +68,6 @@ CBCSweepChunkTD::CBCSweepChunkTD(DiscreteOrdinatesProblem& problem, LBSGroupset&
 void
 CBCSweepChunkTD::SetAngleSet(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::SetAngleSet");
-
   fluds_ = &dynamic_cast<CBC_FLUDS&>(angle_set.GetFLUDS());
   async_comm_ = &dynamic_cast<CBC_AsynchronousCommunicator&>(*angle_set.GetCommunicator());
 }
@@ -84,8 +81,6 @@ CBCSweepChunkTD::Sweep(AngleSet& angle_set)
 void
 CBCSweepChunkTD::Sweep_Generic(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::Sweep_Generic");
-
   CBC_Sweep_Generic<true>(*this, angle_set);
 }
 
@@ -93,8 +88,6 @@ template <unsigned int NumNodes>
 void
 CBCSweepChunkTD::Sweep_FixedN(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunkTD::Sweep_FixedN");
-
   CBC_Sweep_FixedN<NumNodes, true>(*this, angle_set);
 }
 

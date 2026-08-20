@@ -17,6 +17,13 @@ class CBC_SPDS;
 class CBC_AngleSet : public AngleSet
 {
 public:
+  /// Cumulative ready-task counters for low-overhead profiling.
+  struct Statistics
+  {
+    std::uint64_t ready_bursts = 0;
+    std::uint64_t ready_tasks = 0;
+  };
+
   CBC_AngleSet(std::size_t id,
                const LBSGroupset& groupset,
                const SPDS& spds,
@@ -41,6 +48,36 @@ public:
   /// Advance ready CBC tasks and progress asynchronous communication.
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
+  /// Initialize task state for the current sweep.
+  void InitializeSweep();
+
+  /// Receive remote face data and progress previously initiated normal sends.
+  AngleSetStatus ProgressCommunication();
+
+  /// Execute one bounded ready-task burst and flush its normal face data.
+  AngleSetStatus AdvanceReadyTasks(SweepChunk& sweep_chunk);
+
+  /// Return whether local task work can execute immediately.
+  bool HasReadyTasks() const noexcept
+  {
+    return IsDependencyResolved() and not ready_tasks_.empty();
+  }
+
+  /// Return whether the current sweep has completed.
+  bool IsFinished() const noexcept { return executed_; }
+
+  /// Return whether delayed send or receive work exists.
+  bool NeedsDelayedDrain() const noexcept { return async_comm_.NeedsDelayedDrain(); }
+
+  /// Return cumulative task-frontier counters.
+  const Statistics& GetStatistics() const noexcept { return statistics_; }
+
+  /// Return cumulative communicator counters.
+  const CBC_AsynchronousCommunicator::Statistics& GetCommunicationStatistics() const noexcept
+  {
+    return async_comm_.GetStatistics();
+  }
+
   /// Flush pending CBC send buffers.
   AngleSetStatus FlushSendBuffers() override
   {
@@ -55,6 +92,9 @@ public:
   bool ReceiveDelayedData() override { return async_comm_.ReceiveDelayedData(); }
 
 protected:
+  /// Mark the angle set complete after every task and normal send completes.
+  bool FinishIfReady();
+
   /// CBC sweep-plane data structure.
   const CBC_SPDS& cbc_spds_;
   /// Current CBC task list.
@@ -71,6 +111,8 @@ protected:
   int max_buffer_messages_ = 0;
   /// CBC asynchronous communicator.
   CBC_AsynchronousCommunicator async_comm_;
+  /// Cumulative profiling counters.
+  Statistics statistics_;
 };
 
 } // namespace opensn

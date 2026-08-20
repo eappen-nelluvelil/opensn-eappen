@@ -23,6 +23,19 @@ class CBC_FLUDS;
 class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
 {
 public:
+  /// Cumulative communication counters for low-overhead profiling.
+  struct Statistics
+  {
+    std::uint64_t empty_probes = 0;
+    std::uint64_t messages_sent = 0;
+    std::uint64_t messages_received = 0;
+    std::uint64_t bytes_sent = 0;
+    std::uint64_t bytes_received = 0;
+    std::uint64_t records_sent = 0;
+    std::uint64_t records_received = 0;
+    std::uint64_t send_progress_calls = 0;
+  };
+
   /// Downwind face-psi stream selected by the sweep chunk.
   enum class DownwindPsiType : std::uint8_t
   {
@@ -54,8 +67,17 @@ public:
   /// Allocate delayed upstream storage and reset delayed receive state.
   void InitializeDelayedUpstreamData();
 
-  /// Start or progress pending nonblocking sends.
-  bool SendData();
+  /// Progress sealed or in-flight normal sends without closing open aggregation buffers.
+  bool ProgressNormalSends();
+
+  /// Seal all open normal buffers and progress their nonblocking sends.
+  bool FlushNormalSendBuffers();
+
+  /// Return whether the rank-wide normal-message byte budget has been reached.
+  bool NormalFlushRequired() const noexcept
+  {
+    return queued_normal_bytes_ >= max_mpi_message_size_;
+  }
 
   /// Flush normal sends, completion markers, and delayed sends.
   bool FlushSendBuffers();
@@ -71,8 +93,18 @@ public:
   /// Receive delayed face psi until all delayed upstream locations have sent completion markers.
   bool ReceiveDelayedData();
 
-  /// Return whether sends remain in flight.
+  /// Return whether normal sends remain buffered or in flight.
   bool HasPendingCommunication() const noexcept { return not send_buffer_.empty(); }
+
+  /// Return whether this angle set participates in delayed communication.
+  bool NeedsDelayedDrain() const noexcept
+  {
+    return not delayed_send_peers_.empty() or not delayed_recv_done_.empty() or
+           not delayed_send_buffer_.empty();
+  }
+
+  /// Return cumulative low-overhead communication counters.
+  const Statistics& GetStatistics() const noexcept { return statistics_; }
 
   /// Clear pending send and receive state.
   void Reset();
@@ -109,8 +141,14 @@ private:
     const mpi::Communicator* comm = nullptr;
     /// Rank within the destination communicator.
     int rank = 0;
+    /// Destination index in the corresponding peer array.
+    std::size_t peer_index = INVALID_BUFFER_INDEX;
+    /// Whether additional records may be appended.
+    bool open = false;
     /// Nonblocking-send state.
     bool send_initiated = false;
+    /// Number of serialized records in this message.
+    std::size_t record_count = 0;
     /// Serialized face-psi data.
     std::vector<char> data;
   };
@@ -150,13 +188,17 @@ private:
                                 std::vector<std::size_t>& open_buffer_indices);
 
   /**
-   * Start unsent buffers, progress active requests, and recycle completed buffers.
+   * Start sealed buffers, progress active requests, and recycle completed buffers.
    *
    * \return True when no buffers remain active.
    */
-  bool SendMessages(std::vector<BufferItem>& buffers,
-                    std::vector<mpi::Request>& requests,
-                    std::vector<std::size_t>& open_buffer_indices);
+  bool ProgressMessages(std::vector<BufferItem>& buffers,
+                        std::vector<mpi::Request>& requests,
+                        std::vector<std::size_t>& open_buffer_indices);
+
+  /// Close every open buffer in one message stream.
+  static void SealOpenBuffers(std::vector<BufferItem>& buffers,
+                              std::vector<std::size_t>& open_buffer_indices);
 
   /// Queue delayed-stream completion markers for all delayed downstream locations.
   void QueueDelayedCompletionMarkers();
@@ -221,12 +263,16 @@ private:
   std::vector<std::size_t> incoming_received_values_;
   /// Whether delayed completion markers have been queued this sweep.
   bool delayed_completion_markers_queued_ = false;
+  /// Normal serialized bytes accumulated since the preceding flush.
+  std::size_t queued_normal_bytes_ = 0;
   /// Maximum serialized MPI message size.
   std::size_t max_mpi_message_size_ = 0;
   /// Maximum number of face-psi values in one serialized record.
   std::size_t max_payload_chunk_size_ = 1;
   /// Sentinel for no open send buffer.
   static constexpr std::size_t INVALID_BUFFER_INDEX = std::numeric_limits<std::size_t>::max();
+  /// Cumulative profiling counters.
+  Statistics statistics_;
 };
 
 } // namespace opensn

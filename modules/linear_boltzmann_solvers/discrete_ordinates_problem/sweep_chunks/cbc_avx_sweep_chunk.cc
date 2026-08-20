@@ -5,7 +5,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_chunk_td.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbc_sweep_kernels.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/avx_sweep_chunk_utils.h"
-#include "caliper/cali.h"
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -17,8 +16,6 @@ template <unsigned int NumNodes, bool time_dependent, class SweepChunkT>
 void
 CBC_Sweep_FixedN(SweepChunkT& sweep_chunk, AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBC_Sweep_FixedN");
-
   static_assert(NumNodes >= 2 and NumNodes <= 8);
 
   const auto& groupset = sweep_chunk.groupset_;
@@ -420,8 +417,6 @@ template <unsigned int NumNodes>
 void
 CBCSweepChunk::Sweep_FixedN(AngleSet& angle_set)
 {
-  CALI_CXX_MARK_SCOPE("CBCSweepChunk::Sweep_FixedN");
-
   CBC_Sweep_FixedN<NumNodes, false>(*this, angle_set);
 }
 

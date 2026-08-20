@@ -6,7 +6,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/runtime.h"
-#include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -171,6 +170,7 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(std::size_t peer_index,
     if (buffer.data.size() + record_size <= max_mpi_message_size_)
       return buffer;
 
+    buffer.open = false;
     open_buffer_index = INVALID_BUFFER_INDEX;
   }
 
@@ -188,7 +188,10 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(std::size_t peer_index,
   const auto& peer = peers[peer_index];
   buffer.comm = peer.comm;
   buffer.rank = peer.rank;
+  buffer.peer_index = peer_index;
+  buffer.open = true;
   buffer.send_initiated = false;
+  buffer.record_count = 0;
   buffer.data.clear();
 
   open_buffer_index = buffer_index;
@@ -222,11 +225,12 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
   const auto complete_record_size = FACE_MESSAGE_HEADER_SIZE + total_size * sizeof(double);
   if (complete_record_size <= max_mpi_message_size_)
   {
-    auto& raw =
-      GetOpenSendBuffer(
-        peer_index, complete_record_size, *peers, *buffers, *requests, *open_buffer_indices)
-        .data;
-    AppendFaceMessage(raw, kind, face_slot, outgoing_face_psi);
+    auto& buffer = GetOpenSendBuffer(
+      peer_index, complete_record_size, *peers, *buffers, *requests, *open_buffer_indices);
+    AppendFaceMessage(buffer.data, kind, face_slot, outgoing_face_psi);
+    ++buffer.record_count;
+    if (not delayed)
+      queued_normal_bytes_ += complete_record_size;
     return;
   }
 
@@ -235,19 +239,18 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
   for (std::size_t offset = 0; offset < total_size; offset += max_payload_chunk_size_)
   {
     const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
-    auto& raw = GetOpenSendBuffer(peer_index,
-                                  CHUNK_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double),
-                                  *peers,
-                                  *buffers,
-                                  *requests,
-                                  *open_buffer_indices)
-                  .data;
-    AppendFaceMessageChunk(raw,
+    const auto record_size = CHUNK_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double);
+    auto& buffer =
+      GetOpenSendBuffer(peer_index, record_size, *peers, *buffers, *requests, *open_buffer_indices);
+    AppendFaceMessageChunk(buffer.data,
                            chunk_kind,
                            face_slot,
                            total_size,
                            offset,
                            outgoing_face_psi.subspan(offset, chunk_size));
+    ++buffer.record_count;
+    if (not delayed)
+      queued_normal_bytes_ += record_size;
   }
 }
 
@@ -260,25 +263,46 @@ CBC_AsynchronousCommunicator::InitializeDelayedUpstreamData()
   delayed_completion_markers_queued_ = false;
 }
 
+void
+CBC_AsynchronousCommunicator::SealOpenBuffers(std::vector<BufferItem>& buffers,
+                                              std::vector<std::size_t>& open_buffer_indices)
+{
+  for (auto& open_buffer_index : open_buffer_indices)
+  {
+    if (open_buffer_index != INVALID_BUFFER_INDEX)
+      buffers[open_buffer_index].open = false;
+    open_buffer_index = INVALID_BUFFER_INDEX;
+  }
+}
+
 bool
-CBC_AsynchronousCommunicator::SendMessages(std::vector<BufferItem>& buffers,
-                                           std::vector<mpi::Request>& requests,
-                                           std::vector<std::size_t>& open_buffer_indices)
+CBC_AsynchronousCommunicator::ProgressMessages(std::vector<BufferItem>& buffers,
+                                               std::vector<mpi::Request>& requests,
+                                               std::vector<std::size_t>& open_buffer_indices)
 {
   if (buffers.empty())
     return true;
 
   const auto tag = static_cast<int>(angle_set_id_);
+  bool has_active_request = false;
   for (std::size_t i = 0; i < buffers.size(); ++i)
   {
     auto& buffer_item = buffers[i];
-    if (not buffer_item.send_initiated)
+    if (not buffer_item.open and not buffer_item.send_initiated)
     {
       requests[i] = buffer_item.comm->isend(buffer_item.rank, tag, buffer_item.data);
       buffer_item.send_initiated = true;
+      ++statistics_.messages_sent;
+      statistics_.bytes_sent += buffer_item.data.size();
+      statistics_.records_sent += buffer_item.record_count;
     }
+    has_active_request = has_active_request or buffer_item.send_initiated;
   }
 
+  if (not has_active_request)
+    return false;
+
+  ++statistics_.send_progress_calls;
   completed_send_indices_.clear();
   mpi::test_some(requests, completed_send_indices_);
   std::ranges::sort(completed_send_indices_, std::greater<>{});
@@ -286,28 +310,37 @@ CBC_AsynchronousCommunicator::SendMessages(std::vector<BufferItem>& buffers,
   {
     const auto i = static_cast<std::size_t>(completed_index);
     auto& buffer_item = buffers[i];
+    buffer_item.open = false;
     buffer_item.send_initiated = false;
+    buffer_item.record_count = 0;
     buffer_item.data.clear();
     reusable_send_buffers_.push_back(std::move(buffer_item));
     if (i != buffers.size() - 1)
     {
       buffers[i] = std::move(buffers.back());
       requests[i] = requests.back();
+      if (buffers[i].open)
+        open_buffer_indices[buffers[i].peer_index] = i;
     }
     buffers.pop_back();
     requests.pop_back();
   }
 
-  std::fill(open_buffer_indices.begin(), open_buffer_indices.end(), INVALID_BUFFER_INDEX);
   return buffers.empty();
 }
 
 bool
-CBC_AsynchronousCommunicator::SendData()
+CBC_AsynchronousCommunicator::ProgressNormalSends()
 {
-  CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::SendData");
+  return ProgressMessages(send_buffer_, send_requests_, open_send_buffer_indices_);
+}
 
-  return SendMessages(send_buffer_, send_requests_, open_send_buffer_indices_);
+bool
+CBC_AsynchronousCommunicator::FlushNormalSendBuffers()
+{
+  SealOpenBuffers(send_buffer_, open_send_buffer_indices_);
+  queued_normal_bytes_ = 0;
+  return ProgressNormalSends();
 }
 
 void
@@ -316,14 +349,14 @@ CBC_AsynchronousCommunicator::QueueDelayedCompletionMarkers()
   for (std::size_t delayed_peer_index = 0; delayed_peer_index < delayed_send_peers_.size();
        ++delayed_peer_index)
   {
-    auto& raw = GetOpenSendBuffer(delayed_peer_index,
-                                  COMPLETION_MESSAGE_SIZE,
-                                  delayed_send_peers_,
-                                  delayed_send_buffer_,
-                                  delayed_send_requests_,
-                                  open_delayed_send_buffer_indices_)
-                  .data;
-    AppendDelayedCompletion(raw);
+    auto& buffer = GetOpenSendBuffer(delayed_peer_index,
+                                     COMPLETION_MESSAGE_SIZE,
+                                     delayed_send_peers_,
+                                     delayed_send_buffer_,
+                                     delayed_send_requests_,
+                                     open_delayed_send_buffer_indices_);
+    AppendDelayedCompletion(buffer.data);
+    ++buffer.record_count;
   }
   delayed_completion_markers_queued_ = true;
 }
@@ -331,13 +364,14 @@ CBC_AsynchronousCommunicator::QueueDelayedCompletionMarkers()
 bool
 CBC_AsynchronousCommunicator::FlushSendBuffers()
 {
-  if (not SendData())
+  if (not FlushNormalSendBuffers())
     return false;
 
   if (not delayed_completion_markers_queued_)
     QueueDelayedCompletionMarkers();
 
-  return SendMessages(
+  SealOpenBuffers(delayed_send_buffer_, open_delayed_send_buffer_indices_);
+  return ProgressMessages(
     delayed_send_buffer_, delayed_send_requests_, open_delayed_send_buffer_indices_);
 }
 
@@ -361,6 +395,7 @@ CBC_AsynchronousCommunicator::Reset()
             INVALID_BUFFER_INDEX);
   std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), 0);
   delayed_completion_markers_queued_ = false;
+  queued_normal_bytes_ = 0;
 }
 
 void
@@ -413,9 +448,14 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
   {
     auto message = receive_comm_.improbe(mpi::ANY_SOURCE, tag);
     if (not message)
+    {
+      ++statistics_.empty_probes;
       break;
+    }
 
     message.recv(receive_buffer_);
+    ++statistics_.messages_received;
+    statistics_.bytes_received += receive_buffer_.size();
 
     const auto source_rank = message.source();
     auto* read_ptr = receive_buffer_.data();
@@ -423,6 +463,7 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
 
     while (read_ptr < read_end)
     {
+      ++statistics_.records_received;
       const auto kind = static_cast<MessageKind>(ReadMessageValue<std::uint8_t>(read_ptr));
       if (kind == MessageKind::DELAYED_COMPLETION)
       {
@@ -468,8 +509,6 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
 void
 CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_received_data)
 {
-  CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
-
   cells_who_received_data.clear();
   ReceiveAvailableMessages(cells_who_received_data);
 }
@@ -477,8 +516,6 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
 bool
 CBC_AsynchronousCommunicator::ReceiveDelayedData()
 {
-  CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveDelayedData");
-
   const auto& delayed_location_dependencies = fluds_.GetSPDS().GetDelayedLocationDependencies();
   if (delayed_recv_done_.size() != delayed_location_dependencies.size())
     delayed_recv_done_.assign(delayed_location_dependencies.size(), 0);

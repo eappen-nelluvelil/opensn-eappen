@@ -6,8 +6,10 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_aggregation/angle_aggregation.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
+#include <cstdint>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 namespace opensn
 {
@@ -83,6 +85,9 @@ private:
 
   SPMD_ThreadPool pool_;
   std::vector<std::size_t> execution_order_;
+
+  std::uint64_t cbc_scheduler_passes_ = 0;
+  std::uint64_t cbc_active_angle_set_visits_ = 0;
 };
 
 } // namespace opensn
