@@ -213,15 +213,11 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
 {
   CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/Sweep");
 
-  std::vector<CBC_AngleSet*> ready_angle_sets;
-  std::vector<CBC_AngleSet*> blocked_angle_sets;
-  std::vector<CBC_AngleSet*> next_ready_angle_sets;
-  std::vector<CBC_AngleSet*> next_blocked_angle_sets;
+  std::vector<CBC_AngleSet*> active_angle_sets;
+  std::vector<CBC_AngleSet*> next_active_angle_sets;
   const auto num_angle_sets = angle_agg_.GetNumAngleSets();
-  ready_angle_sets.reserve(num_angle_sets);
-  blocked_angle_sets.reserve(num_angle_sets);
-  next_ready_angle_sets.reserve(num_angle_sets);
-  next_blocked_angle_sets.reserve(num_angle_sets);
+  active_angle_sets.reserve(num_angle_sets);
+  next_active_angle_sets.reserve(num_angle_sets);
   {
     CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/Reset");
     for (auto& angle_set : angle_agg_)
@@ -229,51 +225,37 @@ SweepScheduler::ScheduleAlgoFIFO(SweepChunk& sweep_chunk)
       angle_set->ResetDependencyCounter();
       auto& cbc_angle_set = dynamic_cast<CBC_AngleSet&>(*angle_set);
       cbc_angle_set.InitializeSweep();
-      auto& queue = cbc_angle_set.HasReadyTasks() ? ready_angle_sets : blocked_angle_sets;
-      queue.push_back(&cbc_angle_set);
+      active_angle_sets.push_back(&cbc_angle_set);
     }
   }
 
-  while (not ready_angle_sets.empty() or not blocked_angle_sets.empty())
+  while (not active_angle_sets.empty())
   {
     ++cbc_scheduler_passes_;
 
-    if (not ready_angle_sets.empty())
-    {
-      CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/Compute");
-      for (auto* angle_set : ready_angle_sets)
-      {
-        ++cbc_active_angle_set_visits_;
-
-        angle_set->AdvanceReadyTasks(sweep_chunk);
-        if (angle_set->IsFinished())
-          continue;
-
-        auto& queue = angle_set->HasReadyTasks() ? next_ready_angle_sets : next_blocked_angle_sets;
-        queue.push_back(angle_set);
-      }
-    }
-
-    if (not blocked_angle_sets.empty())
     {
       CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/Communication");
-      for (auto* angle_set : blocked_angle_sets)
+      for (auto* angle_set : active_angle_sets)
       {
         ++cbc_active_angle_set_visits_;
-
         angle_set->ProgressCommunication();
-        if (angle_set->IsFinished())
-          continue;
-
-        auto& queue = angle_set->HasReadyTasks() ? next_ready_angle_sets : next_blocked_angle_sets;
-        queue.push_back(angle_set);
       }
     }
 
-    ready_angle_sets.swap(next_ready_angle_sets);
-    blocked_angle_sets.swap(next_blocked_angle_sets);
-    next_ready_angle_sets.clear();
-    next_blocked_angle_sets.clear();
+    {
+      CALI_CXX_MARK_SCOPE("HostSweepProfile/CBC/Compute");
+      for (auto* angle_set : active_angle_sets)
+      {
+        if (not angle_set->IsFinished() and angle_set->HasReadyTasks())
+          angle_set->AdvanceReadyTasks(sweep_chunk);
+
+        if (not angle_set->IsFinished())
+          next_active_angle_sets.push_back(angle_set);
+      }
+    }
+
+    active_angle_sets.swap(next_active_angle_sets);
+    next_active_angle_sets.clear();
   }
 
   {

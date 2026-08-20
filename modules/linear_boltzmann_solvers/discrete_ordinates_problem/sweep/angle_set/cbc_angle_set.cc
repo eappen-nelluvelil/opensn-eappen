@@ -108,11 +108,9 @@ CBC_AngleSet::AdvanceReadyTasks(SweepChunk& sweep_chunk)
 
     ++num_completed_tasks_;
     ++statistics_.ready_tasks;
-    if (async_comm_.NormalFlushRequired())
-      break;
+    if (async_comm_.HasBufferedNormalData())
+      async_comm_.FlushNormalSendBuffers();
   }
-
-  async_comm_.FlushNormalSendBuffers();
 
   if (FinishIfReady())
     return AngleSetStatus::FINISHED;

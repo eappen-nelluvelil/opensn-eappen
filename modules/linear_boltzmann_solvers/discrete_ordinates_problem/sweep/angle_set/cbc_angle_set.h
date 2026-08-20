@@ -54,7 +54,7 @@ public:
   /// Receive remote face data and progress previously initiated normal sends.
   AngleSetStatus ProgressCommunication();
 
-  /// Execute one bounded ready-task burst and flush its normal face data.
+  /// Execute the current local ready frontier and release remote dependencies.
   AngleSetStatus AdvanceReadyTasks(SweepChunk& sweep_chunk);
 
   /// Return whether local task work can execute immediately.

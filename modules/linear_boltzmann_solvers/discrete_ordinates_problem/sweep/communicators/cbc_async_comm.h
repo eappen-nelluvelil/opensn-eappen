@@ -73,12 +73,6 @@ public:
   /// Seal all open normal buffers and progress their nonblocking sends.
   bool FlushNormalSendBuffers();
 
-  /// Return whether the rank-wide normal-message byte budget has been reached.
-  bool NormalFlushRequired() const noexcept
-  {
-    return queued_normal_bytes_ >= max_mpi_message_size_;
-  }
-
   /// Flush normal sends, completion markers, and delayed sends.
   bool FlushSendBuffers();
 
@@ -95,6 +89,9 @@ public:
 
   /// Return whether normal sends remain buffered or in flight.
   bool HasPendingCommunication() const noexcept { return not send_buffer_.empty(); }
+
+  /// Return whether normal face data has not yet been sealed for sending.
+  bool HasBufferedNormalData() const noexcept { return normal_data_buffered_; }
 
   /// Return whether this angle set participates in delayed communication.
   bool NeedsDelayedDrain() const noexcept
@@ -263,8 +260,8 @@ private:
   std::vector<std::size_t> incoming_received_values_;
   /// Whether delayed completion markers have been queued this sweep.
   bool delayed_completion_markers_queued_ = false;
-  /// Normal serialized bytes accumulated since the preceding flush.
-  std::size_t queued_normal_bytes_ = 0;
+  /// Whether an open normal buffer contains data not yet submitted to MPI.
+  bool normal_data_buffered_ = false;
   /// Maximum serialized MPI message size.
   std::size_t max_mpi_message_size_ = 0;
   /// Maximum number of face-psi values in one serialized record.

@@ -205,6 +205,9 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
                                                    std::span<const double> outgoing_face_psi)
 {
   const bool delayed = psi_type == DownwindPsiType::DELAYED;
+  if (not delayed)
+    normal_data_buffered_ = true;
+
   const auto kind = delayed ? MessageKind::DELAYED_FACE_PSI : MessageKind::NORMAL_FACE_PSI;
   auto peer_index = target;
   const auto* peers = &send_peers_;
@@ -229,8 +232,6 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
       peer_index, complete_record_size, *peers, *buffers, *requests, *open_buffer_indices);
     AppendFaceMessage(buffer.data, kind, face_slot, outgoing_face_psi);
     ++buffer.record_count;
-    if (not delayed)
-      queued_normal_bytes_ += complete_record_size;
     return;
   }
 
@@ -249,8 +250,6 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
                            offset,
                            outgoing_face_psi.subspan(offset, chunk_size));
     ++buffer.record_count;
-    if (not delayed)
-      queued_normal_bytes_ += record_size;
   }
 }
 
@@ -339,7 +338,7 @@ bool
 CBC_AsynchronousCommunicator::FlushNormalSendBuffers()
 {
   SealOpenBuffers(send_buffer_, open_send_buffer_indices_);
-  queued_normal_bytes_ = 0;
+  normal_data_buffered_ = false;
   return ProgressNormalSends();
 }
 
@@ -395,7 +394,7 @@ CBC_AsynchronousCommunicator::Reset()
             INVALID_BUFFER_INDEX);
   std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), 0);
   delayed_completion_markers_queued_ = false;
-  queued_normal_bytes_ = 0;
+  normal_data_buffered_ = false;
 }
 
 void
