@@ -10,7 +10,7 @@ per rank, and the node sequence `1,2,4,...,256`. AAH and CBC run sequentially
 inside the same exclusive allocation. Their order alternates between trials to
 limit systematic first-run bias. Strong and weak cases use the existing
 `tools/scaling/lib/cube.geo` and `xs_168g.xs` inputs. Meshes are generated once
-in a shared cache and verified by SHA-256 before every run.
+and reused from a shared cache.
 
 ## 1. Transfer the source tree to Dane
 
