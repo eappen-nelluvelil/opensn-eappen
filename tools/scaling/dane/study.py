@@ -11,6 +11,7 @@ import shlex
 import statistics
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +44,19 @@ def parse_nodes(value):
             f"no weak-scaling mesh divisor is defined for {sorted(unsupported)}"
         )
     return nodes
+
+
+def parse_profile_modes(value):
+    available = ("baseline", "coarse", "pmpi")
+    if value == "all":
+        return available
+    modes = tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+    invalid = set(modes) - set(available)
+    if not modes or invalid:
+        raise argparse.ArgumentTypeError(
+            "profile modes must be all or a comma-separated subset of baseline,coarse,pmpi"
+        )
+    return modes
 
 
 def executable(value):
@@ -397,29 +411,11 @@ def profile(args):
     binary = binary.expanduser().resolve()
     algorithm = args.algorithm.upper()
     input_path = Path(case["inputs"][algorithm])
-    output_dir = (
-        study
-        / "profiles"
-        / args.kind
-        / f"nodes-{allocation_nodes}"
-        / args.mode
-        / algorithm.lower()
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    caliper_output = output_dir / ("profile.txt" if args.mode == "summary" else "profile.cali")
-    common = "profile.mpi,mpi.message.count,mpi.message.size,comm.stats,region.count,region.stats"
-    if args.mode == "summary":
-        config = (
-            f'runtime-report(output="{caliper_output}",aggregate_across_ranks,'
-            f"calc.inclusive,print.metadata,order_by_time,max_column_width=180,{common})"
-        )
-    else:
-        config = (
-            f"hatchet-region-profile(output={caliper_output},output.format=cali,use.mpi,"
-            f"time.inclusive,{common})"
-        )
+    output_root = study / "profiles" / args.label / args.kind / f"nodes-{allocation_nodes}"
+    output_root.mkdir(parents=True, exist_ok=True)
+    modes = args.mode
     ranks = allocation_nodes * 64
-    command = [
+    base_command = [
         "srun",
         f"--nodes={allocation_nodes}",
         f"--ntasks={ranks}",
@@ -430,7 +426,6 @@ def profile(args):
         "--distribution=block:cyclic",
         "--kill-on-bad-exit=1",
         str(binary),
-        f"--caliper={config}",
         "-i",
         str(input_path),
     ]
@@ -445,12 +440,103 @@ def profile(args):
             "OMP_PROC_BIND": "true",
         }
     )
-    (output_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
-    with (output_dir / "stdout.txt").open("w") as stdout, (output_dir / "stderr.txt").open("w") as stderr:
-        result = subprocess.run(command, cwd=study, env=environment, stdout=stdout, stderr=stderr, check=False)
-    if result.returncode:
-        raise RuntimeError(f"profile failed with status {result.returncode}: {output_dir}")
-    print(f"Profile written to {output_dir}")
+    records = []
+    for trial in range(1, args.repetitions + 1):
+        trial_modes = modes if trial % 2 else tuple(reversed(modes))
+        for mode in trial_modes:
+            output_dir = output_root / mode / algorithm.lower() / f"trial-{trial}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            command = list(base_command)
+            if mode == "coarse":
+                caliper_output = output_dir / "profile.txt"
+                config = (
+                    f'runtime-report(output="{caliper_output}",aggregate_across_ranks,'
+                    "calc.inclusive,print.metadata,order_by_time,max_column_width=180,"
+                    "region.count)"
+                )
+                command.insert(-2, f"--caliper={config}")
+            elif mode == "pmpi":
+                caliper_output = output_dir / "mpi.txt"
+                command.insert(-2, f'--caliper=mpi-report(output="{caliper_output}")')
+
+            stdout_path = output_dir / "stdout.txt"
+            stderr_path = output_dir / "stderr.txt"
+            (output_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
+            start = time.perf_counter()
+            with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+                result = subprocess.run(
+                    command,
+                    cwd=study,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
+                )
+            wall_seconds = time.perf_counter() - start
+            if result.returncode:
+                raise RuntimeError(
+                    f"{mode} profile failed with status {result.returncode}: {output_dir}"
+                )
+
+            sweep_times = SWEEP_TIME_RE.findall(stdout_path.read_text(errors="replace"))
+            if not sweep_times:
+                raise RuntimeError(f"missing sweep time in {stdout_path}")
+            record = {
+                "mode": mode,
+                "algorithm": algorithm,
+                "kind": args.kind,
+                "nodes": allocation_nodes,
+                "ranks": ranks,
+                "trial": trial,
+                "binary": str(binary),
+                "avg_sweep_time_s": float(sweep_times[-1]),
+                "wall_time_s": wall_seconds,
+            }
+            (output_dir / "metrics.json").write_text(json.dumps(record, indent=2) + "\n")
+            records.append(record)
+
+    summaries = []
+    baseline = None
+    for mode in modes:
+        selected = [record for record in records if record["mode"] == mode]
+        median_sweep = statistics.median(record["avg_sweep_time_s"] for record in selected)
+        median_wall = statistics.median(record["wall_time_s"] for record in selected)
+        if mode == "baseline":
+            baseline = median_sweep
+        summaries.append(
+            {
+                "mode": mode,
+                "trials": len(selected),
+                "median_avg_sweep_time_s": median_sweep,
+                "median_wall_time_s": median_wall,
+            }
+        )
+
+    if baseline is not None:
+        for summary in summaries:
+            summary["sweep_overhead_percent"] = (
+                (summary["median_avg_sweep_time_s"] / baseline - 1.0) * 100.0
+            )
+    summary_path = output_root / f"profile-summary-{algorithm.lower()}.json"
+    summary_path.write_text(json.dumps({"runs": records, "summary": summaries}, indent=2) + "\n")
+    lines = [
+        f"# {algorithm} {args.kind} profiling comparison",
+        "",
+        "| Mode | Trials | Median sweep (s) | Median wall (s) | Sweep overhead |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for summary in summaries:
+        overhead = summary.get("sweep_overhead_percent")
+        overhead_text = "n/a" if overhead is None else f"{overhead:.2f}%"
+        lines.append(
+            f"| {summary['mode']} | {summary['trials']} "
+            f"| {summary['median_avg_sweep_time_s']:.8g} "
+            f"| {summary['median_wall_time_s']:.3f} | {overhead_text} |"
+        )
+    (output_root / f"profile-summary-{algorithm.lower()}.md").write_text(
+        "\n".join(lines) + "\n"
+    )
+    print(f"Profiles and overhead summary written to {output_root}")
 
 
 def parser():
@@ -482,7 +568,14 @@ def parser():
     profile_parser.add_argument("--study", type=Path, required=True)
     profile_parser.add_argument("--algorithm", choices=("AAH", "CBC"), default="CBC")
     profile_parser.add_argument("--kind", choices=("strong", "weak"), default="strong")
-    profile_parser.add_argument("--mode", choices=("summary", "hatchet"), default="summary")
+    profile_parser.add_argument(
+        "--mode",
+        type=parse_profile_modes,
+        default=parse_profile_modes("all"),
+        help="all or a comma-separated subset of baseline,coarse,pmpi",
+    )
+    profile_parser.add_argument("--label", default="optimized")
+    profile_parser.add_argument("--repetitions", type=int, default=3)
     profile_parser.add_argument("--binary", type=executable)
     profile_parser.set_defaults(function=profile)
     return top

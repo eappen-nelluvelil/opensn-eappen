@@ -284,93 +284,72 @@ scp "${REMOTE_HOST}:${REMOTE_RESULTS}/production-$REVISION/summary.md" \
 
 ## 5. Profile CBC interactively
 
-Use the `cbc-cycles-update-profiling` branch for attribution runs. It adds
-coarse Caliper regions around CBC scheduler scans, task release, ready-task
-draining, delayed-data completion, and sweep reset. The regions do not change
-the sweep algorithm, but their overhead makes the profiling binary unsuitable
-for scaling timings.
+Use the `cbc-cycles-update-profiling` branch for attribution runs. It records
+only complete-sweep, compute, communication, delayed-drain, and reset regions.
+Scheduler, message, byte, probe, record, ready-task, and send-progress counts
+are accumulated without entering a Caliper region in the hot path.
 
 Build that branch in a separate build directory while reusing the dependency
 prefix from the production build:
 
 ```zsh
-SOURCE=/usr/workspace/$USER/opensn-dane/opensn-profiling/source
-SCALING_WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
+ROOT=/usr/workspace/$USER/opensn-dane/opensn-profiling
+SOURCE=$ROOT/source-profiling
+DEPS_ROOT=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
 PROFILE_TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
-PROFILE_BUILD=$SCALING_WORK/build-profile-$PROFILE_TAG
+PROFILE_BUILD=$DEPS_ROOT/build-profile-$PROFILE_TAG
 export OPENSN_SOURCE=$SOURCE
-export OPENSN_DANE_ROOT=$SCALING_WORK
+export OPENSN_DANE_ROOT=$DEPS_ROOT
 export OPENSN_DANE_BUILD=$PROFILE_BUILD
 
 zsh "$SOURCE/tools/scaling/dane/bootstrap.zsh" build-opensn
 test -x "$PROFILE_BUILD/python/opensn"
 ```
 
-Profile the strong case in separate two- and four-node allocations:
+Prepare inputs once if the selected scaling-study directory does not already
+contain the allocation sizes to profile. Reuse the production mesh cache.
 
 ```zsh
-salloc -N 2 -p pdebug --exclusive -t 01:00:00
-REMOTE_ROOT=/usr/workspace/$USER/opensn-dane/opensn-profiling
-SOURCE=$REMOTE_ROOT/source
-RESULTS=$REMOTE_ROOT/results
-SCALING_WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
+ROOT=/usr/workspace/$USER/opensn-dane/opensn-profiling
+SOURCE=$ROOT/source-profiling
+DEPS_ROOT=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
 PROFILE_TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
-PROFILE_BUILD=$SCALING_WORK/build-profile-$PROFILE_TAG
+PROFILE_BUILD=$DEPS_ROOT/build-profile-$PROFILE_TAG
 DRIVER=$SOURCE/tools/scaling/dane/study.py
-REVISION=026d69f6d108f65ca68fa3c589f303eb950b53f6
-source "$SCALING_WORK/env.zsh"
-python "$DRIVER" profile \
-  --study "$RESULTS/production-$REVISION" \
-  --binary "$PROFILE_BUILD/python/opensn" \
-  --algorithm CBC --kind strong --mode summary
-python "$DRIVER" profile \
-  --study "$RESULTS/production-$REVISION" \
-  --binary "$PROFILE_BUILD/python/opensn" \
-  --algorithm CBC --kind strong --mode hatchet
-exit
-```
+STUDY=$ROOT/results/profile-inputs-$PROFILE_TAG
+source "$DEPS_ROOT/env.zsh"
 
-Repeat with `salloc -N 4` and the same setup block. For a one-node profile,
-prepare but do not submit a one-node study, then profile its weak case; the
-one-node strong CBC case exceeds the memory available with the full FLUDS:
-
-```zsh
-salloc -N 1 -p pdebug --exclusive -t 01:00:00
-REMOTE_ROOT=/usr/workspace/$USER/opensn-dane/opensn-profiling
-SOURCE=$REMOTE_ROOT/source
-RESULTS=$REMOTE_ROOT/results
-SCALING_WORK=/usr/workspace/$USER/opensn-dane/builds/cbc-cycles-update-34af858a5716
-PROFILE_TAG=$(git -C "$SOURCE" rev-parse --short=12 HEAD)
-PROFILE_BUILD=$SCALING_WORK/build-profile-$PROFILE_TAG
-DRIVER=$SOURCE/tools/scaling/dane/study.py
-REVISION=026d69f6d108f65ca68fa3c589f303eb950b53f6
-source "$SCALING_WORK/env.zsh"
-PROFILE_INPUTS=$RESULTS/profile-inputs-$REVISION
 python "$DRIVER" prepare \
   --binary "$PROFILE_BUILD/python/opensn" \
-  --environment "$SCALING_WORK/env.zsh" \
-  --output "$PROFILE_INPUTS" \
-  --mesh-cache "$SCALING_WORK/mesh-cache-v2" \
+  --environment "$DEPS_ROOT/env.zsh" \
+  --output "$STUDY" \
+  --mesh-cache "$DEPS_ROOT/mesh-cache-v2" \
   --gmsh "$(command -v gmsh)" \
-  --label cbc-profile-inputs --revision "$REVISION" \
-  --nodes 1 --repetitions 1
+  --label cbc-profile --revision "$(git -C "$SOURCE" rev-parse HEAD)" \
+  --nodes 1,2,4 --repetitions 1
+```
 
-python "$DRIVER" profile --study "$PROFILE_INPUTS" \
+Run the three configurations sequentially in separate one-, two-, and four-node
+allocations. `--mode all` alternates their order over three repetitions and
+reports sweep-time overhead relative to the run with no active Caliper channel.
+Use the weak case at one node because the strong case exceeds memory with the
+full CBC FLUDS.
+
+```zsh
+# After entering an allocation with: salloc -N N -p pdebug --exclusive -t 01:00:00
+source "$DEPS_ROOT/env.zsh"
+KIND=strong                         # use KIND=weak when N=1
+python "$DRIVER" profile \
+  --study "$STUDY" \
   --binary "$PROFILE_BUILD/python/opensn" \
-  --algorithm CBC --kind weak --mode summary
-python "$DRIVER" profile --study "$PROFILE_INPUTS" \
-  --binary "$PROFILE_BUILD/python/opensn" \
-  --algorithm CBC --kind weak --mode hatchet
+  --algorithm CBC --kind "$KIND" --mode all --repetitions 3
 exit
 ```
 
 Dane permits at most eight pdebug nodes per user and pdebug allocations last
 one hour. The profile command infers the allocation size and launches 64 ranks
-per node. Text summaries and `.cali` files are written under
-`profiles/KIND/nodes-N/` and can be downloaded with the result-transfer command
-above.
-
-Use the production scaling outputs for timing. The summary report identifies
-the dominant aggregate phases and rank minima/maxima; the Hatchet `.cali` file
-retains the call tree needed to separate cell-kernel work from scheduler and
-communication wait. Do not reuse the profiling binary for production scaling.
+per node. Baseline output, coarse Caliper reports, PMPI-only reports, and the
+overhead summary are written under `profiles/LABEL/KIND/nodes-N/`. Accept coarse
+profiles for attribution only after their median sweep-time overhead is below
+approximately 3--5 percent. Use the uninstrumented production binary and
+production studies for scaling conclusions.
