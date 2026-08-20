@@ -103,11 +103,11 @@ python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" prepare-profile \
 /path/to/results/candidate-profile/submit.zsh
 ```
 
-The generated one-node jobs are independent:
+The generated jobs are independent:
 
-- `baseline` measures the unprofiled case.
-- `caliper` attributes existing OpenSn CPU regions.
-- `pmpi` reports MPI activity through Caliper.
+- `baseline` measures the unprofiled case at 1, 2, and 4 nodes.
+- `caliper` attributes existing OpenSn CPU regions at 1, 2, and 4 nodes.
+- `pmpi` reports intra- and inter-node MPI activity at 1, 2, and 4 nodes.
 - `rocprof` records HIP API, kernel, allocation, and copy traces per rank.
 - `hpctoolkit` samples CPU call paths and ROCm GPU activity at low overhead.
 - `omniperf` profiles `SweepKernel` occupancy and memory behavior on one MI300A.

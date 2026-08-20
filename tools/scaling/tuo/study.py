@@ -451,19 +451,19 @@ def compare(args):
     print(f"Comparison written to {output}")
 
 
-def profile_job(args, profile, study, input_path):
-    tasks = 1 if profile == "omniperf" else 4
-    result = study / "results" / profile
+def profile_job(args, profile, nodes, study, input_path):
+    tasks = 1 if profile == "omniperf" else nodes * 4
+    result = study / "results" / profile / f"nodes-{nodes}"
     scheduler = study / "scheduler"
     header = flux_header(
-        f"{args.label}-{profile}",
-        1,
+        f"{args.label}-{profile}-{nodes}",
+        nodes,
         tasks,
         args.queue,
         args.bank,
         args.time_limit,
-        scheduler / f"{profile}-{{{{id}}}}.out",
-        scheduler / f"{profile}-{{{{id}}}}.err",
+        scheduler / f"{profile}-{nodes}-{{{{id}}}}.out",
+        scheduler / f"{profile}-{nodes}-{{{{id}}}}.err",
     )
     common = runtime_environment(args.environment) + f"""
 binary={quote(args.binary)}
@@ -472,13 +472,13 @@ result={quote(result)}
 mkdir -p -- "$result"
 """
     if profile == "baseline":
-        command = 'flux run -N 1 -n 4 --exclusive "$binary" -i "$input" > "$result/stdout.txt" 2> "$result/stderr.txt"\n'
+        command = f'flux run -N {nodes} -n {tasks} --exclusive "$binary" -i "$input" > "$result/stdout.txt" 2> "$result/stderr.txt"\n'
     elif profile == "caliper":
         config = f'runtime-report(output="{result}/profile.txt",aggregate_across_ranks,calc.inclusive,print.metadata,order_by_time,max_column_width=180,region.count)'
-        command = f'flux run -N 1 -n 4 --exclusive "$binary" --caliper={quote(config)} -i "$input" > "$result/stdout.txt" 2> "$result/stderr.txt"\n'
+        command = f'flux run -N {nodes} -n {tasks} --exclusive "$binary" --caliper={quote(config)} -i "$input" > "$result/stdout.txt" 2> "$result/stderr.txt"\n'
     elif profile == "pmpi":
         config = f'mpi-report(output="{result}/mpi.txt")'
-        command = f'flux run -N 1 -n 4 --exclusive "$binary" --caliper={quote(config)} -i "$input" > "$result/stdout.txt" 2> "$result/stderr.txt"\n'
+        command = f'flux run -N {nodes} -n {tasks} --exclusive "$binary" --caliper={quote(config)} -i "$input" > "$result/stdout.txt" 2> "$result/stderr.txt"\n'
     elif profile == "rocprof":
         command = f"""export OPENSN_PROFILE_MODE=rocprof
 export OPENSN_PROFILE_BINARY="$binary"
@@ -518,10 +518,23 @@ def prepare_profile(args):
     write_input(input_path, mesh, args.max_iterations, args.save_angular_flux)
     profiles = ("baseline", "caliper", "pmpi", "rocprof", "hpctoolkit", "omniperf")
     jobs = []
+    cases = []
     for profile in profiles:
-        job = study / "jobs" / f"{profile}.zsh"
-        write_executable(job, profile_job(args, profile, study, input_path))
-        jobs.append(job)
+        profile_nodes = (
+            args.profile_nodes if profile in ("baseline", "caliper", "pmpi") else (1,)
+        )
+        for nodes in profile_nodes:
+            job = study / "jobs" / f"{profile}-{nodes}.zsh"
+            write_executable(job, profile_job(args, profile, nodes, study, input_path))
+            jobs.append(job)
+            cases.append(
+                {
+                    "profile": profile,
+                    "nodes": nodes,
+                    "ranks": 1 if profile == "omniperf" else nodes * 4,
+                    "job": str(job),
+                }
+            )
     write_executable(
         study / "submit.zsh",
         "#!/bin/zsh\nset -euo pipefail\n\n"
@@ -540,6 +553,8 @@ def prepare_profile(args):
         "max_iterations": args.max_iterations,
         "save_angular_flux": args.save_angular_flux,
         "profiles": profiles,
+        "profile_nodes": args.profile_nodes,
+        "cases": cases,
     }
     (study / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Prepared {len(jobs)} independent Flux profile jobs in {study}")
@@ -549,8 +564,9 @@ def collect_profile(args):
     study = args.study.expanduser().resolve()
     manifest = json.loads((study / "manifest.json").read_text())
     rows = []
-    for profile in manifest["profiles"]:
-        result = study / "results" / profile
+    for case in manifest["cases"]:
+        profile = case["profile"]
+        result = study / "results" / profile / f"nodes-{case['nodes']}"
         stdout = result / "stdout.txt"
         sweep = None
         if stdout.is_file():
@@ -560,6 +576,8 @@ def collect_profile(args):
         rows.append(
             {
                 "profile": profile,
+                "nodes": case["nodes"],
+                "ranks": case["ranks"],
                 "completed": sweep is not None,
                 "avg_sweep_time_s": sweep,
                 "result_directory": str(result),
@@ -569,13 +587,14 @@ def collect_profile(args):
     lines = [
         f"# {manifest['label']} Tuolumne profile inventory",
         "",
-        "| Profile | Completed | Average sweep time (s) | Result directory |",
-        "|---|---|---:|---|",
+        "| Profile | Nodes | Ranks | Completed | Average sweep time (s) | Result directory |",
+        "|---|---:|---:|---|---:|---|",
     ]
     for row in rows:
         sweep = "n/a" if row["avg_sweep_time_s"] is None else f"{row['avg_sweep_time_s']:.8g}"
         lines.append(
-            f"| {row['profile']} | {row['completed']} | {sweep} | `{row['result_directory']}` |"
+            f"| {row['profile']} | {row['nodes']} | {row['ranks']} | {row['completed']} "
+            f"| {sweep} | `{row['result_directory']}` |"
         )
     (study / "profile-summary.md").write_text("\n".join(lines) + "\n")
     print(f"Profile inventory written to {study}")
@@ -626,6 +645,7 @@ def parser():
     profile_parser = commands.add_parser("prepare-profile", help="prepare independent profile jobs")
     add_common_prepare_arguments(profile_parser, profile=True)
     profile_parser.add_argument("--profile-divisor", type=int, default=15)
+    profile_parser.add_argument("--profile-nodes", type=parse_nodes, default=(1, 2, 4))
     profile_parser.add_argument("--max-iterations", type=int, default=2)
     profile_parser.set_defaults(function=prepare_profile)
 
