@@ -119,6 +119,9 @@ class PreparationTests(unittest.TestCase):
             self.assertIn("export OPENSN_CBCD_WORKER_POLICY=hardware", job)
             self.assertIn("unset OPENSN_CBCD_NUM_WORKERS", job)
             self.assertIn('result="$result_root/run-$job_tag-$started-$$"', job)
+            self.assertIn("job_tag=${FLUX_JOB_ID:-allocation}", job)
+            self.assertIn('flux_job_id=${FLUX_JOB_ID:-unset}', job)
+            self.assertNotIn("FLUX_JOB_ID:?", job)
             self.assertNotIn("amd-gpumode", job)
             self.assertNotIn("setattr=gpumode", job)
             self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
@@ -449,6 +452,7 @@ class SimplicityTests(unittest.TestCase):
         positions = [helper.index(command) for command in sequence]
         self.assertEqual(positions, sorted(positions))
         self.assertNotIn("amd-gpumode", helper)
+        self.assertNotIn("FLUX_JOB_ID:?", helper)
         self.assertNotRegex(helper, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
 
 

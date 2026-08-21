@@ -218,8 +218,8 @@ export OPENSN_CBCD_WORKER_POLICY={quote(args.worker_policy)}
 def run_directory_setup(result_root, metadata):
     metadata_lines = "\n".join(f"  print -- {quote(line)}" for line in metadata)
     return f"""result_root={quote(result_root)}
-: ${{FLUX_JOB_ID:?Run this job inside a Flux allocation}}
-job_tag=${{FLUX_JOB_ID//\\//_}}
+job_tag=${{FLUX_JOB_ID:-allocation}}
+job_tag=${{job_tag//\\//_}}
 started=$(date -u +%Y%m%dT%H%M%SZ)
 result="$result_root/run-$job_tag-$started-$$"
 mkdir -p -- "$result"
@@ -240,7 +240,7 @@ trap finish_run EXIT INT TERM
 {{
   print -- "started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {metadata_lines}
-  print -- "flux_job_id=$FLUX_JOB_ID"
+  print -- "flux_job_id=${{FLUX_JOB_ID:-unset}}"
 }} >| "$result/metadata.txt"
 """
 

@@ -113,7 +113,6 @@ allocation()
 
 build_here()
 {
-  : ${FLUX_JOB_ID:?build-here requires an active Flux allocation}
   if [[ -r $environment && -x $binary ]]; then
     print -- "Reusing completed build: $binary"
     return
@@ -213,7 +212,6 @@ run_here()
   local nodes=$2
   check_policy "$policy"
   check_nodes "$nodes"
-  : ${FLUX_JOB_ID:?run-here requires an active Flux allocation}
   local study=$(study_for interactive "$policy")
   [[ -x $study/jobs/strong-$nodes.zsh ]] || {
     print -u2 'Run prepare-interactive first.'
@@ -234,7 +232,6 @@ run_one()
 
 run_interactive_here()
 {
-  : ${FLUX_JOB_ID:?run-interactive-here requires an active Flux allocation}
   run_here hardware 1
   run_here resource-aware 1
   run_here resource-aware 2
