@@ -26,6 +26,7 @@ WEAK_DIVISORS = dict(zip(DEFAULT_NODES, (6, 8, 10, 12, 15, 19, 25, 31, 39)))
 PROFILE_NAMES = (
     "baseline",
     "caliper",
+    "caliper-mpi",
     "pmpi",
     "caliper-rocm",
     "rocprof",
@@ -319,6 +320,15 @@ def profile_command(profile, nodes, ranks):
             '-i "$input"'
         )
         return "", command
+    if profile == "caliper-mpi":
+        command = (
+            f'{launch} "$binary" --verbose 1 --caliper="runtime-report('
+            'output=\\"$result/mpi-regions.txt\\",aggregate_across_ranks,'
+            'calc.inclusive,print.metadata,order_by_time,max_column_width=180,'
+            'profile.mpi,mpi.message.count,mpi.message.size,comm.stats,'
+            'region.count,region.stats)" -i "$input"'
+        )
+        return "", command
     if profile == "pmpi":
         command = (
             f'{launch} "$binary" --verbose 1 '
@@ -387,12 +397,17 @@ def profile_job(args, study, profile, nodes, input_path):
     artifact = ":"
     if profile == "caliper":
         artifact = '[[ -s "$result/profile.txt" ]]'
+    elif profile == "caliper-mpi":
+        artifact = '[[ -s "$result/mpi-regions.txt" ]]'
     elif profile == "pmpi":
         artifact = '[[ -s "$result/mpi.txt" ]]'
     elif profile == "caliper-rocm":
         artifact = '[[ -s "$result/rocm.txt" ]]'
     elif profile == "rocprof":
-        artifact = 'find "$result" -path "*/rank-*/*" -type f -print -quit | grep -q .'
+        artifact = (
+            'find "$result" -path "*/rank-*/*.csv" -type f -size +0c '
+            '-print -quit | grep -q .'
+        )
     elif profile == "hpctoolkit":
         artifact = 'find "$result/measurements" -type f -print -quit | grep -q .'
     elif profile == "omniperf":
@@ -551,7 +566,10 @@ def prepare_profile(args):
 
     cases = []
     for profile in args.profiles:
-        nodes_values = args.profile_nodes if profile in DEFAULT_PROFILES else (1,)
+        # OmniPerf serializes kernel replay and intentionally changes the production
+        # decomposition to one rank. All other tools preserve the requested 4-rank/node
+        # layout so 2- and 4-node communication behavior can be diagnosed directly.
+        nodes_values = (1,) if profile == "omniperf" else args.profile_nodes
         for nodes in nodes_values:
             job_path = study / "jobs" / f"{profile}-{nodes}.zsh"
             write_executable(job_path, profile_job(args, study, profile, nodes, input_path))
@@ -607,8 +625,8 @@ def submit(args):
         raise RuntimeError("pdebug is interactive-only; run generated jobs inside flux alloc")
     if record["type"] == "scaling" and args.profiles:
         raise RuntimeError("--profiles cannot select scaling jobs")
-    if record["type"] == "profile" and (args.kinds or args.nodes):
-        raise RuntimeError("--kinds and --nodes cannot select profile jobs")
+    if record["type"] == "profile" and args.kinds:
+        raise RuntimeError("--kinds cannot select profile jobs")
 
     selected = []
     for case in record["cases"]:
@@ -1102,8 +1120,10 @@ def collect_profile(args):
     if record["type"] != "profile":
         raise RuntimeError("collect-profile requires a profile study")
     rows = []
+    incomplete_cases = []
     for case in record["cases"]:
         root = study / "results" / case["profile"] / f"nodes-{case['nodes']}"
+        case_completed = False
         for run in sorted(root.glob("run-*")):
             if not run.is_dir():
                 continue
@@ -1116,6 +1136,7 @@ def collect_profile(args):
                 )
             except (OSError, RuntimeError, ValueError):
                 values = None
+            case_completed = case_completed or values is not None
             rows.append(
                 {
                     "profile": case["profile"],
@@ -1131,6 +1152,8 @@ def collect_profile(args):
                     "result_directory": str(run),
                 }
             )
+        if not case_completed:
+            incomplete_cases.append(case["id"])
     write_rows(study / "profile-summary.csv", rows)
     lines = [
         f"# {record['label']} Tuolumne profile inventory",
@@ -1156,6 +1179,10 @@ def collect_profile(args):
             f"| `{row['result_directory']}` |"
         )
     (study / "profile-summary.md").write_text("\n".join(lines) + "\n")
+    if incomplete_cases:
+        raise RuntimeError(
+            "profile cases have no successful run: " + ", ".join(incomplete_cases)
+        )
     print(f"Profile inventory written to {study}")
 
 

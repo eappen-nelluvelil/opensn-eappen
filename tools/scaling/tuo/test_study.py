@@ -225,6 +225,39 @@ class PreparationTests(unittest.TestCase):
                 self.assertNotIn("amd-gpumode", job)
                 self.assertNotRegex(job, r"(?m)^(?:\s*local\s+)?status=")
                 self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
+                if profile == "caliper-mpi":
+                    self.assertIn("mpi.message.size", job)
+                    self.assertIn("comm.stats", job)
+                if profile == "rocprof":
+                    self.assertIn('*/rank-*/*.csv', job)
+
+    def test_multinode_profilers_preserve_layout_except_omniperf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(
+                root,
+                output=root / "profile-study",
+                queue="pbatch",
+                worker_policy="resource-aware",
+            )
+            args.profile_nodes = (1, 2, 4)
+            args.profile_divisor = 39
+            args.profiles = ("rocprof", "hpctoolkit", "omniperf")
+            create_meshes(args.mesh_dir, (39,))
+
+            STUDY.prepare_profile(args)
+
+            record = json.loads((args.output / "manifest.json").read_text())
+            cases = {
+                (case["profile"], case["nodes"], case["ranks"])
+                for case in record["cases"]
+            }
+            self.assertIn(("rocprof", 4, 16), cases)
+            self.assertIn(("hpctoolkit", 4, 16), cases)
+            self.assertEqual(
+                {case for case in cases if case[0] == "omniperf"},
+                {("omniperf", 1, 1)},
+            )
 
     def test_failure_trap_executes_under_zsh_and_preserves_exit_code(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -387,6 +420,29 @@ class ResultTests(unittest.TestCase):
             with (study / "results.csv").open() as stream:
                 self.assertEqual(sum(1 for _ in stream), 3)
 
+    def test_profile_collection_reports_cases_without_a_successful_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            study = Path(directory)
+            (study / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "type": "profile",
+                        "label": "test-profile",
+                        "cases": [
+                            {
+                                "id": "pmpi-4",
+                                "profile": "pmpi",
+                                "nodes": 4,
+                                "ranks": 16,
+                            }
+                        ],
+                    }
+                )
+            )
+            with self.assertRaisesRegex(RuntimeError, "pmpi-4"):
+                STUDY.collect_profile(SimpleNamespace(study=study))
+            self.assertTrue((study / "profile-summary.md").is_file())
+
 
 class SubmissionAndPolicyComparisonTests(unittest.TestCase):
     def test_submit_filters_scaling_jobs_without_tracking_scheduler_state(self):
@@ -422,6 +478,51 @@ class SubmissionAndPolicyComparisonTests(unittest.TestCase):
                 STUDY.submit(args)
             run.assert_called_once_with(
                 ["flux", "batch", "/jobs/strong-1.zsh"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+    def test_submit_filters_profile_jobs_by_nodes_and_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            study = Path(directory)
+            record = {
+                "type": "profile",
+                "queue": "pbatch",
+                "cases": [
+                    {
+                        "id": "pmpi-2",
+                        "profile": "pmpi",
+                        "nodes": 2,
+                        "job": "/jobs/pmpi-2.zsh",
+                    },
+                    {
+                        "id": "pmpi-4",
+                        "profile": "pmpi",
+                        "nodes": 4,
+                        "job": "/jobs/pmpi-4.zsh",
+                    },
+                    {
+                        "id": "caliper-4",
+                        "profile": "caliper",
+                        "nodes": 4,
+                        "job": "/jobs/caliper-4.zsh",
+                    },
+                ],
+            }
+            (study / "manifest.json").write_text(json.dumps(record))
+            args = SimpleNamespace(
+                study=study,
+                nodes=(4,),
+                kinds=None,
+                profiles=("pmpi",),
+            )
+            completed = subprocess.CompletedProcess([], 0, stdout="job-id\n")
+            with mock.patch.object(subprocess, "run", return_value=completed) as run:
+                STUDY.submit(args)
+            run.assert_called_once_with(
+                ["flux", "batch", "/jobs/pmpi-4.zsh"],
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -530,6 +631,10 @@ class SimplicityTests(unittest.TestCase):
         self.assertNotIn("amd-gpumode", helper)
         self.assertNotIn("FLUX_JOB_ID:?", helper)
         self.assertNotRegex(helper, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
+        self.assertIn('run_here "$1" 1', helper)
+        self.assertIn('prepare_one batch "$1"', helper)
+        self.assertIn("prepare-profile", helper)
+        self.assertIn("rebuild-here", helper)
 
 
 if __name__ == "__main__":

@@ -79,6 +79,16 @@ zsh "$OPENSN_SOURCE/tools/scaling/tuo/bootstrap.zsh" build-opensn
 Run those lower-level commands on a compute node with `OPENSN_SOURCE`,
 `OPENSN_TUO_ROOT`, and `OPENSN_TUO_BUILD` exported as above.
 
+After pulling source changes, retain the fresh dependency stack and rebuild
+only OpenSn in a new one-node allocation:
+
+```zsh
+zsh "$HELPER" rebuild
+```
+
+Unlike `build`, `rebuild` never treats an existing executable as proof that the
+new source has already been compiled.
+
 ## 3. Interactive 1/2/4-node policy comparison
 
 Do not set a fixed worker count for this comparison:
@@ -87,10 +97,25 @@ Do not set a fixed worker count for this comparison:
 unset OPENSN_CBCD_NUM_WORKERS
 export OPENSN_TUO_INTERACTIVE_ITERATIONS=10
 
-zsh "$HELPER" prepare-interactive
 zsh "$HELPER" run-interactive
 zsh "$HELPER" collect-interactive
 ```
+
+To study only the resource-aware implementation, use the optional policy
+argument. This runs 1, 2, and 4 nodes inside one four-node allocation and avoids
+creating or running hardware-policy jobs:
+
+```zsh
+unset OPENSN_CBCD_NUM_WORKERS
+export OPENSN_TUO_INTERACTIVE_ITERATIONS=10
+
+zsh "$HELPER" run-interactive resource-aware
+zsh "$HELPER" collect-interactive resource-aware
+```
+
+Repeat `run-interactive resource-aware` at least three times before evaluating
+a small scaling reversal. Every invocation appends a new independent run and
+the collector reports the median, MAD, and IQR across all successful runs.
 
 `prepare-interactive` creates separate hardware and resource-aware studies that
 use the same strong-scaling mesh. Rerunning it refreshes generated inputs and
@@ -146,7 +171,14 @@ zsh "$HELPER" prepare-batch
 zsh "$HELPER" submit-batch
 ```
 
-The helper prepares and submits both policies. All strong cases use
+Without a policy argument the helper prepares and submits both policies. To
+run only the resource-aware campaign requested for CBCD V2, use:
+
+```zsh
+zsh "$HELPER" submit-batch resource-aware
+```
+
+All strong cases use
 `cube-d39.msh`; the weak cases use divisors 6, 8, 10, 12, 15, 19, 25, 31, and
 39 in increasing node order. No mesh generation is performed. Each invocation
 of `submit-batch` submits the complete selected campaign, so do not repeat it
@@ -165,6 +197,12 @@ After both studies finish:
 zsh "$HELPER" collect-batch
 ```
 
+For the resource-aware-only campaign, collect with:
+
+```zsh
+zsh "$HELPER" collect-batch resource-aware
+```
+
 To use a smaller first campaign, set `OPENSN_TUO_NODES` before
 `prepare-batch`, for example `1,2,4,8,16`. Use a new `OPENSN_TUO_LABEL` or
 `OPENSN_TUO_BATCH_ROOT` when changing nodes, iteration count, repetitions, or
@@ -172,33 +210,56 @@ the executable; prepared study directories are intentionally not rewritten.
 
 ## 5. Profiling jobs
 
-Source the new environment and prepare a separate profiling directory. This
-keeps profiler overhead out of the scaling measurements:
+The helper prepares a separate resource-aware profiling directory, keeping
+profiler overhead out of the scaling measurements. By default it runs the d39
+strong-scaling problem for ten iterations at 1, 2, and 4 nodes with:
+
+- an uninstrumented baseline,
+- a Caliper runtime region report,
+- a combined Caliper region/MPI/message-volume report, and
+- a Caliper PMPI call report.
+
+Prepare and submit all four profiles with:
 
 ```zsh
-source "$OPENSN_TUO_ROOT/env.zsh"
+unset OPENSN_CBCD_NUM_WORKERS
+export OPENSN_TUO_PROFILE_NODES=1,2,4
+export OPENSN_TUO_PROFILE_DIVISOR=39
+export OPENSN_TUO_PROFILE_ITERATIONS=10
+export OPENSN_TUO_PROFILES=baseline,caliper,caliper-mpi,pmpi
 
-python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" prepare-profile \
-  --binary "$OPENSN_TUO_BUILD/python/opensn" \
-  --environment "$OPENSN_TUO_ROOT/env.zsh" \
-  --output "$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-resource-aware" \
-  --mesh-dir "$OPENSN_TUO_MESH_DIR" \
-  --label "$OPENSN_TUO_LABEL-profile-resource-aware" \
-  --profile-nodes 1,2,4 \
-  --worker-policy resource-aware \
-  --queue pbatch \
-  --bank "$OPENSN_TUO_BANK" \
-  --no-save-angular-flux
-
-zsh "$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-resource-aware/submit.zsh"
-
-python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" collect-profile \
-  --study "$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-resource-aware"
+zsh "$HELPER" submit-profile
 ```
 
-Use the uninstrumented scaling studies for performance conclusions. Caliper,
-PMPI, rocprofv3, HPCToolkit, and OmniPerf jobs answer narrower attribution
-questions and should be submitted only as needed.
+Monitor with `flux jobs -A`. Once all jobs finish, collect their validated
+inventory with:
+
+```zsh
+zsh "$HELPER" collect-profile
+```
+
+The combined report is named `mpi-regions.txt`; use it to compare MPI call
+counts, message volumes, rank maxima, and time in `SerializeAndSend`,
+`ProbeAndReceive`, and `PollInFlightSends` at 2 versus 4 nodes. The `pmpi`
+report is named `mpi.txt`. Use the uninstrumented baseline and scaling studies
+for performance conclusions; profiler timings are diagnostic only.
+
+`caliper-rocm`, `rocprof`, and `hpctoolkit` also preserve the requested
+four-ranks-per-node layout when explicitly selected. For example, a focused
+2/4-node ROCm trace can be prepared in a separate result directory with:
+
+```zsh
+export OPENSN_TUO_PROFILE_ROOT=$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-rocm
+export OPENSN_TUO_PROFILE_NODES=2,4
+export OPENSN_TUO_PROFILE_ITERATIONS=2
+export OPENSN_TUO_PROFILES=rocprof
+
+zsh "$HELPER" submit-profile
+```
+
+`omniperf` remains intentionally restricted to one node and one rank because
+kernel replay is a microanalysis and does not preserve the production MPI
+decomposition.
 
 Current Tuo queue limits and launch recommendations should be checked before a
 large campaign:

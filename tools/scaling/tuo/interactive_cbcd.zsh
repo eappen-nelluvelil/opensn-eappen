@@ -14,6 +14,7 @@ results_root=${OPENSN_TUO_RESULTS:-$study_root/results}
 label=${OPENSN_TUO_LABEL:-update-3}
 interactive_root=${OPENSN_TUO_INTERACTIVE_ROOT:-$results_root/$label-interactive}
 batch_root=${OPENSN_TUO_BATCH_ROOT:-$results_root/$label-batch}
+profile_root=${OPENSN_TUO_PROFILE_ROOT:-$results_root/$label-profile/resource-aware}
 hardware_interactive=$interactive_root/hardware
 resource_interactive=$interactive_root/resource-aware
 hardware_batch=$batch_root/hardware
@@ -25,6 +26,11 @@ batch_nodes=${OPENSN_TUO_NODES:-1,2,4,8,16,32,64,128,256}
 batch_repetitions=${OPENSN_TUO_REPETITIONS:-3}
 batch_iterations=${OPENSN_TUO_MAX_ITERATIONS:-10}
 batch_time=${OPENSN_TUO_BATCH_TIME_LIMIT:-4h}
+profile_nodes=${OPENSN_TUO_PROFILE_NODES:-1,2,4}
+profile_names=${OPENSN_TUO_PROFILES:-baseline,caliper,caliper-mpi,pmpi}
+profile_divisor=${OPENSN_TUO_PROFILE_DIVISOR:-39}
+profile_iterations=${OPENSN_TUO_PROFILE_ITERATIONS:-10}
+profile_time=${OPENSN_TUO_PROFILE_TIME_LIMIT:-6h}
 bank=${OPENSN_TUO_BANK:-}
 worker_count=${OPENSN_CBCD_NUM_WORKERS:-}
 
@@ -36,15 +42,20 @@ usage: $0 COMMAND [ARGS]
 Commands:
   build                         fresh/resumable one-node Tuo build
   build-here                    build in the current allocation
-  prepare-interactive           prepare both 1/2/4-node policy studies
-  run-interactive               run both policies in one four-node allocation
-  run-interactive-here          run both policies in the current allocation
+  rebuild                       rebuild OpenSn after pulling source changes
+  rebuild-here                  rebuild OpenSn in the current allocation
+  prepare-interactive [POLICY]  prepare one or both 1/2/4-node policy studies
+  run-interactive [POLICY]      run one or both policies in one allocation
+  run-interactive-here [POLICY] run one or both policies in the current allocation
   run POLICY NODES              run one policy at 1, 2, or 4 nodes
   run-here POLICY NODES         run one policy in the current allocation
-  collect-interactive           collect and compare both policy studies
-  prepare-batch                 prepare both strong/weak pbatch studies
-  submit-batch                  submit both pbatch studies
-  collect-batch                 collect and compare both pbatch studies
+  collect-interactive [POLICY]  collect one study or compare both studies
+  prepare-batch [POLICY]        prepare one or both strong/weak pbatch studies
+  submit-batch [POLICY]         submit one or both pbatch studies
+  collect-batch [POLICY]        collect one study or compare both studies
+  prepare-profile               prepare resource-aware profiling jobs
+  submit-profile                submit resource-aware profiling jobs
+  collect-profile               collect the resource-aware profiling inventory
   paths                         print selected paths and study settings
 
 POLICY is hardware or resource-aware. The default mesh directory reuses the
@@ -78,6 +89,10 @@ check_settings()
   }
   [[ $batch_repetitions == <1-> && $batch_iterations == <1-> ]] || {
     print -u2 'Batch repetitions and iterations must be positive.'
+    exit 2
+  }
+  [[ $profile_divisor == <1-> && $profile_iterations == <1-> ]] || {
+    print -u2 'Profile divisor and iteration count must be positive.'
     exit 2
   }
   [[ -z $worker_count || $worker_count == <1-> ]] || {
@@ -135,6 +150,28 @@ build()
   fi
   local -a command=("${(@f)$(allocation 1)}")
   "$command[@]" zsh "$script" build-here
+}
+
+rebuild_here()
+{
+  [[ -r $environment ]] || {
+    print -u2 "The dependency environment is not ready under $work_root"
+    print -u2 "Run '$script build' first."
+    exit 1
+  }
+
+  export OPENSN_SOURCE=$source_dir
+  export OPENSN_TUO_ROOT=$work_root
+  export OPENSN_TUO_BUILD=$build_dir
+  mkdir -p -- "$work_root/logs"
+  zsh "$source_dir/tools/scaling/tuo/bootstrap.zsh" build-opensn \
+    |& tee "$work_root/logs/rebuild-opensn.log"
+}
+
+rebuild()
+{
+  local -a command=("${(@f)$(allocation 1)}")
+  "$command[@]" zsh "$script" rebuild-here
 }
 
 study_for()
@@ -199,8 +236,13 @@ prepare_one()
 prepare_interactive()
 {
   require_build
-  prepare_one interactive hardware
-  prepare_one interactive resource-aware
+  if (( $# == 1 )); then
+    check_policy "$1"
+    prepare_one interactive "$1"
+  else
+    prepare_one interactive hardware
+    prepare_one interactive resource-aware
+  fi
 }
 
 run_here()
@@ -229,6 +271,13 @@ run_one()
 
 run_interactive_here()
 {
+  if (( $# == 1 )); then
+    check_policy "$1"
+    run_here "$1" 1
+    run_here "$1" 2
+    run_here "$1" 4
+    return
+  fi
   run_here hardware 1
   run_here resource-aware 1
   run_here resource-aware 2
@@ -239,9 +288,9 @@ run_interactive_here()
 
 run_interactive()
 {
-  prepare_interactive
+  prepare_interactive "$@"
   local -a command=("${(@f)$(allocation 4)}")
-  "$command[@]" zsh "$script" run-interactive-here
+  "$command[@]" zsh "$script" run-interactive-here "$@"
 }
 
 collect_one()
@@ -274,6 +323,11 @@ compare_pair()
 collect_interactive()
 {
   require_build
+  if (( $# == 1 )); then
+    check_policy "$1"
+    collect_one "$(study_for interactive "$1")"
+    return
+  fi
   collect_one "$hardware_interactive"
   collect_one "$resource_interactive"
   compare_pair interactive
@@ -282,13 +336,22 @@ collect_interactive()
 prepare_batch()
 {
   require_build
+  if (( $# == 1 )); then
+    check_policy "$1"
+    prepare_one batch "$1"
+    return
+  fi
   prepare_one batch hardware
   prepare_one batch resource-aware
 }
 
 submit_batch()
 {
-  prepare_batch
+  prepare_batch "$@"
+  if (( $# == 1 )); then
+    zsh "$(study_for batch "$1")/submit.zsh"
+    return
+  fi
   zsh "$hardware_batch/submit.zsh"
   zsh "$resource_batch/submit.zsh"
 }
@@ -296,9 +359,54 @@ submit_batch()
 collect_batch()
 {
   require_build
+  if (( $# == 1 )); then
+    check_policy "$1"
+    collect_one "$(study_for batch "$1")"
+    return
+  fi
   collect_one "$hardware_batch"
   collect_one "$resource_batch"
   compare_pair batch
+}
+
+prepare_profile()
+{
+  require_build
+  local -a optional_args=()
+  [[ -z $bank ]] || optional_args+=(--bank "$bank")
+  [[ -z $worker_count ]] || optional_args+=(--cbcd-workers "$worker_count")
+
+  source "$environment"
+  python "$source_dir/tools/scaling/tuo/study.py" prepare-profile \
+    --binary "$binary" \
+    --environment "$environment" \
+    --output "$profile_root" \
+    --mesh-dir "$mesh_dir" \
+    --label "$label-profile-resource-aware" \
+    --profile-divisor "$profile_divisor" \
+    --profile-nodes "$profile_nodes" \
+    --profiles "$profile_names" \
+    --max-iterations "$profile_iterations" \
+    --worker-policy resource-aware \
+    --queue pbatch \
+    --time-limit "$profile_time" \
+    --refresh \
+    --no-save-angular-flux \
+    "${optional_args[@]}"
+}
+
+submit_profile()
+{
+  prepare_profile
+  zsh "$profile_root/submit.zsh" --nodes "$profile_nodes" --profiles "$profile_names"
+}
+
+collect_profile()
+{
+  require_build
+  source "$environment"
+  python "$source_dir/tools/scaling/tuo/study.py" collect-profile --study "$profile_root"
+  sed -n '1,80p' "$profile_root/profile-summary.md"
 }
 
 paths()
@@ -313,10 +421,15 @@ paths()
   print -- "interactive_resource_aware=$resource_interactive"
   print -- "batch_hardware=$hardware_batch"
   print -- "batch_resource_aware=$resource_batch"
+  print -- "profile_resource_aware=$profile_root"
   print -- "interactive_iterations=$interactive_iterations"
   print -- "batch_nodes=$batch_nodes"
   print -- "batch_repetitions=$batch_repetitions"
   print -- "batch_iterations=$batch_iterations"
+  print -- "profile_nodes=$profile_nodes"
+  print -- "profiles=$profile_names"
+  print -- "profile_divisor=$profile_divisor"
+  print -- "profile_iterations=$profile_iterations"
   print -- "fixed_workers=${worker_count:-unset}"
 }
 
@@ -327,15 +440,20 @@ shift
 case $command in
   build) (( $# == 0 )) || usage; build ;;
   build-here) (( $# == 0 )) || usage; build_here ;;
-  prepare-interactive) (( $# == 0 )) || usage; prepare_interactive ;;
-  run-interactive) (( $# == 0 )) || usage; run_interactive ;;
-  run-interactive-here) (( $# == 0 )) || usage; run_interactive_here ;;
+  rebuild) (( $# == 0 )) || usage; rebuild ;;
+  rebuild-here) (( $# == 0 )) || usage; rebuild_here ;;
+  prepare-interactive) (( $# <= 1 )) || usage; prepare_interactive "$@" ;;
+  run-interactive) (( $# <= 1 )) || usage; run_interactive "$@" ;;
+  run-interactive-here) (( $# <= 1 )) || usage; run_interactive_here "$@" ;;
   run) (( $# == 2 )) || usage; run_one "$1" "$2" ;;
   run-here) (( $# == 2 )) || usage; run_here "$1" "$2" ;;
-  collect-interactive) (( $# == 0 )) || usage; collect_interactive ;;
-  prepare-batch) (( $# == 0 )) || usage; prepare_batch ;;
-  submit-batch) (( $# == 0 )) || usage; submit_batch ;;
-  collect-batch) (( $# == 0 )) || usage; collect_batch ;;
+  collect-interactive) (( $# <= 1 )) || usage; collect_interactive "$@" ;;
+  prepare-batch) (( $# <= 1 )) || usage; prepare_batch "$@" ;;
+  submit-batch) (( $# <= 1 )) || usage; submit_batch "$@" ;;
+  collect-batch) (( $# <= 1 )) || usage; collect_batch "$@" ;;
+  prepare-profile) (( $# == 0 )) || usage; prepare_profile ;;
+  submit-profile) (( $# == 0 )) || usage; submit_profile ;;
+  collect-profile) (( $# == 0 )) || usage; collect_profile ;;
   paths) (( $# == 0 )) || usage; paths ;;
   *) usage ;;
 esac
