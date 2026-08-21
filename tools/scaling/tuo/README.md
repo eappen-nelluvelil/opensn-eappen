@@ -93,8 +93,9 @@ zsh "$HELPER" collect-interactive
 ```
 
 `prepare-interactive` creates separate hardware and resource-aware studies that
-use the same strong-scaling mesh. `run-interactive` obtains one exclusive
-four-node allocation and runs:
+use the same strong-scaling mesh. Rerunning it refreshes generated inputs and
+job scripts while preserving existing result directories. `run-interactive`
+obtains one exclusive four-node allocation and runs:
 
 ```text
 hardware 1 node

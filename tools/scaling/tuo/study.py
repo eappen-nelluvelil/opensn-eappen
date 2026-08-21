@@ -227,13 +227,13 @@ completed=0
 
 finish_run()
 {{
-  local status=$?
+  local exit_code=$?
   trap - EXIT INT TERM
   if (( ! completed )); then
-    print -- "$status" >| "$result/job_exit_code.txt"
+    print -- "$exit_code" >| "$result/job_exit_code.txt"
     touch "$result/FAILED"
   fi
-  exit "$status"
+  exit "$exit_code"
 }}
 trap finish_run EXIT INT TERM
 
@@ -286,17 +286,17 @@ for trial_number in {{1..{args.repetitions}}}; do
     flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error \\
       "$binary" --verbose 1 -i "$input" \\
       > "$trial/stdout.txt" 2> "$trial/stderr.txt"
-  status=$?
+  exit_code=$?
   set -e
-  print -- "$status" >| "$trial/exit_code.txt"
-  if (( status != 0 )) ||
+  print -- "$exit_code" >| "$trial/exit_code.txt"
+  if (( exit_code != 0 )) ||
      ! grep -q 'OpenSn finished execution\\.' "$trial/stdout.txt" ||
      ! grep -q 'WGS groups .* final, status' "$trial/stdout.txt" ||
      ! grep -q 'CBCD scheduler:.*workers=' "$trial/stdout.txt" ||
      ! grep -q 'avg_sweep_time' "$trial/stdout.txt" ||
      [[ $(grep -Ec '^OPENSN_TUO_SCALAR_FLUX_MAX group=' "$trial/stdout.txt") -ne 2 ]]; then
     touch "$trial/FAILED"
-    exit $(( status == 0 ? 1 : status ))
+    exit $(( exit_code == 0 ? 1 : exit_code ))
   fi
   touch "$trial/SUCCESS"
 done
@@ -407,10 +407,10 @@ set +e
   -f 'wall_seconds=%e launcher_max_rss_kb=%M' \\
   -o "$result/time.txt" \\
   {command} > "$result/stdout.txt" 2> "$result/stderr.txt"
-status=$?
+exit_code=$?
 set -e
-print -- "$status" >| "$result/exit_code.txt"
-if (( status != 0 )) ||
+print -- "$exit_code" >| "$result/exit_code.txt"
+if (( exit_code != 0 )) ||
    ! grep -q 'OpenSn finished execution\\.' "$result/stdout.txt" ||
    ! grep -q 'WGS groups .* final, status' "$result/stdout.txt" ||
    ! grep -q 'WGS groups .* iteration.*residual' "$result/stdout.txt" ||
@@ -418,7 +418,7 @@ if (( status != 0 )) ||
    ! grep -q 'avg_sweep_time' "$result/stdout.txt" ||
    [[ $(grep -Ec '^OPENSN_TUO_SCALAR_FLUX_MAX group=' "$result/stdout.txt") -ne 2 ]] ||
    ! {artifact}; then
-  exit $(( status == 0 ? 1 : status ))
+  exit $(( exit_code == 0 ? 1 : exit_code ))
 fi
 print -- 0 >| "$result/job_exit_code.txt"
 touch "$result/SUCCESS"
@@ -427,10 +427,15 @@ trap - EXIT INT TERM
 """
 
 
-def prepare_directory(output):
+def prepare_directory(output, refresh=False):
     study = output.expanduser().resolve()
     if study.exists() and any(study.iterdir()):
-        raise RuntimeError(f"study directory is not empty: {study}")
+        if not refresh:
+            raise RuntimeError(f"study directory is not empty: {study}")
+        if not (study / "manifest.json").is_file():
+            raise RuntimeError(
+                f"cannot refresh a directory without a study manifest: {study}"
+            )
     for name in ("inputs", "jobs", "results", "scheduler"):
         (study / name).mkdir(parents=True, exist_ok=True)
     return study
@@ -474,7 +479,7 @@ def prepare(args):
     if "weak" in args.kinds:
         divisors.update(WEAK_DIVISORS[node] for node in args.nodes)
     meshes = required_meshes(args.mesh_dir, divisors)
-    study = prepare_directory(args.output)
+    study = prepare_directory(args.output, args.refresh)
 
     cases = []
     for kind in args.kinds:
@@ -535,7 +540,7 @@ def prepare(args):
 def prepare_profile(args):
     validate_prepare(args, args.profile_nodes)
     meshes = required_meshes(args.mesh_dir, {args.profile_divisor})
-    study = prepare_directory(args.output)
+    study = prepare_directory(args.output, args.refresh)
     input_path = study / "inputs" / "profile.py"
     write_input(
         input_path,
@@ -1163,6 +1168,11 @@ def add_common_prepare_arguments(command, profile=False):
     command.add_argument("--queue", default="pbatch")
     command.add_argument("--bank")
     command.add_argument("--time-limit", default="6h" if profile else "4h")
+    command.add_argument(
+        "--refresh",
+        action="store_true",
+        help="replace generated inputs and jobs while preserving result directories",
+    )
     command.add_argument(
         "--worker-policy",
         choices=("hardware", "resource-aware"),

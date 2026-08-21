@@ -43,6 +43,7 @@ def prepare_args(root, **updates):
         "strong_divisor": 39,
         "max_iterations": 2,
         "save_angular_flux": False,
+        "refresh": False,
     }
     values.update(updates)
     return SimpleNamespace(**values)
@@ -122,6 +123,7 @@ class PreparationTests(unittest.TestCase):
             self.assertIn("job_tag=${FLUX_JOB_ID:-allocation}", job)
             self.assertIn('flux_job_id=${FLUX_JOB_ID:-unset}', job)
             self.assertNotIn("FLUX_JOB_ID:?", job)
+            self.assertNotRegex(job, r"(?m)^(?:\s*local\s+)?status=")
             self.assertNotIn("amd-gpumode", job)
             self.assertNotIn("setattr=gpumode", job)
             self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
@@ -151,6 +153,24 @@ class PreparationTests(unittest.TestCase):
             job = (args.output / "jobs/strong-1.zsh").read_text()
             self.assertIn("export OPENSN_CBCD_WORKER_POLICY=resource-aware", job)
             self.assertIn("export OPENSN_CBCD_NUM_WORKERS=20", job)
+
+    def test_refresh_replaces_jobs_and_preserves_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(root)
+            create_meshes(args.mesh_dir, (39,))
+            STUDY.prepare(args)
+            old_job = args.output / "jobs/strong-1.zsh"
+            old_job.write_text("obsolete\n")
+            preserved = args.output / "results/strong/nodes-1/previous-result.txt"
+            preserved.parent.mkdir(parents=True)
+            preserved.write_text("keep\n")
+
+            args.refresh = True
+            STUDY.prepare(args)
+
+            self.assertNotEqual(old_job.read_text(), "obsolete\n")
+            self.assertEqual(preserved.read_text(), "keep\n")
 
     def test_production_defaults_cover_eighteen_jobs(self):
         defaults = STUDY.parser().parse_args(
@@ -203,7 +223,63 @@ class PreparationTests(unittest.TestCase):
                 )
                 self.assertEqual(syntax.returncode, 0, syntax.stderr)
                 self.assertNotIn("amd-gpumode", job)
+                self.assertNotRegex(job, r"(?m)^(?:\s*local\s+)?status=")
                 self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
+
+    def test_failure_trap_executes_under_zsh_and_preserves_exit_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result_root = Path(directory) / "results"
+            script = (
+                "set -euo pipefail\n"
+                + STUDY.run_directory_setup(result_root, ("case=test",))
+                + "false\n"
+            )
+            completed = subprocess.run(
+                ["zsh"],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            runs = list(result_root.glob("run-*"))
+            self.assertEqual(len(runs), 1)
+            self.assertTrue((runs[0] / "FAILED").is_file())
+            self.assertEqual((runs[0] / "job_exit_code.txt").read_text(), "1\n")
+
+    def test_scaling_job_executes_successfully_under_zsh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(root, nodes=(1,))
+            create_meshes(args.mesh_dir, (39,))
+            tools = root / "tools"
+            tools.mkdir()
+            flux = tools / "flux"
+            flux.write_text(
+                "#!/bin/zsh\n"
+                "print -- 'WGS groups [0-63] final, status = iteration_limit, iterations = 2'\n"
+                "print -- 'CBCD scheduler: policy=hardware, workers=192, communicator_threads=1'\n"
+                "print -- 'unknowns = 1024, lagged_unknowns = 7, avg_sweep_time = 0.1 s'\n"
+                "print -- 'OPENSN_TUO_SCALAR_FLUX_MAX group=0 value=0.5'\n"
+                "print -- 'OPENSN_TUO_SCALAR_FLUX_MAX group=63 value=0.0002'\n"
+                "print -- 'OpenSn finished execution.'\n"
+            )
+            flux.chmod(0o700)
+            args.environment.write_text(f"export PATH={tools}:$PATH\n")
+            STUDY.prepare(args)
+
+            completed = subprocess.run(
+                ["zsh", str(args.output / "jobs/strong-1.zsh")],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            runs = list((args.output / "results/strong/nodes-1").glob("run-*"))
+            self.assertEqual(len(runs), 1)
+            self.assertTrue((runs[0] / "SUCCESS").is_file())
+            self.assertTrue((runs[0] / "trial-1/SUCCESS").is_file())
 
 
 class ResultTests(unittest.TestCase):

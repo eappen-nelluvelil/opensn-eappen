@@ -155,10 +155,6 @@ prepare_one()
   local scope=$1
   local policy=$2
   local output=$(study_for "$scope" "$policy")
-  if [[ -r $output/manifest.json ]]; then
-    print -- "Reusing prepared $scope $policy study: $output"
-    return
-  fi
 
   local nodes kinds repetitions iterations study_queue time_limit
   if [[ $scope == interactive ]]; then
@@ -194,6 +190,7 @@ prepare_one()
     --max-iterations "$iterations" \
     --queue "$study_queue" \
     --time-limit "$time_limit" \
+    --refresh \
     --worker-policy "$policy" \
     --no-save-angular-flux \
     "${optional_args[@]}"
