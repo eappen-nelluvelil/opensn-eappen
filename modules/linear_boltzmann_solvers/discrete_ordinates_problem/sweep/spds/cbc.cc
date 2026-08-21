@@ -421,11 +421,8 @@ CBC_SPDS::BuildTaskList()
     if (num_dependencies > std::numeric_limits<unsigned int>::max())
       throw std::length_error("CBC_SPDS: task dependency count exceeds its storage range.");
     const auto stored_dependencies = static_cast<unsigned int>(num_dependencies);
-    task_list_[cell.local_id] = {stored_dependencies,
-                                 std::move(successors),
-                                 cell.local_id,
-                                 &cell,
-                                 false};
+    task_list_[cell.local_id] = {
+      stored_dependencies, std::move(successors), cell.local_id, &cell, false};
     initial_task_dependencies_[cell.local_id] = stored_dependencies;
   }
 
@@ -658,9 +655,8 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots(const std::span<const std::uint32_t> face_n
   }
 
   // Solve the exact minimum chain cover of the local-face reuse poset, then turn that chain
-  // decomposition into a static slot assignment and compact slot-bank layout. The planner
-  // verifies every chain handoff and throws on any internal inconsistency; an unverified or
-  // merely conservative assignment is never exposed as an optimal plan.
+  // decomposition into a static slot assignment and compact slot-bank layout. The sparse-flow
+  // planner certifies each chain handoff with a path through the local task DAG.
   max_num_local_psi_slots_ = detail::ComputeLocalFaceSlotPlan(task_successor_rank_offsets_,
                                                               task_successor_ranks_,
                                                               local_face_producer_ranks_,

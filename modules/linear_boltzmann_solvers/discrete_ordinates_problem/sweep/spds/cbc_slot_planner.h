@@ -24,27 +24,26 @@ namespace opensn::detail
  * width (i.e. the maximum cardinality of any antichain of pairwise incomparable
  * faces). By Dilworth's theorem, this is the minimum chain-cover cardinality.
  *
- * The implementation uses the standard bipartite split-graph reduction. The reuse relation
- * defines the bipartite edges, Hopcroft-Karp computes a maximum cardinality matching, and
- * the matching induces a minimum chain cover of size `|F| - |M|`. Koenig's theorem provides
- * the matching-cover duality for the bipartite graph. Consequently, the returned slot count
- * is exact.
+ * The implementation computes the same maximum matching without materializing the transitive
+ * closure. It constructs a capacitated network over the original task DAG with one unit source
+ * arc for each face consumer and one unit sink arc for each face producer. Task-DAG edges have
+ * capacity `|F|`. An integral source-to-sink flow path pairs exactly one left-side face with one
+ * reachable right-side face; the unit terminal arcs enforce the matching constraints. Conversely,
+ * every edge of the transitive-closure bipartite graph defines such a flow path. The maximum-flow
+ * value therefore equals the maximum matching cardinality, and the induced minimum chain cover
+ * has exactly `|F| - |M|` slots.
  *
  * Algorithm flow:
- * 1. Build the reflexive transitive closure of the local CBC task DAG in topological-rank
- * space.
- * 2. Group local directed faces by consumer-cell rank and cache the reachable producer-cell
- * ranks that define the reuse graph rows.
- * 3. Run Hopcroft-Karp on the implicit bipartite reuse graph:
- *    a. greedy seeding,
- *    b. BFS layer construction,
- *    c. iterative DFS augmentation.
+ * 1. Build the sparse residual network directly from the task-DAG CSR and face endpoint tables.
+ * 2. Compute an integral maximum flow with a level-graph augmenting-path algorithm.
+ * 3. Decompose the flow into certified reachable face pairs.
  * 4. Extract one slot chain per unmatched right-side face.
- * 5. Verify the extracted assignment before returning it.
+ * 5. Verify the flow decomposition and complete slot assignment before returning it.
  *
- * After chain extraction, the assignment is verified by checking each consecutive reuse
- * handoff in face enumeration order. A rejected assignment is an internal correctness error;
- * the planner throws rather than exposing an assignment that is safe but not proven optimal.
+ * The network contains `O(|V| + |E| + |F|)` storage instead of the quadratic task-reachability
+ * matrix. Flow decomposition consumes every unit on a concrete task-DAG path, providing a sparse
+ * certificate for each reuse handoff. Any incomplete flow decomposition or slot assignment is an
+ * internal correctness error; the planner throws rather than exposing an unverified assignment.
  *
  * \param successor_rank_offsets Offsets into the flat successor-rank adjacency list of the
  * local CBC task DAG.

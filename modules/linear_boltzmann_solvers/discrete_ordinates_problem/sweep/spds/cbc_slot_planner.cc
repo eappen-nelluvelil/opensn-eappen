@@ -3,10 +3,8 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/cbc_slot_planner.h"
 #include <algorithm>
-#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -15,189 +13,10 @@
 namespace opensn::detail
 {
 
-// Planner overview:
-// 1. Build the reflexive transitive closure of the local CBC task DAG.
-// 2. Define a face-poset reuse relation: face u may precede face v in one slot if the
-//    consumer cell of u reaches the producer cell of v in the task DAG.
-// 3. Solve the resulting minimum chain-cover problem exactly through the standard bipartite
-//    maximum-matching reduction.
-// 4. Extract one slot chain per unmatched right-side face and verify the resulting static
-//    handoff sequence before exposing it to CBC_SPDS.
-
-constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
-
-// Bit-packed reachability matrix for the local cell DAG.
-// Rows are padded so the closure builder can copy and OR contiguous word spans efficiently.
-class BitMatrix
-{
-public:
-  void ResizeAndClear(const std::size_t n)
-  {
-    n_ = n;
-    active_words_per_row_ = (n + 63) / 64;
-    padded_words_per_row_ = (active_words_per_row_ + 7) & ~std::size_t{7};
-    if (padded_words_per_row_ > 0 and
-        n_ > std::numeric_limits<std::size_t>::max() / padded_words_per_row_)
-      throw std::length_error("CBC slot planner: reachability matrix size overflow.");
-    const std::size_t required_words = n_ * padded_words_per_row_;
-    if (data_.size() < required_words)
-      data_.resize(required_words);
-    if (row_active_word_counts_.size() < n_)
-      row_active_word_counts_.resize(n_);
-    std::fill_n(data_.begin(), required_words, 0ULL);
-    std::fill_n(row_active_word_counts_.begin(), n_, std::size_t{0});
-  }
-
-  std::uint64_t* Row(const std::size_t i) noexcept
-  {
-    return data_.data() + i * padded_words_per_row_;
-  }
-
-  const std::uint64_t* Row(const std::size_t i) const noexcept
-  {
-    return data_.data() + i * padded_words_per_row_;
-  }
-
-  void SetBit(const std::size_t i, const std::size_t j) noexcept
-  {
-    Row(i)[j / 64] |= (1ULL << (j % 64));
-    row_active_word_counts_[i] = std::max(row_active_word_counts_[i], (j / 64) + 1);
-  }
-
-  bool TestBit(const std::size_t i, const std::size_t j) const noexcept
-  {
-    return (Row(i)[j / 64] & (1ULL << (j % 64))) != 0ULL;
-  }
-
-  void CopyRowFromWord(const std::size_t dst,
-                       const BitMatrix& src_mat,
-                       const std::size_t src_row,
-                       const std::size_t start_word) noexcept
-  {
-    const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
-    if (start_word >= src_active_words)
-    {
-      row_active_word_counts_[dst] =
-        std::max(row_active_word_counts_[dst], std::min(start_word, active_words_per_row_));
-      return;
-    }
-
-    std::uint64_t* const d = Row(dst) + start_word;
-    const std::uint64_t* const s = src_mat.Row(src_row) + start_word;
-    const std::size_t words_to_copy = src_active_words - start_word;
-    std::memcpy(d, s, words_to_copy * sizeof(std::uint64_t));
-    row_active_word_counts_[dst] = src_active_words;
-  }
-
-  void OrRowsFromWord(const std::size_t dst,
-                      const BitMatrix& src_mat,
-                      const std::size_t src_row,
-                      const std::size_t start_word) noexcept
-  {
-    const std::size_t src_active_words = src_mat.row_active_word_counts_[src_row];
-    if (start_word >= src_active_words)
-      return;
-
-    std::uint64_t* const d = Row(dst) + start_word;
-    const std::uint64_t* const s = src_mat.Row(src_row) + start_word;
-    const std::size_t words_to_process = src_active_words - start_word;
-    for (std::size_t w = 0; w < words_to_process; ++w)
-      d[w] |= s[w];
-    row_active_word_counts_[dst] = std::max(row_active_word_counts_[dst], src_active_words);
-  }
-
-  std::size_t FindFirstSet(const std::size_t row, const std::size_t start_pos = 0) const noexcept
-  {
-    const std::uint64_t* const r = Row(row);
-    std::size_t w = start_pos / 64;
-    const std::size_t active_words = row_active_word_counts_[row];
-    if (w >= active_words)
-      return n_;
-
-    std::uint64_t masked = r[w] & (~0ULL << (start_pos % 64));
-    if (masked)
-      return w * 64 + static_cast<std::size_t>(std::countr_zero(masked));
-
-    for (++w; w < active_words; ++w)
-    {
-      if (r[w])
-        return w * 64 + static_cast<std::size_t>(std::countr_zero(r[w]));
-    }
-    return n_;
-  }
-
-  std::size_t FindNextSet(const std::size_t row, const std::size_t pos) const noexcept
-  {
-    return FindFirstSet(row, pos + 1);
-  }
-
-  std::size_t CountSetBits(const std::size_t row, const std::size_t start_pos = 0) const noexcept
-  {
-    const std::uint64_t* const r = Row(row);
-    std::size_t word = start_pos / 64;
-    const std::size_t active_words = row_active_word_counts_[row];
-    if (word >= active_words)
-      return 0;
-
-    std::size_t count = std::popcount(r[word] & (~0ULL << (start_pos % 64)));
-    for (++word; word < active_words; ++word)
-      count += std::popcount(r[word]);
-    return count;
-  }
-
-private:
-  std::size_t n_ = 0;
-  std::size_t active_words_per_row_ = 0;
-  std::size_t padded_words_per_row_ = 0;
-  std::vector<std::size_t> row_active_word_counts_;
-  std::vector<std::uint64_t> data_;
-};
-
-struct DFSFrame
-{
-  std::uint32_t u_face_rank = INVALID_INDEX;
-  std::uint32_t via_v_face_rank = INVALID_INDEX;
-  std::uint32_t next_producer_rank = INVALID_INDEX;
-  std::uint32_t next_v_face_rank = 0;
-  std::uint32_t v_face_end = 0;
-};
-
-struct ThreadLocalWorkspace
-{
-  BitMatrix reachability;
-  std::vector<std::uint32_t> face_mate_u;
-  std::vector<std::uint32_t> face_mate_v;
-  std::vector<int> face_dist;
-  std::vector<std::uint32_t> face_queue;
-  std::vector<std::uint32_t> consumer_rank_face_offsets;
-  std::vector<std::uint32_t> consumer_rank_face_write_offsets;
-  std::vector<std::uint32_t> faces_by_consumer_rank;
-  std::vector<std::uint32_t> candidate_rank_counts_by_consumer_rank;
-  std::vector<std::uint32_t> greedy_consumer_rank_order;
-  std::vector<std::uint32_t> face_last_rank_for_slot;
-  std::vector<DFSFrame> dfs_frames;
-
-  void PrepareMatching(const std::size_t num_consumer_ranks, const std::size_t num_faces)
-  {
-    face_mate_u.assign(num_faces, INVALID_INDEX);
-    face_mate_v.assign(num_faces, INVALID_INDEX);
-    face_dist.assign(num_faces, -1);
-    if (face_queue.size() < num_faces)
-      face_queue.resize(num_faces);
-    if (face_last_rank_for_slot.size() < num_faces)
-      face_last_rank_for_slot.resize(num_faces);
-    if (dfs_frames.capacity() < num_faces)
-      dfs_frames.reserve(num_faces);
-    consumer_rank_face_offsets.assign(num_consumer_ranks + 1, 0);
-    consumer_rank_face_write_offsets.assign(num_consumer_ranks, 0);
-    faces_by_consumer_rank.assign(num_faces, INVALID_INDEX);
-    candidate_rank_counts_by_consumer_rank.assign(num_consumer_ranks, 0);
-    greedy_consumer_rank_order.clear();
-  }
-};
-
 namespace
 {
+
+constexpr std::uint32_t INVALID_INDEX = std::numeric_limits<std::uint32_t>::max();
 
 void
 ValidatePlannerInputs(const std::vector<std::uint32_t>& successor_rank_offsets,
@@ -210,8 +29,8 @@ ValidatePlannerInputs(const std::vector<std::uint32_t>& successor_rank_offsets,
     throw std::invalid_argument("CBC slot planner: successor offsets must contain one entry.");
 
   const auto num_tasks = successor_rank_offsets.size() - 1;
-  if (num_tasks > std::numeric_limits<std::uint32_t>::max())
-    throw std::length_error("CBC slot planner: task count exceeds the 32-bit index range.");
+  if (num_tasks > std::numeric_limits<std::uint32_t>::max() - 2)
+    throw std::length_error("CBC slot planner: task count exceeds the flow-network index range.");
   if (successor_rank_offsets.front() != 0 or
       successor_rank_offsets.back() != successor_ranks.size() or
       not std::is_sorted(successor_rank_offsets.begin(), successor_rank_offsets.end()))
@@ -247,405 +66,332 @@ ValidatePlannerInputs(const std::vector<std::uint32_t>& successor_rank_offsets,
         "CBC slot planner: directed face is not a strict task-DAG dependency.");
 }
 
-// Build the reflexive transitive closure of the local cell DAG in topological-rank space.
-void
-BuildReachability(const std::uint32_t num_tasks,
-                  const std::vector<std::uint32_t>& successor_rank_offsets,
-                  const std::vector<std::uint32_t>& successor_ranks,
-                  ThreadLocalWorkspace& ws)
+struct FlowArc
 {
-  ws.reachability.ResizeAndClear(num_tasks);
-  // Every row is the union of its successor rows. Process the topological order backwards so
-  // each successor's transitive closure is complete before it is consumed.
-  for (std::uint32_t offset = 0; offset < num_tasks; ++offset)
-  {
-    const auto i = num_tasks - 1 - offset;
-    const auto successor_begin = successor_ranks.begin() + successor_rank_offsets[i];
-    const auto successor_end = successor_ranks.begin() + successor_rank_offsets[i + 1];
-    const auto start_word = static_cast<std::size_t>(i / 64);
+  std::uint32_t reverse = 0;
+  std::uint32_t to = 0;
+  std::uint32_t capacity = 0;
+  std::uint32_t initial_capacity = 0;
+};
 
-    if (successor_begin == successor_end)
-    {
-      ws.reachability.SetBit(i, i);
-      continue;
-    }
+struct ThreadLocalWorkspace
+{
+  std::vector<std::uint32_t> degrees;
+  std::vector<std::uint32_t> offsets;
+  std::vector<std::uint32_t> write_offsets;
+  std::vector<FlowArc> arcs;
+  std::vector<int> levels;
+  std::vector<std::uint32_t> next_arcs;
+  std::vector<std::uint32_t> queue;
+  std::vector<std::uint32_t> path_arcs;
+  std::vector<std::uint32_t> source_arcs_by_face;
+  std::vector<std::uint32_t> sink_arcs_by_face;
+  std::vector<std::uint32_t> flow_path_cursors;
+  std::vector<std::uint32_t> face_mate_u;
+  std::vector<std::uint32_t> face_mate_v;
+};
 
-    ws.reachability.CopyRowFromWord(i, ws.reachability, *successor_begin, start_word);
-    for (auto it = successor_begin + 1; it != successor_end; ++it)
-      ws.reachability.OrRowsFromWord(i, ws.reachability, *it, start_word);
-    // Copying starts at the word containing `i`, so set the diagonal after the copy to
-    // preserve reflexivity when `i` and its first successor occupy the same word.
-    ws.reachability.SetBit(i, i);
-  }
-}
-
-} // namespace
-
-// Exact minimum chain-cover solver for the local-face reuse poset.
-//
-// The bipartite graph is never explicitly materialized. Candidate right vertices are generated
-// on demand from the cached reachability rows and from the producer-face grouping created by
-// CBC_SPDS::BuildLocalFaceTaskGraph(), which avoids the memory cost of an explicit dense
-// face-to-face adjacency structure.
-class LocalFaceHopcroftKarp
+class SparseReachabilityMatcher
 {
 public:
-  LocalFaceHopcroftKarp(const std::vector<std::uint32_t>& face_producer_ranks,
-                        const std::vector<std::uint32_t>& face_consumer_ranks,
-                        const std::vector<std::uint32_t>& producer_cell_face_offsets,
-                        std::vector<std::uint32_t>& face_slot_ids,
-                        ThreadLocalWorkspace& ws)
-    : num_faces_(static_cast<std::uint32_t>(face_producer_ranks.size())),
+  SparseReachabilityMatcher(const std::vector<std::uint32_t>& successor_rank_offsets,
+                            const std::vector<std::uint32_t>& successor_ranks,
+                            const std::vector<std::uint32_t>& face_producer_ranks,
+                            const std::vector<std::uint32_t>& face_consumer_ranks,
+                            const std::vector<std::uint32_t>& producer_cell_face_offsets,
+                            ThreadLocalWorkspace& workspace)
+    : successor_rank_offsets_(successor_rank_offsets),
+      successor_ranks_(successor_ranks),
       face_producer_ranks_(face_producer_ranks),
       face_consumer_ranks_(face_consumer_ranks),
       producer_cell_face_offsets_(producer_cell_face_offsets),
-      face_slot_ids_(face_slot_ids),
-      ws_(ws)
+      workspace_(workspace),
+      num_tasks_(static_cast<std::uint32_t>(successor_rank_offsets.size() - 1)),
+      num_faces_(static_cast<std::uint32_t>(face_producer_ranks.size())),
+      source_(num_tasks_),
+      sink_(num_tasks_ + 1),
+      num_nodes_(static_cast<std::size_t>(num_tasks_) + 2)
   {
-    ws_.PrepareMatching(producer_cell_face_offsets_.size() - 1, num_faces_);
-    PrepareConsumerFaceCache();
-    PrepareCandidateRankCounts();
-    PrepareGreedyOrder();
+    BuildNetwork();
   }
 
-  std::size_t Solve()
+  std::size_t Solve(std::vector<std::uint32_t>& face_slot_ids)
   {
-    if (num_faces_ == 0)
+    const auto matching_size = MaxFlow();
+    ExtractMatching(matching_size);
+    return ExtractSlotAssignment(matching_size, face_slot_ids);
+  }
+
+private:
+  void CountEdge(const std::uint32_t from, const std::uint32_t to)
+  {
+    if (workspace_.degrees[from] == std::numeric_limits<std::uint32_t>::max() or
+        workspace_.degrees[to] == std::numeric_limits<std::uint32_t>::max())
+      throw std::length_error("CBC slot planner: flow-network degree overflow.");
+    ++workspace_.degrees[from];
+    ++workspace_.degrees[to];
+  }
+
+  std::uint32_t
+  AddEdge(const std::uint32_t from, const std::uint32_t to, const std::uint32_t capacity)
+  {
+    const auto forward = workspace_.write_offsets[from]++;
+    const auto reverse = workspace_.write_offsets[to]++;
+    workspace_.arcs[forward] = {reverse, to, capacity, capacity};
+    workspace_.arcs[reverse] = {forward, from, 0, 0};
+    return forward;
+  }
+
+  void BuildNetwork()
+  {
+    workspace_.degrees.assign(num_nodes_, 0);
+    for (std::uint32_t face = 0; face < num_faces_; ++face)
     {
-      face_slot_ids_.clear();
-      return 0;
+      CountEdge(source_, face_consumer_ranks_[face]);
+      CountEdge(face_producer_ranks_[face], sink_);
+    }
+    for (std::uint32_t task = 0; task < num_tasks_; ++task)
+      for (auto i = successor_rank_offsets_[task]; i < successor_rank_offsets_[task + 1]; ++i)
+        CountEdge(task, successor_ranks_[i]);
+
+    workspace_.offsets.resize(num_nodes_ + 1);
+    workspace_.offsets[0] = 0;
+    for (std::size_t node = 0; node < num_nodes_; ++node)
+    {
+      if (workspace_.degrees[node] >
+          std::numeric_limits<std::uint32_t>::max() - workspace_.offsets[node])
+        throw std::length_error("CBC slot planner: flow-network arc-count overflow.");
+      workspace_.offsets[node + 1] = workspace_.offsets[node] + workspace_.degrees[node];
     }
 
-    // Greedy seeding to increase the initial matching size and reduces the
-    // number of BFS/DFS phases that follow.
-    std::size_t matching_size = GreedyInit();
-    while (BFS())
+    workspace_.arcs.resize(workspace_.offsets.back());
+    workspace_.write_offsets.assign(workspace_.offsets.begin(), workspace_.offsets.end() - 1);
+    workspace_.source_arcs_by_face.resize(num_faces_);
+    workspace_.sink_arcs_by_face.resize(num_faces_);
+
+    for (std::uint32_t face = 0; face < num_faces_; ++face)
+      workspace_.source_arcs_by_face[face] = AddEdge(source_, face_consumer_ranks_[face], 1);
+    for (std::uint32_t face = 0; face < num_faces_; ++face)
+      workspace_.sink_arcs_by_face[face] = AddEdge(face_producer_ranks_[face], sink_, 1);
+
+    const auto internal_capacity = std::max(std::uint32_t{1}, num_faces_);
+    for (std::uint32_t task = 0; task < num_tasks_; ++task)
+      for (auto i = successor_rank_offsets_[task]; i < successor_rank_offsets_[task + 1]; ++i)
+        AddEdge(task, successor_ranks_[i], internal_capacity);
+
+    for (std::size_t node = 0; node < num_nodes_; ++node)
+      if (workspace_.write_offsets[node] != workspace_.offsets[node + 1])
+        throw std::logic_error("CBC slot planner: incomplete flow-network construction.");
+  }
+
+  bool BuildLevelGraph()
+  {
+    workspace_.levels.assign(num_nodes_, -1);
+    if (workspace_.queue.size() < num_nodes_)
+      workspace_.queue.resize(num_nodes_);
+
+    std::size_t head = 0;
+    std::size_t tail = 0;
+    workspace_.levels[source_] = 0;
+    workspace_.queue[tail++] = source_;
+    while (head < tail)
     {
-      for (std::uint32_t i = 0; i < num_faces_; ++i)
+      const auto node = workspace_.queue[head++];
+      if (node == sink_)
+        continue;
+      for (auto arc_index = workspace_.offsets[node]; arc_index < workspace_.offsets[node + 1];
+           ++arc_index)
       {
-        if (ws_.face_mate_u[i] == INVALID_INDEX and DFS(i))
-          ++matching_size;
+        const auto& arc = workspace_.arcs[arc_index];
+        if (arc.capacity == 0 or workspace_.levels[arc.to] != -1)
+          continue;
+        workspace_.levels[arc.to] = workspace_.levels[node] + 1;
+        workspace_.queue[tail++] = arc.to;
+      }
+    }
+    return workspace_.levels[sink_] != -1;
+  }
+
+  bool AugmentLevelGraph()
+  {
+    workspace_.path_arcs.clear();
+    auto node = source_;
+    while (true)
+    {
+      if (node == sink_)
+      {
+        for (const auto arc_index : workspace_.path_arcs)
+        {
+          auto& arc = workspace_.arcs[arc_index];
+          --arc.capacity;
+          ++workspace_.arcs[arc.reverse].capacity;
+        }
+        return true;
+      }
+
+      auto& next_arc = workspace_.next_arcs[node];
+      const auto arc_end = workspace_.offsets[node + 1];
+      while (next_arc < arc_end)
+      {
+        const auto& arc = workspace_.arcs[next_arc];
+        if (arc.capacity != 0 and workspace_.levels[arc.to] == workspace_.levels[node] + 1)
+          break;
+        ++next_arc;
+      }
+
+      if (next_arc < arc_end)
+      {
+        workspace_.path_arcs.push_back(next_arc);
+        node = workspace_.arcs[next_arc].to;
+        continue;
+      }
+
+      workspace_.levels[node] = -1;
+      if (workspace_.path_arcs.empty())
+        return false;
+
+      const auto failed_arc = workspace_.path_arcs.back();
+      workspace_.path_arcs.pop_back();
+      node = workspace_.arcs[workspace_.arcs[failed_arc].reverse].to;
+      ++workspace_.next_arcs[node];
+    }
+  }
+
+  std::size_t MaxFlow()
+  {
+    std::size_t flow = 0;
+    while (BuildLevelGraph())
+    {
+      workspace_.next_arcs.assign(workspace_.offsets.begin(), workspace_.offsets.end() - 1);
+      while (AugmentLevelGraph())
+        ++flow;
+    }
+    return flow;
+  }
+
+  std::uint32_t FlowOnArc(const std::uint32_t arc_index) const noexcept
+  {
+    return workspace_.arcs[workspace_.arcs[arc_index].reverse].capacity;
+  }
+
+  void ConsumeFlowUnit(const std::uint32_t arc_index)
+  {
+    auto& arc = workspace_.arcs[arc_index];
+    auto& reverse = workspace_.arcs[arc.reverse];
+    if (arc.initial_capacity == 0 or reverse.capacity == 0)
+      throw std::logic_error("CBC slot planner: invalid integral-flow decomposition.");
+    ++arc.capacity;
+    --reverse.capacity;
+  }
+
+  void ExtractMatching(const std::size_t matching_size)
+  {
+    workspace_.face_mate_u.assign(num_faces_, INVALID_INDEX);
+    workspace_.face_mate_v.assign(num_faces_, INVALID_INDEX);
+    workspace_.flow_path_cursors.assign(workspace_.offsets.begin(),
+                                        workspace_.offsets.begin() + num_tasks_);
+
+    std::size_t extracted = 0;
+    for (std::uint32_t u_face = 0; u_face < num_faces_; ++u_face)
+    {
+      const auto source_arc = workspace_.source_arcs_by_face[u_face];
+      if (FlowOnArc(source_arc) == 0)
+        continue;
+
+      ConsumeFlowUnit(source_arc);
+      auto task = face_consumer_ranks_[u_face];
+      while (true)
+      {
+        bool path_finished = false;
+        for (auto v_face = producer_cell_face_offsets_[task];
+             v_face < producer_cell_face_offsets_[task + 1];
+             ++v_face)
+        {
+          const auto sink_arc = workspace_.sink_arcs_by_face[v_face];
+          if (FlowOnArc(sink_arc) == 0)
+            continue;
+
+          ConsumeFlowUnit(sink_arc);
+          if (workspace_.face_mate_v[v_face] != INVALID_INDEX)
+            throw std::logic_error("CBC slot planner: flow decomposition repeated a right face.");
+          workspace_.face_mate_u[u_face] = v_face;
+          workspace_.face_mate_v[v_face] = u_face;
+          ++extracted;
+          path_finished = true;
+          break;
+        }
+        if (path_finished)
+          break;
+
+        auto& cursor = workspace_.flow_path_cursors[task];
+        const auto arc_end = workspace_.offsets[task + 1];
+        while (cursor < arc_end)
+        {
+          const auto& arc = workspace_.arcs[cursor];
+          if (arc.initial_capacity != 0 and arc.to < num_tasks_ and FlowOnArc(cursor) != 0)
+            break;
+          ++cursor;
+        }
+        if (cursor == arc_end)
+          throw std::logic_error("CBC slot planner: integral flow terminated before a face.");
+
+        const auto task_arc = cursor;
+        task = workspace_.arcs[task_arc].to;
+        ConsumeFlowUnit(task_arc);
       }
     }
 
-    ExtractSlotAssignment();
-    const std::size_t slot_count = static_cast<std::size_t>(num_faces_) - matching_size;
-    if (not VerifySlotAssignment(slot_count))
+    if (extracted != matching_size)
+      throw std::logic_error("CBC slot planner: incomplete maximum-matching extraction.");
+    for (const auto& arc : workspace_.arcs)
+      if (arc.initial_capacity != 0 and
+          (arc.capacity != arc.initial_capacity or workspace_.arcs[arc.reverse].capacity != 0))
+        throw std::logic_error("CBC slot planner: residual flow remained after decomposition.");
+  }
+
+  std::size_t ExtractSlotAssignment(const std::size_t matching_size,
+                                    std::vector<std::uint32_t>& face_slot_ids) const
+  {
+    face_slot_ids.assign(num_faces_, INVALID_INDEX);
+    std::uint32_t next_slot = 0;
+    for (std::uint32_t face = 0; face < num_faces_; ++face)
+    {
+      if (workspace_.face_mate_v[face] != INVALID_INDEX)
+        continue;
+
+      auto current = face;
+      while (current != INVALID_INDEX)
+      {
+        if (face_slot_ids[current] != INVALID_INDEX)
+          throw std::logic_error("CBC slot planner: matching extraction formed a cycle.");
+        face_slot_ids[current] = next_slot;
+        current = workspace_.face_mate_u[current];
+      }
+      ++next_slot;
+    }
+
+    const auto slot_count = static_cast<std::size_t>(num_faces_) - matching_size;
+    if (next_slot != slot_count or
+        std::ranges::any_of(face_slot_ids,
+                            [slot_count](const std::uint32_t slot) { return slot >= slot_count; }))
       throw std::logic_error("CBC slot planner: minimum chain-cover verification failed.");
     return slot_count;
   }
 
-private:
-  template <class F>
-  void ForEachCandidate(const std::uint32_t u_face_rank, const F& fn) const
-  {
-    // The bipartite graph is implicit. For one left-side face u, admissible right-side faces
-    // are generated directly from its consumer cell's bit-packed reachability row.
-    const auto consumer_cell_rank = face_consumer_ranks_[u_face_rank];
-    const auto num_cell_ranks = producer_cell_face_offsets_.size() - 1;
-    for (std::size_t producer_cell_rank =
-           ws_.reachability.FindFirstSet(consumer_cell_rank, consumer_cell_rank);
-         producer_cell_rank < num_cell_ranks;
-         producer_cell_rank = ws_.reachability.FindNextSet(consumer_cell_rank, producer_cell_rank))
-    {
-      const auto face_begin = producer_cell_face_offsets_[producer_cell_rank];
-      const auto face_end = producer_cell_face_offsets_[producer_cell_rank + 1];
-      for (std::uint32_t v_face_rank = face_begin; v_face_rank < face_end; ++v_face_rank)
-      {
-        if (fn(v_face_rank))
-          return;
-      }
-    }
-  }
-
-  bool ReuseRelationHolds(const std::uint32_t u_face_rank,
-                          const std::uint32_t v_face_rank) const noexcept
-  {
-    return ws_.reachability.TestBit(face_consumer_ranks_[u_face_rank],
-                                    face_producer_ranks_[v_face_rank]);
-  }
-
-  void ExtractSlotAssignment()
-  {
-    // Every unmatched right vertex starts one chain. Following the matched left-to-right
-    // links recovers the full chain, and each chain becomes one reusable slot.
-    face_slot_ids_.assign(num_faces_, INVALID_INDEX);
-    std::uint32_t next_slot_id = 0;
-    for (std::uint32_t i = 0; i < num_faces_; ++i)
-    {
-      if (ws_.face_mate_v[i] != INVALID_INDEX)
-        continue;
-
-      std::uint32_t current = i;
-      while (current != INVALID_INDEX)
-      {
-        face_slot_ids_[current] = next_slot_id;
-        current = ws_.face_mate_u[current];
-      }
-      ++next_slot_id;
-    }
-  }
-
-  bool VerifySlotAssignment(const std::size_t slot_count) const
-  {
-    for (std::uint32_t face = 0; face < num_faces_; ++face)
-    {
-      if (face_slot_ids_[face] >= slot_count)
-        return false;
-    }
-
-    std::fill_n(ws_.face_last_rank_for_slot.begin(), slot_count, INVALID_INDEX);
-    for (std::uint32_t rank = 0; rank < num_faces_; ++rank)
-    {
-      // It is sufficient to check consecutive faces within one extracted chain.
-      // Transitivity of the reuse relation then covers the full chain.
-      const auto slot_id = face_slot_ids_[rank];
-      const auto prev_rank = ws_.face_last_rank_for_slot[slot_id];
-      if ((prev_rank != INVALID_INDEX) and (not ReuseRelationHolds(prev_rank, rank)))
-        return false;
-      ws_.face_last_rank_for_slot[slot_id] = rank;
-    }
-    return std::all_of(ws_.face_last_rank_for_slot.begin(),
-                       ws_.face_last_rank_for_slot.begin() + slot_count,
-                       [](const std::uint32_t face) { return face != INVALID_INDEX; });
-  }
-
-  std::size_t GreedyInit()
-  {
-    std::size_t count = 0;
-    for (const auto consumer_rank : ws_.greedy_consumer_rank_order)
-    {
-      // Process the scarcest consumer rows first.
-      // This preserves exactness while giving the greedy phase a better
-      // chance of seeding a large initial matching.
-      const auto face_begin = ws_.consumer_rank_face_offsets[consumer_rank];
-      const auto face_end = ws_.consumer_rank_face_offsets[consumer_rank + 1];
-      for (std::uint32_t face_index = face_begin; face_index < face_end; ++face_index)
-      {
-        const auto u_face_rank = ws_.faces_by_consumer_rank[face_index];
-        if (ws_.face_mate_u[u_face_rank] != INVALID_INDEX)
-          continue;
-
-        ForEachCandidate(u_face_rank,
-                         [&](const std::uint32_t v_face_rank) -> bool
-                         {
-                           if (ws_.face_mate_v[v_face_rank] != INVALID_INDEX)
-                             return false;
-                           ws_.face_mate_u[u_face_rank] = v_face_rank;
-                           ws_.face_mate_v[v_face_rank] = u_face_rank;
-                           ++count;
-                           return true;
-                         });
-      }
-    }
-    return count;
-  }
-
-  bool BFS()
-  {
-    // Hopcroft-Karp BFS: build distance labels from all unmatched left vertices and
-    // stop at the first layer that reaches the null vertex.
-    std::fill_n(ws_.face_dist.begin(), num_faces_, -1);
-    std::size_t head = 0;
-    std::size_t tail = 0;
-
-    for (std::uint32_t i = 0; i < num_faces_; ++i)
-    {
-      if (ws_.face_mate_u[i] != INVALID_INDEX)
-        continue;
-      ws_.face_dist[i] = 0;
-      ws_.face_queue[tail++] = i;
-    }
-
-    dist_null_ = std::numeric_limits<int>::max();
-    while (head < tail)
-    {
-      const auto u_face_rank = ws_.face_queue[head++];
-      if (ws_.face_dist[u_face_rank] >= dist_null_)
-        continue;
-
-      ForEachCandidate(u_face_rank,
-                       [&](const std::uint32_t v_face_rank) -> bool
-                       {
-                         const auto mate_of_v = ws_.face_mate_v[v_face_rank];
-                         if (mate_of_v == INVALID_INDEX)
-                         {
-                           if (dist_null_ == std::numeric_limits<int>::max())
-                             dist_null_ = ws_.face_dist[u_face_rank] + 1;
-                         }
-                         else if (ws_.face_dist[mate_of_v] == -1)
-                         {
-                           ws_.face_dist[mate_of_v] = ws_.face_dist[u_face_rank] + 1;
-                           ws_.face_queue[tail++] = mate_of_v;
-                         }
-                         return false;
-                       });
-    }
-
-    return dist_null_ != std::numeric_limits<int>::max();
-  }
-
-  bool DFS(const std::uint32_t u_face_rank)
-  {
-    // Hopcroft-Karp DFS, implemented iteratively.
-    // Each frame represents one left vertex together with the current
-    // position in its implicit adjacency row. This avoids recursion while
-    // preserving the same augmenting-path search.
-    ws_.dfs_frames.clear();
-    PushDFSFrame(u_face_rank, INVALID_INDEX);
-
-    while (not ws_.dfs_frames.empty())
-    {
-      auto& frame = ws_.dfs_frames.back();
-      const auto current_u = frame.u_face_rank;
-      const auto current_dist = ws_.face_dist[current_u];
-
-      bool descended = false;
-      while (AdvanceFrame(frame))
-      {
-        const auto v_face_rank = frame.next_v_face_rank++;
-        const auto mate_of_v = ws_.face_mate_v[v_face_rank];
-        if (mate_of_v == INVALID_INDEX)
-        {
-          if (dist_null_ != current_dist + 1)
-            continue;
-
-          // An augmenting path has been found. Walk back through the explicit stack and flip
-          // the matching along the full alternating path.
-          ws_.face_mate_v[v_face_rank] = current_u;
-          ws_.face_mate_u[current_u] = v_face_rank;
-          ws_.face_dist[current_u] = -1;
-          for (std::size_t depth = ws_.dfs_frames.size(); depth-- > 1;)
-          {
-            const auto parent_u = ws_.dfs_frames[depth - 1].u_face_rank;
-            const auto via_v_face_rank = ws_.dfs_frames[depth].via_v_face_rank;
-            ws_.face_mate_v[via_v_face_rank] = parent_u;
-            ws_.face_mate_u[parent_u] = via_v_face_rank;
-            ws_.face_dist[parent_u] = -1;
-          }
-          return true;
-        }
-
-        if (ws_.face_dist[mate_of_v] != current_dist + 1)
-          continue;
-
-        PushDFSFrame(mate_of_v, v_face_rank);
-        descended = true;
-        break;
-      }
-
-      if (descended)
-        continue;
-
-      ws_.face_dist[current_u] = -1;
-      ws_.dfs_frames.pop_back();
-    }
-
-    return false;
-  }
-
-  void PrepareConsumerFaceCache()
-  {
-    // Regroup left-side faces by consumer rank once so both greedy seeding and layered
-    // matching traverse contiguous face ranges instead of repeatedly filtering the face list.
-    for (const auto consumer_rank : face_consumer_ranks_)
-      ++ws_.consumer_rank_face_offsets[consumer_rank + 1];
-
-    std::partial_sum(ws_.consumer_rank_face_offsets.begin(),
-                     ws_.consumer_rank_face_offsets.end(),
-                     ws_.consumer_rank_face_offsets.begin());
-    std::copy_n(ws_.consumer_rank_face_offsets.begin(),
-                ws_.consumer_rank_face_write_offsets.size(),
-                ws_.consumer_rank_face_write_offsets.begin());
-
-    for (std::uint32_t u_face_rank = 0; u_face_rank < num_faces_; ++u_face_rank)
-    {
-      const auto consumer_rank = face_consumer_ranks_[u_face_rank];
-      const auto write_index = ws_.consumer_rank_face_write_offsets[consumer_rank]++;
-      ws_.faces_by_consumer_rank[write_index] = u_face_rank;
-    }
-  }
-
-  void PrepareCandidateRankCounts()
-  {
-    // Use reachable-cell count as the scarcity proxy for greedy ordering. Exact matching does
-    // not depend on this order, and avoiding materialized candidate lists is critical for broad
-    // DAGs where those lists can be much larger than the bit-packed closure itself.
-    const auto num_consumer_ranks = producer_cell_face_offsets_.size() - 1;
-    for (std::size_t consumer_rank = 0; consumer_rank < num_consumer_ranks; ++consumer_rank)
-    {
-      if (ws_.consumer_rank_face_offsets[consumer_rank] ==
-          ws_.consumer_rank_face_offsets[consumer_rank + 1])
-        continue;
-
-      ws_.candidate_rank_counts_by_consumer_rank[consumer_rank] =
-        static_cast<std::uint32_t>(ws_.reachability.CountSetBits(consumer_rank, consumer_rank));
-    }
-  }
-
-  void PrepareGreedyOrder()
-  {
-    // Order nonempty consumer rows by increasing right-side candidate count.
-    // This affects only the heuristic seed matching, not the final result.
-    const auto num_consumer_ranks = producer_cell_face_offsets_.size() - 1;
-    ws_.greedy_consumer_rank_order.reserve(num_consumer_ranks);
-    for (std::uint32_t consumer_rank = 0; consumer_rank < num_consumer_ranks; ++consumer_rank)
-    {
-      if (ws_.consumer_rank_face_offsets[consumer_rank] ==
-          ws_.consumer_rank_face_offsets[consumer_rank + 1])
-        continue;
-      ws_.greedy_consumer_rank_order.push_back(consumer_rank);
-    }
-
-    std::sort(ws_.greedy_consumer_rank_order.begin(),
-              ws_.greedy_consumer_rank_order.end(),
-              [&](const std::uint32_t lhs, const std::uint32_t rhs)
-              {
-                const auto lhs_count = ws_.candidate_rank_counts_by_consumer_rank[lhs];
-                const auto rhs_count = ws_.candidate_rank_counts_by_consumer_rank[rhs];
-                if (lhs_count != rhs_count)
-                  return lhs_count < rhs_count;
-                return lhs < rhs;
-              });
-  }
-
-  void PushDFSFrame(const std::uint32_t u_face_rank, const std::uint32_t via_v_face_rank)
-  {
-    // Materialize the current state of one implicit adjacency-row scan on the DFS stack.
-    const auto consumer_rank = face_consumer_ranks_[u_face_rank];
-    const auto first_producer_rank = ws_.reachability.FindFirstSet(consumer_rank, consumer_rank);
-    ws_.dfs_frames.push_back(
-      {u_face_rank, via_v_face_rank, static_cast<std::uint32_t>(first_producer_rank), 0, 0});
-  }
-
-  bool AdvanceFrame(DFSFrame& frame) const
-  {
-    // Advance the current DFS frame to the next candidate right vertex. The frame stores
-    // both the producer-rank row cursor and the face-range cursor within that row.
-    while (true)
-    {
-      if (frame.next_v_face_rank < frame.v_face_end)
-        return true;
-      if (frame.next_producer_rank >= producer_cell_face_offsets_.size() - 1)
-        return false;
-
-      const auto producer_rank = frame.next_producer_rank;
-      const auto consumer_rank = face_consumer_ranks_[frame.u_face_rank];
-      frame.next_producer_rank =
-        static_cast<std::uint32_t>(ws_.reachability.FindNextSet(consumer_rank, producer_rank));
-      frame.next_v_face_rank = producer_cell_face_offsets_[producer_rank];
-      frame.v_face_end = producer_cell_face_offsets_[producer_rank + 1];
-    }
-  }
-
-  std::uint32_t num_faces_ = 0;
+  const std::vector<std::uint32_t>& successor_rank_offsets_;
+  const std::vector<std::uint32_t>& successor_ranks_;
   const std::vector<std::uint32_t>& face_producer_ranks_;
   const std::vector<std::uint32_t>& face_consumer_ranks_;
   const std::vector<std::uint32_t>& producer_cell_face_offsets_;
-  std::vector<std::uint32_t>& face_slot_ids_;
-  ThreadLocalWorkspace& ws_;
-  int dist_null_ = 0;
+  ThreadLocalWorkspace& workspace_;
+  std::uint32_t num_tasks_ = 0;
+  std::uint32_t num_faces_ = 0;
+  std::uint32_t source_ = 0;
+  std::uint32_t sink_ = 0;
+  std::size_t num_nodes_ = 0;
 };
+
+} // namespace
 
 std::size_t
 ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offsets,
@@ -668,14 +414,13 @@ ComputeLocalFaceSlotPlan(const std::vector<std::uint32_t>& successor_rank_offset
   }
 
   static thread_local ThreadLocalWorkspace workspace;
-  BuildReachability(static_cast<std::uint32_t>(successor_rank_offsets.size() - 1),
-                    successor_rank_offsets,
-                    successor_ranks,
-                    workspace);
-
-  LocalFaceHopcroftKarp slot_planner(
-    face_producer_ranks, face_consumer_ranks, producer_cell_face_offsets, face_slot_ids, workspace);
-  return slot_planner.Solve();
+  SparseReachabilityMatcher matcher(successor_rank_offsets,
+                                    successor_ranks,
+                                    face_producer_ranks,
+                                    face_consumer_ranks,
+                                    producer_cell_face_offsets,
+                                    workspace);
+  return matcher.Solve(face_slot_ids);
 }
 
 } // namespace opensn::detail
