@@ -154,12 +154,11 @@ private:
  * The lagged pointer fields (`delayed_local_psi_old`, `delayed_local_psi_new`,
  * `delayed_nonlocal_incoming_psi_old`, `delayed_nonlocal_outgoing_psi`) are populated only
  * when the owning angle set has at least one delayed-local or delayed-nonlocal face; they
- * are `nullptr` otherwise.  The flux-pointer accessors always check the delayed bit of the
- * supplied node index and dispatch to the appropriate bank.  For acyclic problems every
- * face's node index has the delayed bit cleared and the branch is single-target predicted,
- * so there is no measurable overhead relative to a non-cycle-aware kernel.  This mirrors
- * AAHD's approach: the device kernel follows precomputed routes encoded in the node index
- * and never inspects graph-level cycle metadata.
+ * are `nullptr` otherwise.  The cycle-aware accessor specializations check the delayed bit
+ * of the supplied node index and dispatch to the appropriate bank.  The acyclic
+ * specializations compile that test and the delayed pointer routes out of the device code.
+ * This mirrors AAHD's approach: the device kernel follows precomputed routes encoded in the
+ * node index and never inspects graph-level cycle metadata.
  */
 struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
 {
@@ -183,6 +182,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
    * boundary faces returns the incoming-boundary bank.  Otherwise consults the node-index
    * delayed bit and routes to the lagged-old bank when set, the normal bank when clear.
    */
+  template <bool use_delayed_fluxes>
   constexpr double* GetIncomingFluxPointer(const CBCD_NodeIndex& node_index,
                                            unsigned int angle_group_idx) const noexcept
   {
@@ -196,9 +196,12 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     if (node_index.IsBoundary())
       return incoming_boundary_psi + offset;
 
-    if (node_index.IsDelayed())
-      return node_index.IsLocal() ? delayed_local_psi_old + offset
-                                  : delayed_nonlocal_incoming_psi_old + offset;
+    if constexpr (use_delayed_fluxes)
+    {
+      if (node_index.IsDelayed())
+        return node_index.IsLocal() ? delayed_local_psi_old + offset
+                                    : delayed_nonlocal_incoming_psi_old + offset;
+    }
 
     return node_index.IsLocal() ? local_psi + offset : nonlocal_incoming_psi + offset;
   }
@@ -210,6 +213,7 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
    * boundary faces returns the outgoing-boundary bank.  Otherwise consults the node-index
    * delayed bit and routes to the lagged-new bank when set, the normal bank when clear.
    */
+  template <bool use_delayed_fluxes>
   constexpr double* GetOutgoingFluxPointer(const CBCD_NodeIndex& node_index,
                                            unsigned int angle_group_idx) const noexcept
   {
@@ -223,9 +227,12 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
     if (node_index.IsBoundary())
       return outgoing_boundary_psi + offset;
 
-    if (node_index.IsDelayed())
-      return node_index.IsLocal() ? delayed_local_psi_new + offset
-                                  : delayed_nonlocal_outgoing_psi + offset;
+    if constexpr (use_delayed_fluxes)
+    {
+      if (node_index.IsDelayed())
+        return node_index.IsLocal() ? delayed_local_psi_new + offset
+                                    : delayed_nonlocal_outgoing_psi + offset;
+    }
 
     return node_index.IsLocal() ? local_psi + offset : nonlocal_outgoing_psi + offset;
   }

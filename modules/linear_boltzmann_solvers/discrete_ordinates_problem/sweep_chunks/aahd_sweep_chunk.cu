@@ -65,13 +65,13 @@ AAHDSweepChunk::Sweep(AngleSet& angle_set)
     // perform the sweep on device
     const std::uint32_t* level_data = spds.GetDeviceLevelVector(level);
 #if defined(__NVCC__) || defined(__HIPCC__)
-    gpu_kernel::SweepKernel<SweepKind::AAH><<<grid_size, block_size, 0, stream>>>(
+    gpu_kernel::SweepKernel<SweepKind::AAH, false><<<grid_size, block_size, 0, stream>>>(
       args, level_data, static_cast<unsigned int>(level_size), saved_psi);
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
     stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
                         [=](sycl::nd_item<3> work_index)
                         {
-                          gpu_kernel::SweepKernel<SweepKind::AAH>(
+                          gpu_kernel::SweepKernel<SweepKind::AAH, false>(
                             args, level_data, static_cast<unsigned int>(level_size), saved_psi);
                         });
 #endif

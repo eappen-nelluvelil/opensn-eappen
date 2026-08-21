@@ -49,6 +49,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                               crb::Dim3(block_size_x, block_size_y),
                               grid_size_x,
                               fluds,
+                              fluds->GetCommonData().HasDelayedFluxes(),
                               fluds->GetSavedAngularFluxDevicePointer()});
   }
 
@@ -221,16 +222,28 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
   {
     CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::KernelLaunch");
 #if defined(__NVCC__) || defined(__HIPCC__)
-    gpu_kernel::SweepKernel<SweepKind::CBC><<<grid_size, ck.block_size, 0, stream>>>(
-      ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
+    if (ck.use_delayed_fluxes)
+      gpu_kernel::SweepKernel<SweepKind::CBC, true><<<grid_size, ck.block_size, 0, stream>>>(
+        ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
+    else
+      gpu_kernel::SweepKernel<SweepKind::CBC, false><<<grid_size, ck.block_size, 0, stream>>>(
+        ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
     stream.synchronize();
-    stream.parallel_for(sycl::nd_range<3>(grid_size * ck.block_size, ck.block_size),
-                        [=](sycl::nd_item<3> work_index)
-                        {
-                          gpu_kernel::SweepKernel<SweepKind::CBC>(
-                            ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
-                        });
+    if (ck.use_delayed_fluxes)
+      stream.parallel_for(sycl::nd_range<3>(grid_size * ck.block_size, ck.block_size),
+                          [=](sycl::nd_item<3> work_index)
+                          {
+                            gpu_kernel::SweepKernel<SweepKind::CBC, true>(
+                              ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
+                          });
+    else
+      stream.parallel_for(sycl::nd_range<3>(grid_size * ck.block_size, ck.block_size),
+                          [=](sycl::nd_item<3> work_index)
+                          {
+                            gpu_kernel::SweepKernel<SweepKind::CBC, false>(
+                              ck.args, local_cell_ids, num_ready_cells, ck.device_saved_psi);
+                          });
 #endif
   }
 }

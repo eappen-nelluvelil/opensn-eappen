@@ -31,7 +31,7 @@ ForDOFs1ToMax(F&& f)
               std::forward<F>(f));
 }
 
-template <SweepKind k, class... Args>
+template <SweepKind k, bool use_delayed_fluxes, class... Args>
 __CRB_DEVICE_FUNC__ void
 SweepDispatch(std::uint32_t n, Args&&... args)
 {
@@ -42,19 +42,21 @@ SweepDispatch(std::uint32_t n, Args&&... args)
       constexpr std::uint32_t dof = decltype(dof_c)::value;
       if (!done && n == dof)
       {
-        gpu_kernel::Sweep<dof, k>(std::forward<Args>(args)...);
+        gpu_kernel::Sweep<dof, k, use_delayed_fluxes>(std::forward<Args>(args)...);
         done = true;
       }
     });
 }
 
-template <SweepKind k>
+template <SweepKind k, bool use_delayed_fluxes>
 __CRB_GLOBAL_FUNC__ void
 SweepKernel(Arguments<k> args,
             const std::uint32_t* cells_to_sweep,
             unsigned int num_cells,
             double* saved_psi)
 {
+  static_assert(k == SweepKind::CBC || not use_delayed_fluxes,
+                "Delayed fluxes are supported only by the CBC sweep kernel");
 #if defined(__NVCC__) || defined(__HIPCC__)
   unsigned int cell_idx = threadIdx.y + blockDim.y * blockIdx.y;
   unsigned int angle_group_idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -81,15 +83,15 @@ SweepKernel(Arguments<k> args,
     num_moments = quadrature.num_moments;
     quadrature.GetDirectionView(direction, direction_num);
   }
-  opensn::gpu_kernel::SweepDispatch<k>(cell.num_nodes,
-                                       args,
-                                       cell,
-                                       direction,
-                                       cell_edge_data,
-                                       angle_group_idx,
-                                       group_idx,
-                                       num_moments,
-                                       saved_psi);
+  opensn::gpu_kernel::SweepDispatch<k, use_delayed_fluxes>(cell.num_nodes,
+                                                           args,
+                                                           cell,
+                                                           direction,
+                                                           cell_edge_data,
+                                                           angle_group_idx,
+                                                           group_idx,
+                                                           num_moments,
+                                                           saved_psi);
 }
 
 } // namespace opensn::gpu_kernel

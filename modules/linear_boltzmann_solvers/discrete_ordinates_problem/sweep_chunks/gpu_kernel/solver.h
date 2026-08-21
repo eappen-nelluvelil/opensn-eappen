@@ -60,7 +60,7 @@ ComputeGMS(double* sweep_matrix,
 }
 
 /// Compute the sweep matrix from surface integral
-template <std::size_t ndofs, SweepKind k>
+template <std::size_t ndofs, SweepKind k, bool use_delayed_fluxes>
 __CRB_DEVICE_FUNC__ void
 ComputeSurfaceIntegral(double* sweep_matrix,
                        double* psi,
@@ -104,7 +104,7 @@ ComputeSurfaceIntegral(double* sweep_matrix,
                                                     args.boundary_offset,
                                                     args.is_surface_source_active);
           else
-            upwind_psi = args.flud_data.GetIncomingFluxPointer(
+            upwind_psi = args.flud_data.template GetIncomingFluxPointer<use_delayed_fluxes>(
               cell_edge_data[face_node_counter + fj], angle_group_idx);
           psi[i] += *upwind_psi * mu_Nij;
         }
@@ -160,7 +160,7 @@ GaussianElimination(double* sweep_matrix, double* psi)
 }
 
 /// Record angular flux to downwind and compute outflow for boundary faces.
-template <SweepKind k>
+template <SweepKind k, bool use_delayed_fluxes>
 __CRB_DEVICE_FUNC__ void
 WritePsiToFludsAndOutflow(double* psi,
                           CellView& cell,
@@ -215,7 +215,9 @@ WritePsiToFludsAndOutflow(double* psi,
             downwind_psi = args.flud_data.GetOutgoingFluxPointer(
               node_index, angle_group_idx, args.boundary, args.boundary_offset);
           else
-            downwind_psi = args.flud_data.GetOutgoingFluxPointer(node_index, angle_group_idx);
+            downwind_psi =
+              args.flud_data.template GetOutgoingFluxPointer<use_delayed_fluxes>(node_index,
+                                                                                 angle_group_idx);
           *downwind_psi = psi[i];
         }
       }
@@ -263,7 +265,7 @@ SaveAngularFlux(const double* psi,
 }
 
 /// Template device function performing the sweep
-template <std::size_t ndofs, SweepKind k>
+template <std::size_t ndofs, SweepKind k, bool use_delayed_fluxes>
 __CRB_DEVICE_FUNC__ void
 Sweep(const Arguments<k>& args,
       CellView& cell,
@@ -279,12 +281,12 @@ Sweep(const Arguments<k>& args,
   // prepare linear system to solve
   ComputeGMS<ndofs, k>(
     buffer.A(), buffer.b(), buffer.s(), cell, direction, group_idx, num_moments, args);
-  ComputeSurfaceIntegral<ndofs, k>(
+  ComputeSurfaceIntegral<ndofs, k, use_delayed_fluxes>(
     buffer.A(), buffer.b(), cell, direction, cell_edge_data, angle_group_idx, group_idx, args);
   // solve for the angular flux
   GaussianElimination<ndofs>(buffer.A(), buffer.b());
   // save the result
-  WritePsiToFludsAndOutflow<k>(
+  WritePsiToFludsAndOutflow<k, use_delayed_fluxes>(
     buffer.b(), cell, direction, cell_edge_data, angle_group_idx, group_idx, args);
   ComputePhi<ndofs, k>(buffer.b(), cell, direction, group_idx, num_moments, args);
   if (saved_psi != nullptr)

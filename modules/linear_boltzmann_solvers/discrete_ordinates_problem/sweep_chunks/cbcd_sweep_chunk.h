@@ -87,6 +87,8 @@ private:
     unsigned int grid_size_x;
     /// FLUDS instance bound to the angle set.
     CBCD_FLUDS* fluds;
+    /// Whether this angle set requires lagged flux-bank routing.
+    bool use_delayed_fluxes;
     /// Device pointer to saved angular fluxes.
     double* device_saved_psi;
   };
