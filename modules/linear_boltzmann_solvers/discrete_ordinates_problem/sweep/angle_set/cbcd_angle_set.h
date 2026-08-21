@@ -217,6 +217,8 @@ private:
   bool boundary_data_initialized_ = false;
   /// Flag indicating if following anglesets have been notified of completion.
   bool following_angle_sets_notified_ = false;
+  /// Flag indicating that local work is complete and delayed-output markers were published.
+  bool local_completion_signaled_ = false;
 
   /// Build the reflecting-boundary producer mask from the CBC task graph.
   void InitializeReflectingTaskMask();

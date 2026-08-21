@@ -44,19 +44,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
-    save_angular_flux_(save_angular_flux),
-    // Lagged nonlocal banks: zero-sized when the SPDS is acyclic, otherwise sized exactly
-    // to the delayed-face-node count.  Allocated as mapped host vectors so the kernel can
-    // read/write them via the same pointer-set mechanism as the normal nonlocal banks.
-    delayed_nonlocal_incoming_psi_old_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
-                                       num_groups_and_angles_,
-                                       0.0),
-    delayed_nonlocal_incoming_psi_new_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
-                                       num_groups_and_angles_,
-                                       0.0),
-    delayed_nonlocal_outgoing_psi_(common_data_.GetNumDelayedOutgoingNonlocalNodes() *
-                                   num_groups_and_angles_,
-                                   0.0)
+    save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
   for (auto& local_cell_ids : local_cell_ids_)
@@ -111,7 +99,7 @@ CBCD_FLUDS::~CBCD_FLUDS()
 }
 
 void
-CBCD_FLUDS::AllocateLocalAndSavedPsi()
+CBCD_FLUDS::AllocatePsiBanks()
 {
   local_psi_ = crb::DeviceMemory<double>(local_psi_data_size_);
   if (save_angular_flux_ and host_saved_psi_.empty())
@@ -119,6 +107,7 @@ CBCD_FLUDS::AllocateLocalAndSavedPsi()
     host_saved_psi_ = crb::HostVector<double>(saved_psi_data_size_);
     device_saved_psi_ = crb::DeviceMemory<double>(saved_psi_data_size_);
   }
+  AllocateDelayedPsiBanks();
   CreatePointerSet();
 }
 
@@ -226,12 +215,15 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
   if (not common_data_.HasDelayedFluxes())
     return;
 
-  const auto delayed_local_size =
-    common_data_.GetNumDelayedLocalNodes() * num_groups_and_angles_;
+  const auto delayed_local_size = common_data_.GetNumDelayedLocalNodes() * num_groups_and_angles_;
   if (delayed_local_size > 0)
   {
     delayed_local_psi_old_ = crb::DeviceMemory<double>(delayed_local_size);
     delayed_local_psi_new_ = crb::DeviceMemory<double>(delayed_local_size);
+    host_delayed_local_psi_old_ = crb::HostVector<double>(delayed_local_size, 0.0);
+    host_delayed_local_psi_new_ = crb::HostVector<double>(delayed_local_size, 0.0);
+    delayed_local_psi_old_view_ = std::span<double>(host_delayed_local_psi_old_);
+    delayed_local_psi_view_ = std::span<double>(host_delayed_local_psi_new_);
     // Zero the lagged-local banks at allocation time so the first sweep iteration reads
     // a well-defined initial state (the cycle-aware sweep route reads `_old` before any
     // delayed producer has written it).
@@ -247,6 +239,9 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
       crb::MappedHostVector<double>(delayed_incoming_nonlocal_size, 0.0);
     delayed_nonlocal_incoming_psi_new_ =
       crb::MappedHostVector<double>(delayed_incoming_nonlocal_size, 0.0);
+    delayed_prelocI_outgoing_psi_old_view_ = {
+      std::span<double>(delayed_nonlocal_incoming_psi_old_)};
+    delayed_prelocI_outgoing_psi_view_ = {std::span<double>(delayed_nonlocal_incoming_psi_new_)};
   }
 
   const auto delayed_outgoing_nonlocal_size =
@@ -254,23 +249,69 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
   if (delayed_outgoing_nonlocal_size > 0)
     delayed_nonlocal_outgoing_psi_ =
       crb::MappedHostVector<double>(delayed_outgoing_nonlocal_size, 0.0);
-
-  CreatePointerSet();
 }
 
 void
-CBCD_FLUDS::SwapDelayedLocalBanks() noexcept
+CBCD_FLUDS::CopyDelayedPsiToDevice()
 {
-  std::swap(delayed_local_psi_old_, delayed_local_psi_new_);
-  pointer_set_.delayed_local_psi_old = delayed_local_psi_old_.get();
-  pointer_set_.delayed_local_psi_new = delayed_local_psi_new_.get();
+  if (not host_delayed_local_psi_old_.empty())
+    crb::copy(delayed_local_psi_old_,
+              host_delayed_local_psi_old_,
+              host_delayed_local_psi_old_.size(),
+              0,
+              0,
+              stream_);
 }
 
 void
-CBCD_FLUDS::SwapDelayedNonlocalIncomingBanks() noexcept
+CBCD_FLUDS::CopyDelayedLocalPsiFromDevice()
 {
-  std::swap(delayed_nonlocal_incoming_psi_old_, delayed_nonlocal_incoming_psi_new_);
-  pointer_set_.delayed_nonlocal_incoming_psi_old = delayed_nonlocal_incoming_psi_old_.data();
+  if (not host_delayed_local_psi_new_.empty())
+    crb::copy(host_delayed_local_psi_new_,
+              delayed_local_psi_new_,
+              host_delayed_local_psi_new_.size(),
+              0,
+              0,
+              stream_);
+}
+
+void
+CBCD_FLUDS::SynchronizeHostData()
+{
+  if (not host_delayed_local_psi_new_.empty() or save_angular_flux_)
+    stream_.synchronize();
+}
+
+void
+CBCD_FLUDS::SetDelayedLocalPsiOldToNew()
+{
+  std::copy(host_delayed_local_psi_old_.begin(),
+            host_delayed_local_psi_old_.end(),
+            host_delayed_local_psi_new_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedLocalPsiNewToOld()
+{
+  std::copy(host_delayed_local_psi_new_.begin(),
+            host_delayed_local_psi_new_.end(),
+            host_delayed_local_psi_old_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedOutgoingPsiOldToNew()
+{
+  std::copy(delayed_nonlocal_incoming_psi_old_.begin(),
+            delayed_nonlocal_incoming_psi_old_.end(),
+            delayed_nonlocal_incoming_psi_new_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedOutgoingPsiNewToOld()
+{
+  std::copy(delayed_nonlocal_incoming_psi_new_.begin(),
+            delayed_nonlocal_incoming_psi_new_.end(),
+            delayed_nonlocal_incoming_psi_old_.begin());
 }
 
 void
@@ -424,8 +465,6 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
     return;
 
   CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopySavedPsiToDestinationPsi");
-
-  stream_.synchronize();
 
   DiscreteOrdinatesProblem& problem = sweep_chunk.GetProblem();
   auto* mesh = problem.GetMeshCarrier();

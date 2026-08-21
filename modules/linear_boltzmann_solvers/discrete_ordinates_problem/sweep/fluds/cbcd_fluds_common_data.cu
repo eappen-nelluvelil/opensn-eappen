@@ -9,6 +9,7 @@
 #include "caribou/main.hpp"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
@@ -27,6 +28,30 @@ PackProducerFaceKey(std::uint32_t producer_cell_local_id, unsigned int producer_
 {
   return (static_cast<std::uint64_t>(producer_cell_local_id) << 32) |
          static_cast<std::uint64_t>(producer_face_id);
+}
+
+std::size_t
+CheckedAdd(const std::size_t lhs, const std::size_t rhs, const char* const description)
+{
+  if (rhs > std::numeric_limits<std::size_t>::max() - lhs)
+    throw std::length_error(description);
+  return lhs + rhs;
+}
+
+template <typename NodeMap>
+void
+ValidateFaceNodePermutation(const NodeMap& node_map, const std::size_t num_face_nodes)
+{
+  if (node_map.size() != num_face_nodes)
+    throw std::logic_error("CBCD FLUDS: face-node mapping has an invalid extent.");
+
+  std::vector<std::uint8_t> mapped(num_face_nodes, 0);
+  for (const auto node : node_map)
+  {
+    if (node < 0 or static_cast<std::size_t>(node) >= num_face_nodes or mapped[node] != 0)
+      throw std::logic_error("CBCD FLUDS: face-node mapping is not a permutation.");
+    mapped[node] = 1;
+  }
 }
 
 } // namespace
@@ -64,7 +89,12 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
   // directed edge appears once as a producer's outgoing face and once as a consumer's
   // incoming face; both sides must use the same offset so the kernel's outgoing write hits
   // the bank slot that the next sweep's downwind read consumes.
-  std::unordered_map<std::uint64_t, std::uint32_t> delayed_local_offset_by_producer_face;
+  struct DelayedLocalStorage
+  {
+    std::size_t offset = 0;
+    std::size_t num_nodes = 0;
+  };
+  std::unordered_map<std::uint64_t, DelayedLocalStorage> delayed_local_storage_by_producer_face;
   std::uint64_t total_face_nodes = 0;
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
@@ -148,11 +178,32 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
       const bool is_incoming_face = (orientation == FaceOrientation::INCOMING);
       const bool is_local_face = face.IsNeighborLocal(&grid);
       const bool is_boundary_face = not face.has_neighbor;
+      if (face.has_neighbor and num_face_nodes == 0)
+        throw std::logic_error("CBCD FLUDS: neighboring face has no discretization nodes.");
+      if (num_face_nodes > std::numeric_limits<std::uint16_t>::max())
+        throw std::length_error("CBCD FLUDS: face-node count exceeds compact metadata range.");
+      if (face.has_neighbor)
+      {
+        if (face_nodal_mapping.associated_face_ < 0 or
+            static_cast<std::size_t>(face_nodal_mapping.associated_face_) >=
+              grid.cells[face.neighbor_id].faces.size())
+          throw std::logic_error("CBCD FLUDS: invalid neighboring face mapping.");
+        ValidateFaceNodePermutation(face_nodal_mapping.face_node_mapping_, num_face_nodes);
+      }
+      if (is_local_face)
+      {
+        const auto& adjacent_cell = grid.cells[face.neighbor_id];
+        const auto adjacent_num_face_nodes =
+          sdm.GetCellMapping(adjacent_cell)
+            .GetNumFaceNodes(static_cast<unsigned int>(face_nodal_mapping.associated_face_));
+        if (adjacent_num_face_nodes != num_face_nodes)
+          throw std::logic_error("CBCD FLUDS: local face-node counts do not match.");
+      }
 
       // Cycle-aware classification: identify faces whose dependency was removed by the
       // local or interpartition feedback-arc set and routed through the lagged banks.
       bool is_delayed_local_face = false;
-      std::uint64_t delayed_local_producer_face_key = 0;
+      const DelayedLocalStorage* delayed_local_storage = nullptr;
       if (is_local_face and (is_incoming_face or is_outgoing_face))
       {
         const auto adj_cell_local_id =
@@ -167,8 +218,21 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           const auto producer_face_id =
             is_outgoing_face ? static_cast<unsigned int>(f)
                              : static_cast<unsigned int>(face_nodal_mapping.associated_face_);
-          delayed_local_producer_face_key =
+          const auto& producer_cell = grid.local_cells[producer_cell_local_id];
+          const auto producer_num_face_nodes =
+            sdm.GetCellMapping(producer_cell).GetNumFaceNodes(producer_face_id);
+          const auto producer_face_key =
             PackProducerFaceKey(producer_cell_local_id, producer_face_id);
+          auto [it, inserted] = delayed_local_storage_by_producer_face.try_emplace(
+            producer_face_key,
+            DelayedLocalStorage{num_delayed_local_nodes_, producer_num_face_nodes});
+          if (inserted)
+            num_delayed_local_nodes_ = CheckedAdd(num_delayed_local_nodes_,
+                                                  producer_num_face_nodes,
+                                                  "CBCD FLUDS: delayed local-bank size overflow.");
+          else if (it->second.num_nodes != producer_num_face_nodes)
+            throw std::logic_error("CBCD FLUDS: inconsistent delayed local-face extent.");
+          delayed_local_storage = &it->second;
         }
       }
       bool is_delayed_nonlocal_face = false;
@@ -191,19 +255,13 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             if (is_delayed_local_face)
             {
-              // Resolve (producer_cell, producer_face) -> delayed-local bank offset.  The
-              // producer-side outgoing iteration may run before or after this consumer-side
-              // incoming iteration; whichever side encounters the directed face first assigns
-              // the canonical offset, which the other side then reuses.
-              auto [it, inserted] = delayed_local_offset_by_producer_face.try_emplace(
-                delayed_local_producer_face_key,
-                static_cast<std::uint32_t>(num_delayed_local_nodes_));
-              if (inserted)
-                num_delayed_local_nodes_ += num_face_nodes;
               const auto local_face_node =
                 static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
+              if (local_face_node >= delayed_local_storage->num_nodes)
+                throw std::logic_error("CBCD FLUDS: delayed local node mapping is out of range.");
               node_index = CBCD_NodeIndex::DelayedLocal(
-                static_cast<std::uint64_t>(it->second) + local_face_node, is_outgoing_face);
+                static_cast<std::uint64_t>(delayed_local_storage->offset) + local_face_node,
+                is_outgoing_face);
             }
             else
             {
@@ -314,14 +372,12 @@ CBCD_FLUDSCommonData::CopyFlattenedNodeIndexToDevice(const SpatialDiscretization
           {
             if (is_delayed_local_face)
             {
-              auto [it, inserted] = delayed_local_offset_by_producer_face.try_emplace(
-                delayed_local_producer_face_key,
-                static_cast<std::uint32_t>(num_delayed_local_nodes_));
-              if (inserted)
-                num_delayed_local_nodes_ += num_face_nodes;
-              node_index = CBCD_NodeIndex::DelayedLocal(static_cast<std::uint64_t>(it->second) +
-                                                          static_cast<std::uint64_t>(fn),
-                                                        is_outgoing_face);
+              if (num_face_nodes != delayed_local_storage->num_nodes)
+                throw std::logic_error("CBCD FLUDS: delayed local-face node-count mismatch.");
+              node_index = CBCD_NodeIndex::DelayedLocal(
+                static_cast<std::uint64_t>(delayed_local_storage->offset) +
+                  static_cast<std::uint64_t>(fn),
+                is_outgoing_face);
             }
             else
             {

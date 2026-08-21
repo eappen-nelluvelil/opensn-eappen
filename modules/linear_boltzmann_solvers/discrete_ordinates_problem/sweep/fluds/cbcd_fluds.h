@@ -65,38 +65,20 @@ public:
   /// Bytes in the local psi backing buffer for this FLUDS instance.
   std::size_t GetLocalPsiBytes() const noexcept { return local_psi_data_size_ * sizeof(double); }
 
-  /// Allocate buffers asynchronously on the associated stream.
-  void AllocateLocalAndSavedPsi();
-
   /**
-   * Allocate the lagged old/new banks used by cycle-aware sweeps.
-   *
-   * No-op when the owning common data has no delayed-local or delayed-nonlocal faces.
-   * Otherwise sizes the lagged local banks against
-   * `CBCD_FLUDSCommonData::GetNumDelayedLocalNodes()` and the lagged nonlocal banks
-   * against the corresponding incoming/outgoing delayed counts, then refreshes the
-   * pointer set with the new device/mapped-host pointers.
+   * Allocate the normal, saved, and delayed angular-flux banks before publishing the
+   * kernel pointer set.
    */
-  void AllocateDelayedPsiBanks();
+  void AllocatePsiBanks();
 
-  /**
-   * Swap the lagged local old/new banks after delayed-data finalization.
-   *
-   * The kernel reads `delayed_local_psi_old` during the current sweep and writes
-   * `delayed_local_psi_new`.  After the scheduler has signalled that all delayed
-   * downstream/upstream communication is complete, the new bank becomes the old bank for
-   * the next sweep application.  Reflects the pointer-swap into the device pointer set.
-   */
-  void SwapDelayedLocalBanks() noexcept;
+  /// Copy host lagged-local old data to its device bank before a sweep application.
+  void CopyDelayedPsiToDevice();
 
-  /**
-   * Swap the lagged incoming non-local old/new banks after delayed-data finalization.
-   *
-   * Mirrors `SwapDelayedLocalBanks` for the nonlocal incoming pair.  The kernel reads
-   * `_old` during the current sweep; the communicator writes `_new` during the delayed
-   * receive phase; after barrier `_new` becomes `_old`.
-   */
-  void SwapDelayedNonlocalIncomingBanks() noexcept;
+  /// Enqueue the device-to-host copy of the newly computed lagged-local data.
+  void CopyDelayedLocalPsiFromDevice();
+
+  /// Synchronize pending delayed-local and saved-psi host transfers.
+  void SynchronizeHostData();
 
   /**
    * Build reflecting-boundary copy plans for this angle set.
@@ -194,6 +176,11 @@ public:
   void AllocatePrelocIOutgoingPsi() override {}
   void AllocateDelayedPrelocIOutgoingPsi() override {}
 
+  void SetDelayedLocalPsiOldToNew() override;
+  void SetDelayedLocalPsiNewToOld() override;
+  void SetDelayedOutgoingPsiOldToNew() override;
+  void SetDelayedOutgoingPsiNewToOld() override;
+
   std::span<const ReflectingBoundaryFacePlan>
   GetReflectingOutgoingBoundaryFaces(const std::uint64_t cell_local_id) const
   {
@@ -235,6 +222,9 @@ private:
   /// Lagged local face-slot banks (consulted by the cycle-aware sweep route).
   crb::DeviceMemory<double> delayed_local_psi_old_;
   crb::DeviceMemory<double> delayed_local_psi_new_;
+  /// Host-visible lagged-local state used by transport iterations and restart I/O.
+  crb::HostVector<double> host_delayed_local_psi_old_;
+  crb::HostVector<double> host_delayed_local_psi_new_;
   /// Lagged incoming non-local banks (consulted by the cycle-aware sweep route).
   crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_old_;
   crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_new_;
@@ -254,6 +244,8 @@ private:
   /// Flat byte-level memcpy descriptors referenced by delayed outgoing faces.
   std::vector<OutgoingNodeMemcpy> delayed_outgoing_node_memcpy_plan_;
 
+  /// Allocate the lagged old/new banks used by cycle-aware sweeps.
+  void AllocateDelayedPsiBanks();
   /// Build the device pointer set exposed to the CBCD sweep kernel.
   void CreatePointerSet();
 };

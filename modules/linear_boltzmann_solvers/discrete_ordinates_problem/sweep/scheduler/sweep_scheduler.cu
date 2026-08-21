@@ -4,7 +4,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/sweep_scheduler.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/aahd_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/aahd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
@@ -127,19 +126,6 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   cbcd_sweep_chunk.StopCommunicator();
 
   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
-
-  // Promote the lagged old/new banks for cycle-aware angle sets.  `StopCommunicator` has
-  // joined the communication thread, which guarantees that every delayed-completion
-  // marker has been observed and every delayed face-psi payload has been scattered into
-  // `delayed_nonlocal_incoming_psi_new_`.  Both lagged-local and lagged-incoming-nonlocal
-  // banks now rotate from `_new` to `_old` for the next transport application.  When the
-  // SPDS has no delayed faces these calls are no-ops (the banks are zero-sized).
-  for (auto* angle_set : angle_sets)
-  {
-    auto& cbcd_fluds = static_cast<CBCD_FLUDS&>(angle_set->GetFLUDS());
-    cbcd_fluds.SwapDelayedLocalBanks();
-    cbcd_fluds.SwapDelayedNonlocalIncomingBanks();
-  }
 
   for (auto* angle_set : angle_sets)
     angle_set->ResetSweepBuffers();

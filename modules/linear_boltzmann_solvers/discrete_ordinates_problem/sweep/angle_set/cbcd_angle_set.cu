@@ -39,8 +39,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   crb::MemoryPinningManager angle_indices_pinner_(angles_);
   crb::copy(device_angle_indices_, angle_indices_pinner_, angles_.size(), 0, 0, stream_);
   cbcd_fluds_.GetStream() = stream_;
-  cbcd_fluds_.AllocateLocalAndSavedPsi();
-  cbcd_fluds_.AllocateDelayedPsiBanks();
+  cbcd_fluds_.AllocatePsiBanks();
   cbcd_fluds_.InitializeReflectingBoundaryNodes(boundaries_);
   InitializeTaskGraphData();
   InitializeReflectingTaskMask();
@@ -272,6 +271,7 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
 
+  cbcd_fluds_.CopyDelayedPsiToDevice();
   cbcd_fluds_.CopyIncomingBoundaryPsiToDevice(sweep_chunk, this);
   InitializeTaskState();
   boundary_data_initialized_ = true;
@@ -289,12 +289,17 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
   auto& ready_cell_ids = cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index);
   const bool kernel_completed = batch_state_.kernel_in_flight and stream_.is_completed();
   const bool has_incoming = async_comm_->HasIncoming(GetID());
-  const bool can_finalize = (num_completed_tasks_ == num_tasks_) and
-                            (not batch_state_.kernel_in_flight) and
-                            (not batch_state_.completed_batch_pending);
+  const bool local_work_complete = (num_completed_tasks_ == num_tasks_) and
+                                   (not batch_state_.kernel_in_flight) and
+                                   (not batch_state_.completed_batch_pending);
+  const bool can_signal_completion = local_work_complete and (not local_completion_signaled_);
+  const bool can_finalize = local_work_complete and local_completion_signaled_ and
+                            async_comm_->AreDelayedReceivesComplete(GetID()) and
+                            (not async_comm_->HasIncoming(GetID()));
 
   if ((not kernel_completed) and (not batch_state_.completed_batch_pending) and
-      ready_cell_ids.empty() and (not has_incoming) and (not can_finalize))
+      ready_cell_ids.empty() and (not has_incoming) and (not can_signal_completion) and
+      (not can_finalize))
     return false;
 
   bool work_done = false;
@@ -358,15 +363,31 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
     work_done = true;
   }
 
-  // Finalize once all tasks are done and no kernel is in flight.
-  if (num_completed_tasks_ == num_tasks_ and (not batch_state_.kernel_in_flight) and
-      (not batch_state_.completed_batch_pending))
+  // Publish delayed-output completion before waiting for delayed input. Otherwise every
+  // rank in a distributed cycle can wait for a marker that no rank has emitted.
+  const bool all_local_work_complete = (num_completed_tasks_ == num_tasks_) and
+                                       (not batch_state_.kernel_in_flight) and
+                                       (not batch_state_.completed_batch_pending);
+  if (all_local_work_complete and (not local_completion_signaled_))
+  {
+    async_comm_->SignalAngleSetComplete(GetID());
+    local_completion_signaled_ = true;
+    work_done = true;
+  }
+
+  // A completion marker is ordered after its source's delayed payloads. The acquire in
+  // AreDelayedReceivesComplete followed by the mailbox check ensures all such payloads
+  // have been drained before host-visible new-state data is exposed.
+  const bool communication_complete =
+    async_comm_->AreDelayedReceivesComplete(GetID()) and (not async_comm_->HasIncoming(GetID()));
+  if (all_local_work_complete and local_completion_signaled_ and communication_complete)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FinalizeCompletion");
-    async_comm_->SignalAngleSetComplete(GetID());
     TryNotifyFollowingAngleSets();
     executed_ = true;
+    cbcd_fluds_.CopyDelayedLocalPsiFromDevice();
     cbcd_fluds_.CopySavedPsiFromDevice();
+    cbcd_fluds_.SynchronizeHostData();
     cbcd_fluds_.CopySavedPsiToDestinationPsi(cbcd_sweep_chunk, this);
     return true;
   }
@@ -410,6 +431,7 @@ CBCD_AngleSet::ResetSweepBuffers()
   pending_reflecting_tasks_ = 0;
   boundary_data_initialized_ = false;
   following_angle_sets_notified_ = false;
+  local_completion_signaled_ = false;
   ResetDependencyCounter();
   executed_ = false;
 }
