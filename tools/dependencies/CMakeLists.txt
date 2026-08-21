@@ -25,13 +25,27 @@ set(ENV_SCRIPT "${OPENSN_ENV_DIR}/set_opensn_env.sh")
 
 find_package(MPI REQUIRED)
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
-find_package(mpicpp-lite 2.7.1 QUIET)
 
 option(ENABLE_BOOST   "Install Boost"   ON)
 option(ENABLE_PETSC   "Install PETSc"   ON)
 option(ENABLE_HDF5    "Install HDF5"    ON)
 option(ENABLE_VTK     "Install VTK"     ON)
 option(ENABLE_CALIPER "Install Caliper" ON)
+option(OPENSN_FORCE_DEPENDENCY_REBUILD
+       "Build every enabled dependency instead of using installed packages" OFF)
+set(OPENSN_CALIPER_GPU_BACKEND "NONE" CACHE STRING
+    "Caliper GPU profiling backend: NONE, CUDA, or ROCM")
+set_property(CACHE OPENSN_CALIPER_GPU_BACKEND PROPERTY STRINGS NONE CUDA ROCM)
+string(TOUPPER "${OPENSN_CALIPER_GPU_BACKEND}" OPENSN_CALIPER_GPU_BACKEND)
+if(NOT OPENSN_CALIPER_GPU_BACKEND MATCHES "^(NONE|CUDA|ROCM)$")
+  message(FATAL_ERROR
+          "OPENSN_CALIPER_GPU_BACKEND must be NONE, CUDA, or ROCM (got "
+          "'${OPENSN_CALIPER_GPU_BACKEND}')")
+endif()
+if(NOT ENABLE_CALIPER AND NOT OPENSN_CALIPER_GPU_BACKEND STREQUAL "NONE")
+  message(FATAL_ERROR
+          "A Caliper GPU backend was requested while ENABLE_CALIPER=OFF")
+endif()
 if(ENABLE_VTK AND NOT ENABLE_HDF5)
   message(STATUS "ENABLE_VTK=ON requires HDF5; enabling HDF5")
   set(ENABLE_HDF5 ON CACHE BOOL "" FORCE)
@@ -41,7 +55,10 @@ set(INSTALLED_DEP_COUNT 0)
 set(ALL_DEP_TARGETS)
 
 # mpicpp-lite install
-if (TARGET mpicpp-lite::mpicpp-lite)
+if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD)
+  find_package(mpicpp-lite 2.7.1 QUIET)
+endif()
+if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD AND TARGET mpicpp-lite::mpicpp-lite)
   message(STATUS "Found mpicpp-lite: " ${MPICPP_LITE_VERSION})
   if(NOT TARGET mpicpp-lite)
     add_custom_target(mpicpp-lite)
@@ -56,6 +73,8 @@ else()
       -B <BINARY_DIR>
       -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
       -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
       <SOURCE_DIR>
     BUILD_COMMAND ""
     INSTALL_COMMAND
@@ -74,11 +93,13 @@ endif()
 
 # Boost install (header-only)
 if(ENABLE_BOOST)
-  find_package(Boost CONFIG QUIET)
-  if (NOT Boost_FOUND)
-    find_package(Boost QUIET)
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD)
+    find_package(Boost CONFIG QUIET)
+    if(NOT Boost_FOUND)
+      find_package(Boost QUIET)
+    endif()
   endif()
-  if(Boost_FOUND)
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD AND Boost_FOUND)
     message(STATUS "Found Boost: ${Boost_DIR}")
     if(NOT TARGET boost)
       add_custom_target(boost)
@@ -89,7 +110,15 @@ if(ENABLE_BOOST)
       URL https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz
       CONFIGURE_COMMAND ""
       BUILD_COMMAND ""
-      INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/boost ${CMAKE_INSTALL_PREFIX}/include/boost
+      INSTALL_COMMAND
+        ${CMAKE_COMMAND} -E copy_directory
+          <SOURCE_DIR>/boost ${CMAKE_INSTALL_PREFIX}/include/boost
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+          ${CMAKE_INSTALL_PREFIX}/lib/cmake/Boost-1.86.0
+        COMMAND ${CMAKE_COMMAND} -E copy
+          ${CMAKE_CURRENT_SOURCE_DIR}/packages/boost/BoostConfig.cmake
+          ${CMAKE_CURRENT_SOURCE_DIR}/packages/boost/BoostConfigVersion.cmake
+          ${CMAKE_INSTALL_PREFIX}/lib/cmake/Boost-1.86.0
       LOG_DOWNLOAD  1
       LOG_UPDATE    1
       LOG_CONFIGURE 1
@@ -105,8 +134,10 @@ endif()
 
 # PETSc
 if(ENABLE_PETSC)
-  find_package(PETSc 3.17 QUIET)
-  if (PETSC_FOUND)
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD)
+    find_package(PETSc 3.17 QUIET)
+  endif()
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD AND PETSC_FOUND)
     check_symbol_exists(PETSC_USE_64BIT_INDICES "${PETSC_INCLUDE_DIR}/petscconf.h" PETSC_USE_64BIT_INDICES)
     check_symbol_exists(PETSC_HAVE_PTSCOTCH "${PETSC_INCLUDE_DIR}/petscconf.h" PETSC_HAVE_PTSCOTCH)
     check_symbol_exists(PETSC_HAVE_SUPERLU_DIST "${PETSC_INCLUDE_DIR}/petscconf.h" PETSC_HAVE_SUPERLU_DIST)
@@ -119,7 +150,7 @@ if(ENABLE_PETSC)
       list(APPEND ALL_DEP_TARGETS petsc)
     endif()
   endif()
-  if (NOT PETSC_FOUND OR NOT PETSC_CONFIG_OK)
+  if(OPENSN_FORCE_DEPENDENCY_REBUILD OR NOT PETSC_FOUND OR NOT PETSC_CONFIG_OK)
     ExternalProject_Add(petsc
       URL https://web.cels.anl.gov/projects/petsc/download/release-snapshots/petsc-3.23.0.tar.gz
       SOURCE_DIR ${CMAKE_BINARY_DIR}/petsc-src
@@ -147,8 +178,10 @@ endif()
 
 # HDF5
 if(ENABLE_HDF5)
-  find_package(HDF5 COMPONENTS C HL QUIET)
-  if (HDF5_FOUND)
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD)
+    find_package(HDF5 COMPONENTS C HL QUIET)
+  endif()
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD AND HDF5_FOUND)
     message(STATUS "Found HDF5: ${HDF5_VERSION}")
     if(NOT TARGET hdf5)
       add_custom_target(hdf5)
@@ -161,6 +194,8 @@ if(ENABLE_HDF5)
       BINARY_DIR ${CMAKE_BINARY_DIR}/hdf5-build
       CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
       BUILD_COMMAND
         ${CMAKE_COMMAND} --build <BINARY_DIR> -- -j${JOBS}
       INSTALL_COMMAND
@@ -180,20 +215,22 @@ endif()
 
 # VTK
 if(ENABLE_VTK)
-  find_package(VTK COMPONENTS
-               CommonCore
-               CommonDataModel
-               IOLegacy
-               IOCore
-               IOXML
-               ParallelCore
-               IOParallelXML
-               FiltersCore
-               IOEnSight
-               IOExodus
-               QUIET
-              )
-  if (VTK_FOUND)
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD)
+    find_package(VTK COMPONENTS
+                 CommonCore
+                 CommonDataModel
+                 IOLegacy
+                 IOCore
+                 IOXML
+                 ParallelCore
+                 IOParallelXML
+                 FiltersCore
+                 IOEnSight
+                 IOExodus
+                 QUIET
+                )
+  endif()
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD AND VTK_FOUND)
     message(STATUS "Found VTK: ${VTK_DIR}")
     if(NOT TARGET vtk)
       add_custom_target(vtk)
@@ -205,6 +242,10 @@ if(ENABLE_VTK)
       SOURCE_DIR ${CMAKE_BINARY_DIR}/vtk-src
       CONFIGURE_COMMAND ${CMAKE_COMMAND} -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
                         -DBUILD_SHARED_LIBS=ON -DVTK_USE_MPI=ON
+                        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+                        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                        -DMPI_C_COMPILER=${MPI_C_COMPILER}
+                        -DMPI_CXX_COMPILER=${MPI_CXX_COMPILER}
                         -DVTK_GROUP_ENABLE_StandAlone=WANT -DVTK_GROUP_ENABLE_Rendering=DONT_WANT
                         -DVTK_GROUP_ENABLE_Imaging=DONT_WANT -DVTK_GROUP_ENABLE_Web=DONT_WANT
                         -DVTK_GROUP_ENABLE_Qt=DONT_WANT -DVTK_MODULE_USE_EXTERNAL_VTK_hdf5=ON
@@ -227,24 +268,67 @@ endif()
 
 # Caliper
 if(ENABLE_CALIPER)
-  find_package(caliper QUIET)
-  if(caliper_FOUND)
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD)
+    find_package(caliper QUIET)
+  endif()
+  if(NOT OPENSN_FORCE_DEPENDENCY_REBUILD AND caliper_FOUND)
     message(STATUS "Found Caliper: ${caliper_DIR}")
     if(NOT TARGET caliper)
       add_custom_target(caliper)
     endif()
     list(APPEND ALL_DEP_TARGETS caliper)
   else()
+    set(OPENSN_CALIPER_WITH_NVTX OFF)
+    set(OPENSN_CALIPER_WITH_CUPTI OFF)
+    set(OPENSN_CALIPER_WITH_ROCPROFILER OFF)
+    set(OPENSN_CALIPER_PLATFORM_ARGS)
+    if(OPENSN_CALIPER_GPU_BACKEND STREQUAL "CUDA")
+      if(CMAKE_VERSION VERSION_LESS 3.25)
+        message(FATAL_ERROR
+                "The CUDA Caliper backend requires CMake 3.25 or newer for "
+                "the CUDA::nvtx3 target")
+      endif()
+      find_package(CUDAToolkit REQUIRED)
+      set(OPENSN_CALIPER_WITH_NVTX ON)
+      set(OPENSN_CALIPER_WITH_CUPTI ON)
+      list(APPEND OPENSN_CALIPER_PLATFORM_ARGS
+           -DCUDAToolkit_ROOT=${CUDAToolkit_ROOT})
+    elseif(OPENSN_CALIPER_GPU_BACKEND STREQUAL "ROCM")
+      set(OPENSN_CALIPER_WITH_ROCPROFILER ON)
+    endif()
+
     ExternalProject_Add(caliper
       URL https://github.com/LLNL/Caliper/archive/refs/tags/v2.13.0.tar.gz
       SOURCE_DIR ${CMAKE_BINARY_DIR}/caliper-src
+      PATCH_COMMAND patch -p1 --forward --input=${CMAKE_CURRENT_SOURCE_DIR}/patches/caliper-2.13-cuda13-nvtx3.patch
       CONFIGURE_COMMAND ${CMAKE_COMMAND}
         -S <SOURCE_DIR>
         -B <BINARY_DIR>
         -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
-        -DWITH_MPI=ON -DWITH_KOKKOS=OFF -DWITH_GOTCHA=OFF
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DMPI_C_COMPILER=${MPI_C_COMPILER}
+        -DMPI_CXX_COMPILER=${MPI_CXX_COMPILER}
+        -DBUILD_TESTING=OFF
+        -DWITH_TOOLS=ON
+        -DWITH_MPI=ON
+        -DWITH_NVTX=${OPENSN_CALIPER_WITH_NVTX}
+        -DWITH_CUPTI=${OPENSN_CALIPER_WITH_CUPTI}
+        -DWITH_ROCPROFILER=${OPENSN_CALIPER_WITH_ROCPROFILER}
+        -DWITH_KOKKOS=OFF
+        -DWITH_GOTCHA=OFF
+        ${OPENSN_CALIPER_PLATFORM_ARGS}
       BUILD_COMMAND   ${CMAKE_COMMAND} --build <BINARY_DIR> -- -j${JOBS}
-      INSTALL_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target install --
+      INSTALL_COMMAND
+        ${CMAKE_COMMAND} --build <BINARY_DIR> --target install --
+        COMMAND ${CMAKE_COMMAND}
+          -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+          -DREQUIRE_NVTX=${OPENSN_CALIPER_WITH_NVTX}
+          -DREQUIRE_CUPTI=${OPENSN_CALIPER_WITH_CUPTI}
+          -DREQUIRE_ROCPROFILER=${OPENSN_CALIPER_WITH_ROCPROFILER}
+          -DOPENSN_CALIPER_GPU_BACKEND=${OPENSN_CALIPER_GPU_BACKEND}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/validate_caliper.cmake
       LOG_DOWNLOAD  1
       LOG_UPDATE    1
       LOG_CONFIGURE 1

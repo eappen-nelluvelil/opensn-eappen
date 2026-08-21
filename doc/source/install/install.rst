@@ -127,6 +127,26 @@ During this step, **CMake** automatically searches for compatible system
 installations of the required packages. Any missing dependencies will be
 downloaded, built, and installed into the specified directory.
 
+For a clean, reproducible rebuild that does not reuse compatible packages
+from the current environment, use a new build directory and an empty install
+prefix, then configure with ``-DOPENSN_FORCE_DEPENDENCY_REBUILD=ON``. Caliper
+is built with MPI support by default. GPU profiling services can be selected
+explicitly with ``-DOPENSN_CALIPER_GPU_BACKEND=CUDA`` (NVTX and CUPTI) or
+``-DOPENSN_CALIPER_GPU_BACKEND=ROCM`` (rocprofiler-sdk). The dependency build
+validates the requested Caliper services after installation and fails if they
+are unavailable.
+
+For example, a clean CUDA profiling build can be configured with:
+
+.. code-block:: shell
+
+   cmake -S /path/to/opensn/tools/dependencies -B build_deps \
+         -DCMAKE_INSTALL_PREFIX=/empty/dependencies/directory \
+         -DOPENSN_FORCE_DEPENDENCY_REBUILD=ON \
+         -DOPENSN_CALIPER_GPU_BACKEND=CUDA \
+         -DCUDAToolkit_ROOT=/path/to/cuda
+   cmake --build build_deps --parallel
+
 When the process completes, a helper script named ``set_opensn_env.sh``
 is generated in the installation directory:
 

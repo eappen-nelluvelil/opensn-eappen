@@ -1,0 +1,37 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 34f5aa7..46b1b4c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -188,7 +188,7 @@ if (WITH_NVTX)
+       set(CALIPER_HAVE_NVTX ON)
+       set(CALIPER_Nvtx_CMAKE_MSG "Yes, using ${CUDAToolkit_TARGET_DIR}")
+       set(CALI_NVTX_INCLUDE_DIRS ${CUDAToolkit_INCLUDE_DIRS})
+-      list(APPEND CALIPER_EXTERNAL_LIBS CUDA::nvToolsExt)
++      list(APPEND CALIPER_EXTERNAL_LIBS CUDA::nvtx3)
+     endif()
+   else()
+     find_package(CUDA REQUIRED)
+diff --git a/src/services/cupti/Cupti.cpp b/src/services/cupti/Cupti.cpp
+index 14d4136..8470032 100644
+--- a/src/services/cupti/Cupti.cpp
++++ b/src/services/cupti/Cupti.cpp
+@@ -21,5 +21,5 @@
+-#include <nvToolsExt.h>
++#include <nvtx3/nvToolsExt.h>
+ #if CUDART_VERSION >= 9000
+-#include <nvToolsExtSync.h>
++#include <nvtx3/nvToolsExtSync.h>
+ #endif
+ #include <generated_nvtx_meta.h>
+diff --git a/src/services/cupti/CuptiTrace.cpp b/src/services/cupti/CuptiTrace.cpp
+index b7d60de..14ebd45 100644
+--- a/src/services/cupti/CuptiTrace.cpp
++++ b/src/services/cupti/CuptiTrace.cpp
+@@ -21,5 +21,5 @@
+-#include <nvToolsExt.h>
++#include <nvtx3/nvToolsExt.h>
+ #if CUDART_VERSION >= 9000
+-#include <nvToolsExtSync.h>
++#include <nvtx3/nvToolsExtSync.h>
+ #endif
+ #include <generated_nvtx_meta.h>
