@@ -14,6 +14,7 @@
 #include "framework/runtime.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/sweep_parallel_for.h"
 #include "framework/utils/error.h"
+#include "framework/utils/thread_utils.h"
 #include "framework/utils/timer.h"
 #include <algorithm>
 #include <cstddef>
@@ -354,9 +355,10 @@ BuildCBCSPDS(SweepRuntime& runtime,
     return;
 
   std::vector<std::shared_ptr<SPDS>> result(work.size());
-  const size_t nthreads = std::min<size_t>(std::max(1U, opensn_num_threads), work.size());
+  const auto thread_info = GetThreadResourceInfo();
+  const auto nthreads = std::min(work.size(), thread_info.available_threads);
   log.Log() << program_timer.GetTimeString() << " SPDS construction: " << work.size() << " angles ("
-            << nthreads << " thread(s)).";
+            << nthreads << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
   ParallelFor(work.size(),
               nthreads,
               [&](size_t i)
@@ -724,10 +726,14 @@ BuildCBCLocalFaceSlotPlans(SweepRuntime& runtime,
     face_offset += cell.faces.size();
   }
 
-  log.Log0Verbose1() << program_timer.GetTimeString()
-                     << " Compute local-face slot plans for CBC SPDS.";
-  for (const auto& spds : spds_list)
-    spds->ComputeMaxNumLocalPsiSlots(face_node_counts);
+  const auto thread_info = GetThreadResourceInfo();
+  const auto nthreads = std::min(spds_list.size(), thread_info.available_threads);
+  log.Log() << program_timer.GetTimeString() << " Compute local-face slot plans for CBC SPDS ("
+            << nthreads << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
+  ParallelFor(spds_list.size(),
+              nthreads,
+              [&spds_list, &face_node_counts](const std::size_t i)
+              { spds_list[i]->ComputeMaxNumLocalPsiSlots(face_node_counts); });
 }
 
 void
