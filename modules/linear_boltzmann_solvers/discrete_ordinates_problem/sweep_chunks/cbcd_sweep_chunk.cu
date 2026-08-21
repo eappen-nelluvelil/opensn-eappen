@@ -261,13 +261,6 @@ CBCDSweepChunk::StartCommunicator(const std::size_t num_workers)
 }
 
 void
-CBCDSweepChunk::RequestCommunicatorFlush()
-{
-  if (async_comm_)
-    async_comm_->RequestFlush();
-}
-
-void
 CBCDSweepChunk::StopCommunicator()
 {
   if (async_comm_)

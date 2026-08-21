@@ -57,9 +57,6 @@ public:
   /// Start the aggregated communicator thread for the given number of sweep workers.
   void StartCommunicator(std::size_t num_workers);
 
-  /// Flush pending peer buffers when a worker exhausts its local ready frontier.
-  void RequestCommunicatorFlush();
-
   /// Stop the aggregated communicator thread.
   void StopCommunicator();
 

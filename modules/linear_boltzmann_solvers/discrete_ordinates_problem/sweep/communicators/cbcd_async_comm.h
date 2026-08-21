@@ -242,8 +242,6 @@ public:
   void SignalAngleSetComplete(std::size_t angle_set_id, std::size_t producer_id);
   /// Start the communication thread for the given number of sweep workers.
   void Start(std::size_t num_producers);
-  /// Request that pending peer buffers be sent because a local ready frontier is empty.
-  void RequestFlush() { flush_requested_.store(true, std::memory_order_release); }
   /// Request termination and join the communication thread.
   void Stop();
 
@@ -282,21 +280,10 @@ private:
     CBCDMessageKind last_section_kind = CBCDMessageKind::NORMAL_FACE_PSI;
     /// Whether the final section can accept another face-data entry.
     bool has_open_face_section = false;
-    /// Progress passes elapsed since the current peer buffer was opened.
-    std::size_t deferred_progress_passes = 0;
   };
 
   /// Worker-local destination activation queue.
   using DoorbellQueue = LockFreeSPSCSlotQueue<std::size_t>;
-
-  /// One in-flight nonblocking MPI send and its owned serialized bytes.
-  struct InFlightSend
-  {
-    /// Nonblocking MPI request.
-    mpi::Request request;
-    /// Owned serialized payload storage.
-    ByteArray data;
-  };
 
   /// Run the communication-thread progress loop.
   void CommThreadLoop();
@@ -304,14 +291,14 @@ private:
   void ConfigureProducerShards(std::size_t num_producers);
   /// Drain worker-local doorbell queues into comm-thread-local active lists.
   bool DrainProducerDoorbells();
-  /// Drain active destination queues and post peer buffers when required.
-  bool FlushActiveDestinations(bool force);
-  /// Drain one destination queue into its persistent aggregation buffer.
-  bool FlushActiveDestination(std::size_t destination_queue_index, bool force);
+  /// Drain active destination queues and post every nonempty peer buffer.
+  bool FlushActiveDestinations();
+  /// Drain one destination queue and post its currently ready records.
+  bool FlushActiveDestination(std::size_t destination_queue_index);
   /// Append one outgoing record to a destination's serialized aggregation buffer.
-  bool AppendOutgoing(DestinationQueue& destination_queue, const OutgoingFaceData& entry);
+  void AppendOutgoing(DestinationQueue& destination_queue, const OutgoingFaceData& entry);
   /// Post one destination's open aggregation buffer as a nonblocking send.
-  bool PostSend(DestinationQueue& destination_queue);
+  void PostSend(DestinationQueue& destination_queue);
   /// Drain outgoing queues, serialize batches, and post MPI sends.
   bool SerializeAndSend();
   /// Probe for incoming MPI messages, deserialize them, and publish mailbox batches.
@@ -333,8 +320,6 @@ private:
   int mpi_tag_;
   /// Maximum serialized MPI payload size.
   std::size_t max_message_bytes_;
-  /// Maximum number of outstanding sends permitted before receive/progress work takes priority.
-  std::size_t max_in_flight_sends_ = 0;
   /// Local MPI rank.
   int my_rank_ = 0;
   /// Source partitions that can send to this rank.
@@ -363,13 +348,15 @@ private:
   /// Reusable receive buffer for one incoming MPI payload.
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
-  std::vector<InFlightSend> in_flight_sends_;
+  std::vector<mpi::Request> send_requests_;
+  /// Serialized payload storage retained until the corresponding send completes.
+  std::vector<ByteArray> in_flight_send_buffers_;
+  /// Indices returned by `MPI_Testsome`.
+  std::vector<int> completed_send_indices_;
   /// Completed aggregate buffers retained for capacity-preserving reuse.
   std::vector<ByteArray> available_send_buffers_;
   /// Termination flag for the communication thread.
   std::atomic<bool> stop_requested_{false};
-  /// Worker signal that local dependency progress requires pending sends to be released.
-  std::atomic<bool> flush_requested_{false};
   /// Per-angle-set local completion flags.
   std::vector<std::atomic<bool>> angle_set_done_;
   /// Number of delayed source slots still incomplete for each angle set.

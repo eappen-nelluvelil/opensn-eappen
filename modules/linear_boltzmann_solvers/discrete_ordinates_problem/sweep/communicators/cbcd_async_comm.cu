@@ -12,6 +12,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -57,9 +58,6 @@ CheckedMultiply(const std::size_t lhs, const std::size_t rhs, const char* const 
 constexpr std::size_t message_header_bytes = sizeof(std::size_t);
 constexpr std::size_t section_header_bytes = sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
 constexpr std::size_t entry_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
-constexpr std::size_t max_deferred_progress_passes = 64;
-constexpr std::size_t max_receive_burst = 64;
-constexpr std::size_t max_sends_per_destination_pass = 2;
 
 // Bounded byte reader for communicator payload deserialization.
 struct BufferReader
@@ -232,11 +230,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   dest_to_queue_index_.reserve(destination_ranks_.size());
   for (std::size_t queue_index = 0; queue_index < destination_ranks_.size(); ++queue_index)
     dest_to_queue_index_.emplace(destination_ranks_[queue_index], queue_index);
-  max_in_flight_sends_ =
-    std::clamp(detail::CheckedMultiply(
-                 destination_ranks_.size(), 4, "CBCD communicator: in-flight send limit overflow."),
-               std::size_t{8},
-               std::size_t{64});
   for (auto& done : angle_set_done_)
     done.store(false, std::memory_order_relaxed);
 
@@ -391,7 +384,6 @@ CBCD_AsynchronousCommunicator::Start(const std::size_t num_producers)
   ConfigureProducerShards(num_producers);
 
   stop_requested_.store(false, std::memory_order_relaxed);
-  flush_requested_.store(false, std::memory_order_relaxed);
   for (auto& done : angle_set_done_)
     done.store(false, std::memory_order_relaxed);
   for (std::size_t angle_set_id = 0; angle_set_id < num_angle_sets_; ++angle_set_id)
@@ -401,7 +393,9 @@ CBCD_AsynchronousCommunicator::Start(const std::size_t num_producers)
     delayed_sources_remaining_by_angle_set_[angle_set_id].store(
       detail::CheckedSourceSlot(received.size()), std::memory_order_relaxed);
   }
-  in_flight_sends_.clear();
+  send_requests_.clear();
+  in_flight_send_buffers_.clear();
+  completed_send_indices_.clear();
   active_destinations_.clear();
   std::fill(destination_active_local_.begin(), destination_active_local_.end(), 0);
   for (auto& destination_queue : outgoing_queues_)
@@ -414,7 +408,6 @@ CBCD_AsynchronousCommunicator::Start(const std::size_t num_producers)
     assert(destination_queue.open_send_buffer.Data().empty());
     destination_queue.num_open_sections = 0;
     destination_queue.has_open_face_section = false;
-    destination_queue.deferred_progress_passes = 0;
     for (auto& shard : destination_queue.producer_shards)
     {
       shard->scheduled.store(false, std::memory_order_relaxed);
@@ -450,11 +443,11 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
 
     if (stop_requested_.load(std::memory_order_acquire) and AllAngleSetsComplete())
     {
-      while (not in_flight_sends_.empty())
+      while (not send_requests_.empty())
       {
         ProbeAndReceive();
         PollInFlightSends();
-        if (not in_flight_sends_.empty())
+        if (not send_requests_.empty())
           std::this_thread::yield();
       }
       break;
@@ -495,32 +488,29 @@ CBCD_AsynchronousCommunicator::DrainProducerDoorbells()
   return activated_any;
 }
 
-bool
+void
 CBCD_AsynchronousCommunicator::PostSend(DestinationQueue& destination_queue)
 {
   auto& bytes = destination_queue.open_send_buffer.Data();
-  if (bytes.empty() or in_flight_sends_.size() >= max_in_flight_sends_)
-    return false;
+  if (bytes.empty())
+    return;
   if (bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
     throw std::overflow_error("CBCD communicator: MPI payload exceeds the count range.");
 
   std::memcpy(bytes.data(), &destination_queue.num_open_sections, detail::message_header_bytes);
-  InFlightSend in_flight;
-  in_flight.data = std::move(destination_queue.open_send_buffer);
+  ByteArray send_buffer = std::move(destination_queue.open_send_buffer);
   destination_queue.open_send_buffer.Clear();
   const auto& comm = comm_set_.LocICommunicator(destination_queue.dest_rank);
   const auto mapped_rank =
     comm_set_.MapIonJ(destination_queue.dest_rank, destination_queue.dest_rank);
-  in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
-  in_flight_sends_.push_back(std::move(in_flight));
+  send_requests_.push_back(comm.isend(mapped_rank, mpi_tag_, send_buffer.Data()));
+  in_flight_send_buffers_.push_back(std::move(send_buffer));
 
   destination_queue.num_open_sections = 0;
   destination_queue.has_open_face_section = false;
-  destination_queue.deferred_progress_passes = 0;
-  return true;
 }
 
-bool
+void
 CBCD_AsynchronousCommunicator::AppendOutgoing(DestinationQueue& destination_queue,
                                               const OutgoingFaceData& entry)
 {
@@ -557,8 +547,7 @@ CBCD_AsynchronousCommunicator::AppendOutgoing(DestinationQueue& destination_queu
     (current_size >= max_message_bytes_ or additional_bytes > max_message_bytes_ - current_size);
   if (exceeds_message_limit)
   {
-    if (not PostSend(destination_queue))
-      return false;
+    PostSend(destination_queue);
     extends_last_section = false;
   }
 
@@ -619,19 +608,15 @@ CBCD_AsynchronousCommunicator::AppendOutgoing(DestinationQueue& destination_queu
   if (max_message_bytes_ > 0 and
       destination_queue.open_send_buffer.Data().size() >= max_message_bytes_)
     PostSend(destination_queue);
-  return true;
 }
 
 bool
-CBCD_AsynchronousCommunicator::FlushActiveDestination(const std::size_t destination_queue_index,
-                                                      const bool force)
+CBCD_AsynchronousCommunicator::FlushActiveDestination(const std::size_t destination_queue_index)
 {
   if (destination_queue_index >= outgoing_queues_.size())
     throw std::out_of_range("CBCD communicator: invalid destination queue index.");
   auto& destination_queue = outgoing_queues_[destination_queue_index];
   bool work_done = false;
-  bool saw_completion = false;
-  const auto initial_send_count = in_flight_sends_.size();
 
   const auto producer_count = destination_queue.active_producers.size();
   for (std::size_t visited = 0;
@@ -672,50 +657,32 @@ CBCD_AsynchronousCommunicator::FlushActiveDestination(const std::size_t destinat
       continue;
     }
 
-    std::size_t slots_processed = 0;
     for (const auto* slot : slot_cache_)
-    {
-      const auto& entry = slot->payload;
-      if (not AppendOutgoing(destination_queue, entry))
-        break;
-      saw_completion |= entry.kind == CBCDMessageKind::DELAYED_COMPLETION;
-      ++slots_processed;
-      const auto sends_posted = in_flight_sends_.size() - initial_send_count;
-      if (destination_queue.open_send_buffer.Data().empty() and
-          (in_flight_sends_.size() >= max_in_flight_sends_ or
-           sends_posted >= detail::max_sends_per_destination_pass))
-        break;
-    }
+      AppendOutgoing(destination_queue, slot->payload);
 
-    shard.queue.ReleaseReadySlots(slots_processed);
-    work_done |= slots_processed > 0;
+    shard.queue.ReleaseReadySlots(slot_cache_.size());
+    work_done = true;
     destination_queue.rr_cursor = (active_index + 1) % destination_queue.active_producers.size();
-    if (slots_processed != slot_cache_.size())
-      break;
   }
 
   if (not destination_queue.open_send_buffer.Data().empty())
   {
-    ++destination_queue.deferred_progress_passes;
-    if (force or saw_completion or
-        destination_queue.deferred_progress_passes >= detail::max_deferred_progress_passes)
-      work_done |= PostSend(destination_queue);
+    PostSend(destination_queue);
+    work_done = true;
   }
-  else
-    destination_queue.deferred_progress_passes = 0;
 
   return work_done;
 }
 
 bool
-CBCD_AsynchronousCommunicator::FlushActiveDestinations(const bool force)
+CBCD_AsynchronousCommunicator::FlushActiveDestinations()
 {
   bool work_done = false;
 
   for (std::size_t i = 0; i < active_destinations_.size();)
   {
     const auto destination_queue_index = active_destinations_[i];
-    work_done |= FlushActiveDestination(destination_queue_index, force);
+    work_done |= FlushActiveDestination(destination_queue_index);
 
     const auto& destination_queue = outgoing_queues_[destination_queue_index];
     if (destination_queue.active_producers.empty() and
@@ -738,9 +705,7 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::SerializeAndSend");
 
   const auto activated_any = DrainProducerDoorbells();
-  const bool force = flush_requested_.exchange(false, std::memory_order_acq_rel) or
-                     stop_requested_.load(std::memory_order_acquire);
-  const auto sent_any = FlushActiveDestinations(force);
+  const auto sent_any = FlushActiveDestinations();
   return activated_any or sent_any;
 }
 
@@ -752,7 +717,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   bool received_any = false;
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
 
-  for (std::size_t received = 0; received < detail::max_receive_burst; ++received)
+  while (true)
   {
     auto message = recv_comm.improbe(mpi::ANY_SOURCE, mpi_tag_);
     if (not message)
@@ -848,22 +813,25 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::PollInFlightSends");
 
-  // Compact the in-flight vector in place by swapping completed requests with the back.
-  bool completed_any = false;
-  for (std::size_t i = 0; i < in_flight_sends_.size();)
+  if (send_requests_.empty())
+    return false;
+
+  completed_send_indices_.clear();
+  mpi::test_some(send_requests_, completed_send_indices_);
+  std::ranges::sort(completed_send_indices_, std::greater<>{});
+  for (const int completed_index : completed_send_indices_)
   {
-    if (mpi::test(in_flight_sends_[i].request))
+    const auto i = static_cast<std::size_t>(completed_index);
+    available_send_buffers_.push_back(std::move(in_flight_send_buffers_[i]));
+    if (i + 1 != send_requests_.size())
     {
-      completed_any = true;
-      available_send_buffers_.push_back(std::move(in_flight_sends_[i].data));
-      if (i + 1 != in_flight_sends_.size())
-        in_flight_sends_[i] = std::move(in_flight_sends_.back());
-      in_flight_sends_.pop_back();
+      send_requests_[i] = send_requests_.back();
+      in_flight_send_buffers_[i] = std::move(in_flight_send_buffers_.back());
     }
-    else
-      ++i;
+    send_requests_.pop_back();
+    in_flight_send_buffers_.pop_back();
   }
-  return completed_any;
+  return not completed_send_indices_.empty();
 }
 
 bool
