@@ -17,6 +17,61 @@ CBCD V2 uses its compact FLUDS and does not. Pass `--save-angular-flux` when
 preparing the trunk study. Omit it for CBCD V2 scaling and profiling; generated
 CBCD V2 inputs then explicitly set `save_angular_flux=False`.
 
+## Interactive CBCD V2 checks
+
+`interactive_cbcd.zsh` provides a short path for revision-specific CBCD V2
+strong-scaling checks at 1, 2, and 4 nodes. It reuses the production input
+generator and mesh cache, requests one GPU per rank, leaves CBCD thread-count
+overrides unset, and records each run without changing the source tree.
+
+On a Tuo login node, reuse the candidate checkout recorded by the prior study
+workflow. If that state file or checkout is unavailable, the fallback creates
+a stable candidate checkout instead:
+
+```zsh
+STUDY_ROOT=/usr/workspace/$USER/opensn-gpu/cbcd-v2-studies
+DEPS_ROOT=$STUDY_ROOT/builds/gfx942
+mkdir -p "$STUDY_ROOT"
+
+[[ -r $DEPS_ROOT/current-tuo-studies.zsh ]] && \
+  source "$DEPS_ROOT/current-tuo-studies.zsh"
+
+if [[ -n ${CANDIDATE_SOURCE:-} ]] &&
+   git -C "$CANDIDATE_SOURCE" rev-parse --git-dir >/dev/null 2>&1; then
+  REPO=$CANDIDATE_SOURCE
+else
+  REPO=$STUDY_ROOT/source-candidate
+  if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    git clone --branch cbc-cbcd-minimally-sized-fluds-update --single-branch \
+      https://github.com/eappen-nelluvelil/opensn-eappen.git "$REPO"
+  fi
+fi
+
+git -C "$REPO" fetch origin \
+  +cbc-cbcd-minimally-sized-fluds-update:refs/remotes/origin/cbc-cbcd-minimally-sized-fluds-update
+REVISION=$(git -C "$REPO" rev-parse \
+  refs/remotes/origin/cbc-cbcd-minimally-sized-fluds-update)
+git -C "$REPO" switch --detach "$REVISION"
+
+HELPER=$REPO/tools/scaling/tuo/interactive_cbcd.zsh
+zsh "$HELPER" paths
+zsh "$HELPER" build
+zsh "$HELPER" prepare
+zsh "$HELPER" run-all
+zsh "$HELPER" summary
+```
+
+`build` and `run` request exclusive `pdebug` allocations and wait for them to
+finish; use `run N` to repeat only one node count. If already inside an
+allocation of the required size, use `build-here` or `run-here N` instead. The
+default dependency root is
+`/usr/workspace/$USER/opensn-gpu/cbcd-v2-studies/builds/gfx942`; set
+`OPENSN_TUO_ROOT` when reusing a dependency installation elsewhere. Set
+`OPENSN_TUO_BANK`, `OPENSN_TUO_QUEUE`, or `OPENSN_TUO_TIME_LIMIT` only when the
+site allocation requires an explicit bank or different scheduler settings.
+`prepare` resolves Gmsh from the Python environment recorded in
+`$OPENSN_TUO_ROOT/env.zsh`; it does not load a site Gmsh module.
+
 ## Environment and build
 
 Install the files in `dotfiles/` only after backing up the current files. Do
