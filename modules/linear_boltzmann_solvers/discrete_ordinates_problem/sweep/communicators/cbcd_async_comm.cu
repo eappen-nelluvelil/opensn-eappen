@@ -12,6 +12,7 @@
 #include <cstring>
 #include <set>
 #include <cstddef>
+#include <stdexcept>
 
 namespace opensn
 {
@@ -144,10 +145,15 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   }
 
   my_rank_ = opensn::mpi_comm.rank();
-  source_partitions_.assign(sources.begin(), sources.end());
-  source_ranks_.reserve(source_partitions_.size());
-  for (const int source_partition : source_partitions_)
-    source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
+  source_partition_by_rank_.reserve(sources.size());
+  for (const int source_partition : sources)
+  {
+    const int source_rank = comm_set_.MapIonJ(source_partition, my_rank_);
+    const bool inserted =
+      source_partition_by_rank_.emplace(source_rank, source_partition).second;
+    if (not inserted)
+      throw std::logic_error("CBCD communicator: duplicate mapped source rank.");
+  }
 
   source_partition_to_slot_by_angle_set_.resize(angle_sets.size());
   delayed_source_partition_to_slot_by_angle_set_.resize(angle_sets.size());
@@ -163,8 +169,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     auto& delayed_source_to_slot = delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
     const auto& delayed_source_partitions = delayed_incoming_source_partitions[angle_set_id];
     delayed_source_to_slot.reserve(delayed_source_partitions.size());
-    for (std::size_t source_slot = 0; source_slot < delayed_source_partitions.size();
-         ++source_slot)
+    for (std::size_t source_slot = 0; source_slot < delayed_source_partitions.size(); ++source_slot)
       delayed_source_to_slot.emplace(delayed_source_partitions[source_slot],
                                      static_cast<std::uint32_t>(source_slot));
   }
@@ -313,11 +318,18 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
   bool sent_any = false;
 
   // Per-section overhead: kind byte + angle-set id + entry count.
-  constexpr std::size_t section_header_bytes =
-    sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
+  constexpr std::size_t section_header_bytes = sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
 
-  for (auto& destination_queue : outgoing_queues_)
+  for (std::size_t destination_queue_index = 0; destination_queue_index < outgoing_queues_.size();
+       ++destination_queue_index)
   {
+    auto& destination_queue = outgoing_queues_[destination_queue_index];
+
+    // Bound retained MPI state and provide backpressure for aggregation.  Records that arrive
+    // while this request is active remain in the queue and are combined after it completes.
+    if (destination_queue->send_in_flight)
+      continue;
+
     // Gather the currently published outgoing face payloads for this destination. The queue
     // is drained in FIFO order, but the serialized message is batched by `(kind, angle_set)`
     // so the receiver can publish one mailbox payload per `(kind, angle_set)` section.
@@ -348,41 +360,40 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
       };
 
       write_bytes(&active_sections, sizeof(std::size_t));
-      for (std::size_t kind_idx = 0; kind_idx < send_batch_by_kind_and_angle_set_.size();
-           ++kind_idx)
+      for (const auto& section : active_send_sections_)
       {
-        const auto kind = static_cast<CBCDMessageKind>(kind_idx);
-        const auto kind_byte = static_cast<std::uint8_t>(kind_idx);
-        for (std::size_t angle_set_id = 0; angle_set_id < num_angle_sets_; ++angle_set_id)
-        {
-          auto& entries = send_batch_by_kind_and_angle_set_[kind_idx][angle_set_id];
-          if (entries.empty())
-            continue;
+        const auto kind = static_cast<CBCDMessageKind>(section.kind_index);
+        const auto kind_byte = static_cast<std::uint8_t>(section.kind_index);
+        const auto angle_set_id = section.angle_set_id;
+        auto& entries = send_batch_by_kind_and_angle_set_[section.kind_index][angle_set_id];
+        assert(not entries.empty());
 
-          write_bytes(&kind_byte, sizeof(std::uint8_t));
-          write_bytes(&angle_set_id, sizeof(std::size_t));
-          // Completion markers carry the kind tag with zero entries; face-psi sections
-          // pack one (remote_face_index, payload_size, doubles) triple per entry.
-          const auto num_entries =
-            kind == CBCDMessageKind::DELAYED_COMPLETION ? std::size_t{0} : entries.size();
-          write_bytes(&num_entries, sizeof(std::size_t));
-          if (kind != CBCDMessageKind::DELAYED_COMPLETION)
-            for (const auto* entry : entries)
-            {
-              write_bytes(&entry->remote_face_index, sizeof(std::uint32_t));
-              const auto data_size = entry->psi_data.size();
-              write_bytes(&data_size, sizeof(std::size_t));
-              write_bytes(entry->psi_data.data(), data_size * sizeof(double));
-            }
-          entries.clear();
-        }
+        write_bytes(&kind_byte, sizeof(std::uint8_t));
+        write_bytes(&angle_set_id, sizeof(std::size_t));
+        // Completion markers carry the kind tag with zero entries; face-psi sections
+        // pack one (remote_face_index, payload_size, doubles) triple per entry.
+        const auto num_entries =
+          kind == CBCDMessageKind::DELAYED_COMPLETION ? std::size_t{0} : entries.size();
+        write_bytes(&num_entries, sizeof(std::size_t));
+        if (kind != CBCDMessageKind::DELAYED_COMPLETION)
+          for (const auto* entry : entries)
+          {
+            write_bytes(&entry->remote_face_index, sizeof(std::uint32_t));
+            const auto data_size = entry->psi_data.size();
+            write_bytes(&data_size, sizeof(std::size_t));
+            write_bytes(entry->psi_data.data(), data_size * sizeof(double));
+          }
+        entries.clear();
       }
+      active_send_sections_.clear();
 
       const auto& comm = comm_set_.LocICommunicator(destination_queue->dest_rank);
       const auto mapped_rank =
         comm_set_.MapIonJ(destination_queue->dest_rank, destination_queue->dest_rank);
       in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
+      in_flight.destination_queue_index = destination_queue_index;
       in_flight_sends_.push_back(std::move(in_flight));
+      destination_queue->send_in_flight = true;
     };
 
     for (std::size_t slot_index = 0; slot_index < slot_cache_.size(); ++slot_index)
@@ -390,32 +401,29 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
       const auto* slot = slot_cache_[slot_index];
       const auto& entry = slot->payload;
       const bool is_completion = entry.kind == CBCDMessageKind::DELAYED_COMPLETION;
-      const auto entry_bytes =
-        is_completion ? std::size_t{0}
-                      : sizeof(std::uint32_t) + sizeof(std::size_t) +
-                          entry.psi_data.size() * sizeof(double);
-
-      // Attempt to adhere to the message-size limit.  Once the next entry would exceed the
-      // limit, flush the current batch and continue packing the remaining queue entries.
-      if (max_message_bytes_ > 0 and
-          current_payload_bytes + entry_bytes > max_message_bytes_ and active_sections > 0)
-      {
-        send_batch();
-        destination_queue->queue->FreeSlots(slots_processed);
-        current_payload_bytes = sizeof(std::size_t);
-        active_sections = 0;
-        slots_processed = 0;
-      }
+      const auto entry_bytes = is_completion ? std::size_t{0}
+                                             : sizeof(std::uint32_t) + sizeof(std::size_t) +
+                                                 entry.psi_data.size() * sizeof(double);
 
       const auto kind_idx = static_cast<std::size_t>(entry.kind);
       auto& entries = send_batch_by_kind_and_angle_set_[kind_idx][entry.angle_set_id];
-      if (entries.empty())
+      const bool opens_section = entries.empty();
+      const auto added_bytes = entry_bytes + (opens_section ? section_header_bytes : 0);
+
+      // Post at most one message for this destination in a progress pass. Include a newly
+      // opened section's header in the size projection. A single indivisible face record may
+      // exceed the limit and is sent by itself.
+      if (max_message_bytes_ > 0 and current_payload_bytes + added_bytes > max_message_bytes_ and
+          active_sections > 0)
+        break;
+
+      if (opens_section)
       {
         ++active_sections;
-        current_payload_bytes += section_header_bytes;
+        active_send_sections_.push_back({kind_idx, entry.angle_set_id});
       }
       entries.push_back(&entry);
-      current_payload_bytes += entry_bytes;
+      current_payload_bytes += added_bytes;
       ++slots_processed;
     }
 
@@ -436,101 +444,93 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
 
-  bool received_any = false;
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
+  auto message = recv_comm.improbe(mpi::ANY_SOURCE, mpi_tag_);
+  if (not message)
+    return false;
 
-  for (std::size_t source_index = 0; source_index < source_ranks_.size(); ++source_index)
+  const auto source_it = source_partition_by_rank_.find(message.source());
+  if (source_it == source_partition_by_rank_.end())
+    throw std::logic_error("CBCD communicator: message arrived from an unknown source rank.");
+  const int source_partition = source_it->second;
+  message.recv(recv_buffer_.Data());
+
+  detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data()),
+                              recv_buffer_.Data().size()};
+
+  // Walk each (kind, angle_set) section to determine its source slot, entry count, and
+  // total number of doubles, which allows exactly one mailbox payload allocation per
+  // face-psi section.  DELAYED_COMPLETION sections carry zero entries and only
+  // increment the receiver's per-(angle_set, source_slot) completion counter.
+  const auto num_sections = reader.LoadSize();
+  for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
   {
-    const int source_partition = source_partitions_[source_index];
-    const int source_rank = source_ranks_[source_index];
-    mpi::Status status;
+    const auto kind = reader.LoadKind();
+    const auto angle_set_id = reader.LoadSize();
+    const auto num_entries = reader.LoadSize();
+    assert(angle_set_id < num_angle_sets_);
 
-    while (recv_comm.iprobe(source_rank, mpi_tag_, status))
+    // Normal and delayed traffic use disjoint per-(angle_set) source-slot spaces; the
+    // kind tag selects which map to consult.  `DELAYED_COMPLETION` markers use the
+    // delayed map because the counter table is keyed by the delayed-source slot index.
+    const auto& slot_map = (kind == CBCDMessageKind::NORMAL_FACE_PSI)
+                             ? source_partition_to_slot_by_angle_set_[angle_set_id]
+                             : delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
+    const auto slot_it = slot_map.find(source_partition);
+    assert(slot_it != slot_map.end());
+    const auto source_slot = slot_it->second;
+
+    if (kind == CBCDMessageKind::DELAYED_COMPLETION)
     {
-      received_any = true;
-      const auto num_bytes = status.count<std::byte>();
-      recv_buffer_.Data().resize(static_cast<std::size_t>(num_bytes));
-      recv_comm.recv(source_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
-
-      detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data()),
-                                  recv_buffer_.Data().size()};
-
-      // Walk each (kind, angle_set) section to determine its source slot, entry count, and
-      // total number of doubles, which allows exactly one mailbox payload allocation per
-      // face-psi section.  DELAYED_COMPLETION sections carry zero entries and only
-      // increment the receiver's per-(angle_set, source_slot) completion counter.
-      const auto num_sections = reader.LoadSize();
-      for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
-      {
-        const auto kind = reader.LoadKind();
-        const auto angle_set_id = reader.LoadSize();
-        const auto num_entries = reader.LoadSize();
-        assert(angle_set_id < num_angle_sets_);
-
-        // Normal and delayed traffic use disjoint per-(angle_set) source-slot spaces; the
-        // kind tag selects which map to consult.  `DELAYED_COMPLETION` markers use the
-        // delayed map because the counter table is keyed by the delayed-source slot index.
-        const auto& slot_map =
-          (kind == CBCDMessageKind::NORMAL_FACE_PSI)
-            ? source_partition_to_slot_by_angle_set_[angle_set_id]
-            : delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
-        const auto slot_it = slot_map.find(source_partition);
-        assert(slot_it != slot_map.end());
-        const auto source_slot = slot_it->second;
-
-        if (kind == CBCDMessageKind::DELAYED_COMPLETION)
-        {
-          assert(num_entries == 0);
-          // Mark this `(angle_set_id, source_slot)` as complete.  The atomic value carries
-          // the number of completion markers received; for the current protocol only one
-          // marker per `(angle_set, source)` per sweep is emitted, so any non-zero value
-          // counts as complete.
-          if (source_slot < delayed_completion_received_by_angle_set_[angle_set_id].size())
-            delayed_completion_received_by_angle_set_[angle_set_id][source_slot].fetch_add(
-              1, std::memory_order_release);
-          continue;
-        }
-
-        const auto* const section_ptr = reader.Data();
-        std::size_t total_values = 0;
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          reader.LoadFaceIndex();
-          const auto data_size = reader.LoadSize();
-          reader.SkipBytes(data_size * sizeof(double));
-          total_values += data_size;
-        }
-        const auto section_num_bytes = static_cast<std::size_t>(reader.Data() - section_ptr);
-
-        auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-        auto& batch = slot.payload;
-        batch.kind = kind;
-        batch.source_slot = source_slot;
-        batch.entries.resize(num_entries);
-        batch.psi_data.resize(total_values);
-        detail::BufferReader section_reader{section_ptr, section_num_bytes};
-        std::size_t value_offset = 0;
-        // Walk the compact mailbox payload with per-face offsets into one contiguous
-        // `psi_data` block.
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          auto& entry = batch.entries[entry_index];
-          entry.source_face_index = section_reader.LoadFaceIndex();
-          entry.payload_offset = value_offset;
-          entry.payload_size = section_reader.LoadSize();
-          std::memcpy(batch.psi_data.data() + value_offset,
-                      section_reader.Data(),
-                      entry.payload_size * sizeof(double));
-          section_reader.SkipBytes(entry.payload_size * sizeof(double));
-          value_offset += entry.payload_size;
-        }
-
-        incoming_mailboxes_[angle_set_id]->PublishSlot(slot);
-      }
+      assert(num_entries == 0);
+      // Mark this `(angle_set_id, source_slot)` as complete.  The atomic value carries
+      // the number of completion markers received; for the current protocol only one
+      // marker per `(angle_set, source)` per sweep is emitted, so any non-zero value
+      // counts as complete.
+      if (source_slot < delayed_completion_received_by_angle_set_[angle_set_id].size())
+        delayed_completion_received_by_angle_set_[angle_set_id][source_slot].fetch_add(
+          1, std::memory_order_release);
+      continue;
     }
+
+    const auto* const section_ptr = reader.Data();
+    std::size_t total_values = 0;
+    for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+    {
+      reader.LoadFaceIndex();
+      const auto data_size = reader.LoadSize();
+      reader.SkipBytes(data_size * sizeof(double));
+      total_values += data_size;
+    }
+    const auto section_num_bytes = static_cast<std::size_t>(reader.Data() - section_ptr);
+
+    auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+    auto& batch = slot.payload;
+    batch.kind = kind;
+    batch.source_slot = source_slot;
+    batch.entries.resize(num_entries);
+    batch.psi_data.resize(total_values);
+    detail::BufferReader section_reader{section_ptr, section_num_bytes};
+    std::size_t value_offset = 0;
+    // Walk the compact mailbox payload with per-face offsets into one contiguous
+    // `psi_data` block.
+    for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+    {
+      auto& entry = batch.entries[entry_index];
+      entry.source_face_index = section_reader.LoadFaceIndex();
+      entry.payload_offset = value_offset;
+      entry.payload_size = section_reader.LoadSize();
+      std::memcpy(batch.psi_data.data() + value_offset,
+                  section_reader.Data(),
+                  entry.payload_size * sizeof(double));
+      section_reader.SkipBytes(entry.payload_size * sizeof(double));
+      value_offset += entry.payload_size;
+    }
+
+    incoming_mailboxes_[angle_set_id]->PublishSlot(slot);
   }
 
-  return received_any;
+  return true;
 }
 
 bool
@@ -545,6 +545,9 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
     if (mpi::test(in_flight_sends_[i].request))
     {
       completed_any = true;
+      const auto destination_queue_index = in_flight_sends_[i].destination_queue_index;
+      assert(destination_queue_index < outgoing_queues_.size());
+      outgoing_queues_[destination_queue_index]->send_in_flight = false;
       in_flight_sends_[i] = std::move(in_flight_sends_.back());
       in_flight_sends_.pop_back();
     }

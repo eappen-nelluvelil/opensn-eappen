@@ -227,6 +227,8 @@ private:
     int dest_rank = 0;
     /// Outgoing MPSC queue drained by the communication thread.
     std::unique_ptr<LockFreeRingBuffer<OutgoingFaceData>> queue;
+    /// Whether this destination currently owns a nonblocking send request.
+    bool send_in_flight = false;
   };
 
   /// One in-flight nonblocking MPI send and its owned serialized bytes.
@@ -236,6 +238,15 @@ private:
     mpi::Request request;
     /// Owned serialized payload storage.
     ByteArray data;
+    /// Outgoing destination queue associated with this request.
+    std::size_t destination_queue_index = 0;
+  };
+
+  /// One nonempty `(message kind, angle set)` section in the current send batch.
+  struct ActiveSendSection
+  {
+    std::size_t kind_index = 0;
+    std::size_t angle_set_id = 0;
   };
 
   /// Run the communication-thread progress loop.
@@ -259,10 +270,8 @@ private:
   std::size_t max_message_bytes_;
   /// Local MPI rank.
   int my_rank_ = 0;
-  /// Source partitions that can send to this rank.
-  std::vector<int> source_partitions_;
-  /// Source ranks mapped into the local communicator for receives.
-  std::vector<int> source_ranks_;
+  /// Local-communicator source rank to global partition map.
+  std::unordered_map<int, int> source_partition_by_rank_;
   /// Source-partition to source-slot map grouped by angle set (normal traffic).
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_slot_by_angle_set_;
   /// Source-partition to source-slot map grouped by angle set (delayed traffic).
@@ -278,6 +287,8 @@ private:
   /// `CBCDMessageKind` (cast to its underlying integer) and then by angle-set id.
   std::array<std::vector<std::vector<const OutgoingFaceData*>>, 3>
     send_batch_by_kind_and_angle_set_;
+  /// Nonempty sections in the current send batch, avoiding a dense three-kind scan.
+  std::vector<ActiveSendSection> active_send_sections_;
   /// Reusable receive buffer for one incoming MPI payload.
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
