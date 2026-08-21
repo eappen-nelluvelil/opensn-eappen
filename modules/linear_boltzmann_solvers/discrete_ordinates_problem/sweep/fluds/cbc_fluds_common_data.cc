@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <stdexcept>
 
 namespace opensn
 {
@@ -199,8 +200,16 @@ CBC_FLUDSCommonData::CBC_FLUDSCommonData(
       if (face_task_id == CBC_SPDS::INVALID_LOCAL_FACE_TASK_ID)
         continue;
 
-      local_face_slot_node_offsets_by_face_[face_offset + f] =
-        slot_node_offsets[slot_ids[face_task_id]];
+      const auto num_face_nodes =
+        GetFaceNodalMapping(cell.local_id, static_cast<unsigned int>(f)).face_node_mapping_.size();
+      if (orientation == FaceOrientation::OUTGOING and
+          cbc_spds.GetLocalFaceNodeCount(face_task_id) != num_face_nodes)
+        throw std::logic_error("CBC FLUDS: outgoing local-face extent is inconsistent.");
+
+      const auto slot_id = slot_ids[face_task_id];
+      if (static_cast<std::size_t>(slot_id) + 1 >= slot_node_offsets.size())
+        throw std::logic_error("CBC FLUDS: local face has an invalid slot.");
+      local_face_slot_node_offsets_by_face_[face_offset + f] = slot_node_offsets[slot_id];
     }
   }
 }

@@ -120,8 +120,14 @@ public:
   bool IsDelayedLocalDependency(std::uint32_t upwind_local_id,
                                 std::uint32_t downwind_local_id) const noexcept;
 
-  /// Compute the exact minimum safe local-face psi slot assignment.
-  void ComputeMaxNumLocalPsiSlots();
+  /**
+   * Compute the exact minimum safe local-face psi slot assignment.
+   *
+   * \param face_node_counts Spatial-discretization node counts indexed by flattened local
+   * cell-face ID. These counts size the physical slot chains; they do not alter the reuse
+   * relation or its minimum chain cover.
+   */
+  void ComputeMaxNumLocalPsiSlots(std::span<const std::uint32_t> face_node_counts);
 
   /// Return the minimum number of reusable local-face psi slots.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
@@ -133,15 +139,21 @@ public:
   }
 
   /// Return prefix offsets into the compact local-face slot bank.
-  const std::vector<std::uint32_t>& GetLocalFaceSlotNodeOffsets() const noexcept
+  const std::vector<std::size_t>& GetLocalFaceSlotNodeOffsets() const noexcept
   {
     return local_face_slot_node_offsets_;
   }
 
   /// Return slot-local node extents indexed by slot ID.
-  const std::vector<std::uint16_t>& GetLocalFaceSlotNodeCounts() const noexcept
+  const std::vector<std::uint32_t>& GetLocalFaceSlotNodeCounts() const noexcept
   {
     return local_face_slot_node_counts_;
+  }
+
+  /// Return the discretization node count for one directed local-face task.
+  std::uint32_t GetLocalFaceNodeCount(const std::uint32_t task_id) const noexcept
+  {
+    return local_face_node_counts_[task_id];
   }
 
   /// Return the total number of nodes spanned by the compact local-face slot bank.
@@ -219,13 +231,13 @@ protected:
   /// Consumer task rank for each local directed face.
   std::vector<std::uint32_t> local_face_consumer_ranks_;
   /// Node count for each local directed face.
-  std::vector<std::uint16_t> local_face_node_counts_;
+  std::vector<std::uint32_t> local_face_node_counts_;
   /// Static face-to-slot assignment.
   std::vector<std::uint32_t> local_face_slot_ids_;
   /// Maximum node extent for each slot.
-  std::vector<std::uint16_t> local_face_slot_node_counts_;
+  std::vector<std::uint32_t> local_face_slot_node_counts_;
   /// Prefix offsets into the compact slot bank.
-  std::vector<std::uint32_t> local_face_slot_node_offsets_;
+  std::vector<std::size_t> local_face_slot_node_offsets_;
   /// Exact minimum number of reusable local-face slots.
   std::size_t max_num_local_psi_slots_ = 0;
   /// Total number of nodes spanned by the compact local-face slot bank.
