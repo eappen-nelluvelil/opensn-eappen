@@ -1044,6 +1044,30 @@
     ]
   },
   {
+    "file": "transport_3d_4_cycles_1_cbc.py",
+    "outfileprefix": "transport_3d_4_cycles_1_cbcd_gpu",
+    "comment": "3D cyclic LinearBSolver Test Extruded-Unstructured Mesh - PWLD (CBCD)",
+    "num_procs": 4,
+    "requires_gpu": "True",
+    "args": [
+      "use_gpus=True"
+    ],
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value1=",
+        "goldvalue": 0.555349,
+        "abs_tol": 0.0001
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Max-value2=",
+        "goldvalue": 0.000374343,
+        "abs_tol": 0.0001
+      }
+    ]
+  },
+  {
     "file": "transport_3d_4_cycles_1_gpu.py",
     "comment": "3D LinearBSolver Test Extruded-Unstructured Mesh - PWLD",
     "requires_gpu": "True",

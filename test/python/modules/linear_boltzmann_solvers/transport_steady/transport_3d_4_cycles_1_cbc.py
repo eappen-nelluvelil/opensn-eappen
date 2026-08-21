@@ -11,6 +11,12 @@ import os
 import sys
 import math
 
+
+def get_bool_option(name, default):
+    if name in globals():
+        return bool(globals()[name])
+    return default
+
 if "opensn_console" not in globals():
     from mpi4py import MPI
     size = MPI.COMM_WORLD.size
@@ -97,6 +103,7 @@ if __name__ == "__main__":
             {"name": "zmax", "type": "isotropic", "group_strength": bsrc},
         ],
         sweep_type="CBC",
+        use_gpus=get_bool_option("use_gpus", False),
     )
 
     # Initialize and Execute Solver
