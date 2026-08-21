@@ -1,255 +1,207 @@
-# Tuolumne CBCD studies
+# Tuolumne CBCD V2 studies
 
-This directory provides a revision-pinned workflow for CBCD V2 correctness,
-strong/weak scaling, and profiling on Tuolumne. The supported production
-geometry is four MPI ranks per node, one MI300A and 21 user CPU cores per rank,
-native SPX mode, and Flux/mpibind placement over Tuo's 84 user cores. A node
-has 96 physical CPU cores; three cores per socket are reserved for the OS,
-leaving 84 to jobs, with two hardware threads per core. The binding preflight
-requires all 21 user cores (rather than counting hardware threads) and a distinct
-local GPU for every rank.
+This directory provides a short path from a clean Tuo checkout to interactive
+and batch CBCD V2 studies. It uses four MPI ranks per node, one MI300A per rank,
+the default native SPX mode, and Flux/mpibind placement. The two policy studies differ only
+in CBCD thread allocation:
 
-The framework never checks out a branch, sources personal state files, or
-installs shell dotfiles. Give it an already checked-out, clean source tree. It
-derives and records the exact 40-character Git SHA, hashes the executable and
-all study assets, and refuses to run a binary whose build manifest does not
-match.
+- `hardware` uses the direct `std::thread::hardware_concurrency()` behavior.
+- `resource-aware` bounds workers using the CPU resources assigned to each rank
+  and reserves a core for its communicator.
 
-## Build one exact revision
+The helper prepares and runs both policies so the binary, mesh, solver settings,
+rank count, and allocation are otherwise the same.
 
-Run from a clean detached checkout or clean branch worktree. Dependency setup
-needs network access to the LC package mirrors. Builds belong on a compute
-node. `all` refuses an existing stack or build directory: it creates a new,
-content-fingerprinted dependency prefix and a new Python venv.
+## 1. Select the checkout and paths
+
+On a Tuo login node, update the checkout to
+`cbc-cbcd-minimally-sized-fluds-update-3`, then set the paths once in the shell
+used for the study:
 
 ```zsh
-export OPENSN_SOURCE=/usr/workspace/$USER/opensn-gpu/source-update-2
-export OPENSN_TUO_ROOT=/usr/workspace/$USER/opensn-gpu/tuo/gfx942
-export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-update-2
-export OPENSN_TUO_REVISION=$(git -C "$OPENSN_SOURCE" rev-parse HEAD)
-export OPENSN_TUO_STACK_ID=update-2-clean-1
+STUDY_ROOT=/usr/workspace/$USER/opensn-gpu/cbcd-v2-studies
 
-flux alloc -N1 -q pdebug --exclusive --amd-gpumode=SPX -t 60m
-zsh "$OPENSN_SOURCE/tools/scaling/tuo/bootstrap.zsh" all
-```
-
-`all` creates the Python environment, dependencies, OpenSn binary, and
-`$OPENSN_TUO_BUILD/tuo-build-manifest.json`. To retry an interrupted build,
-use `build-deps`, then `build-opensn`; to rebuild from scratch, select a new
-`OPENSN_TUO_STACK_ID` and build path. The fingerprint covers the dependency
-inputs, exact module set, exact Python package pins, stack ID, and Caliper
-features. Gmsh 4.15.2 is pinned by default.
-
-The dependency build forces Caliper 2.13's MPI support on (needed by PMPI and
-cross-rank aggregation), forces NVTX/CUPTI off because Tuo is AMD, and requests
-Caliper's rocProfiler service. The actual Caliper `WITH_*` cache entries and
-installed feature macros are validated and stored in
-`caliper-features.json`; the installed recipe inventory must contain
-`runtime-report` and `mpi-report`, plus the exact `rocm-activity-report` recipe
-when the ROCm backend is requested. The fresh
-Boost 1.86 package configuration is selected explicitly. The launcher and its
-complete resolved DSO closure—including `libopensn.so`—are hashed and checked
-again during preparation and on every compute allocation. If the installed
-ROCm cannot support that service, explicitly select
-`OPENSN_TUO_CALIPER_GPU_BACKEND=NONE`; the MPI/PMPI services remain mandatory.
-
-Use identical pinned inputs but fresh stack IDs and distinct build directories
-for clean rebuilds. Build the proven
-`cbc-and-cbcd-with-minimally-sized-fluds` revision as the primary CBCD V2
-performance baseline. Trunk device CBC is a useful separate comparison, not a
-substitute for that baseline.
-
-To build an older clean source tree that predates these tools, invoke the
-bootstrap from the update-2 tools checkout while setting `OPENSN_SOURCE` to
-the old tree. The bootstrap records and requires both exact clean revisions,
-and supports the old and current dependency-driver interfaces.
-
-## Prepare an immutable production study
-
-```zsh
-BUILD_MANIFEST=$OPENSN_TUO_BUILD/tuo-build-manifest.json
-ENVIRONMENT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["environment"])' \
-  "$BUILD_MANIFEST")
-source "$ENVIRONMENT"
-python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" prepare \
-  --source "$OPENSN_SOURCE" \
-  --binary "$OPENSN_TUO_BUILD/python/opensn" \
-  --environment "$ENVIRONMENT" \
-  --output /path/to/results/update-2 \
-  --mesh-cache /path/to/mesh-cache \
-  --gmsh "$(command -v gmsh)" \
-  --label update-2 \
-  --nodes 1,2,4,8,16,32,64,128,256 \
-  --kinds strong,weak \
-  --repetitions 3 \
-  --queue pbatch \
-  --bank YOUR_LC_BANK \
-  --worker-policy hardware \
-  --no-save-angular-flux
-```
-
-Preparation is atomic. It stages the geometry, cross sections, generator,
-runtime wrapper, build manifest, and generated inputs; records hashes and tool
-versions; and uses a content-addressed mesh cache. The executable, environment,
-dependency manifest, Caliper feature manifest, and OpenSn CMake cache are
-revalidated before preparation, submission, collection, and execution.
-Full-node allocations and launches use `--exclusive` without explicit `-c` or
-`-g`, following current Tuo guidance. The preflight then proves each rank has
-one distinct physical GPU and a disjoint 21-user-core CPU affinity.
-
-`--worker-policy hardware` is the default and is required for the historical
-CBCD V2 baseline unless deliberately overridden. Use
-`--worker-policy resource-aware` for the affinity-aware candidate policy, and
-optionally add `--cbcd-workers N` for a fixed positive override. Both values
-are recorded in the study manifest and every attempt's metadata. Collection
-also requires and records the scheduler's actual `workers=N` diagnostic.
-
-Submit selected cases with the recorded, idempotent submitter:
-
-```zsh
-/path/to/results/update-2/submit.zsh --kinds strong --nodes 1,2,4
-/path/to/results/update-2/submit.zsh --kinds strong,weak
-```
-
-Repeating the command skips cases already recorded in `submissions.jsonl`.
-Use `--resubmit` explicitly for failed, incomplete, or invalid `SUCCESS`
-attempts. Valid successful cases are never overwritten; every attempt is
-stored under its Flux job ID. Collection validates every success-marked
-attempt instead of silently choosing the newest one, and authenticates the
-collected result files plus every contributing attempt artifact.
-
-After all cases finish:
-
-```zsh
-python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" collect \
-  --study /path/to/results/update-2 --require-monotonic
-
-python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" compare \
-  --baseline /path/to/results/proven-old-cbcd \
-  --candidate /path/to/results/update-2 \
-  --output /path/to/results/comparison \
-  --max-slowdown 1.03 \
-  --monotonic-tolerance 0.0 \
-  --scalar-flux-rtol 1.0e-10 \
-  --scalar-flux-atol 1.0e-12
-```
-
-Collection requires an exit-zero marker, clean `OpenSn finished execution`, a
-valid final WGS record, and a valid rank/GPU/CPU binding map. It reports median,
-MAD, and IQR. Each run must also report finite scalar-flux maxima for groups 0
-and 63. Repetitions at the same `(kind, nodes)` point must reproduce those
-maxima exactly; baseline/candidate maxima at that same point are checked with
-the explicit `--scalar-flux-rtol` and `--scalar-flux-atol` thresholds.
-Comparison rejects incompatible studies, numerical/iteration
-mismatches, non-monotonic candidate strong scaling, and slowdowns beyond the
-requested threshold. `--allow-incomplete` is diagnostic only; incomplete
-collections cannot be used by `compare`.
-
-WGS iteration counts are compared only across repetitions at an identical
-decomposition and between baseline/candidate at the same `(kind, nodes)`.
-They are intentionally not required to match across node counts: additional
-CBCD cycles and lagged flux can legitimately increase iteration counts as the
-decomposition changes.
-
-`compare` refuses a non-hardware baseline by default. Policy experiments must
-opt into `--allow-worker-policy-difference`; a deliberately non-hardware
-baseline additionally requires `--allow-nonhardware-baseline`.
-
-## Short 1/2/4-node check
-
-The helper uses one four-node `pdebug` allocation for `run-all`, rather than
-chaining allocations. Tuo's documented pdebug limit is 16 nodes per user
-and one hour, interactive only; the helper deliberately stays at four nodes
-and defaults to 60 minutes. Production pbatch jobs can request up to 256
-nodes. The currently documented allocation flag is
-`--amd-gpumode=SPX|TPX|CPX`; these studies explicitly select the native/default
-SPX mode.
-
-Interactive studies default to two WGS iterations so a paired 1/2/4 sequence
-has margin under pdebug's one-hour limit. Override
-`OPENSN_TUO_INTERACTIVE_ITERATIONS` only if both paired studies use the same
-value. Production studies default to ten iterations.
-
-```zsh
-export OPENSN_SOURCE=/path/to/clean/update-2
-export OPENSN_TUO_ROOT=/path/to/tuo/gfx942
-export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-update-2
-export OPENSN_TUO_LABEL=update-2
-export OPENSN_CBCD_WORKER_POLICY=hardware
+export OPENSN_SOURCE=$STUDY_ROOT/source-update-3
+export OPENSN_TUO_ROOT=$STUDY_ROOT/builds/gfx942-update-3
+export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-opensn
+export OPENSN_TUO_MESH_DIR=$STUDY_ROOT/builds/gfx942/mesh-cache
+export OPENSN_TUO_RESULTS=$STUDY_ROOT/results
+export OPENSN_TUO_LABEL=update-3
+export OPENSN_TUO_BANK=YOUR_LC_BANK
 
 HELPER=$OPENSN_SOURCE/tools/scaling/tuo/interactive_cbcd.zsh
+zsh "$HELPER" paths
+```
+
+The default mesh path is the cache created by the earlier Tuo framework. Study
+preparation never regenerates meshes. Interactive strong scaling needs only
+`cube-d39.msh`. A full 1--256-node strong/weak campaign uses these files:
+
+```text
+cube-d6.msh   cube-d8.msh   cube-d10.msh  cube-d12.msh
+cube-d15.msh  cube-d19.msh  cube-d25.msh  cube-d31.msh
+cube-d39.msh
+```
+
+Check the existing files before starting:
+
+```zsh
+for divisor in 6 8 10 12 15 19 25 31 39; do
+  [[ -s $OPENSN_TUO_MESH_DIR/cube-d$divisor.msh ]] || \
+    print -u2 "missing cube-d$divisor.msh"
+done
+```
+
+## 2. Build a fresh Tuo stack
+
+Choose a new `OPENSN_TUO_ROOT`; do not point it at an older dependency prefix or
+virtual environment. Then run:
+
+```zsh
 zsh "$HELPER" build
-zsh "$HELPER" prepare
-zsh "$HELPER" run-all
-zsh "$HELPER" summary
 ```
 
-For a paired run, prepare a one-repetition strong study for the proven old CBCD
-binary too, then run both studies in the same four-node allocation:
+The helper obtains one exclusive `pdebug` node and builds a new Python virtual
+environment, OpenSn dependencies, and the HIP-enabled OpenSn executable. The
+ambient Python and dependency paths are cleared before configuration. Caliper
+is built with MPI support and its ROCm activity service by default.
+
+If the one-hour interactive allocation ends during the dependency build, run
+the same command again. It resumes the selected build directories. The
+lower-level resumable commands are:
 
 ```zsh
-export OPENSN_TUO_BASELINE_STUDY=/path/to/proven-old-interactive-study
-zsh "$HELPER" paired-run-all
+zsh "$OPENSN_SOURCE/tools/scaling/tuo/bootstrap.zsh" configure-deps
+zsh "$OPENSN_SOURCE/tools/scaling/tuo/bootstrap.zsh" build-deps
+zsh "$OPENSN_SOURCE/tools/scaling/tuo/bootstrap.zsh" build-opensn
 ```
 
-The order alternates by node count to reduce systematic first-run bias. For a
-strong acceptance decision, repeat paired allocations and use the production
-collector/comparator.
+Run those lower-level commands on a compute node with `OPENSN_SOURCE`,
+`OPENSN_TUO_ROOT`, and `OPENSN_TUO_BUILD` exported as above.
 
-Policy A/B studies are the same workflow with two distinct study directories:
+## 3. Interactive 1/2/4-node policy comparison
+
+Do not set a fixed worker count for this comparison:
 
 ```zsh
-export OPENSN_TUO_BASELINE_STUDY=/path/to/hardware-policy-study
-export OPENSN_TUO_INTERACTIVE_STUDY=/path/to/resource-aware-policy-study
-export OPENSN_TUO_ALLOW_POLICY_COMPARISON=1
-zsh "$HELPER" paired-run-all
-zsh "$HELPER" summary
+unset OPENSN_CBCD_NUM_WORKERS
+export OPENSN_TUO_INTERACTIVE_ITERATIONS=10
+
+zsh "$HELPER" prepare-interactive
+zsh "$HELPER" run-interactive
+zsh "$HELPER" collect-interactive
 ```
 
-The comparison still requires identical geometry, launch dimensions, solver
-settings, requested repetition policy, per-case meshes, dependency recipe,
-unknown counts, WGS status, same-point iteration count, residual, and
-scalar-flux maxima. The
-opt-in only removes worker policy/count from the compatibility fingerprint.
+`prepare-interactive` creates separate hardware and resource-aware studies that
+use the same strong-scaling mesh. `run-interactive` obtains one exclusive
+four-node allocation and runs:
 
-## Profiling
+```text
+hardware 1 node
+resource-aware 1 node
+resource-aware 2 nodes
+hardware 2 nodes
+hardware 4 nodes
+resource-aware 4 nodes
+```
 
-The default profile set is the uninstrumented baseline, Caliper runtime report,
-and Caliper PMPI report at 1, 2, and 4 nodes. Heavy one-node profilers are opt-in.
+Alternating the first policy reduces a consistent warm/cold-order bias. Ten WGS
+iterations match the earlier scaling protocol; use a smaller value only for a
+smoke test, and select a new `OPENSN_TUO_LABEL` before preparing that different
+configuration. Repeating `run-interactive` adds another set of measurements
+rather than replacing completed output.
+
+Run one selected case when diagnosing or retrying a point:
 
 ```zsh
+zsh "$HELPER" run hardware 2
+zsh "$HELPER" run resource-aware 2
+```
+
+Each run prints the scheduler's selected worker count. On the established Tuo
+placement, the expected comparison is the hardware counter's full value versus
+the affinity-bounded resource-aware value. Treat the printed value as the
+authoritative result for a particular allocation.
+
+The collector writes `results.csv`, `summary.csv`, `summary.md`, scaling plots,
+and a hardware-to-resource-aware comparison under the interactive results
+directory. It checks clean completion, the final WGS state, scalar-flux
+observables, and the selected worker count. Iteration counts may differ between
+node counts because CBCD cycles and lagged flux change with decomposition; the
+two policies must agree at the same node count.
+
+## 4. Larger pbatch strong/weak studies
+
+The defaults prepare strong and weak cases at 1, 2, 4, 8, 16, 32, 64, 128, and
+256 nodes, with three repetitions per allocation and ten WGS iterations:
+
+```zsh
+export OPENSN_TUO_NODES=1,2,4,8,16,32,64,128,256
+export OPENSN_TUO_REPETITIONS=3
+export OPENSN_TUO_MAX_ITERATIONS=10
+export OPENSN_TUO_BATCH_TIME_LIMIT=4h
+
+zsh "$HELPER" prepare-batch
+zsh "$HELPER" submit-batch
+```
+
+The helper prepares and submits both policies. All strong cases use
+`cube-d39.msh`; the weak cases use divisors 6, 8, 10, 12, 15, 19, 25, 31, and
+39 in increasing node order. No mesh generation is performed. Each invocation
+of `submit-batch` submits the complete selected campaign, so do not repeat it
+unless another full set of measurements is intentional; submit an individual
+generated job with `flux batch` when retrying only that point.
+
+Monitor the jobs with:
+
+```zsh
+flux jobs -A
+```
+
+After both studies finish:
+
+```zsh
+zsh "$HELPER" collect-batch
+```
+
+To use a smaller first campaign, set `OPENSN_TUO_NODES` before
+`prepare-batch`, for example `1,2,4,8,16`. Use a new `OPENSN_TUO_LABEL` or
+`OPENSN_TUO_BATCH_ROOT` when changing nodes, iteration count, repetitions, or
+the executable; prepared study directories are intentionally not rewritten.
+
+## 5. Profiling jobs
+
+Source the new environment and prepare a separate profiling directory. This
+keeps profiler overhead out of the scaling measurements:
+
+```zsh
+source "$OPENSN_TUO_ROOT/env.zsh"
+
 python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" prepare-profile \
-  --source "$OPENSN_SOURCE" \
   --binary "$OPENSN_TUO_BUILD/python/opensn" \
-  --environment "$ENVIRONMENT" \
-  --output /path/to/results/update-2-profile \
-  --mesh-cache /path/to/mesh-cache \
-  --gmsh "$(command -v gmsh)" \
-  --label update-2-profile \
+  --environment "$OPENSN_TUO_ROOT/env.zsh" \
+  --output "$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-resource-aware" \
+  --mesh-dir "$OPENSN_TUO_MESH_DIR" \
+  --label "$OPENSN_TUO_LABEL-profile-resource-aware" \
   --profile-nodes 1,2,4 \
-  --profiles baseline,caliper,pmpi,caliper-rocm,rocprof,hpctoolkit,omniperf \
-  --bank YOUR_LC_BANK
+  --worker-policy resource-aware \
+  --queue pbatch \
+  --bank "$OPENSN_TUO_BANK" \
+  --no-save-angular-flux
 
-/path/to/results/update-2-profile/submit.zsh --profiles baseline,caliper,pmpi
+zsh "$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-resource-aware/submit.zsh"
+
 python "$OPENSN_SOURCE/tools/scaling/tuo/study.py" collect-profile \
-  --study /path/to/results/update-2-profile
+  --study "$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile-resource-aware"
 ```
 
-`submit.zsh` is deliberately disabled for `pdebug` studies because that queue
-is interactive-only. Run the generated job inside one `flux alloc` instead.
-Submitting a scaling study with `--profiles`, or a profiling study with
-`--kinds`, is rejected rather than silently broadening the request.
+Use the uninstrumented scaling studies for performance conclusions. Caliper,
+PMPI, rocprofv3, HPCToolkit, and OmniPerf jobs answer narrower attribution
+questions and should be submitted only as needed.
 
-Profiler timings are never used for scaling conclusions.
+Current Tuo queue limits and launch recommendations should be checked before a
+large campaign:
 
-The baseline, Caliper runtime-report, and Caliper PMPI profiles work at
-multiple node counts. `caliper-rocm` is an opt-in one-node rocProfiler activity
-report and requires a Caliper `WITH_ROCPROFILER=ON` build. rocprofv3 and
-HPCToolkit launch rank-resolved profiling; Omniperf is intentionally
-restricted to one rank/one GPU. Select only the profiles needed for a question.
-
-Current Tuo limits and topology should be rechecked before a campaign:
-[Tuolumne platform](https://hpc.llnl.gov/hardware/compute-platforms/tuolumne)
-and [El Capitan systems GPU programming](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/using-el-capitan-systems-gpu-programming),
-[Flux and mpibind](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/running-jobs-flux-and-mpi),
-and [El Capitan systems pro tips](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/introduction-and-quickstart/pro-tips).
+- [Tuolumne platform](https://hpc.llnl.gov/hardware/compute-platforms/tuolumne)
+- [Flux and MPI](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/running-jobs-flux-and-mpi)
+- [El Capitan systems GPU programming](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/using-el-capitan-systems-gpu-programming)

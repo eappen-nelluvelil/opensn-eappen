@@ -1,14 +1,13 @@
-"""Focused unit and golden tests for the Tuolumne study generator."""
+"""Tests for the deliberately simple Tuolumne CBCD study workflow."""
 
 import importlib.util
-import io
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from contextlib import redirect_stdout
 
 
 MODULE_PATH = Path(__file__).with_name("study.py")
@@ -17,467 +16,440 @@ STUDY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(STUDY)
 
 
-def arguments():
-    return SimpleNamespace(
-        label="golden",
-        queue="pdebug",
-        bank="bank",
-        time_limit="60m",
-        gpu_mode="SPX",
-        environment=Path("/stack/env.zsh"),
-        binary=Path("/build/python/opensn"),
-        revision="a" * 40,
-        worker_policy="hardware",
-        cbcd_workers=None,
-        repetitions=3,
-    )
+def make_executable(path):
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(0o700)
+    return path
 
 
-def hashes():
+def prepare_args(root, **updates):
+    binary = make_executable(root / "opensn")
+    environment = root / "env.zsh"
+    environment.write_text("export TEST_ENV=1\n")
+    values = {
+        "binary": binary,
+        "environment": environment,
+        "output": root / "study",
+        "mesh_dir": root / "meshes",
+        "label": "update-3",
+        "nodes": (1, 2, 4),
+        "kinds": ("strong",),
+        "repetitions": 1,
+        "queue": "pdebug",
+        "bank": "bank",
+        "time_limit": "60m",
+        "worker_policy": "hardware",
+        "cbcd_workers": None,
+        "strong_divisor": 39,
+        "max_iterations": 2,
+        "save_angular_flux": False,
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
+
+
+def create_meshes(directory, divisors):
+    directory.mkdir(parents=True, exist_ok=True)
+    for divisor in divisors:
+        (directory / f"cube-d{divisor}.msh").write_text(f"mesh {divisor}\n")
+
+
+def result_values(nodes=1, iterations=8, workers=192, sweep=None):
     return {
-        "binary": "b" * 64,
-        "environment": "e" * 64,
-        "input": "i" * 64,
-        "mesh": "m" * 64,
-        "mesh_path": Path("/study/meshes/cube.msh"),
-        "xs": "x" * 64,
-        "xs_path": Path("/study/assets/xs.xs"),
-        "build_manifest": "j" * 64,
-        "build_manifest_path": Path("/study/assets/tuo-build-manifest.json"),
-        "build_provenance": [],
+        "kind": "strong",
+        "nodes": nodes,
+        "avg_sweep_time_s": sweep if sweep is not None else 1.0 / nodes,
+        "unknowns": 1024,
+        "lagged_unknowns": nodes,
+        "wgs_status": "iteration_limit",
+        "wgs_iterations": iterations,
+        "scheduler_workers": workers,
+        "final_residual": 1.0e-4,
+        "wall_time_s": 2.0,
+        "launcher_max_rss_kb": 4096,
+        "scalar_flux_max_g0": 0.50758,
+        "scalar_flux_max_g63": 2.52527e-4,
     }
 
 
-class ParserTests(unittest.TestCase):
-    def test_parse_nodes_deduplicates_and_sorts(self):
-        self.assertEqual(STUDY.parse_nodes("4,1,2,4"), (1, 2, 4))
+class MeshTests(unittest.TestCase):
+    def test_existing_plain_meshes_are_reused_without_running_a_generator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_meshes(root, (6, 39))
+            with mock.patch.object(subprocess, "run") as run:
+                meshes = STUDY.required_meshes(root, {39, 6})
+            run.assert_not_called()
+            self.assertEqual(meshes[6], (root / "cube-d6.msh").resolve())
+            self.assertEqual(meshes[39], (root / "cube-d39.msh").resolve())
 
-    def test_spread(self):
-        self.assertEqual(STUDY.spread([1.0, 2.0, 3.0]), (2.0, 1.0, 1.0))
+    def test_all_missing_meshes_are_reported_before_study_creation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_meshes(root / "meshes", (6,))
+            args = prepare_args(
+                root,
+                nodes=(1, 2),
+                kinds=("strong", "weak"),
+                mesh_dir=root / "meshes",
+            )
+            with self.assertRaisesRegex(RuntimeError, "cube-d8.msh") as caught:
+                STUDY.prepare(args)
+            self.assertIn("cube-d39.msh", str(caught.exception))
+            self.assertFalse(args.output.exists())
 
-    def test_comparison_default_rejects_over_three_percent(self):
-        args = STUDY.parser().parse_args(
+
+class PreparationTests(unittest.TestCase):
+    def test_interactive_strong_study_uses_one_mesh_and_modern_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(root)
+            create_meshes(args.mesh_dir, (39,))
+            STUDY.prepare(args)
+
+            record = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(record["nodes"], [1, 2, 4])
+            self.assertEqual(record["kinds"], ["strong"])
+            self.assertEqual(record["worker_policy"], "hardware")
+            self.assertEqual(len(record["cases"]), 3)
+            job = (args.output / "jobs/strong-2.zsh").read_text()
+            self.assertIn("#flux: -N 2", job)
+            self.assertIn("#flux: -n 8", job)
+            self.assertIn("flux run -N 2 -n 8 --exclusive -o exit-on-error", job)
+            self.assertIn("export OPENSN_CBCD_WORKER_POLICY=hardware", job)
+            self.assertIn("unset OPENSN_CBCD_NUM_WORKERS", job)
+            self.assertIn('result="$result_root/run-$job_tag-$started-$$"', job)
+            self.assertNotIn("amd-gpumode", job)
+            self.assertNotIn("setattr=gpumode", job)
+            self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
+            compile(
+                (args.output / "inputs/strong-2.py").read_text(),
+                "strong-2.py",
+                "exec",
+            )
+            syntax = subprocess.run(
+                ["zsh", "-n", str(args.output / "jobs/strong-2.zsh")],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+    def test_resource_aware_fixed_worker_count_is_exported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(
+                root,
+                worker_policy="resource-aware",
+                cbcd_workers=20,
+            )
+            create_meshes(args.mesh_dir, (39,))
+            STUDY.prepare(args)
+            job = (args.output / "jobs/strong-1.zsh").read_text()
+            self.assertIn("export OPENSN_CBCD_WORKER_POLICY=resource-aware", job)
+            self.assertIn("export OPENSN_CBCD_NUM_WORKERS=20", job)
+
+    def test_production_defaults_cover_eighteen_jobs(self):
+        defaults = STUDY.parser().parse_args(
             [
-                "compare",
-                "--baseline",
-                "/baseline",
-                "--candidate",
-                "/candidate",
+                "prepare",
+                "--binary",
+                "/bin/true",
+                "--environment",
+                "/env",
                 "--output",
-                "/comparison",
+                "/study",
+                "--mesh-dir",
+                "/meshes",
+                "--label",
+                "test",
             ]
         )
-        self.assertEqual(args.max_slowdown, 1.03)
+        self.assertEqual(defaults.nodes, STUDY.DEFAULT_NODES)
+        self.assertEqual(defaults.kinds, ("strong", "weak"))
+        self.assertEqual(len(defaults.nodes) * len(defaults.kinds), 18)
+        self.assertEqual(defaults.repetitions, 3)
+        self.assertEqual(defaults.max_iterations, 10)
 
-
-class GoldenJobTests(unittest.TestCase):
-    def test_flux_directive_tokens_reject_shell_syntax(self):
-        with self.assertRaisesRegex(RuntimeError, "unsafe Flux directive"):
-            STUDY.flux_header(
-                "bad$(id)", 1, 4, "pbatch", "bank", "1h", "/tmp/o", "/tmp/e", "SPX"
-            )
-
-    def test_scaling_job_has_uniform_flux_and_atomic_markers(self):
-        job = STUDY.scaling_job(
-            arguments(),
-            Path("/study"),
-            "strong",
-            2,
-            Path("/study/inputs/strong-2.py"),
-            hashes(),
+    def test_profile_jobs_are_valid_zsh_and_keep_default_launch_unmodified(self):
+        args = SimpleNamespace(
+            label="profile",
+            queue="pbatch",
+            bank=None,
+            time_limit="6h",
+            environment=Path("/stack/env.zsh"),
+            binary=Path("/build/python/opensn"),
+            worker_policy="resource-aware",
+            cbcd_workers=None,
         )
-        self.assertIn("#flux: -N 2", job)
-        self.assertIn("#flux: -n 8", job)
-        self.assertNotIn("#flux: -g", job)
-        self.assertIn("#flux: --exclusive", job)
-        self.assertIn("#flux: --amd-gpumode=SPX", job)
-        self.assertGreaterEqual(job.count("-N 2 -n 8 --exclusive -o exit-on-error"), 2)
-        self.assertNotIn("flux run -N 2 -n 8 -g1", job)
-        self.assertIn("export OPENSN_CBCD_WORKER_POLICY=hardware", job)
-        self.assertIn('"$binary" --verbose 1 -i "$input"', job)
-        self.assertIn("runtime dynamic-library closure differs", job)
-        self.assertIn('touch "$result/RUNNING"', job)
-        self.assertIn('mv -- "$result/RUNNING" "$result/SUCCESS"', job)
-        self.assertIn('mv -- "$result/RUNNING" "$result/FAILED"', job)
-        self.assertIn("claim_cpus($1, $5) != 21", job)
-
-    def test_profile_commands_expand_result_at_runtime(self):
-        setup, command = STUDY.profile_command(
-            "caliper", 4, 16, Path("/study/assets/profile_rank.zsh")
-        )
-        self.assertEqual(setup, "")
-        self.assertIn("$result/profile.txt", command)
-        self.assertIn("-N 4 -n 16 --exclusive -o exit-on-error", command)
-        self.assertNotIn(" -g1 ", command)
-        setup, command = STUDY.profile_command(
-            "rocprof", 2, 8, Path("/study/assets/profile_rank.zsh")
-        )
-        self.assertIn('OPENSN_PROFILE_OUTPUT="$result"', setup)
-        self.assertIn("/study/assets/profile_rank.zsh", command)
-
-    def test_every_generated_profile_job_is_valid_zsh(self):
         for profile in STUDY.PROFILE_NAMES:
             with self.subTest(profile=profile):
                 job = STUDY.profile_job(
-                    arguments(),
+                    args,
+                    Path("/study"),
                     profile,
                     1,
-                    Path("/study"),
                     Path("/study/inputs/profile.py"),
-                    hashes(),
                 )
-                result = subprocess.run(
+                syntax = subprocess.run(
                     ["zsh", "-n"],
                     input=job,
                     text=True,
                     capture_output=True,
                     check=False,
                 )
-                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(syntax.returncode, 0, syntax.stderr)
+                self.assertNotIn("amd-gpumode", job)
+                self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
 
 
 class ResultTests(unittest.TestCase):
-    def test_strict_result_and_binding(self):
+    def test_result_requires_wgs_workers_and_scalar_flux_observables(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stdout = root / "stdout.txt"
             stdout.write_text(
-                "WGS groups [0-63] iteration = 10, residual = 1.0e-4\n"
-                "WGS groups [0-63] final, status = iteration_limit, iterations = 10\n"
-                "CBCD scheduler: policy=hardware, workers=192, communicator_threads=1, "
-                "reserved_communicator_threads=0, hardware_threads=192, "
-                "affinity_threads=42, affinity_cores=21, requested_threads=0, "
-                "available_threads=21.\n"
-                "unknowns = 1024, lagged_unknowns = 8, avg_sweep_time = 2.5e-2 s\n"
-                "OPENSN_TUO_SCALAR_FLUX_MAX group=0 value=5.07580000000000031e-01\n"
-                "OPENSN_TUO_SCALAR_FLUX_MAX group=63 value=2.52527000000000010e-04\n"
+                "WGS groups [0-63] iteration = 8, residual = 1.0e-4\n"
+                "WGS groups [0-63] final, status = iteration_limit, iterations = 8\n"
+                "CBCD scheduler: policy=hardware, workers=192, communicator_threads=1\n"
+                "unknowns = 1024, lagged_unknowns = 7, avg_sweep_time = 2.5e-2 s\n"
+                "OPENSN_TUO_SCALAR_FLUX_MAX group=0 value=5.0758e-1\n"
+                "OPENSN_TUO_SCALAR_FLUX_MAX group=63 value=2.52527e-4\n"
                 "OpenSn finished execution.\n"
             )
             (root / "time.txt").write_text(
                 "wall_seconds=1.5 launcher_max_rss_kb=4096\n"
             )
-            (root / "exit.txt").write_text("0\n")
+            (root / "exit_code.txt").write_text("0\n")
             (root / "SUCCESS").touch()
             result = STUDY.read_result(
                 stdout,
                 root / "time.txt",
-                root / "exit.txt",
+                root / "exit_code.txt",
                 root / "SUCCESS",
             )
-            self.assertEqual(result["unknowns"], 1024)
-            self.assertEqual(result["wgs_iterations"], 10)
+            self.assertEqual(result["wgs_iterations"], 8)
             self.assertEqual(result["scheduler_workers"], 192)
-            self.assertEqual(result["scalar_flux_max_g0"], 0.50758)
+            self.assertEqual(result["lagged_unknowns"], 7)
 
-            lines = []
-            for host_index in range(2):
-                for local_rank in range(4):
-                    rank = host_index * 4 + local_rank
-                    first_cpu = local_rank * 21
-                    cpus = f"{first_cpu}-{first_cpu + 20}"
-                    lines.append(
-                        f"host{host_index} {rank} {local_rank} "
-                        f"{local_rank} {cpus} 21"
-                    )
-            binding = root / "binding.txt"
-            binding.write_text("\n".join(lines) + "\n")
-            STUDY.validate_binding(binding, 2, 8)
-
-            binding.write_text("host0 0 0 3 42-62 21\n")
-            STUDY.validate_binding(binding, 1, 1)
-
-            binding.write_text(
-                "host0 0 0 0 0-20 21\n"
-                "host0 1 1 1 20-40 21\n"
-            )
-            with self.assertRaisesRegex(RuntimeError, "overlapping per-node CPU"):
-                STUDY.validate_binding(binding, 1, 2)
-
-            stdout.write_text(
-                stdout.read_text().replace(
-                    "OpenSn finished execution.\n",
-                    "OPENSN_TUO_SCALAR_FLUX_MAX group=1 value=1.0e-3\n"
-                    "OpenSn finished execution.\n",
-                )
-            )
-            with self.assertRaisesRegex(RuntimeError, "exactly groups"):
+            stdout.write_text(stdout.read_text().replace("group=63", "group=1"))
+            with self.assertRaisesRegex(RuntimeError, "required CBCD metrics"):
                 STUDY.read_result(
                     stdout,
                     root / "time.txt",
-                    root / "exit.txt",
+                    root / "exit_code.txt",
                     root / "SUCCESS",
                 )
 
-    def test_missing_finished_marker_fails(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "stdout.txt").write_text(
-                "WGS groups [0] iteration = 1, residual = 1e-2\n"
-                "WGS groups [0] final, status = iteration_limit, iterations = 1\n"
-                "unknowns = 1, avg_sweep_time = 1 s\n"
-            )
-            (root / "time.txt").write_text("wall_seconds=1\n")
-            (root / "exit.txt").write_text("0\n")
-            (root / "SUCCESS").touch()
-            with self.assertRaises(RuntimeError):
-                STUDY.read_result(
-                    root / "stdout.txt",
-                    root / "time.txt",
-                    root / "exit.txt",
-                    root / "SUCCESS",
-                )
-
-    def test_summary_statistics_and_monotonic_gate(self):
-        rows = []
-        for nodes, samples in ((1, (2.0, 4.0, 6.0)), (2, (1.0, 2.0, 3.0))):
-            for sample in samples:
-                rows.append(
-                    {
-                        "kind": "strong",
-                        "nodes": nodes,
-                        "avg_sweep_time_s": sample,
-                        "unknowns": 100,
-                        "lagged_unknowns": 7,
-                        "wgs_status": "iteration_limit",
-                        "wgs_iterations": 10,
-                        "scheduler_workers": 96,
-                        "final_residual": 1.0e-4,
-                        "wall_time_s": sample + 1.0,
-                        "scalar_flux_max_g0": 0.50758,
-                        "scalar_flux_max_g63": 2.52527e-4,
-                    }
-                )
-        summary = STUDY.summarize(rows)
-        self.assertEqual(summary[0]["median_avg_sweep_time_s"], 4.0)
-        self.assertEqual(summary[0]["avg_sweep_time_mad_s"], 2.0)
-        self.assertEqual(summary[0]["avg_sweep_time_iqr_s"], 2.0)
-        self.assertEqual(summary[0]["median_lagged_unknowns"], 7)
-        self.assertEqual(STUDY.monotonic_failures(summary, 0.0), [])
-
-        summary[1]["median_avg_sweep_time_s"] = 5.0
-        self.assertEqual(len(STUDY.monotonic_failures(summary, 0.0)), 1)
-
-    def test_iterations_may_differ_across_node_counts_only(self):
-        rows = []
-        for nodes, iterations in ((1, 8), (2, 11)):
-            for _ in range(2):
-                rows.append(
-                    {
-                        "kind": "strong",
-                        "nodes": nodes,
-                        "avg_sweep_time_s": 1.0 / nodes,
-                        "unknowns": 100,
-                        "lagged_unknowns": nodes,
-                        "wgs_status": "converged",
-                        "wgs_iterations": iterations,
-                        "scheduler_workers": 96,
-                        "final_residual": 1.0e-12,
-                        "wall_time_s": 2.0,
-                        "scalar_flux_max_g0": 0.5,
-                        "scalar_flux_max_g63": 2.0e-4,
-                    }
-                )
+    def test_iterations_may_change_across_nodes_but_not_within_one_point(self):
+        rows = [
+            result_values(1, iterations=8),
+            result_values(1, iterations=8),
+            result_values(2, iterations=11),
+            result_values(2, iterations=11),
+        ]
         summary = STUDY.summarize(rows)
         self.assertEqual([row["wgs_iterations"] for row in summary], [8, 11])
-
         rows[1]["wgs_iterations"] = 9
         with self.assertRaisesRegex(RuntimeError, "inconsistent numerical signature"):
             STUDY.summarize(rows)
 
-    def test_scalar_flux_mismatch_fails_comparison(self):
-        row = {
-            "kind": "strong",
-            "nodes": "1",
-            "trials": "3",
-            "metric": "1.0",
-            "median_avg_sweep_time_s": "1.0",
-            "median_unknowns": "100",
-            "median_lagged_unknowns": "2",
-            "wgs_status": "converged",
-            "wgs_iterations": "8",
-            "scheduler_workers": "96",
-            "median_final_residual": "1e-12",
-            "scalar_flux_max_g0": "0.5",
-            "scalar_flux_max_g63": "2e-4",
-        }
-        candidate = dict(row, scalar_flux_max_g63="3e-4")
-        manifest = {
-            "label": "test",
-            "revision": "a" * 40,
-            "worker_policy": "hardware",
-            "compatibility": {"same": True},
-        }
-        args = SimpleNamespace(
-            output=None,
-            baseline=Path("/baseline"),
-            candidate=Path("/candidate"),
-            max_slowdown=1.03,
-            monotonic_tolerance=0.0,
-            residual_rtol=1.0e-6,
-            residual_atol=1.0e-12,
-            scalar_flux_rtol=1.0e-10,
-            scalar_flux_atol=1.0e-12,
-            allow_worker_policy_difference=False,
-            allow_nonhardware_baseline=False,
-        )
+    def test_collection_uses_all_successful_repeat_directories(self):
         with tempfile.TemporaryDirectory() as directory:
-            args.output = Path(directory) / "comparison"
-            with mock.patch.object(
-                STUDY,
-                "read_collected",
-                side_effect=[(manifest, [row]), (manifest, [candidate])],
-            ):
-                with self.assertRaisesRegex(RuntimeError, "scalar-flux maximum"):
-                    STUDY.compare(args)
+            root = Path(directory)
+            study = root / "study"
+            run_roots = [
+                study / "results/strong/nodes-1/run-first",
+                study / "results/strong/nodes-1/run-second",
+            ]
+            study.mkdir()
+            (study / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "type": "scaling",
+                        "label": "test",
+                        "worker_policy": "hardware",
+                        "repetitions": 1,
+                        "cases": [
+                            {
+                                "id": "strong-1",
+                                "kind": "strong",
+                                "nodes": 1,
+                                "ranks": 4,
+                            }
+                        ],
+                    }
+                )
+            )
+            for index, run in enumerate(run_roots, start=1):
+                trial = run / "trial-1"
+                trial.mkdir(parents=True)
+                run.joinpath("SUCCESS").touch()
+                trial.joinpath("SUCCESS").touch()
+                trial.joinpath("exit_code.txt").write_text("0\n")
+                trial.joinpath("time.txt").write_text("wall_seconds=1\n")
+                trial.joinpath("stdout.txt").write_text(
+                    "WGS groups [0-63] iteration = 8, residual = 1e-4\n"
+                    "WGS groups [0-63] final, status = iteration_limit, iterations = 8\n"
+                    "CBCD scheduler: workers=192\n"
+                    f"unknowns = 1024, lagged_unknowns = 7, avg_sweep_time = {index}.0 s\n"
+                    "OPENSN_TUO_SCALAR_FLUX_MAX group=0 value=0.5\n"
+                    "OPENSN_TUO_SCALAR_FLUX_MAX group=63 value=2e-4\n"
+                    "OpenSn finished execution.\n"
+                )
+            STUDY.collect(
+                SimpleNamespace(
+                    study=study,
+                    allow_incomplete=False,
+                    require_monotonic=False,
+                    monotonic_tolerance=0.0,
+                )
+            )
+            with (study / "results.csv").open() as stream:
+                self.assertEqual(sum(1 for _ in stream), 3)
 
 
-class SubmissionTests(unittest.TestCase):
-    def test_incompatible_filters_and_pdebug_are_rejected(self):
-        args = SimpleNamespace(
-            study=Path("/study"),
-            nodes=None,
-            kinds=None,
-            profiles=("omniperf",),
-            resubmit=False,
-        )
-        scaling = {"type": "scaling", "queue": "pbatch"}
-        with mock.patch.object(STUDY, "load_manifest", return_value=(args.study, scaling)):
-            with mock.patch.object(STUDY, "verify_study_files"):
-                with self.assertRaisesRegex(RuntimeError, "--profiles"):
-                    STUDY.submit(args)
-
-        args.profiles = None
-        args.kinds = ("strong",)
-        profile = {"type": "profile", "queue": "pbatch"}
-        with mock.patch.object(STUDY, "load_manifest", return_value=(args.study, profile)):
-            with mock.patch.object(STUDY, "verify_study_files"):
-                with self.assertRaisesRegex(RuntimeError, "--kinds"):
-                    STUDY.submit(args)
-
-        args.kinds = None
-        scaling["queue"] = "pdebug"
-        with mock.patch.object(STUDY, "load_manifest", return_value=(args.study, scaling)):
-            with mock.patch.object(STUDY, "verify_study_files"):
-                with self.assertRaisesRegex(RuntimeError, "interactive-only"):
-                    STUDY.submit(args)
-
-    def test_pdebug_submit_wrapper_is_disabled(self):
-        with tempfile.TemporaryDirectory() as directory:
-            stage = Path(directory)
-            STUDY.write_submit_wrapper(stage, Path("/study"), "pdebug")
-            wrapper = (stage / "submit.zsh").read_text()
-            self.assertIn("interactive-only", wrapper)
-            self.assertNotIn("exec python", wrapper)
-
-    def test_resubmit_replaces_an_invalid_success_attempt(self):
+class SubmissionAndPolicyComparisonTests(unittest.TestCase):
+    def test_submit_filters_scaling_jobs_without_tracking_scheduler_state(self):
         with tempfile.TemporaryDirectory() as directory:
             study = Path(directory)
-            attempt = study / "results/strong/nodes-1/job-old"
-            attempt.mkdir(parents=True)
-            (attempt / "SUCCESS").touch()
-            job = study / "jobs/strong-1.zsh"
-            job.parent.mkdir()
-            job.write_text("#!/bin/zsh\n")
-            manifest = {
+            record = {
                 "type": "scaling",
                 "queue": "pbatch",
-                "repetitions": 1,
                 "cases": [
                     {
                         "id": "strong-1",
-                        "category": "scaling",
                         "kind": "strong",
                         "nodes": 1,
-                        "ranks": 4,
-                        "job": str(job),
-                    }
+                        "job": "/jobs/strong-1.zsh",
+                    },
+                    {
+                        "id": "weak-2",
+                        "kind": "weak",
+                        "nodes": 2,
+                        "job": "/jobs/weak-2.zsh",
+                    },
                 ],
             }
+            (study / "manifest.json").write_text(json.dumps(record))
             args = SimpleNamespace(
                 study=study,
-                nodes=None,
-                kinds=None,
+                nodes=(1,),
+                kinds=("strong",),
                 profiles=None,
-                resubmit=False,
             )
-            with mock.patch.object(STUDY, "load_manifest", return_value=(study, manifest)):
-                with mock.patch.object(STUDY, "verify_study_files"):
-                    with self.assertRaisesRegex(RuntimeError, "invalid SUCCESS"):
-                        STUDY.submit(args)
+            completed = subprocess.CompletedProcess([], 0, stdout="job-id\n")
+            with mock.patch.object(subprocess, "run", return_value=completed) as run:
+                STUDY.submit(args)
+            run.assert_called_once_with(
+                ["flux", "batch", "/jobs/strong-1.zsh"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
 
-            args.resubmit = True
-            with mock.patch.object(STUDY, "load_manifest", return_value=(study, manifest)):
-                with mock.patch.object(STUDY, "verify_study_files"):
-                    with mock.patch.object(
-                        STUDY, "command_output", return_value="ƒABC123"
-                    ) as command:
-                        with redirect_stdout(io.StringIO()):
-                            STUDY.submit(args)
-            command.assert_called_once_with(["flux", "batch", str(job)])
-
-    def test_collected_artifact_tampering_is_rejected(self):
+    def test_policy_compare_requires_same_point_numerics(self):
+        row = STUDY.summarize([result_values(1)])[0]
+        row = {name: str(value) for name, value in row.items()}
+        baseline_record = {
+            "label": "hardware",
+            "worker_policy": "hardware",
+            "nodes": [1],
+            "kinds": ["strong"],
+            "ranks_per_node": 4,
+            "gpus_per_rank": 1,
+            "gpu_mode": "SPX",
+            "repetitions": 1,
+            "strong_divisor": 39,
+            "weak_divisors": {},
+            "max_iterations": 10,
+            "save_angular_flux": False,
+        }
+        candidate_record = dict(
+            baseline_record,
+            label="resource-aware",
+            worker_policy="resource-aware",
+        )
         with tempfile.TemporaryDirectory() as directory:
-            study = Path(directory)
-            (study / "manifest.json").write_text(
-                '{"schema_version": 2, "files": {}}\n'
+            args = SimpleNamespace(
+                baseline=Path("/baseline"),
+                candidate=Path("/candidate"),
+                output=Path(directory) / "comparison",
+                max_slowdown=1.03,
+                monotonic_tolerance=0.0,
+                residual_rtol=1.0e-6,
+                residual_atol=1.0e-12,
+                scalar_flux_rtol=1.0e-10,
+                scalar_flux_atol=1.0e-12,
             )
-            for name in ("results.csv", "summary.csv", "summary.md"):
-                (study / name).write_text("original\n")
-            attempt_file = study / "results/strong/nodes-1/job-1/stdout.txt"
-            attempt_file.parent.mkdir(parents=True)
-            attempt_file.write_text("output\n")
-            collection = {
-                "complete": True,
-                "artifacts": {
-                    name: STUDY.sha256(study / name)
-                    for name in ("results.csv", "summary.csv", "summary.md")
-                },
-                "attempt_artifacts": {
-                    str(attempt_file.relative_to(study)): STUDY.sha256(attempt_file)
-                },
-            }
-            STUDY.atomic_json(study / "collection.json", collection)
-            (study / "summary.csv").write_text("tampered\n")
-            with mock.patch.object(STUDY, "verify_study_files"):
-                with self.assertRaisesRegex(RuntimeError, "artifact hash mismatch"):
-                    STUDY.read_collected(study)
+            with mock.patch.object(
+                STUDY,
+                "read_summary",
+                side_effect=[
+                    (baseline_record, [row]),
+                    (candidate_record, [dict(row)]),
+                ],
+            ), mock.patch.object(STUDY, "plot_series"):
+                STUDY.compare(args)
+
+            mismatched = dict(row, wgs_iterations="9")
+            args.output = Path(directory) / "mismatch"
+            with mock.patch.object(
+                STUDY,
+                "read_summary",
+                side_effect=[
+                    (baseline_record, [row]),
+                    (candidate_record, [mismatched]),
+                ],
+            ), mock.patch.object(STUDY, "plot_series"):
+                with self.assertRaisesRegex(RuntimeError, "wgs_iterations differs"):
+                    STUDY.compare(args)
 
 
-class TemplateTests(unittest.TestCase):
-    def test_transport_template_is_syntactically_valid_after_substitution(self):
-        with tempfile.TemporaryDirectory() as directory:
-            generated = Path(directory) / "transport.py"
-            STUDY.write_input(
-                generated,
-                Path(__file__).with_name("transport.py.in"),
-                Path("/mesh.msh"),
-                Path("/xs.xs"),
-                10,
-                False,
+class SimplicityTests(unittest.TestCase):
+    def test_provenance_and_content_addressing_terms_are_absent(self):
+        files = (
+            MODULE_PATH,
+            MODULE_PATH.with_name("bootstrap.zsh"),
+            MODULE_PATH.with_name("interactive_cbcd.zsh"),
+            MODULE_PATH.with_name("README.md"),
+        )
+        terms = ("hash" + "lib", "sha" + "256", "check" + "sum", "finger" + "print")
+        for path in files:
+            source = path.read_text().lower()
+            for term in terms:
+                with self.subTest(path=path.name, term=term):
+                    self.assertNotIn(term, source)
+        source = MODULE_PATH.read_text().lower()
+        for removed_option in ("--source", "--revision", "--gmsh"):
+            with self.subTest(option=removed_option):
+                self.assertNotIn(removed_option, source)
+
+    def test_shell_helpers_are_valid_and_policy_order_alternates(self):
+        for name in ("bootstrap.zsh", "interactive_cbcd.zsh"):
+            path = MODULE_PATH.with_name(name)
+            result = subprocess.run(
+                ["zsh", "-n", str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
             )
-            compile(generated.read_text(), str(generated), "exec")
-            self.assertIn("OPENSN_TUO_SCALAR_FLUX_MAX", generated.read_text())
+            self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_embedded_python_is_syntactically_valid(self):
-        scripts = ("bootstrap.zsh", "interactive_cbcd.zsh")
-        total = 0
-        for name in scripts:
-            script = Path(__file__).with_name(name)
-            programs = []
-            active = None
-            for line in script.read_text().splitlines():
-                if active is None and "<<'PY'" in line:
-                    active = []
-                elif active is not None and line == "PY":
-                    programs.append("\n".join(active) + "\n")
-                    active = None
-                elif active is not None:
-                    active.append(line)
-            self.assertIsNone(active)
-            total += len(programs)
-            for index, program in enumerate(programs):
-                compile(program, f"{script}:heredoc-{index}", "exec")
-        self.assertGreaterEqual(total, 7)
+        helper = MODULE_PATH.with_name("interactive_cbcd.zsh").read_text()
+        sequence = (
+            "run_here hardware 1",
+            "run_here resource-aware 1",
+            "run_here resource-aware 2",
+            "run_here hardware 2",
+            "run_here hardware 4",
+            "run_here resource-aware 4",
+        )
+        positions = [helper.index(command) for command in sequence]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("amd-gpumode", helper)
+        self.assertNotRegex(helper, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
 
 
 if __name__ == "__main__":
