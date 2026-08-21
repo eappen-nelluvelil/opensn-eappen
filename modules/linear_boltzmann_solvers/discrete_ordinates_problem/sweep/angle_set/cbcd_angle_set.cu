@@ -379,23 +379,21 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
     work_done = true;
   }
 
-  // Publish delayed-output completion as soon as local work is done. This must precede
-  // waiting for delayed input; otherwise a distributed cycle can make every rank wait
-  // before any rank emits the marker that breaks the wait.
+  // Publish local completion only after the final completed batch has sealed its outgoing
+  // messages. Delayed receive completion is tracked by the exact expected face count.
   const bool all_local_work_complete = (num_completed_tasks_ == num_tasks_) and
                                        (not batch_state_.kernel_in_flight) and
                                        (not batch_state_.completed_batch_pending);
   if (all_local_work_complete and (not local_completion_signaled_))
   {
     if (async_comm_ != nullptr)
-      async_comm_->SignalAngleSetComplete(GetID(), worker_id);
+      async_comm_->SignalAngleSetComplete(GetID());
     local_completion_signaled_ = true;
     work_done = true;
   }
 
-  // Keep the angle set assigned to its worker until every delayed payload has been
-  // published before its source's completion marker and drained from this mailbox. The
-  // completion acquire followed by the mailbox check closes the publish/observe ordering.
+  // Keep the angle set assigned to its worker until every delayed payload has arrived and
+  // been drained from this mailbox.
   const bool communication_complete =
     async_comm_ == nullptr or
     (async_comm_->AreDelayedReceivesComplete(GetID()) and (not async_comm_->HasIncoming(GetID())));

@@ -114,19 +114,14 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
       delayed_incoming_source_partitions_by_angle_set.push_back(
         common_data.GetDelayedIncomingSourcePartitions());
-      // Outgoing queue capacity includes (a) normal outgoing face payloads, (b) delayed
-      // outgoing face payloads, and (c) one delayed-completion marker per
-      // delayed-destination locality.  Each item occupies one queue slot.
-      capacities[as_ss_idx].outgoing_faces =
-        CheckedAdd(CheckedAdd(common_data.GetNumOutgoingNonlocalFaces(),
-                              common_data.GetNumDelayedOutgoingNonlocalFaces(),
-                              "CBCD sweep chunk: outgoing face-count overflow."),
-                   common_data.GetDelayedOutgoingLocalities().size(),
-                   "CBCD sweep chunk: outgoing record-count overflow.");
       capacities[as_ss_idx].incoming_faces =
         CheckedAdd(common_data.GetNumIncomingNonlocalFaces(),
                    common_data.GetNumDelayedIncomingNonlocalFaces(),
                    "CBCD sweep chunk: incoming face-count overflow.");
+      capacities[as_ss_idx].delayed_incoming_faces =
+        common_data.GetNumDelayedIncomingNonlocalFaces();
+      // A batch flush exists only for a destination touched by at least one face, so two
+      // queue slots per face are a tight worst-case bound for each destination.
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -137,7 +132,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           const int dest_rank = common_data.GetOutgoingLocalities()[face_info.dest_slot];
           outgoing_records_by_destination[dest_rank] =
             CheckedAdd(outgoing_records_by_destination[dest_rank],
-                       1,
+                       2,
                        "CBCD sweep chunk: outgoing record-count overflow.");
           const auto num_values =
             CheckedMultiply(static_cast<std::size_t>(face_info.num_face_nodes),
@@ -157,7 +152,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           const int dest_rank = common_data.GetDelayedOutgoingLocalities()[face_info.dest_slot];
           outgoing_records_by_destination[dest_rank] =
             CheckedAdd(outgoing_records_by_destination[dest_rank],
-                       1,
+                       2,
                        "CBCD sweep chunk: delayed outgoing record-count overflow.");
           const auto num_values =
             CheckedMultiply(static_cast<std::size_t>(face_info.num_face_nodes),
@@ -171,13 +166,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             "CBCD sweep chunk: delayed outgoing wire-entry size overflow.");
           ValidateWireEntrySize(entry_bytes);
         }
-      }
-      for (const int dest_rank : common_data.GetDelayedOutgoingLocalities())
-      {
-        outgoing_records_by_destination[dest_rank] =
-          CheckedAdd(outgoing_records_by_destination[dest_rank],
-                     1,
-                     "CBCD sweep chunk: completion record-count overflow.");
       }
       capacities[as_ss_idx].outgoing_faces_by_destination.reserve(
         outgoing_records_by_destination.size());

@@ -69,6 +69,8 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
   grid_ptr_ = GetSPDS().GetGrid().get();
   for (auto& local_cell_ids : local_cell_ids_)
     local_cell_ids.reserve(num_local_cells);
+  touched_outgoing_destinations_.reserve(common_data_.GetOutgoingLocalities().size() +
+                                         common_data_.GetDelayedOutgoingLocalities().size());
 }
 
 void
@@ -342,8 +344,14 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
     throw std::logic_error("CBCD FLUDS: non-local output requires a communicator.");
 
   const auto num_angles = angle_indices.size();
-  const auto& grid = *(GetSPDS().GetGrid());
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
+  touched_outgoing_destinations_.clear();
+  const auto mark_destination = [this](const int destination)
+  {
+    if (std::ranges::find(touched_outgoing_destinations_, destination) ==
+        touched_outgoing_destinations_.end())
+      touched_outgoing_destinations_.push_back(destination);
+  };
   // Cycles-4 boundary lookups carry the owning groupset id so that boundaries that hold
   // per-groupset state (notably ReflectingBoundary) can resolve the correct sub-bank.
   const int groupset_id = sweep_chunk.GetGroupset().id;
@@ -378,6 +386,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       const auto source_offset =
         static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
       const int dest_rank = common_data_.GetOutgoingLocalities()[face_info.dest_slot];
+      mark_destination(dest_rank);
       async_comm->EnqueueOutgoing(dest_rank,
                                   producer_id,
                                   angle_set_id,
@@ -398,6 +407,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
       const auto source_offset =
         static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
       const int dest_rank = common_data_.GetDelayedOutgoingLocalities()[face_info.dest_slot];
+      mark_destination(dest_rank);
       async_comm->EnqueueOutgoing(dest_rank,
                                   producer_id,
                                   angle_set_id,
@@ -407,6 +417,10 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                   CBCDMessageKind::DELAYED_FACE_PSI);
     }
   }
+
+  if (async_comm != nullptr)
+    for (const int dest_rank : touched_outgoing_destinations_)
+      async_comm->EnqueueFlush(dest_rank, producer_id);
 }
 
 void

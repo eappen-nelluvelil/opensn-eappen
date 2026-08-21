@@ -247,6 +247,8 @@ private:
   std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
   /// Flat reflecting-boundary face plans.
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
+  /// Destination ranks touched by the current completed kernel batch.
+  std::vector<int> touched_outgoing_destinations_;
   /// Allocate the lagged old/new banks used by cycle-aware sweeps.
   void AllocateDelayedPsiBanks();
   /// Build the device pointer set exposed to the CBCD sweep kernel.

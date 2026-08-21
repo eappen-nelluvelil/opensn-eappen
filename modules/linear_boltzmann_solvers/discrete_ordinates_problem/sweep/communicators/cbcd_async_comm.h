@@ -29,16 +29,13 @@ class MPICommunicatorSet;
  *
  * The aggregated wire format carries a sequence of sections, each tagged with a kind byte.
  * `NORMAL_FACE_PSI` sections feed the normal incoming non-local bank and decrement the
- * receiving angle set's task dependencies.  `DELAYED_FACE_PSI` sections populate the
+ * receiving angle set's task dependencies. `DELAYED_FACE_PSI` sections populate the
  * lagged incoming non-local "new" bank without touching dependency counters.
- * `DELAYED_COMPLETION` sections carry no face entries and only signal that the sending
- * angle set has finished publishing its delayed outgoing data.
  */
 enum class CBCDMessageKind : std::uint8_t
 {
   NORMAL_FACE_PSI = 0,
   DELAYED_FACE_PSI = 1,
-  DELAYED_COMPLETION = 2,
 };
 
 /// Metadata for one received non-local face payload inside an incoming batch.
@@ -68,6 +65,8 @@ struct IncomingFaceBatch
 /// One outgoing non-local face payload published by a sweep worker.
 struct OutgoingFaceData
 {
+  /// Whether this record seals a completed kernel batch without carrying face data.
+  bool flush = false;
   /// Stream kind for this payload.
   CBCDMessageKind kind = CBCDMessageKind::NORMAL_FACE_PSI;
   /// Producing angle-set ID.
@@ -92,10 +91,10 @@ struct OutgoingDestinationCapacity
 /// Queue-capacity summary for one angle set.
 struct AngleSetCapacity
 {
-  /// Number of outgoing non-local faces produced by this angle set.
-  std::size_t outgoing_faces = 0;
   /// Number of incoming non-local faces consumed by this angle set.
   std::size_t incoming_faces = 0;
+  /// Number of delayed face records expected during each sweep.
+  std::size_t delayed_incoming_faces = 0;
   /// Maximum number of face entries in one received batch.
   std::size_t max_incoming_batch_entries = 0;
   /// Maximum number of doubles in one received batch.
@@ -189,6 +188,7 @@ public:
     assert(data_size == 0 or psi_data != nullptr);
     auto& shard = *outgoing_queues_[it->second].producer_shards[producer_id];
     auto& slot = shard.queue.ReserveSlot();
+    slot.payload.flush = false;
     slot.payload.kind = kind;
     slot.payload.angle_set_id = angle_set_id;
     slot.payload.remote_face_index = remote_face_index;
@@ -204,17 +204,10 @@ public:
     }
   }
 
-  /**
-   * Publish a delayed-completion marker for one angle set toward one destination rank.
-   *
-   * Completion markers carry no face entries; they only signal to the receiver that the
-   * sending rank has finished publishing every delayed outgoing payload for the given
-   * angle set.  The receiver uses these markers to decide when its lagged incoming bank
-   * can be promoted from `new` to `old`.
-   */
-  void EnqueueDelayedCompletion(int dest_rank, std::size_t producer_id, std::size_t angle_set_id);
+  /// Seal one producer's current completed-batch payload for a destination rank.
+  void EnqueueFlush(int dest_rank, std::size_t producer_id);
 
-  /// Report whether every expected delayed-completion marker for one angle set has arrived.
+  /// Report whether every expected delayed face record for one angle set has arrived.
   bool AreDelayedReceivesComplete(std::size_t angle_set_id) const noexcept;
 
   /**
@@ -239,7 +232,7 @@ public:
   }
 
   /// Mark one angle set as locally complete.
-  void SignalAngleSetComplete(std::size_t angle_set_id, std::size_t producer_id);
+  void SignalAngleSetComplete(std::size_t angle_set_id);
   /// Start the communication thread for the given number of sweep workers.
   void Start(std::size_t num_producers);
   /// Request termination and join the communication thread.
@@ -280,6 +273,8 @@ private:
     CBCDMessageKind last_section_kind = CBCDMessageKind::NORMAL_FACE_PSI;
     /// Whether the final section can accept another face-data entry.
     bool has_open_face_section = false;
+    /// Whether this destination already has a nonblocking send in flight.
+    bool send_in_flight = false;
   };
 
   /// Worker-local destination activation queue.
@@ -291,14 +286,14 @@ private:
   void ConfigureProducerShards(std::size_t num_producers);
   /// Drain worker-local doorbell queues into comm-thread-local active lists.
   bool DrainProducerDoorbells();
-  /// Drain active destination queues and post every nonempty peer buffer.
+  /// Advance active destination queues through one completed-batch boundary per peer.
   bool FlushActiveDestinations();
-  /// Drain one destination queue and post its currently ready records.
+  /// Advance one destination queue through at most one completed-batch boundary.
   bool FlushActiveDestination(std::size_t destination_queue_index);
-  /// Append one outgoing record to a destination's serialized aggregation buffer.
-  void AppendOutgoing(DestinationQueue& destination_queue, const OutgoingFaceData& entry);
-  /// Post one destination's open aggregation buffer as a nonblocking send.
-  void PostSend(DestinationQueue& destination_queue);
+  /// Append one outgoing record, returning false when peer backpressure prevents progress.
+  bool AppendOutgoing(std::size_t destination_queue_index, const OutgoingFaceData& entry);
+  /// Post one destination's open buffer when that peer has no send in flight.
+  bool PostSend(std::size_t destination_queue_index);
   /// Drain outgoing queues, serialize batches, and post MPI sends.
   bool SerializeAndSend();
   /// Probe for incoming MPI messages, deserialize them, and publish mailbox batches.
@@ -351,6 +346,8 @@ private:
   std::vector<mpi::Request> send_requests_;
   /// Serialized payload storage retained until the corresponding send completes.
   std::vector<ByteArray> in_flight_send_buffers_;
+  /// Destination queue associated with each outstanding nonblocking send.
+  std::vector<std::size_t> send_destination_queue_indices_;
   /// Indices returned by `MPI_Testsome`.
   std::vector<int> completed_send_indices_;
   /// Completed aggregate buffers retained for capacity-preserving reuse.
@@ -359,14 +356,8 @@ private:
   std::atomic<bool> stop_requested_{false};
   /// Per-angle-set local completion flags.
   std::vector<std::atomic<bool>> angle_set_done_;
-  /// Number of delayed source slots still incomplete for each angle set.
-  std::vector<std::atomic<std::uint32_t>> delayed_sources_remaining_by_angle_set_;
-  /// Delayed source partitions expected to send completion markers for each angle set.
-  std::vector<std::vector<int>> delayed_source_partitions_by_angle_set_;
-  /// Delayed destination partitions to send completion markers to for each angle set.
-  std::vector<std::vector<int>> delayed_destination_partitions_by_angle_set_;
-  /// Communication-thread-local delayed-completion flags by angle set and source slot.
-  std::vector<std::vector<std::uint8_t>> delayed_completion_received_by_angle_set_;
+  /// Number of delayed face records still expected for each angle set.
+  std::vector<std::atomic<std::size_t>> delayed_faces_remaining_by_angle_set_;
   /// Dedicated communication thread.
   std::thread comm_thread_;
   /// Scratch vector used while gathering ready outgoing queue slots.
