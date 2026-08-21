@@ -17,6 +17,7 @@
 #include <cassert>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include "caliper/cali.h"
@@ -500,13 +501,16 @@ CBCD_FLUDS::CopySavedPsiToDestinationPsi(CBCDSweepChunk& sweep_chunk, CBCD_Angle
 std::uint32_t
 CBCD_FLUDS::ScatterReceivedFaceData(const std::uint32_t source_slot,
                                     const std::uint32_t source_face_index,
-                                    const double* psi_data)
+                                    const double* psi_data,
+                                    const std::size_t payload_size)
 {
   const auto& face_info = common_data_.GetIncomingNonlocalFace(source_slot, source_face_index);
   double* dst = incoming_nonlocal_psi_.data() +
                 static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   const std::size_t face_values =
     static_cast<std::size_t>(face_info.num_nodes) * num_groups_and_angles_;
+  if (payload_size != face_values)
+    throw std::runtime_error("CBCD FLUDS: received face payload has the wrong extent.");
   std::memcpy(dst, psi_data, face_values * sizeof(double));
   return face_info.cell_local_id;
 }
@@ -514,7 +518,8 @@ CBCD_FLUDS::ScatterReceivedFaceData(const std::uint32_t source_slot,
 void
 CBCD_FLUDS::ScatterReceivedDelayedFaceData(const std::uint32_t source_slot,
                                            const std::uint32_t source_face_index,
-                                           const double* psi_data)
+                                           const double* psi_data,
+                                           const std::size_t payload_size)
 {
   const auto& face_info =
     common_data_.GetDelayedIncomingNonlocalFace(source_slot, source_face_index);
@@ -522,6 +527,8 @@ CBCD_FLUDS::ScatterReceivedDelayedFaceData(const std::uint32_t source_slot,
                 static_cast<std::size_t>(face_info.base_storage_index) * num_groups_and_angles_;
   const std::size_t face_values =
     static_cast<std::size_t>(face_info.num_nodes) * num_groups_and_angles_;
+  if (payload_size != face_values)
+    throw std::runtime_error("CBCD FLUDS: received delayed face payload has the wrong extent.");
   std::memcpy(dst, psi_data, face_values * sizeof(double));
 }
 

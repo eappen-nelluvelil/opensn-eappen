@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -21,15 +22,37 @@ namespace opensn
 namespace detail
 {
 
+std::size_t
+CheckedAdd(const std::size_t lhs, const std::size_t rhs, const char* const description)
+{
+  if (rhs > std::numeric_limits<std::size_t>::max() - lhs)
+    throw std::overflow_error(description);
+  return lhs + rhs;
+}
+
+std::size_t
+CheckedMultiply(const std::size_t lhs, const std::size_t rhs, const char* const description)
+{
+  if (lhs != 0 and rhs > std::numeric_limits<std::size_t>::max() / lhs)
+    throw std::overflow_error(description);
+  return lhs * rhs;
+}
+
 // Bounded byte reader for communicator payload deserialization.
 struct BufferReader
 {
   const std::byte* ptr = nullptr;
   std::size_t remaining_bytes = 0;
 
+  void Require(const std::size_t num_bytes) const
+  {
+    if (remaining_bytes < num_bytes)
+      throw std::runtime_error("CBCD communicator: truncated wire payload.");
+  }
+
   std::size_t LoadSize()
   {
-    assert(remaining_bytes >= sizeof(std::size_t));
+    Require(sizeof(std::size_t));
     std::size_t value{};
     std::memcpy(&value, ptr, sizeof(std::size_t));
     ptr += sizeof(std::size_t);
@@ -39,7 +62,7 @@ struct BufferReader
 
   std::uint32_t LoadFaceIndex()
   {
-    assert(remaining_bytes >= sizeof(std::uint32_t));
+    Require(sizeof(std::uint32_t));
     std::uint32_t value{};
     std::memcpy(&value, ptr, sizeof(std::uint32_t));
     ptr += sizeof(std::uint32_t);
@@ -49,7 +72,7 @@ struct BufferReader
 
   CBCDMessageKind LoadKind()
   {
-    assert(remaining_bytes >= sizeof(std::uint8_t));
+    Require(sizeof(std::uint8_t));
     std::uint8_t value{};
     std::memcpy(&value, ptr, sizeof(std::uint8_t));
     ptr += sizeof(std::uint8_t);
@@ -61,7 +84,7 @@ struct BufferReader
 
   void SkipBytes(const std::size_t num_bytes)
   {
-    assert(remaining_bytes >= num_bytes);
+    Require(num_bytes);
     ptr += num_bytes;
     remaining_bytes -= num_bytes;
   }
@@ -307,6 +330,8 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
       //     repeated entries:
       //     [remote_face_index: u32][payload_size: size_t][payload doubles...]
       ByteArray send_buffer;
+      if (current_payload_bytes > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::overflow_error("CBCD communicator: MPI payload exceeds the count range.");
       send_buffer.Data().resize(current_payload_bytes);
       std::size_t offset = 0;
 
@@ -350,25 +375,38 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
     {
       const auto* slot = slot_cache_[slot_index];
       const auto& entry = slot->payload;
+      const auto payload_bytes = detail::CheckedMultiply(
+        entry.psi_data.size(), sizeof(double), "CBCD communicator: outgoing face size overflow.");
       const auto entry_bytes =
-        sizeof(std::uint32_t) + sizeof(std::size_t) + entry.psi_data.size() * sizeof(double);
+        detail::CheckedAdd(sizeof(std::uint32_t) + sizeof(std::size_t),
+                           payload_bytes,
+                           "CBCD communicator: outgoing record size overflow.");
 
       const auto kind_idx = static_cast<std::size_t>(entry.kind);
+      if (kind_idx >= send_batch_by_kind_and_angle_set_.size() or
+          entry.angle_set_id >= num_angle_sets_)
+        throw std::logic_error("CBCD communicator: invalid outgoing record metadata.");
       auto& entries = send_batch_by_kind_and_angle_set_[kind_idx][entry.angle_set_id];
       bool opens_section = entries.empty();
-      auto added_bytes = entry_bytes + (opens_section ? section_header_bytes : 0);
+      auto added_bytes = detail::CheckedAdd(entry_bytes,
+                                            opens_section ? section_header_bytes : 0,
+                                            "CBCD communicator: outgoing section size overflow.");
+      auto projected_bytes = detail::CheckedAdd(
+        current_payload_bytes, added_bytes, "CBCD communicator: outgoing message size overflow.");
 
       // Close the current message before adding an entry that would exceed the cap. Continue
       // through the same ready snapshot so a backlog is scanned only once. A single
       // indivisible face record may exceed the limit and is sent by itself.
-      if (max_message_bytes_ > 0 and current_payload_bytes + added_bytes > max_message_bytes_ and
-          active_sections > 0)
+      if (max_message_bytes_ > 0 and projected_bytes > max_message_bytes_ and active_sections > 0)
       {
         send_batch();
         current_payload_bytes = sizeof(std::size_t);
         active_sections = 0;
         opens_section = true;
-        added_bytes = entry_bytes + section_header_bytes;
+        added_bytes = detail::CheckedAdd(
+          entry_bytes, section_header_bytes, "CBCD communicator: outgoing section size overflow.");
+        projected_bytes = detail::CheckedAdd(
+          current_payload_bytes, added_bytes, "CBCD communicator: outgoing message size overflow.");
       }
 
       if (opens_section)
@@ -377,7 +415,7 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
         active_send_sections_.push_back({kind_idx, entry.angle_set_id});
       }
       entries.push_back(&entry);
-      current_payload_bytes += added_bytes;
+      current_payload_bytes = projected_bytes;
       ++slots_processed;
     }
 
@@ -433,6 +471,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       if (slot_it == slot_map.end())
         throw std::runtime_error("CBCD communicator: source has no angle-set slot mapping.");
       const auto source_slot = slot_it->second;
+      if (num_entries == 0)
+        throw std::runtime_error("CBCD communicator: empty face-data section.");
 
       const auto* const section_ptr = reader.Data();
       std::size_t total_values = 0;
@@ -440,8 +480,11 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       {
         reader.LoadFaceIndex();
         const auto data_size = reader.LoadSize();
-        reader.SkipBytes(data_size * sizeof(double));
-        total_values += data_size;
+        const auto data_bytes = detail::CheckedMultiply(
+          data_size, sizeof(double), "CBCD communicator: wire face size overflow.");
+        reader.SkipBytes(data_bytes);
+        total_values = detail::CheckedAdd(
+          total_values, data_size, "CBCD communicator: wire section size overflow.");
       }
       const auto section_num_bytes = static_cast<std::size_t>(reader.Data() - section_ptr);
 
@@ -461,23 +504,28 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         entry.source_face_index = section_reader.LoadFaceIndex();
         entry.payload_offset = value_offset;
         entry.payload_size = section_reader.LoadSize();
-        std::memcpy(batch.psi_data.data() + value_offset,
-                    section_reader.Data(),
-                    entry.payload_size * sizeof(double));
-        section_reader.SkipBytes(entry.payload_size * sizeof(double));
-        value_offset += entry.payload_size;
+        const auto payload_bytes = detail::CheckedMultiply(
+          entry.payload_size, sizeof(double), "CBCD communicator: wire face size overflow.");
+        section_reader.Require(payload_bytes);
+        std::memcpy(batch.psi_data.data() + value_offset, section_reader.Data(), payload_bytes);
+        section_reader.SkipBytes(payload_bytes);
+        value_offset = detail::CheckedAdd(
+          value_offset, entry.payload_size, "CBCD communicator: wire section size overflow.");
       }
+      if (section_reader.remaining_bytes != 0 or value_offset != total_values)
+        throw std::runtime_error("CBCD communicator: inconsistent face-data section.");
 
       incoming_mailboxes_[angle_set_id]->PublishSlot(slot);
       if (kind == CBCDMessageKind::DELAYED_FACE_PSI)
       {
-        assert(num_entries > 0);
         const auto previous = delayed_faces_remaining_by_angle_set_[angle_set_id].fetch_sub(
           num_entries, std::memory_order_release);
         if (num_entries > previous)
           throw std::logic_error("CBCD communicator: delayed face counter underflow.");
       }
     }
+    if (reader.remaining_bytes != 0)
+      throw std::runtime_error("CBCD communicator: trailing bytes in wire payload.");
   }
 
   return received_any;

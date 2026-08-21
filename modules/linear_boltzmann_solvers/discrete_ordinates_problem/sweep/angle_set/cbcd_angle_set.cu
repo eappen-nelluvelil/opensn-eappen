@@ -326,8 +326,11 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
           // owning cell once its incoming dependency count reaches zero.
           for (const auto& entry : batch.entries)
           {
-            const auto cell_local_id = cbcd_fluds_.ScatterReceivedFaceData(
-              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
+            const auto cell_local_id =
+              cbcd_fluds_.ScatterReceivedFaceData(batch.source_slot,
+                                                  entry.source_face_index,
+                                                  psi_base + entry.payload_offset,
+                                                  entry.payload_size);
             if (--remaining_deps_[cell_local_id] == 0)
               cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
                 .push_back(static_cast<std::uint32_t>(cell_local_id));
@@ -341,8 +344,10 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
           // occurs only after every expected delayed face has arrived.
           assert(batch.kind == CBCDMessageKind::DELAYED_FACE_PSI);
           for (const auto& entry : batch.entries)
-            cbcd_fluds_.ScatterReceivedDelayedFaceData(
-              batch.source_slot, entry.source_face_index, psi_base + entry.payload_offset);
+            cbcd_fluds_.ScatterReceivedDelayedFaceData(batch.source_slot,
+                                                       entry.source_face_index,
+                                                       psi_base + entry.payload_offset,
+                                                       entry.payload_size);
         }
       });
   }

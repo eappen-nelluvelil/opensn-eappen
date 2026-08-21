@@ -146,26 +146,30 @@ public:
    * \param source_slot Source-locality slot for the sending partition.
    * \param source_face_index Source-slot-local face index carried on the wire.
    * \param psi_data Packed payload doubles.
+   * \param payload_size Number of packed payload doubles.
    * \return Local cell ID whose dependency count should be updated.
    */
   std::uint32_t ScatterReceivedFaceData(std::uint32_t source_slot,
                                         std::uint32_t source_face_index,
-                                        const double* psi_data);
+                                        const double* psi_data,
+                                        std::size_t payload_size);
 
   /**
    * Scatter one received delayed non-local face payload into the lagged-incoming `_new` bank.
    *
    * The delayed scatter populates next-iteration storage and must not decrement any
    * current-iteration task dependency.  The bank rotation from `_new` to `_old` runs in
-   * the scheduler after every delayed source's completion marker has been received.
+   * the scheduler after every expected delayed face has been received.
    *
    * \param source_slot Delayed-source-locality slot for the sending partition.
    * \param source_face_index Source-slot-local delayed face index carried on the wire.
    * \param psi_data Packed payload doubles.
+   * \param payload_size Number of packed payload doubles.
    */
   void ScatterReceivedDelayedFaceData(std::uint32_t source_slot,
                                       std::uint32_t source_face_index,
-                                      const double* psi_data);
+                                      const double* psi_data,
+                                      std::size_t payload_size);
 
   void ClearLocalAndReceivePsi() override;
   void ClearSendPsi() override {}
