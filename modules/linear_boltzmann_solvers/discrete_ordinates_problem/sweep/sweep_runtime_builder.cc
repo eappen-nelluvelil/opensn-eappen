@@ -355,9 +355,10 @@ BuildCBCSPDS(SweepRuntime& runtime,
     return;
 
   std::vector<std::shared_ptr<SPDS>> result(work.size());
-  const size_t nthreads = std::min<size_t>(std::max(1U, opensn_num_threads), work.size());
+  const auto thread_info = GetThreadResourceInfo();
+  const auto nthreads = std::min(work.size(), thread_info.available_threads);
   log.Log() << program_timer.GetTimeString() << " SPDS construction: " << work.size() << " angles ("
-            << nthreads << " thread(s)).";
+            << nthreads << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
   ParallelFor(work.size(),
               nthreads,
               [&](size_t i)
@@ -727,9 +728,8 @@ BuildCBCLocalFaceSlotPlans(SweepRuntime& runtime,
 
   const auto thread_info = GetThreadResourceInfo();
   const auto num_threads = std::min(spds_list.size(), thread_info.available_threads);
-  log.Log0Verbose1() << program_timer.GetTimeString()
-                     << " Compute local-face slot plans for CBC SPDS (" << num_threads
-                     << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
+  log.Log() << program_timer.GetTimeString() << " Compute local-face slot plans for CBC SPDS ("
+            << num_threads << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
   ParallelFor(spds_list.size(),
               num_threads,
               [&spds_list, &face_node_counts](const std::size_t i)

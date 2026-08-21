@@ -92,9 +92,9 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
     const auto worker_limit = worker_override > 0 ? worker_override : default_worker_limit;
     const auto num_workers =
       std::max<std::size_t>(1, std::min(angle_agg_.GetNumAngleSets(), worker_limit));
-    log.Log0Verbose1() << "CBCD scheduler: " << num_workers << " worker(s)"
-                       << (worker_override > 0 ? " from OPENSN_CBCD_NUM_WORKERS; " : "; ")
-                       << FormatThreadResourceInfo(thread_info) << ".";
+    log.Log() << "CBCD scheduler: " << num_workers << " worker(s)"
+              << (worker_override > 0 ? " from OPENSN_CBCD_NUM_WORKERS; " : "; ")
+              << FormatThreadResourceInfo(thread_info) << ".";
     pool_.Resize(num_workers);
   }
 
