@@ -9,8 +9,11 @@
 #include "framework/math/quadratures/angular/curvilinear_product_quadrature.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include "framework/utils/thread_utils.h"
 #include <algorithm>
-#include <thread>
+#include <cstdlib>
+#include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 
 namespace opensn
@@ -18,6 +21,25 @@ namespace opensn
 
 namespace
 {
+
+enum class CBCDWorkerPolicy
+{
+  HARDWARE_CONCURRENCY,
+  RESOURCE_AWARE
+};
+
+CBCDWorkerPolicy
+GetCBCDWorkerPolicy()
+{
+  const char* value = std::getenv("OPENSN_CBCD_WORKER_POLICY"); // NOLINT(concurrency-mt-unsafe)
+  if (value == nullptr or value[0] == '\0' or std::string_view(value) == "hardware")
+    return CBCDWorkerPolicy::HARDWARE_CONCURRENCY;
+  if (std::string_view(value) == "resource-aware")
+    return CBCDWorkerPolicy::RESOURCE_AWARE;
+
+  throw std::invalid_argument(
+    "OPENSN_CBCD_WORKER_POLICY must be either 'hardware' or 'resource-aware'.");
+}
 
 bool
 Compare(const RuleValues& a, const RuleValues& b)
@@ -64,16 +86,45 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   }
   else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
-    // Preserve the proven CBCD V2 execution model: one persistent worker per angle set,
-    // capped by the hardware concurrency visible to the rank.  Without this pool the
-    // ASYNC_FIFO batch is empty and the communicator waits forever for sweeps that never
-    // started.
     angle_agg_.SetupAngleSetDependencies();
-    const std::size_t hardware_concurrency = std::thread::hardware_concurrency();
+    const auto thread_info = GetThreadResourceInfo();
+    const auto worker_policy = GetCBCDWorkerPolicy();
+    const auto worker_override = GetPositiveEnvironmentValue("OPENSN_CBCD_NUM_WORKERS");
+    const bool uses_communication =
+      std::any_of(angle_agg_.begin(),
+                  angle_agg_.end(),
+                  [](const auto& angle_set)
+                  {
+                    const auto& spds = angle_set->GetSPDS();
+                    return not spds.GetLocationDependencies().empty() or
+                           not spds.GetLocationSuccessors().empty() or
+                           not spds.GetDelayedLocationDependencies().empty() or
+                           not spds.GetDelayedLocationSuccessors().empty();
+                  });
+
+    // The resource-aware policy keeps the persistent communicator inside the CPU allocation.
+    // The historical policy deliberately retains CBCD V2's hardware_concurrency behavior so
+    // that archived Tuo results can be reproduced and compared without a hidden policy change.
+    const std::size_t reserved_communication_threads =
+      worker_policy == CBCDWorkerPolicy::RESOURCE_AWARE and uses_communication and
+          thread_info.available_threads > 1
+        ? 1
+        : 0;
+    const auto policy_worker_limit =
+      worker_policy == CBCDWorkerPolicy::RESOURCE_AWARE
+        ? thread_info.available_threads - reserved_communication_threads
+        : thread_info.hardware_threads;
+    const auto worker_limit = worker_override > 0 ? worker_override : policy_worker_limit;
     const auto num_workers =
-      std::max<std::size_t>(1,
-                            std::min(angle_agg_.GetNumAngleSets(),
-                                     hardware_concurrency == 0 ? 1 : hardware_concurrency));
+      std::max<std::size_t>(1, std::min(angle_agg_.GetNumAngleSets(), worker_limit));
+
+    log.Log0Verbose1()
+      << "CBCD scheduler: policy="
+      << (worker_policy == CBCDWorkerPolicy::RESOURCE_AWARE ? "resource-aware" : "hardware")
+      << ", workers=" << num_workers << ", communicator_threads=1, reserved_communicator_threads="
+      << reserved_communication_threads
+      << (worker_override > 0 ? ", worker override from OPENSN_CBCD_NUM_WORKERS, " : ", ")
+      << FormatThreadResourceInfo(thread_info) << ".";
     pool_.Resize(num_workers);
   }
 
