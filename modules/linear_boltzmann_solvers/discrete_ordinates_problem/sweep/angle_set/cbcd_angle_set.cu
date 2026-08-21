@@ -281,8 +281,6 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 bool
 CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
-
   if (executed_ or (not boundary_data_initialized_))
     return false;
 
@@ -301,6 +299,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
       ready_cell_ids.empty() and (not has_incoming) and (not can_signal_completion) and
       (not can_finalize))
     return false;
+
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
   bool work_done = false;
 
