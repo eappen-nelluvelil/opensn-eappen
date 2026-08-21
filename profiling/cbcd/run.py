@@ -1342,17 +1342,39 @@ def require_success(result: CommandResult) -> None:
 
 
 def validate_profiler_csv(path: pathlib.Path, description: str) -> dict[str, Any]:
-    """Require a real CSV header and at least one profiler data row."""
+    """Require a real CSV header and at least one profiler data row.
+
+    Nsight Systems 2025.3 writes SQLite export/progress messages to stdout
+    before the requested CSV report.  Treat leading one-column records as a
+    preamble instead of assuming that the first non-empty record is the
+    header.  A skipped or empty report still fails because it has no
+    multi-column header followed by a width-matched data record.
+    """
 
     if not path.is_file() or path.stat().st_size == 0:
         raise StudyError(f"{description} did not create a non-empty CSV artifact: {path}")
     with path.open(encoding="utf-8", errors="replace", newline="") as stream:
         rows = [row for row in csv.reader(stream) if any(cell.strip() for cell in row)]
-    if len(rows) < 2 or len(rows[0]) < 2:
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows[:-1])
+            if len(row) >= 2 and any(len(candidate) == len(row) for candidate in rows[index + 1 :])
+        ),
+        None,
+    )
+    if header_index is None:
         raise StudyError(
             f"{description} CSV has no parseable header/data rows (profiler may have skipped the report): {path}"
         )
-    return {"path": str(path), "columns": rows[0], "data_rows": len(rows) - 1}
+    columns = rows[header_index]
+    data_rows = [row for row in rows[header_index + 1 :] if len(row) == len(columns)]
+    return {
+        "path": str(path),
+        "columns": columns,
+        "data_rows": len(data_rows),
+        "preamble_rows": header_index,
+    }
 
 
 def resolve_signature_set(args: argparse.Namespace) -> SignatureSet | None:

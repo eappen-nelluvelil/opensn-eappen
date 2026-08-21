@@ -396,6 +396,16 @@ class ProvenanceAndEnvironmentTests(unittest.TestCase):
             path = pathlib.Path(temporary) / "report.csv"
             path.write_text("Name,Time\nSweepKernel,12\n")
             self.assertEqual(RUNNER.validate_profiler_csv(path, "fixture")["data_rows"], 1)
+            path.write_text(
+                "Generating SQLite file /tmp/report.sqlite from /tmp/report.nsys-rep\n"
+                "Processing [/tmp/report.sqlite] with [cuda_gpu_kern_sum.py]...\n"
+                "Name,Time,Instances\n"
+                '"SweepKernel<int, 1>",12,4\n'
+            )
+            validation = RUNNER.validate_profiler_csv(path, "fixture")
+            self.assertEqual(validation["preamble_rows"], 2)
+            self.assertEqual(validation["columns"], ["Name", "Time", "Instances"])
+            self.assertEqual(validation["data_rows"], 1)
             path.write_text("Name,Time\n")
             with self.assertRaises(RUNNER.StudyError):
                 RUNNER.validate_profiler_csv(path, "fixture")
