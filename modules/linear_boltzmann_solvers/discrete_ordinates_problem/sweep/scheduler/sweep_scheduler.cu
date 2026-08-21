@@ -106,6 +106,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       for (std::size_t i = begin; i < end; ++i)
         active_angle_set_ids.push_back(i);
 
+      bool flush_requested = false;
       while (not active_angle_set_ids.empty())
       {
         bool any_work_done = false;
@@ -140,8 +141,17 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
           ++i;
         }
-        if (not any_work_done)
+        if (any_work_done)
+          flush_requested = false;
+        else
+        {
+          if (not flush_requested)
+          {
+            cbcd_sweep_chunk.RequestCommunicatorFlush();
+            flush_requested = true;
+          }
           std::this_thread::yield();
+        }
       }
     });
 

@@ -6,7 +6,6 @@
 #include "framework/data_types/byte_array.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
 #include "mpicpp-lite/mpicpp-lite.h"
-#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -149,7 +148,7 @@ public:
    * \param delayed_incoming_source_partitions Delayed-incoming source partitions grouped by
    * angle set.  Empty for acyclic SPDSes.
    * \param max_message_bytes Maximum serialized MPI payload size. A value of zero disables
-   * message-size splitting.
+   * message-size splitting. A single indivisible face record may exceed this limit.
    * \param capacities Queue-capacity summary for each angle set.
    */
   CBCD_AsynchronousCommunicator(
@@ -243,6 +242,8 @@ public:
   void SignalAngleSetComplete(std::size_t angle_set_id, std::size_t producer_id);
   /// Start the communication thread for the given number of sweep workers.
   void Start(std::size_t num_producers);
+  /// Request that pending peer buffers be sent because a local ready frontier is empty.
+  void RequestFlush() { flush_requested_.store(true, std::memory_order_release); }
   /// Request termination and join the communication thread.
   void Stop();
 
@@ -269,6 +270,20 @@ private:
     std::vector<std::uint8_t> producer_active_local;
     /// Round-robin cursor over `active_producers`.
     std::size_t rr_cursor = 0;
+    /// Serialized records retained across progress passes for message aggregation.
+    ByteArray open_send_buffer;
+    /// Number of sections currently serialized in `open_send_buffer`.
+    std::size_t num_open_sections = 0;
+    /// Entry-count field for the final face-data section in `open_send_buffer`.
+    std::size_t last_entry_count_offset = 0;
+    /// Angle-set ID of the final face-data section.
+    std::size_t last_section_angle_set_id = 0;
+    /// Kind of the final face-data section.
+    CBCDMessageKind last_section_kind = CBCDMessageKind::NORMAL_FACE_PSI;
+    /// Whether the final section can accept another face-data entry.
+    bool has_open_face_section = false;
+    /// Progress passes elapsed since the current peer buffer was opened.
+    std::size_t deferred_progress_passes = 0;
   };
 
   /// Worker-local destination activation queue.
@@ -283,34 +298,20 @@ private:
     ByteArray data;
   };
 
-  /// Key identifying one nonempty `(message kind, angle set)` send section.
-  struct SendSectionKey
-  {
-    /// Message-kind array index.
-    std::uint8_t kind_index = 0;
-    /// Producing angle-set ID.
-    std::size_t angle_set_id = 0;
-  };
-
-  /// Queue slots retained until every pointer into them has been serialized.
-  struct PendingQueueRelease
-  {
-    /// Queue whose consumer slots remain owned by the communication thread.
-    LockFreeSPSCSlotQueue<OutgoingFaceData>* queue = nullptr;
-    /// Number of consecutive ready slots to release.
-    std::size_t count = 0;
-  };
-
   /// Run the communication-thread progress loop.
   void CommThreadLoop();
   /// Allocate or resize outgoing shards and doorbell queues for the current worker count.
   void ConfigureProducerShards(std::size_t num_producers);
   /// Drain worker-local doorbell queues into comm-thread-local active lists.
   bool DrainProducerDoorbells();
-  /// Drain all currently active destination queues.
-  bool FlushActiveDestinations();
-  /// Drain one active destination queue in round-robin producer order.
-  bool FlushActiveDestination(std::size_t destination_queue_index);
+  /// Drain active destination queues and post peer buffers when required.
+  bool FlushActiveDestinations(bool force);
+  /// Drain one destination queue into its persistent aggregation buffer.
+  bool FlushActiveDestination(std::size_t destination_queue_index, bool force);
+  /// Append one outgoing record to a destination's serialized aggregation buffer.
+  bool AppendOutgoing(DestinationQueue& destination_queue, const OutgoingFaceData& entry);
+  /// Post one destination's open aggregation buffer as a nonblocking send.
+  bool PostSend(DestinationQueue& destination_queue);
   /// Drain outgoing queues, serialize batches, and post MPI sends.
   bool SerializeAndSend();
   /// Probe for incoming MPI messages, deserialize them, and publish mailbox batches.
@@ -332,6 +333,8 @@ private:
   int mpi_tag_;
   /// Maximum serialized MPI payload size.
   std::size_t max_message_bytes_;
+  /// Maximum number of outstanding sends permitted before receive/progress work takes priority.
+  std::size_t max_in_flight_sends_ = 0;
   /// Local MPI rank.
   int my_rank_ = 0;
   /// Source partitions that can send to this rank.
@@ -357,12 +360,6 @@ private:
   std::vector<std::uint8_t> destination_active_local_;
   /// Per-angle-set incoming mailboxes.
   std::vector<std::unique_ptr<LockFreeSPSCSlotQueue<IncomingFaceBatch>>> incoming_mailboxes_;
-  /// Transient send batches assembled by the communication thread, indexed first by
-  /// `CBCDMessageKind` (cast to its underlying integer) and then by angle-set id.
-  std::array<std::vector<std::vector<const OutgoingFaceData*>>, 3>
-    send_batch_by_kind_and_angle_set_;
-  /// Nonempty send sections in first-activation order.
-  std::vector<SendSectionKey> active_send_sections_;
   /// Reusable receive buffer for one incoming MPI payload.
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
@@ -371,6 +368,8 @@ private:
   std::vector<ByteArray> available_send_buffers_;
   /// Termination flag for the communication thread.
   std::atomic<bool> stop_requested_{false};
+  /// Worker signal that local dependency progress requires pending sends to be released.
+  std::atomic<bool> flush_requested_{false};
   /// Per-angle-set local completion flags.
   std::vector<std::atomic<bool>> angle_set_done_;
   /// Number of delayed source slots still incomplete for each angle set.
@@ -385,8 +384,6 @@ private:
   std::thread comm_thread_;
   /// Scratch vector used while gathering ready outgoing queue slots.
   std::vector<LockFreeSPSCSlotQueue<OutgoingFaceData>::Slot*> slot_cache_;
-  /// Scratch release list that preserves queue-slot ownership through serialization.
-  std::vector<PendingQueueRelease> pending_queue_releases_;
 };
 
 } // namespace opensn

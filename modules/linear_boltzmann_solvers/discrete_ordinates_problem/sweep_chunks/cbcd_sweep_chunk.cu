@@ -11,7 +11,6 @@
 #include <array>
 #include <cstdint>
 #include <limits>
-#include <set>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -106,9 +105,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     std::vector<std::vector<int>> delayed_incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     delayed_incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
-    // Payload bytes keyed by destination partition, message kind, and angle set. This is
-    // the exact upper bound relevant to this rank's outgoing message serialization.
-    std::unordered_map<int, std::array<std::vector<std::size_t>, 3>> destination_section_bytes;
     std::vector<AngleSetCapacity> capacities(angle_sets_.size());
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
     {
@@ -147,21 +143,12 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             CheckedMultiply(static_cast<std::size_t>(face_info.num_face_nodes),
                             stride,
                             "CBCD sweep chunk: outgoing face-value count overflow.");
-          auto& per_as_bytes =
-            destination_section_bytes[dest_rank]
-                                     [static_cast<std::size_t>(CBCDMessageKind::NORMAL_FACE_PSI)];
-          if (per_as_bytes.empty())
-            per_as_bytes.assign(angle_sets_.size(), 0);
           const auto entry_bytes = CheckedAdd(
             entry_header_bytes,
             CheckedMultiply(
               num_values, sizeof(double), "CBCD sweep chunk: outgoing face-payload size overflow."),
             "CBCD sweep chunk: outgoing wire-entry size overflow.");
           ValidateWireEntrySize(entry_bytes);
-          per_as_bytes[as_ss_idx] =
-            CheckedAdd(per_as_bytes[as_ss_idx],
-                       entry_bytes,
-                       "CBCD sweep chunk: outgoing wire-section size overflow.");
         }
         for (const auto& face_info : common_data.GetDelayedOutgoingNonlocalFaces(cell_local_id))
         {
@@ -176,11 +163,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             CheckedMultiply(static_cast<std::size_t>(face_info.num_face_nodes),
                             stride,
                             "CBCD sweep chunk: delayed outgoing face-value count overflow.");
-          auto& per_as_bytes =
-            destination_section_bytes[dest_rank]
-                                     [static_cast<std::size_t>(CBCDMessageKind::DELAYED_FACE_PSI)];
-          if (per_as_bytes.empty())
-            per_as_bytes.assign(angle_sets_.size(), 0);
           const auto entry_bytes = CheckedAdd(
             entry_header_bytes,
             CheckedMultiply(num_values,
@@ -188,10 +170,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                             "CBCD sweep chunk: delayed outgoing face-payload size overflow."),
             "CBCD sweep chunk: delayed outgoing wire-entry size overflow.");
           ValidateWireEntrySize(entry_bytes);
-          per_as_bytes[as_ss_idx] =
-            CheckedAdd(per_as_bytes[as_ss_idx],
-                       entry_bytes,
-                       "CBCD sweep chunk: delayed outgoing wire-section size overflow.");
         }
       }
       for (const int dest_rank : common_data.GetDelayedOutgoingLocalities())
@@ -200,12 +178,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           CheckedAdd(outgoing_records_by_destination[dest_rank],
                      1,
                      "CBCD sweep chunk: completion record-count overflow.");
-        auto& completion_sections =
-          destination_section_bytes[dest_rank]
-                                   [static_cast<std::size_t>(CBCDMessageKind::DELAYED_COMPLETION)];
-        if (completion_sections.empty())
-          completion_sections.assign(angle_sets_.size(), 0);
-        completion_sections[as_ss_idx] = 1;
       }
       capacities[as_ss_idx].outgoing_faces_by_destination.reserve(
         outgoing_records_by_destination.size());
@@ -260,30 +232,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
     }
 
-    std::size_t max_message_bytes = 0;
-    for (const auto& [_, per_kind_bytes] : destination_section_bytes)
-    {
-      std::size_t msg_size_in_bytes = message_header_bytes;
-      for (std::size_t kind_index = 0; kind_index < per_kind_bytes.size(); ++kind_index)
-      {
-        const bool is_completion =
-          kind_index == static_cast<std::size_t>(CBCDMessageKind::DELAYED_COMPLETION);
-        const auto& per_as_bytes = per_kind_bytes[kind_index];
-        for (const auto& section_bytes : per_as_bytes)
-        {
-          if (section_bytes == 0)
-            continue;
-          const auto wire_section_bytes =
-            CheckedAdd(section_header_bytes,
-                       is_completion ? 0 : section_bytes,
-                       "CBCD sweep chunk: wire-section size overflow.");
-          msg_size_in_bytes = wire_section_bytes > mpi_count_limit - msg_size_in_bytes
-                                ? mpi_count_limit
-                                : msg_size_in_bytes + wire_section_bytes;
-        }
-      }
-      max_message_bytes = std::max(max_message_bytes, std::min(msg_size_in_bytes, mpi_count_limit));
-    }
+    const auto max_message_bytes =
+      static_cast<std::size_t>(problem.GetOptions().max_mpi_message_size);
 
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
     async_comm_ = std::make_unique<CBCD_AsynchronousCommunicator>(
@@ -308,6 +258,13 @@ CBCDSweepChunk::StartCommunicator(const std::size_t num_workers)
 {
   if (async_comm_)
     async_comm_->Start(num_workers);
+}
+
+void
+CBCDSweepChunk::RequestCommunicatorFlush()
+{
+  if (async_comm_)
+    async_comm_->RequestFlush();
 }
 
 void
