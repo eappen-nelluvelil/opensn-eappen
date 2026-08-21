@@ -65,19 +65,12 @@ public:
   /// Bytes in the local psi backing buffer for this FLUDS instance.
   std::size_t GetLocalPsiBytes() const noexcept { return local_psi_data_size_ * sizeof(double); }
 
-  /// Allocate buffers asynchronously on the associated stream.
-  void AllocateLocalAndSavedPsi();
-
   /**
-   * Allocate the lagged old/new banks used by cycle-aware sweeps.
+   * Allocate the angular-flux banks used by the sweep kernel.
    *
-   * No-op when the owning common data has no delayed-local or delayed-nonlocal faces.
-   * Otherwise sizes the device and host lagged-local banks against
-   * `CBCD_FLUDSCommonData::GetNumDelayedLocalNodes()` and the lagged nonlocal banks
-   * against the corresponding incoming/outgoing delayed counts. The host old/new views
-   * expose the complete lagged state to the transport iteration and restart machinery.
+   * Allocates the normal, saved, and delayed banks before publishing the kernel pointer set.
    */
-  void AllocateDelayedPsiBanks();
+  void AllocatePsiBanks();
 
   /// Copy host lagged-local old data to its device bank before a sweep application.
   void CopyDelayedPsiToDevice();
@@ -254,6 +247,8 @@ private:
   std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
   /// Flat reflecting-boundary face plans.
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
+  /// Allocate the lagged old/new banks used by cycle-aware sweeps.
+  void AllocateDelayedPsiBanks();
   /// Build the device pointer set exposed to the CBCD sweep kernel.
   void CreatePointerSet();
 };

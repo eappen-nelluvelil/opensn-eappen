@@ -72,7 +72,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
 }
 
 void
-CBCD_FLUDS::AllocateLocalAndSavedPsi()
+CBCD_FLUDS::AllocatePsiBanks()
 {
   local_psi_ = crb::DeviceMemory<double>(local_psi_data_size_);
   if (save_angular_flux_ and host_saved_psi_.empty())
@@ -80,6 +80,7 @@ CBCD_FLUDS::AllocateLocalAndSavedPsi()
     host_saved_psi_ = crb::HostVector<double>(saved_psi_data_size_);
     device_saved_psi_ = crb::DeviceMemory<double>(saved_psi_data_size_);
   }
+  AllocateDelayedPsiBanks();
   CreatePointerSet();
 }
 
@@ -219,8 +220,6 @@ CBCD_FLUDS::AllocateDelayedPsiBanks()
   if (delayed_outgoing_nonlocal_size > 0)
     delayed_nonlocal_outgoing_psi_ =
       crb::MappedHostVector<double>(delayed_outgoing_nonlocal_size, 0.0);
-
-  CreatePointerSet();
 }
 
 void
