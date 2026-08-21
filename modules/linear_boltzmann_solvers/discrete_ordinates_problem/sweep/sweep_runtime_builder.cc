@@ -23,6 +23,7 @@
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -727,13 +728,45 @@ BuildCBCLocalFaceSlotPlans(SweepRuntime& runtime,
   }
 
   const auto thread_info = GetThreadResourceInfo();
-  const auto num_threads = std::min(spds_list.size(), thread_info.available_threads);
-  log.Log() << program_timer.GetTimeString() << " Compute local-face slot plans for CBC SPDS ("
+  std::vector<std::size_t> plan_leaders;
+  std::vector<std::size_t> leader_by_spds(spds_list.size());
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> groups_by_hash;
+  for (std::size_t i = 0; i < spds_list.size(); ++i)
+  {
+    const auto hash = spds_list[i]->GetLocalFaceTaskGraphHash();
+    auto& candidates = groups_by_hash[hash];
+    const auto match =
+      std::ranges::find_if(candidates,
+                           [&](const std::size_t leader)
+                           { return spds_list[i]->HasSameLocalFaceTaskGraph(*spds_list[leader]); });
+    if (match != candidates.end())
+      leader_by_spds[i] = *match;
+    else
+    {
+      leader_by_spds[i] = i;
+      candidates.push_back(i);
+      plan_leaders.push_back(i);
+    }
+  }
+
+  const auto num_threads = std::min(plan_leaders.size(), thread_info.available_threads);
+  log.Log() << program_timer.GetTimeString() << " Compute local-face slot plans for "
+            << spds_list.size() << " CBC SPDS (" << plan_leaders.size() << " unique graph(s), "
             << num_threads << " thread(s); " << FormatThreadResourceInfo(thread_info) << ").";
-  ParallelFor(spds_list.size(),
-              num_threads,
-              [&spds_list, &face_node_counts](const std::size_t i)
-              { spds_list[i]->ComputeMaxNumLocalPsiSlots(face_node_counts); });
+  ParallelForDynamic(
+    plan_leaders.size(),
+    num_threads,
+    [&spds_list, &face_node_counts, &plan_leaders](const std::size_t group)
+    { spds_list[plan_leaders[group]]->ComputeMaxNumLocalPsiSlots(face_node_counts); });
+  ParallelForDynamic(spds_list.size(),
+                     std::min(spds_list.size(), thread_info.available_threads),
+                     [&spds_list, &face_node_counts, &leader_by_spds](const std::size_t i)
+                     {
+                       const auto leader = leader_by_spds[i];
+                       if (leader != i)
+                         spds_list[i]->ReuseLocalFaceSlotPlan(*spds_list[leader], face_node_counts);
+                     });
+  log.Log() << program_timer.GetTimeString() << " Local-face slot planning done.";
 }
 
 void

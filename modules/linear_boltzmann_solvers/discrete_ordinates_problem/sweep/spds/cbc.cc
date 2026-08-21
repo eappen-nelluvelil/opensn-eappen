@@ -25,6 +25,19 @@ namespace
 // Bounds exact SCC optimization to 2^16 states (roughly 0.6 MiB of DP storage).
 constexpr std::size_t MAX_EXACT_FAS_STATES = std::size_t{1} << 16;
 
+void
+HashPlannerRange(std::uint64_t& hash, const std::span<const std::uint32_t> values) noexcept
+{
+  constexpr std::uint64_t fnv_prime = 1099511628211ULL;
+  hash ^= values.size();
+  hash *= fnv_prime;
+  for (const auto value : values)
+  {
+    hash ^= value;
+    hash *= fnv_prime;
+  }
+}
+
 std::uint64_t
 PackDirectedEdge(const std::uint32_t upstream_id, const std::uint32_t downstream_id) noexcept
 {
@@ -576,10 +589,8 @@ CBC_SPDS::UpdateLocalFaceSlotLayout()
 }
 
 void
-CBC_SPDS::ComputeMaxNumLocalPsiSlots(const std::span<const std::uint32_t> face_node_counts)
+CBC_SPDS::SetLocalFaceNodeCounts(const std::span<const std::uint32_t> face_node_counts)
 {
-  CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
-
   if (face_node_counts.size() != outgoing_local_face_task_ids_.size())
     throw std::invalid_argument("CBC_SPDS: local face-node table has an invalid size.");
 
@@ -594,6 +605,49 @@ CBC_SPDS::ComputeMaxNumLocalPsiSlots(const std::span<const std::uint32_t> face_n
     max_local_face_node_count_ =
       std::max(max_local_face_node_count_, static_cast<std::size_t>(face_node_counts[face]));
   }
+}
+
+std::uint64_t
+CBC_SPDS::GetLocalFaceTaskGraphHash() const noexcept
+{
+  std::uint64_t hash = 14695981039346656037ULL;
+  HashPlannerRange(hash, task_successor_rank_offsets_);
+  HashPlannerRange(hash, task_successor_ranks_);
+  HashPlannerRange(hash, local_face_producer_ranks_);
+  HashPlannerRange(hash, local_face_consumer_ranks_);
+  HashPlannerRange(hash, producer_cell_face_offsets_);
+  return hash;
+}
+
+bool
+CBC_SPDS::HasSameLocalFaceTaskGraph(const CBC_SPDS& other) const noexcept
+{
+  return task_successor_rank_offsets_ == other.task_successor_rank_offsets_ and
+         task_successor_ranks_ == other.task_successor_ranks_ and
+         local_face_producer_ranks_ == other.local_face_producer_ranks_ and
+         local_face_consumer_ranks_ == other.local_face_consumer_ranks_ and
+         producer_cell_face_offsets_ == other.producer_cell_face_offsets_;
+}
+
+void
+CBC_SPDS::ReuseLocalFaceSlotPlan(const CBC_SPDS& source,
+                                 const std::span<const std::uint32_t> face_node_counts)
+{
+  if (not HasSameLocalFaceTaskGraph(source))
+    throw std::invalid_argument("CBC_SPDS: cannot reuse a slot plan from a different face graph.");
+
+  SetLocalFaceNodeCounts(face_node_counts);
+  max_num_local_psi_slots_ = source.max_num_local_psi_slots_;
+  local_face_slot_ids_ = source.local_face_slot_ids_;
+  UpdateLocalFaceSlotLayout();
+}
+
+void
+CBC_SPDS::ComputeMaxNumLocalPsiSlots(const std::span<const std::uint32_t> face_node_counts)
+{
+  CALI_CXX_MARK_SCOPE("CBC_SPDS::ComputeMaxNumLocalPsiSlots");
+
+  SetLocalFaceNodeCounts(face_node_counts);
 
   if (task_list_.empty() or local_face_producer_ranks_.empty())
   {

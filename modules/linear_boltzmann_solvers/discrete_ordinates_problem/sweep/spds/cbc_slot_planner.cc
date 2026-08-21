@@ -131,6 +131,20 @@ public:
     return FindFirstSet(row, pos + 1);
   }
 
+  std::size_t CountSetBits(const std::size_t row, const std::size_t start_pos = 0) const noexcept
+  {
+    const std::uint64_t* const r = Row(row);
+    std::size_t word = start_pos / 64;
+    const std::size_t active_words = row_active_word_counts_[row];
+    if (word >= active_words)
+      return 0;
+
+    std::size_t count = std::popcount(r[word] & (~0ULL << (start_pos % 64)));
+    for (++word; word < active_words; ++word)
+      count += std::popcount(r[word]);
+    return count;
+  }
+
 private:
   std::size_t n_ = 0;
   std::size_t active_words_per_row_ = 0;
@@ -143,8 +157,7 @@ struct DFSFrame
 {
   std::uint32_t u_face_rank = INVALID_INDEX;
   std::uint32_t via_v_face_rank = INVALID_INDEX;
-  std::uint32_t producer_rank_index = 0;
-  std::uint32_t producer_rank_end = 0;
+  std::uint32_t next_producer_rank = INVALID_INDEX;
   std::uint32_t next_v_face_rank = 0;
   std::uint32_t v_face_end = 0;
 };
@@ -159,9 +172,7 @@ struct ThreadLocalWorkspace
   std::vector<std::uint32_t> consumer_rank_face_offsets;
   std::vector<std::uint32_t> consumer_rank_face_write_offsets;
   std::vector<std::uint32_t> faces_by_consumer_rank;
-  std::vector<std::uint32_t> candidate_producer_rank_offsets;
-  std::vector<std::uint32_t> candidate_producer_ranks;
-  std::vector<std::uint32_t> candidate_face_counts_by_consumer_rank;
+  std::vector<std::uint32_t> candidate_rank_counts_by_consumer_rank;
   std::vector<std::uint32_t> greedy_consumer_rank_order;
   std::vector<std::uint32_t> face_last_rank_for_slot;
   std::vector<DFSFrame> dfs_frames;
@@ -180,10 +191,8 @@ struct ThreadLocalWorkspace
     consumer_rank_face_offsets.assign(num_consumer_ranks + 1, 0);
     consumer_rank_face_write_offsets.assign(num_consumer_ranks, 0);
     faces_by_consumer_rank.assign(num_faces, INVALID_INDEX);
-    candidate_producer_rank_offsets.assign(num_consumer_ranks + 1, 0);
-    candidate_face_counts_by_consumer_rank.assign(num_consumer_ranks, 0);
+    candidate_rank_counts_by_consumer_rank.assign(num_consumer_ranks, 0);
     greedy_consumer_rank_order.clear();
-    candidate_producer_ranks.clear();
   }
 };
 
@@ -295,7 +304,7 @@ public:
   {
     ws_.PrepareMatching(producer_cell_face_offsets_.size() - 1, num_faces_);
     PrepareConsumerFaceCache();
-    PrepareCandidateProducerRankCache();
+    PrepareCandidateRankCounts();
     PrepareGreedyOrder();
   }
 
@@ -330,15 +339,15 @@ private:
   template <class F>
   void ForEachCandidate(const std::uint32_t u_face_rank, const F& fn) const
   {
-    // The bipartite graph is implicit. For one left-side face u, the admissible right-side
-    // faces are all faces whose producer ranks lie in the cached reachable-producer row of
-    // u's consumer rank.
+    // The bipartite graph is implicit. For one left-side face u, admissible right-side faces
+    // are generated directly from its consumer cell's bit-packed reachability row.
     const auto consumer_cell_rank = face_consumer_ranks_[u_face_rank];
-    const auto rank_begin = ws_.candidate_producer_rank_offsets[consumer_cell_rank];
-    const auto rank_end = ws_.candidate_producer_rank_offsets[consumer_cell_rank + 1];
-    for (std::uint32_t rank_index = rank_begin; rank_index < rank_end; ++rank_index)
+    const auto num_cell_ranks = producer_cell_face_offsets_.size() - 1;
+    for (std::size_t producer_cell_rank =
+           ws_.reachability.FindFirstSet(consumer_cell_rank, consumer_cell_rank);
+         producer_cell_rank < num_cell_ranks;
+         producer_cell_rank = ws_.reachability.FindNextSet(consumer_cell_rank, producer_cell_rank))
     {
-      const auto producer_cell_rank = ws_.candidate_producer_ranks[rank_index];
       const auto face_begin = producer_cell_face_offsets_[producer_cell_rank];
       const auto face_end = producer_cell_face_offsets_[producer_cell_rank + 1];
       for (std::uint32_t v_face_rank = face_begin; v_face_rank < face_end; ++v_face_rank)
@@ -557,41 +566,21 @@ private:
     }
   }
 
-  void PrepareCandidateProducerRankCache()
+  void PrepareCandidateRankCounts()
   {
-    // Cache the sparse producer-rank rows of the implicit bipartite graph. All faces with
-    // the same consumer rank share the same reachable producer ranks.
+    // Use reachable-cell count as the scarcity proxy for greedy ordering. Exact matching does
+    // not depend on this order, and avoiding materialized candidate lists is critical for broad
+    // DAGs where those lists can be much larger than the bit-packed closure itself.
     const auto num_consumer_ranks = producer_cell_face_offsets_.size() - 1;
     for (std::size_t consumer_rank = 0; consumer_rank < num_consumer_ranks; ++consumer_rank)
     {
-      ws_.candidate_producer_rank_offsets[consumer_rank] =
-        static_cast<std::uint32_t>(ws_.candidate_producer_ranks.size());
-
       if (ws_.consumer_rank_face_offsets[consumer_rank] ==
           ws_.consumer_rank_face_offsets[consumer_rank + 1])
         continue;
 
-      std::uint32_t candidate_face_count = 0;
-      for (std::size_t producer_rank = ws_.reachability.FindFirstSet(consumer_rank, consumer_rank);
-           producer_rank < num_consumer_ranks;
-           producer_rank = ws_.reachability.FindNextSet(consumer_rank, producer_rank))
-      {
-        const auto face_begin = producer_cell_face_offsets_[producer_rank];
-        const auto face_end = producer_cell_face_offsets_[producer_rank + 1];
-        if (face_begin == face_end)
-          continue;
-
-        if (ws_.candidate_producer_ranks.size() >= std::numeric_limits<std::uint32_t>::max())
-          throw std::length_error(
-            "CBC slot planner: candidate-rank cache exceeds the 32-bit offset range.");
-        ws_.candidate_producer_ranks.push_back(static_cast<std::uint32_t>(producer_rank));
-        candidate_face_count += face_end - face_begin;
-      }
-      ws_.candidate_face_counts_by_consumer_rank[consumer_rank] = candidate_face_count;
+      ws_.candidate_rank_counts_by_consumer_rank[consumer_rank] =
+        static_cast<std::uint32_t>(ws_.reachability.CountSetBits(consumer_rank, consumer_rank));
     }
-
-    ws_.candidate_producer_rank_offsets.back() =
-      static_cast<std::uint32_t>(ws_.candidate_producer_ranks.size());
   }
 
   void PrepareGreedyOrder()
@@ -612,8 +601,8 @@ private:
               ws_.greedy_consumer_rank_order.end(),
               [&](const std::uint32_t lhs, const std::uint32_t rhs)
               {
-                const auto lhs_count = ws_.candidate_face_counts_by_consumer_rank[lhs];
-                const auto rhs_count = ws_.candidate_face_counts_by_consumer_rank[rhs];
+                const auto lhs_count = ws_.candidate_rank_counts_by_consumer_rank[lhs];
+                const auto rhs_count = ws_.candidate_rank_counts_by_consumer_rank[rhs];
                 if (lhs_count != rhs_count)
                   return lhs_count < rhs_count;
                 return lhs < rhs;
@@ -624,10 +613,9 @@ private:
   {
     // Materialize the current state of one implicit adjacency-row scan on the DFS stack.
     const auto consumer_rank = face_consumer_ranks_[u_face_rank];
-    const auto producer_rank_index = ws_.candidate_producer_rank_offsets[consumer_rank];
-    const auto producer_rank_end = ws_.candidate_producer_rank_offsets[consumer_rank + 1];
+    const auto first_producer_rank = ws_.reachability.FindFirstSet(consumer_rank, consumer_rank);
     ws_.dfs_frames.push_back(
-      {u_face_rank, via_v_face_rank, producer_rank_index, producer_rank_end, 0, 0});
+      {u_face_rank, via_v_face_rank, static_cast<std::uint32_t>(first_producer_rank), 0, 0});
   }
 
   bool AdvanceFrame(DFSFrame& frame) const
@@ -638,10 +626,13 @@ private:
     {
       if (frame.next_v_face_rank < frame.v_face_end)
         return true;
-      if (frame.producer_rank_index >= frame.producer_rank_end)
+      if (frame.next_producer_rank >= producer_cell_face_offsets_.size() - 1)
         return false;
 
-      const auto producer_rank = ws_.candidate_producer_ranks[frame.producer_rank_index++];
+      const auto producer_rank = frame.next_producer_rank;
+      const auto consumer_rank = face_consumer_ranks_[frame.u_face_rank];
+      frame.next_producer_rank =
+        static_cast<std::uint32_t>(ws_.reachability.FindNextSet(consumer_rank, producer_rank));
       frame.next_v_face_rank = producer_cell_face_offsets_[producer_rank];
       frame.v_face_end = producer_cell_face_offsets_[producer_rank + 1];
     }

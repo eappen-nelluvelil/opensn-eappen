@@ -129,6 +129,16 @@ public:
    */
   void ComputeMaxNumLocalPsiSlots(std::span<const std::uint32_t> face_node_counts);
 
+  /// Return a deterministic fingerprint of the local face-poset planner inputs.
+  std::uint64_t GetLocalFaceTaskGraphHash() const noexcept;
+
+  /// Return whether another SPDS has identical local face-poset planner inputs.
+  bool HasSameLocalFaceTaskGraph(const CBC_SPDS& other) const noexcept;
+
+  /// Reuse an exact plan from an SPDS with the same local face-poset planner inputs.
+  void ReuseLocalFaceSlotPlan(const CBC_SPDS& source,
+                              std::span<const std::uint32_t> face_node_counts);
+
   /// Return the minimum number of reusable local-face psi slots.
   std::size_t GetMaxNumLocalPsiSlots() const noexcept { return max_num_local_psi_slots_; }
 
@@ -190,6 +200,9 @@ protected:
 
   /// Recompute compact slot-node extents and prefix offsets for the current assignment.
   void UpdateLocalFaceSlotLayout();
+
+  /// Populate directed-face node counts from the grid-local face table.
+  void SetLocalFaceNodeCounts(std::span<const std::uint32_t> face_node_counts);
 
   /// Process-independent ordinal used to order CBC collectives.
   int id_ = 0;

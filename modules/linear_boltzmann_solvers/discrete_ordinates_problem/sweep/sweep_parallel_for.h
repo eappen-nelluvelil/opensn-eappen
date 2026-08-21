@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <exception>
@@ -84,6 +85,27 @@ ParallelFor(std::size_t count, std::size_t num_threads, Function function)
   for (const auto& exception : exceptions)
     if (exception)
       std::rethrow_exception(exception);
+}
+
+/// Run independent, nonuniform work items using dynamic scheduling.
+template <typename Function>
+void
+ParallelForDynamic(std::size_t count, std::size_t num_threads, Function function)
+{
+  assert(num_threads > 0);
+  std::atomic<std::size_t> next{0};
+  ParallelFor(num_threads,
+              num_threads,
+              [&](const std::size_t)
+              {
+                while (true)
+                {
+                  const auto i = next.fetch_add(1, std::memory_order_relaxed);
+                  if (i >= count)
+                    break;
+                  function(i);
+                }
+              });
 }
 
 } // namespace opensn
