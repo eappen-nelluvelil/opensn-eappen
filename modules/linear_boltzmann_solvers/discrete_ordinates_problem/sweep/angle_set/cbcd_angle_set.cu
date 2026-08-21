@@ -337,8 +337,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
         {
           // Delayed traffic only populates the lagged-incoming `_new` bank — it must not
           // touch dependency counters because the corresponding edge is, by construction,
-          // not part of the current-iteration task graph.  Bank rotation `_new -> _old`
-          // is performed by the scheduler after every delayed-completion marker arrives.
+          // not part of the current-iteration task graph. Bank rotation `_new -> _old`
+          // occurs only after every expected delayed face has arrived.
           assert(batch.kind == CBCDMessageKind::DELAYED_FACE_PSI);
           for (const auto& entry : batch.entries)
             cbcd_fluds_.ScatterReceivedDelayedFaceData(
@@ -363,8 +363,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
     work_done = true;
   }
 
-  // Publish delayed-output completion before waiting for delayed input. Otherwise every
-  // rank in a distributed cycle can wait for a marker that no rank has emitted.
+  // Publish local completion only after every locally produced delayed face has entered
+  // the outgoing queue. Delayed receive completion uses the exact expected face count.
   const bool all_local_work_complete = (num_completed_tasks_ == num_tasks_) and
                                        (not batch_state_.kernel_in_flight) and
                                        (not batch_state_.completed_batch_pending);
@@ -375,9 +375,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
     work_done = true;
   }
 
-  // A completion marker is ordered after its source's delayed payloads. The acquire in
-  // AreDelayedReceivesComplete followed by the mailbox check ensures all such payloads
-  // have been drained before host-visible new-state data is exposed.
+  // The receive counter is decremented after mailbox publication. The acquire followed by
+  // the mailbox check ensures all delayed payloads are drained before new-state exposure.
   const bool communication_complete =
     async_comm_->AreDelayedReceivesComplete(GetID()) and (not async_comm_->HasIncoming(GetID()));
   if (all_local_work_complete and local_completion_signaled_ and communication_complete)

@@ -68,15 +68,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
       delayed_incoming_source_partitions_by_angle_set.push_back(
         common_data.GetDelayedIncomingSourcePartitions());
-      // Outgoing queue capacity includes (a) normal outgoing face payloads, (b) delayed
-      // outgoing face payloads, and (c) one delayed-completion marker per
-      // delayed-destination locality.  Each item occupies one queue slot.
-      capacities[as_ss_idx].outgoing_faces =
-        common_data.GetNumOutgoingNonlocalFaces() +
-        common_data.GetNumDelayedOutgoingNonlocalFaces() +
-        common_data.GetDelayedOutgoingLocalities().size();
-      capacities[as_ss_idx].incoming_faces =
-        common_data.GetNumIncomingNonlocalFaces() +
+      // Outgoing queue capacity includes normal and delayed face payloads. Delayed
+      // completion is tracked by the exact number of received delayed face records.
+      capacities[as_ss_idx].outgoing_faces = common_data.GetNumOutgoingNonlocalFaces() +
+                                             common_data.GetNumDelayedOutgoingNonlocalFaces();
+      capacities[as_ss_idx].incoming_faces = common_data.GetNumIncomingNonlocalFaces() +
+                                             common_data.GetNumDelayedIncomingNonlocalFaces();
+      capacities[as_ss_idx].delayed_incoming_faces =
         common_data.GetNumDelayedIncomingNonlocalFaces();
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
@@ -117,10 +115,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
         }
         // Mirror the sizing loop for delayed incoming faces so the receiver's mailbox
-        // batches are big enough to hold delayed-face-psi sections too.  The
-        // delayed-source-slot indices are independent from normal source-slot indices,
-        // but the same `(angle_set, source_partition)` key counts toward the message-size
-        // estimate because the wire format may carry delayed sections alongside normal.
+        // batches are big enough to hold delayed-face-psi sections too. Delayed and normal
+        // source-slot indices occupy independent spaces.
         for (const auto& face_info : common_data.GetDelayedIncomingNonlocalFaces(cell_local_id))
         {
           if (face_info.num_nodes == 0)
@@ -146,6 +142,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
     }
 
+    // Retain the proven eager communicator's topology-derived full-peer payload bound.
+    // A smaller configured packet size is a separate performance experiment: combining it
+    // with restoration of pipelined sends would make the Tuo comparison ambiguous.
     std::size_t max_message_bytes = 0;
     for (const auto& [_, per_as_bytes] : source_as_section_bytes)
     {
@@ -160,13 +159,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     }
 
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
-    async_comm_ =
-      std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
-                                                      angle_sets_.front()->GetCommunicatorSet(),
-                                                      incoming_source_partitions_by_angle_set,
-                                                      delayed_incoming_source_partitions_by_angle_set,
-                                                      max_message_bytes,
-                                                      capacities);
+    async_comm_ = std::make_unique<CBCD_AsynchronousCommunicator>(
+      base_angle_sets,
+      angle_sets_.front()->GetCommunicatorSet(),
+      incoming_source_partitions_by_angle_set,
+      delayed_incoming_source_partitions_by_angle_set,
+      max_message_bytes,
+      capacities);
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);
   }
