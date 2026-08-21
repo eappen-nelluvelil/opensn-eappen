@@ -10,6 +10,7 @@
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include <algorithm>
+#include <thread>
 #include <unordered_map>
 
 namespace opensn
@@ -60,6 +61,20 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   {
     pool_.Resize(angle_agg_.GetNumAngleSets());
     execution_order_.reserve(angle_agg_.GetNumAngleSets());
+  }
+  else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
+  {
+    // Preserve the proven CBCD V2 execution model: one persistent worker per angle set,
+    // capped by the hardware concurrency visible to the rank.  Without this pool the
+    // ASYNC_FIFO batch is empty and the communicator waits forever for sweeps that never
+    // started.
+    angle_agg_.SetupAngleSetDependencies();
+    const std::size_t hardware_concurrency = std::thread::hardware_concurrency();
+    const auto num_workers =
+      std::max<std::size_t>(1,
+                            std::min(angle_agg_.GetNumAngleSets(),
+                                     hardware_concurrency == 0 ? 1 : hardware_concurrency));
+    pool_.Resize(num_workers);
   }
 
   // Initialize delayed upstream data
