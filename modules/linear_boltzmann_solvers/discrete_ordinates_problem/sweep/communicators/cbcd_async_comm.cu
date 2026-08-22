@@ -25,13 +25,6 @@ namespace opensn
 namespace detail
 {
 
-/// A finite per-peer window permits overlap without exhausting MPI request/resources.
-constexpr std::size_t max_in_flight_sends_per_destination = 4;
-/// Bound one receive-service pass so outgoing and completion progress cannot starve.
-constexpr std::size_t max_receives_per_progress_round = 64;
-/// Avoid repeatedly materializing an entire full-sweep backlog while credits are bounded.
-constexpr std::size_t max_records_per_producer_scan = 256;
-
 std::size_t
 CheckedAdd(const std::size_t lhs, const std::size_t rhs, const char* const description)
 {
@@ -104,17 +97,28 @@ struct BufferReader
 
 } // namespace detail
 
+void
+CBCD_AsynchronousCommunicator::SendBuilder::Clear()
+{
+  data.Clear();
+  data.Data().resize(sizeof(std::size_t));
+  const std::size_t zero = 0;
+  std::memcpy(data.Data().data(), &zero, sizeof(zero));
+  num_sections = 0;
+  current_angle_set_id = static_cast<std::size_t>(-1);
+  current_section_entry_count_offset = static_cast<std::size_t>(-1);
+  num_records = 0;
+}
+
 CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
   const MPICommunicatorSet& comm_set,
   const std::vector<std::vector<int>>& incoming_source_partitions,
   const std::vector<std::vector<int>>& delayed_incoming_source_partitions,
-  const std::size_t max_message_bytes,
   const std::vector<AngleSetCapacity>& capacities)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
     mpi_tag_(static_cast<int>(angle_sets.size())),
-    max_message_bytes_(max_message_bytes),
     angle_set_done_(angle_sets.size()),
     delayed_faces_expected_by_angle_set_(angle_sets.size()),
     delayed_faces_remaining_by_angle_set_(angle_sets.size()),
@@ -237,17 +241,19 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (const int dest_rank : destinations)
   {
     const auto destination_index = destination_states_.size();
-    destination_states_.push_back({dest_rank, 0});
+    const auto mapped_rank = comm_set_.MapIonJ(dest_rank, dest_rank);
+    destination_states_.push_back({dest_rank, mapped_rank});
     dest_to_state_index_[dest_rank] = destination_index;
   }
   send_builders_.resize(destination_states_.size());
-  active_builder_destinations_.reserve(destination_states_.size());
-  builder_is_active_.resize(destination_states_.size(), 0);
+  for (auto& builders : send_builders_)
+    for (auto& builder : builders)
+      builder.Clear();
+  if (num_angle_sets_ > 0)
+    ready_producer_queue_.Preallocate(num_angle_sets_);
+  ready_producer_slot_cache_.reserve(num_angle_sets_);
 
-  log.Log0Verbose1() << "CBCD communicator: packet_target_bytes=" << max_message_bytes_
-                     << ", sends_per_destination=" << detail::max_in_flight_sends_per_destination
-                     << ", receive_progress_budget=" << detail::max_receives_per_progress_round
-                     << ", producer_queues=" << num_angle_sets_
+  log.Log0Verbose1() << "CBCD communicator: producer_queues=" << num_angle_sets_
                      << ", destinations=" << destination_states_.size() << ".";
 
   // Static angle-set scheduling gives each queue exactly one producer and the communication
@@ -268,9 +274,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
   for (auto& done : angle_set_done_)
     done.store(false, std::memory_order_relaxed);
-
-  if (max_message_bytes_ > 0)
-    recv_buffer_.Data().reserve(max_message_bytes_);
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -291,7 +294,30 @@ void
 CBCD_AsynchronousCommunicator::CommitOutgoingBatch(const std::size_t angle_set_id)
 {
   assert(angle_set_id < outgoing_queues_.size());
-  outgoing_queues_[angle_set_id]->queue->Commit();
+  auto& producer = *outgoing_queues_[angle_set_id];
+  producer.has_unpublished_commit |= producer.queue->Commit();
+}
+
+void
+CBCD_AsynchronousCommunicator::PublishOutgoingGeneration(const std::size_t begin_angle_set,
+                                                         const std::size_t end_angle_set)
+{
+  assert(begin_angle_set <= end_angle_set);
+  assert(end_angle_set <= outgoing_queues_.size());
+
+  bool has_committed_work = false;
+  for (auto angle_set_id = begin_angle_set; angle_set_id < end_angle_set; ++angle_set_id)
+  {
+    auto& producer = *outgoing_queues_[angle_set_id];
+    has_committed_work |= producer.has_unpublished_commit;
+    producer.has_unpublished_commit = false;
+  }
+  if (not has_committed_work)
+    return;
+
+  auto& ready_slot = ready_producer_queue_.ReserveSlot();
+  ready_slot.payload = {begin_angle_set, end_angle_set};
+  ready_producer_queue_.PublishSlot(ready_slot);
 }
 
 bool
@@ -320,18 +346,44 @@ CBCD_AsynchronousCommunicator::Start()
       std::fill(seen_by_source.begin(), seen_by_source.end(), std::uint8_t{0});
   }
   in_flight_sends_.clear();
-  for (auto& destination : destination_states_)
-    destination.in_flight_sends = 0;
-  next_outgoing_queue_ = 0;
+  in_flight_send_requests_.clear();
+  completed_send_indices_.clear();
+  metrics_ = {};
+  for (auto& builders : send_builders_)
+    for (auto& builder : builders)
+      builder.Clear();
+  for (auto& producer : outgoing_queues_)
+    producer->has_unpublished_commit = false;
+  assert(ready_producer_queue_.Empty());
   comm_thread_ = std::thread(&CBCD_AsynchronousCommunicator::CommThreadLoop, this);
 }
 
 void
 CBCD_AsynchronousCommunicator::Stop()
 {
+  if (not comm_thread_.joinable())
+    return;
   stop_requested_.store(true, std::memory_order_release);
-  if (comm_thread_.joinable())
-    comm_thread_.join();
+  comm_thread_.join();
+
+  const auto sum_lanes = [](const auto& values) { return values[0] + values[1]; };
+  log.Log0Verbose1() << "CBCD communication summary: sent_messages="
+                       << sum_lanes(metrics_.sent_messages)
+                       << ", sent_normal_messages=" << metrics_.sent_messages[0]
+                       << ", sent_delayed_messages=" << metrics_.sent_messages[1]
+                       << ", sent_sections=" << sum_lanes(metrics_.sent_sections)
+                       << ", sent_records=" << sum_lanes(metrics_.sent_records)
+                       << ", sent_bytes=" << sum_lanes(metrics_.sent_bytes)
+                       << ", received_messages=" << sum_lanes(metrics_.received_messages)
+                       << ", received_normal_messages=" << metrics_.received_messages[0]
+                       << ", received_delayed_messages=" << metrics_.received_messages[1]
+                       << ", received_sections=" << sum_lanes(metrics_.received_sections)
+                       << ", received_records=" << sum_lanes(metrics_.received_records)
+                       << ", received_bytes=" << sum_lanes(metrics_.received_bytes)
+                       << ", producer_generations=" << metrics_.producer_generations
+                       << ", producer_queue_visits=" << metrics_.producer_queue_visits
+                       << ", idle_progress_turns=" << metrics_.idle_progress_turns
+                       << ", peak_outstanding_sends=" << metrics_.peak_outstanding_sends << ".";
 }
 
 void
@@ -341,9 +393,9 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
 
   try
   {
-    // Retire sends first so credits are available, service a bounded incoming burst next so
-    // dependency-unlocking traffic has priority, then admit committed producer batches. No
-    // phase is allowed to monopolize the dedicated progress thread.
+    // Retire completed sends first, service one incoming message next, then serialize the
+    // currently published producer generation. These are semantic progress units rather than
+    // empirically selected work quotas.
     while (true)
     {
       bool work_done = PollInFlightSends();
@@ -362,7 +414,10 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
       }
 
       if (not work_done)
+      {
+        ++metrics_.idle_progress_turns;
         std::this_thread::yield();
+      }
     }
   }
   catch (const std::exception& error)
@@ -380,60 +435,103 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
 }
 
 void
+CBCD_AsynchronousCommunicator::AppendToSendBuilder(SendBuilder& builder,
+                                                   const OutgoingFaceData& entry)
+{
+  auto& raw = builder.data.Data();
+  const auto append_bytes = [&raw](const void* const ptr, const std::size_t size)
+  {
+    const auto old_size = raw.size();
+    raw.resize(detail::CheckedAdd(old_size, size, "CBCD communicator: message size overflow."));
+    std::memcpy(raw.data() + old_size, ptr, size);
+  };
+
+  if (builder.current_angle_set_id != entry.angle_set_id)
+  {
+    const auto kind_byte = static_cast<std::uint8_t>(entry.kind);
+    append_bytes(&kind_byte, sizeof(kind_byte));
+    append_bytes(&entry.angle_set_id, sizeof(entry.angle_set_id));
+    builder.current_section_entry_count_offset = raw.size();
+    const std::size_t zero = 0;
+    append_bytes(&zero, sizeof(zero));
+    builder.current_angle_set_id = entry.angle_set_id;
+    ++builder.num_sections;
+    std::memcpy(raw.data(), &builder.num_sections, sizeof(builder.num_sections));
+  }
+
+  append_bytes(&entry.remote_face_index, sizeof(entry.remote_face_index));
+  const auto data_size = entry.psi_data.size();
+  append_bytes(&data_size, sizeof(data_size));
+  const auto payload_bytes = detail::CheckedMultiply(
+    data_size, sizeof(double), "CBCD communicator: outgoing face size overflow.");
+  append_bytes(entry.psi_data.data(), payload_bytes);
+
+  std::size_t section_entries = 0;
+  std::memcpy(&section_entries,
+              raw.data() + builder.current_section_entry_count_offset,
+              sizeof(section_entries));
+  ++section_entries;
+  std::memcpy(raw.data() + builder.current_section_entry_count_offset,
+              &section_entries,
+              sizeof(section_entries));
+  ++builder.num_records;
+}
+
+void
 CBCD_AsynchronousCommunicator::PostSendBuilder(const std::size_t destination_index,
-                                               const std::size_t angle_set_id,
+                                               const CBCDMessageKind kind,
                                                SendBuilder& builder)
 {
   assert(destination_index < destination_states_.size());
   assert(not builder.Empty());
 
   auto& destination = destination_states_[destination_index];
-  assert(destination.in_flight_sends < detail::max_in_flight_sends_per_destination);
-  if (builder.payload_bytes > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+  if (builder.data.Size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
     throw std::overflow_error("CBCD communicator: MPI payload exceeds the count range.");
 
   InFlightSend in_flight;
-  in_flight.destination_index = destination_index;
-  in_flight.data.Data().resize(builder.payload_bytes);
-  std::size_t offset = 0;
-  const auto write_bytes = [&](const void* ptr, const std::size_t size)
-  {
-    std::memcpy(in_flight.data.Data().data() + offset, ptr, size);
-    offset += size;
-  };
-
-  std::size_t num_sections = 0;
-  for (const auto& entries : builder.entries_by_kind)
-    num_sections += not entries.empty();
-  write_bytes(&num_sections, sizeof(std::size_t));
-
-  for (std::size_t kind_index = 0; kind_index < builder.entries_by_kind.size(); ++kind_index)
-  {
-    const auto& entries = builder.entries_by_kind[kind_index];
-    if (entries.empty())
-      continue;
-
-    const auto kind_byte = static_cast<std::uint8_t>(kind_index);
-    write_bytes(&kind_byte, sizeof(std::uint8_t));
-    write_bytes(&angle_set_id, sizeof(std::size_t));
-    const auto num_entries = entries.size();
-    write_bytes(&num_entries, sizeof(std::size_t));
-    for (const auto* entry : entries)
-    {
-      write_bytes(&entry->remote_face_index, sizeof(std::uint32_t));
-      const auto data_size = entry->psi_data.size();
-      write_bytes(&data_size, sizeof(std::size_t));
-      write_bytes(entry->psi_data.data(), data_size * sizeof(double));
-    }
-  }
-  assert(offset == in_flight.data.Data().size());
+  const auto kind_index = static_cast<std::size_t>(kind);
+  ++metrics_.sent_messages[kind_index];
+  metrics_.sent_sections[kind_index] += builder.num_sections;
+  metrics_.sent_records[kind_index] += builder.num_records;
+  metrics_.sent_bytes[kind_index] += builder.data.Size();
+  in_flight.data = std::move(builder.data);
 
   const auto& comm = comm_set_.LocICommunicator(destination.dest_rank);
-  const auto mapped_rank = comm_set_.MapIonJ(destination.dest_rank, destination.dest_rank);
-  in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
-  ++destination.in_flight_sends;
+  auto request = comm.isend(destination.mapped_rank, mpi_tag_, in_flight.data.Data());
   in_flight_sends_.push_back(std::move(in_flight));
+  in_flight_send_requests_.push_back(std::move(request));
+  metrics_.peak_outstanding_sends =
+    std::max(metrics_.peak_outstanding_sends, in_flight_sends_.size());
+  if (not reusable_send_buffers_.empty())
+  {
+    builder.data = std::move(reusable_send_buffers_.back());
+    reusable_send_buffers_.pop_back();
+  }
   builder.Clear();
+}
+
+bool
+CBCD_AsynchronousCommunicator::FlushSendBuilders()
+{
+  bool sent_any = false;
+  constexpr std::array traffic_priority{CBCDMessageKind::NORMAL_FACE_PSI,
+                                        CBCDMessageKind::DELAYED_FACE_PSI};
+  for (const auto kind : traffic_priority)
+  {
+    const auto kind_index = static_cast<std::size_t>(kind);
+    for (std::size_t destination_index = 0; destination_index < send_builders_.size();
+         ++destination_index)
+    {
+      auto& builder = send_builders_[destination_index][kind_index];
+      if (not builder.Empty())
+      {
+        PostSendBuilder(destination_index, kind, builder);
+        sent_any = true;
+      }
+    }
+  }
+  return sent_any;
 }
 
 bool
@@ -441,110 +539,113 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::SerializeAndSend");
 
-  constexpr std::size_t section_header_bytes = sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
   if (outgoing_queues_.empty())
     return false;
 
-  bool sent_any = false;
-  const auto num_queues = outgoing_queues_.size();
+  bool made_progress = false;
+  constexpr std::size_t section_header_bytes = sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
+  constexpr auto mpi_max_message_bytes = static_cast<std::size_t>(std::numeric_limits<int>::max());
+  ready_producer_queue_.GetReadySlots(ready_producer_slot_cache_);
+  if (ready_producer_slot_cache_.empty())
+    return FlushSendBuilders();
+  metrics_.producer_generations += ready_producer_slot_cache_.size();
+
   // Normal records unlock the current sweep DAG; delayed records only seed the next sweep.
-  // Service all currently available normal prefixes before allowing delayed traffic to
-  // consume a destination credit. Each producer queue is FIFO and publishes its delayed
-  // tail only after its local normal DAG has completed.
+  // Service the notified producers' normal prefixes before delayed traffic. Each producer
+  // queue is FIFO and publishes its delayed tail only after its local normal DAG has completed.
   constexpr std::array traffic_priority{CBCDMessageKind::NORMAL_FACE_PSI,
                                         CBCDMessageKind::DELAYED_FACE_PSI};
   for (const auto traffic_kind : traffic_priority)
   {
-    for (std::size_t scan = 0; scan < num_queues; ++scan)
+    for (const auto* ready_slot : ready_producer_slot_cache_)
     {
-      const auto angle_set_id = (next_outgoing_queue_ + scan) % num_queues;
-      auto& queue = *outgoing_queues_[angle_set_id]->queue;
-      queue.GetReadySlots(slot_cache_, detail::max_records_per_producer_scan);
-      if (slot_cache_.empty() or slot_cache_.front()->payload.kind != traffic_kind)
-        continue;
+      const auto generation = ready_slot->payload;
+      if (generation.begin_angle_set > generation.end_angle_set or
+          generation.end_angle_set > outgoing_queues_.size())
+        throw std::logic_error("CBCD communicator: invalid ready-producer generation.");
+      metrics_.producer_queue_visits += generation.end_angle_set - generation.begin_angle_set;
 
-      active_builder_destinations_.clear();
-      std::size_t slots_processed = 0;
-      for (const auto* slot : slot_cache_)
+      for (auto angle_set_id = generation.begin_angle_set; angle_set_id < generation.end_angle_set;
+           ++angle_set_id)
       {
-        const auto& entry = slot->payload;
-        if (entry.kind != traffic_kind)
-          break;
-        const auto destination_it = dest_to_state_index_.find(entry.dest_rank);
-        if (destination_it == dest_to_state_index_.end())
-          throw std::logic_error("CBCD communicator: outgoing record has an unknown destination.");
-        const auto destination_index = destination_it->second;
-        auto& destination = destination_states_[destination_index];
-        auto& builder = send_builders_[destination_index];
+        auto& queue = *outgoing_queues_[angle_set_id]->queue;
+        queue.GetReadySlots(slot_cache_);
+        if (slot_cache_.empty() or slot_cache_.front()->payload.kind != traffic_kind)
+          continue;
 
-        if (builder.Empty() and
-            destination.in_flight_sends >= detail::max_in_flight_sends_per_destination)
-          break;
-        if (not builder_is_active_[destination_index])
+        std::size_t slots_processed = 0;
+        for (const auto* slot : slot_cache_)
         {
-          builder_is_active_[destination_index] = 1;
-          active_builder_destinations_.push_back(destination_index);
-        }
-
-        const auto payload_bytes = detail::CheckedMultiply(
-          entry.psi_data.size(), sizeof(double), "CBCD communicator: outgoing face size overflow.");
-        const auto entry_bytes =
-          detail::CheckedAdd(sizeof(std::uint32_t) + sizeof(std::size_t),
-                             payload_bytes,
-                             "CBCD communicator: outgoing record size overflow.");
-
-        const auto kind_idx = static_cast<std::size_t>(entry.kind);
-        if (kind_idx >= builder.entries_by_kind.size() or entry.angle_set_id != angle_set_id)
-          throw std::logic_error("CBCD communicator: invalid outgoing record metadata.");
-        auto& entries = builder.entries_by_kind[kind_idx];
-        const bool opens_section = entries.empty();
-        auto added_bytes = detail::CheckedAdd(entry_bytes,
-                                              opens_section ? section_header_bytes : 0,
-                                              "CBCD communicator: outgoing section size overflow.");
-        auto projected_bytes = detail::CheckedAdd(
-          builder.payload_bytes, added_bytes, "CBCD communicator: outgoing message size overflow.");
-
-        // One builder consumes one destination credit. Post it and open another only
-        // when a second credit is available. One indivisible face may exceed the target.
-        const bool exceeds_byte_target =
-          max_message_bytes_ > 0 and projected_bytes > max_message_bytes_;
-        if (exceeds_byte_target and not builder.Empty())
-        {
-          PostSendBuilder(destination_index, angle_set_id, builder);
-          sent_any = true;
-          if (destination.in_flight_sends >= detail::max_in_flight_sends_per_destination)
+          const auto& entry = slot->payload;
+          if (entry.kind != traffic_kind)
             break;
-          added_bytes = detail::CheckedAdd(entry_bytes,
-                                           section_header_bytes,
-                                           "CBCD communicator: outgoing section size overflow.");
-          projected_bytes =
-            detail::CheckedAdd(builder.payload_bytes,
-                               added_bytes,
-                               "CBCD communicator: outgoing message size overflow.");
+          const auto destination_it = dest_to_state_index_.find(entry.dest_rank);
+          if (destination_it == dest_to_state_index_.end())
+            throw std::logic_error(
+              "CBCD communicator: outgoing record has an unknown destination.");
+          const auto destination_index = destination_it->second;
+          const auto kind_index = static_cast<std::size_t>(entry.kind);
+          if (kind_index >= send_builders_[destination_index].size() or
+              entry.angle_set_id != angle_set_id)
+            throw std::logic_error("CBCD communicator: invalid outgoing record metadata.");
+          auto& builder = send_builders_[destination_index][kind_index];
+
+          const auto payload_bytes =
+            detail::CheckedMultiply(entry.psi_data.size(),
+                                    sizeof(double),
+                                    "CBCD communicator: outgoing face size overflow.");
+          const auto entry_bytes =
+            detail::CheckedAdd(sizeof(std::uint32_t) + sizeof(std::size_t),
+                               payload_bytes,
+                               "CBCD communicator: outgoing record size overflow.");
+
+          const bool opens_section = builder.current_angle_set_id != angle_set_id;
+          auto added_bytes =
+            detail::CheckedAdd(entry_bytes,
+                               opens_section ? section_header_bytes : 0,
+                               "CBCD communicator: outgoing section size overflow.");
+          auto projected_bytes = detail::CheckedAdd(
+            builder.data.Size(), added_bytes, "CBCD communicator: outgoing message size overflow.");
+
+          // CBCD packetization follows the ready-producer generation, not the AAH/AAHD
+          // max-message option. Split only at the count range accepted by the MPI interface.
+          if (projected_bytes > mpi_max_message_bytes and not builder.Empty())
+          {
+            PostSendBuilder(destination_index, traffic_kind, builder);
+            made_progress = true;
+            added_bytes = detail::CheckedAdd(entry_bytes,
+                                             section_header_bytes,
+                                             "CBCD communicator: outgoing section size overflow.");
+            projected_bytes =
+              detail::CheckedAdd(builder.data.Size(),
+                                 added_bytes,
+                                 "CBCD communicator: outgoing message size overflow.");
+          }
+          if (projected_bytes > mpi_max_message_bytes)
+            throw std::overflow_error(
+              "CBCD communicator: one face record exceeds the MPI count range.");
+
+          AppendToSendBuilder(builder, entry);
+          assert(builder.data.Size() == projected_bytes);
+          ++slots_processed;
+          made_progress = true;
+
+          if (builder.data.Size() == mpi_max_message_bytes)
+            PostSendBuilder(destination_index, traffic_kind, builder);
         }
 
-        entries.push_back(&entry);
-        builder.payload_bytes = projected_bytes;
-        ++slots_processed;
+        if (slots_processed > 0)
+          queue.FreeSlots(slots_processed);
       }
-
-      for (const auto destination_index : active_builder_destinations_)
-      {
-        auto& builder = send_builders_[destination_index];
-        if (not builder.Empty())
-        {
-          PostSendBuilder(destination_index, angle_set_id, builder);
-          sent_any = true;
-        }
-        builder_is_active_[destination_index] = 0;
-      }
-      if (slots_processed > 0)
-        queue.FreeSlots(slots_processed);
     }
   }
 
-  next_outgoing_queue_ = (next_outgoing_queue_ + 1) % num_queues;
-  return sent_any;
+  ready_producer_queue_.FreeSlots(ready_producer_slot_cache_.size());
+
+  // The ready-producer generation is the semantic flush boundary. It permits cross-angle-set
+  // aggregation without a byte threshold, timer, or angle-set-completion barrier.
+  made_progress |= FlushSendBuilders();
+  return made_progress;
 }
 
 bool
@@ -553,129 +654,138 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
 
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
-  bool received_any = false;
-  std::size_t messages_received = 0;
-  while (messages_received < detail::max_receives_per_progress_round)
+  auto message = recv_comm.improbe(mpi::ANY_SOURCE, mpi_tag_);
+  if (not message)
+    return false;
+
+  const auto source_it = source_partition_by_rank_.find(message.source());
+  if (source_it == source_partition_by_rank_.end())
+    throw std::logic_error("CBCD communicator: message arrived from an unknown source rank.");
+  const int source_partition = source_it->second;
+  message.recv(recv_buffer_.Data());
+
+  detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data()),
+                              recv_buffer_.Data().size()};
+
+  // Walk each (kind, angle_set) section to determine its source slot, entry count, and
+  // total number of doubles, which allows exactly one mailbox payload allocation per
+  // face-psi section.
+  const auto num_sections = reader.LoadSize();
+  if (num_sections == 0)
+    throw std::runtime_error("CBCD communicator: empty wire message.");
+  auto packet_kind = CBCDMessageKind::NORMAL_FACE_PSI;
+  for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
   {
-    auto message = recv_comm.improbe(mpi::ANY_SOURCE, mpi_tag_);
-    if (not message)
-      break;
-    received_any = true;
-    ++messages_received;
+    const auto kind = reader.LoadKind();
+    const auto kind_index = static_cast<std::size_t>(kind);
+    if (section_index == 0)
+      packet_kind = kind;
+    else if (kind != packet_kind)
+      throw std::runtime_error("CBCD communicator: mixed traffic kinds in one wire message.");
+    const auto angle_set_id = reader.LoadSize();
+    const auto num_entries = reader.LoadSize();
+    ++metrics_.received_sections[kind_index];
+    metrics_.received_records[kind_index] += num_entries;
+    if (angle_set_id >= num_angle_sets_)
+      throw std::runtime_error("CBCD communicator: invalid wire angle-set ID.");
 
-    const auto source_it = source_partition_by_rank_.find(message.source());
-    if (source_it == source_partition_by_rank_.end())
-      throw std::logic_error("CBCD communicator: message arrived from an unknown source rank.");
-    const int source_partition = source_it->second;
-    message.recv(recv_buffer_.Data());
-
-    detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data()),
-                                recv_buffer_.Data().size()};
-
-    // Walk each (kind, angle_set) section to determine its source slot, entry count, and
-    // total number of doubles, which allows exactly one mailbox payload allocation per
-    // face-psi section.
-    const auto num_sections = reader.LoadSize();
-    for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
+    // Normal and delayed traffic use disjoint per-(angle_set) source-slot spaces; the
+    // kind tag selects which map to consult.
+    const auto& slot_map = (kind == CBCDMessageKind::NORMAL_FACE_PSI)
+                             ? source_partition_to_slot_by_angle_set_[angle_set_id]
+                             : delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
+    const auto slot_it = slot_map.find(source_partition);
+    if (slot_it == slot_map.end())
+      throw std::runtime_error("CBCD communicator: source has no angle-set slot mapping.");
+    const auto source_slot = slot_it->second;
+    if (num_entries == 0)
+      throw std::runtime_error("CBCD communicator: empty face-data section.");
+    if (kind == CBCDMessageKind::DELAYED_FACE_PSI)
     {
-      const auto kind = reader.LoadKind();
-      const auto angle_set_id = reader.LoadSize();
-      const auto num_entries = reader.LoadSize();
-      if (angle_set_id >= num_angle_sets_)
-        throw std::runtime_error("CBCD communicator: invalid wire angle-set ID.");
-
-      // Normal and delayed traffic use disjoint per-(angle_set) source-slot spaces; the
-      // kind tag selects which map to consult.
-      const auto& slot_map = (kind == CBCDMessageKind::NORMAL_FACE_PSI)
-                               ? source_partition_to_slot_by_angle_set_[angle_set_id]
-                               : delayed_source_partition_to_slot_by_angle_set_[angle_set_id];
-      const auto slot_it = slot_map.find(source_partition);
-      if (slot_it == slot_map.end())
-        throw std::runtime_error("CBCD communicator: source has no angle-set slot mapping.");
-      const auto source_slot = slot_it->second;
-      if (num_entries == 0)
-        throw std::runtime_error("CBCD communicator: empty face-data section.");
-      if (kind == CBCDMessageKind::DELAYED_FACE_PSI)
-      {
-        const auto& remaining_by_source =
-          delayed_faces_remaining_by_source_and_angle_set_[angle_set_id];
-        if (source_slot >= remaining_by_source.size() or
-            num_entries > remaining_by_source[source_slot])
-          throw std::logic_error("CBCD communicator: delayed source-face counter underflow.");
-      }
-
-      const auto* const section_ptr = reader.Data();
-      std::size_t total_values = 0;
-      for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-      {
-        reader.LoadFaceIndex();
-        const auto data_size = reader.LoadSize();
-        const auto data_bytes = detail::CheckedMultiply(
-          data_size, sizeof(double), "CBCD communicator: wire face size overflow.");
-        reader.SkipBytes(data_bytes);
-        total_values = detail::CheckedAdd(
-          total_values, data_size, "CBCD communicator: wire section size overflow.");
-      }
-      const auto section_num_bytes = static_cast<std::size_t>(reader.Data() - section_ptr);
-
-      auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-      auto& batch = slot.payload;
-      batch.kind = kind;
-      batch.source_slot = source_slot;
-      batch.entries.resize(num_entries);
-      batch.psi_data.resize(total_values);
-      detail::BufferReader section_reader{section_ptr, section_num_bytes};
-      std::size_t value_offset = 0;
-      // Walk the compact mailbox payload with per-face offsets into one contiguous
-      // `psi_data` block.
-      for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-      {
-        auto& entry = batch.entries[entry_index];
-        entry.source_face_index = section_reader.LoadFaceIndex();
-        auto& seen = (kind == CBCDMessageKind::NORMAL_FACE_PSI)
-                       ? normal_face_seen_by_source_and_angle_set_[angle_set_id][source_slot]
-                       : delayed_face_seen_by_source_and_angle_set_[angle_set_id][source_slot];
-        if (entry.source_face_index >= seen.size())
-          throw std::runtime_error(
-            kind == CBCDMessageKind::NORMAL_FACE_PSI
-              ? "CBCD communicator: normal face index exceeds its source table."
-              : "CBCD communicator: delayed face index exceeds its source table.");
-        if (seen[entry.source_face_index] != 0)
-          throw std::logic_error(kind == CBCDMessageKind::NORMAL_FACE_PSI
-                                   ? "CBCD communicator: duplicate normal face record."
-                                   : "CBCD communicator: duplicate delayed face record.");
-        seen[entry.source_face_index] = 1;
-        entry.payload_offset = value_offset;
-        entry.payload_size = section_reader.LoadSize();
-        const auto payload_bytes = detail::CheckedMultiply(
-          entry.payload_size, sizeof(double), "CBCD communicator: wire face size overflow.");
-        section_reader.Require(payload_bytes);
-        std::memcpy(batch.psi_data.data() + value_offset, section_reader.Data(), payload_bytes);
-        section_reader.SkipBytes(payload_bytes);
-        value_offset = detail::CheckedAdd(
-          value_offset, entry.payload_size, "CBCD communicator: wire section size overflow.");
-      }
-      if (section_reader.remaining_bytes != 0 or value_offset != total_values)
-        throw std::runtime_error("CBCD communicator: inconsistent face-data section.");
-
-      incoming_mailboxes_[angle_set_id]->PublishSlot(slot);
-      if (kind == CBCDMessageKind::DELAYED_FACE_PSI)
-      {
-        // The communication thread is the sole decrementer. Validate before mutating so a
-        // malformed/duplicate section cannot wrap the unsigned liveness counter.
-        auto& remaining = delayed_faces_remaining_by_angle_set_[angle_set_id];
-        const auto previous = remaining.load(std::memory_order_relaxed);
-        if (num_entries > previous)
-          throw std::logic_error("CBCD communicator: delayed face counter underflow.");
-        delayed_faces_remaining_by_source_and_angle_set_[angle_set_id][source_slot] -= num_entries;
-        remaining.store(previous - num_entries, std::memory_order_release);
-      }
+      const auto& remaining_by_source =
+        delayed_faces_remaining_by_source_and_angle_set_[angle_set_id];
+      if (source_slot >= remaining_by_source.size() or
+          num_entries > remaining_by_source[source_slot])
+        throw std::logic_error("CBCD communicator: delayed source-face counter underflow.");
     }
-    if (reader.remaining_bytes != 0)
-      throw std::runtime_error("CBCD communicator: trailing bytes in wire payload.");
-  }
 
-  return received_any;
+    const auto* const section_ptr = reader.Data();
+    std::size_t total_values = 0;
+    for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+    {
+      reader.LoadFaceIndex();
+      const auto data_size = reader.LoadSize();
+      const auto data_bytes = detail::CheckedMultiply(
+        data_size, sizeof(double), "CBCD communicator: wire face size overflow.");
+      reader.SkipBytes(data_bytes);
+      total_values = detail::CheckedAdd(
+        total_values, data_size, "CBCD communicator: wire section size overflow.");
+    }
+    const auto section_num_bytes = static_cast<std::size_t>(reader.Data() - section_ptr);
+
+    auto& slot = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+    auto& batch = slot.payload;
+    batch.kind = kind;
+    batch.source_slot = source_slot;
+    batch.entries.resize(num_entries);
+    batch.psi_data.resize(total_values);
+    detail::BufferReader section_reader{section_ptr, section_num_bytes};
+    std::size_t value_offset = 0;
+    // Walk the compact mailbox payload with per-face offsets into one contiguous
+    // `psi_data` block.
+    for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+    {
+      auto& entry = batch.entries[entry_index];
+      entry.source_face_index = section_reader.LoadFaceIndex();
+      auto& seen = (kind == CBCDMessageKind::NORMAL_FACE_PSI)
+                     ? normal_face_seen_by_source_and_angle_set_[angle_set_id][source_slot]
+                     : delayed_face_seen_by_source_and_angle_set_[angle_set_id][source_slot];
+      if (entry.source_face_index >= seen.size())
+        throw std::runtime_error(
+          kind == CBCDMessageKind::NORMAL_FACE_PSI
+            ? "CBCD communicator: normal face index exceeds its source table."
+            : "CBCD communicator: delayed face index exceeds its source table.");
+      if (seen[entry.source_face_index] != 0)
+        throw std::logic_error(kind == CBCDMessageKind::NORMAL_FACE_PSI
+                                 ? "CBCD communicator: duplicate normal face record."
+                                 : "CBCD communicator: duplicate delayed face record.");
+      seen[entry.source_face_index] = 1;
+      entry.payload_offset = value_offset;
+      entry.payload_size = section_reader.LoadSize();
+      const auto payload_bytes = detail::CheckedMultiply(
+        entry.payload_size, sizeof(double), "CBCD communicator: wire face size overflow.");
+      section_reader.Require(payload_bytes);
+      std::memcpy(batch.psi_data.data() + value_offset, section_reader.Data(), payload_bytes);
+      section_reader.SkipBytes(payload_bytes);
+      value_offset = detail::CheckedAdd(
+        value_offset, entry.payload_size, "CBCD communicator: wire section size overflow.");
+    }
+    if (section_reader.remaining_bytes != 0 or value_offset != total_values)
+      throw std::runtime_error("CBCD communicator: inconsistent face-data section.");
+
+    incoming_mailboxes_[angle_set_id]->PublishSlot(slot);
+    if (kind == CBCDMessageKind::DELAYED_FACE_PSI)
+    {
+      // The communication thread is the sole decrementer. Validate before mutating so a
+      // malformed/duplicate section cannot wrap the unsigned liveness counter.
+      auto& remaining = delayed_faces_remaining_by_angle_set_[angle_set_id];
+      const auto previous = remaining.load(std::memory_order_relaxed);
+      if (num_entries > previous)
+        throw std::logic_error("CBCD communicator: delayed face counter underflow.");
+      delayed_faces_remaining_by_source_and_angle_set_[angle_set_id][source_slot] -= num_entries;
+      remaining.store(previous - num_entries, std::memory_order_release);
+    }
+  }
+  if (reader.remaining_bytes != 0)
+    throw std::runtime_error("CBCD communicator: trailing bytes in wire payload.");
+
+  // A packet contains sections from one traffic lane because normal and delayed builders
+  // are disjoint. Attribute its wire bytes once after validating every section.
+  const auto packet_kind_index = static_cast<std::size_t>(packet_kind);
+  ++metrics_.received_messages[packet_kind_index];
+  metrics_.received_bytes[packet_kind_index] += recv_buffer_.Data().size();
+
+  return true;
 }
 
 bool
@@ -683,23 +793,27 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::PollInFlightSends");
 
-  bool completed_any = false;
-  for (std::size_t i = 0; i < in_flight_sends_.size();)
+  if (in_flight_send_requests_.empty())
+    return false;
+
+  completed_send_indices_.clear();
+  mpi::test_some(in_flight_send_requests_, completed_send_indices_);
+  std::ranges::sort(completed_send_indices_, std::greater<>{});
+  for (const int completed_index : completed_send_indices_)
   {
-    if (mpi::test(in_flight_sends_[i].request))
+    const auto i = static_cast<std::size_t>(completed_index);
+    auto& in_flight = in_flight_sends_[i];
+    in_flight.data.Clear();
+    reusable_send_buffers_.push_back(std::move(in_flight.data));
+    if (i + 1 != in_flight_sends_.size())
     {
-      completed_any = true;
-      auto& destination = destination_states_[in_flight_sends_[i].destination_index];
-      assert(destination.in_flight_sends > 0);
-      --destination.in_flight_sends;
-      if (i + 1 != in_flight_sends_.size())
-        in_flight_sends_[i] = std::move(in_flight_sends_.back());
-      in_flight_sends_.pop_back();
+      in_flight_sends_[i] = std::move(in_flight_sends_.back());
+      in_flight_send_requests_[i] = in_flight_send_requests_.back();
     }
-    else
-      ++i;
+    in_flight_sends_.pop_back();
+    in_flight_send_requests_.pop_back();
   }
-  return completed_any;
+  return not completed_send_indices_.empty();
 }
 
 bool
@@ -712,6 +826,14 @@ CBCD_AsynchronousCommunicator::AllAngleSetsComplete() const
   for (const auto& producer_queue : outgoing_queues_)
     if (not producer_queue->queue->Empty())
       return false;
+
+  if (not ready_producer_queue_.Empty())
+    return false;
+
+  for (const auto& builders : send_builders_)
+    for (const auto& builder : builders)
+      if (not builder.Empty())
+        return false;
 
   // The lagged incoming-nonlocal banks must be fully populated for the next sweep.
   for (std::size_t angle_set_id = 0; angle_set_id < num_angle_sets_; ++angle_set_id)

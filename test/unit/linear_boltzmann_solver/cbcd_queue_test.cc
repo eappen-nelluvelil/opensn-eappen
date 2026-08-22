@@ -35,6 +35,67 @@ TEST(CBCDCommittedSPSCQueueTest, PublishesOnlyCompleteBatches)
   EXPECT_TRUE(queue.Empty());
 }
 
+TEST(CBCDCommittedSPSCQueueTest, CommitReportsOnlyNewPublication)
+{
+  CommittedSPSCQueue<int> queue;
+  queue.Preallocate(2);
+  std::vector<CommittedSPSCQueue<int>::Slot*> ready;
+
+  EXPECT_FALSE(queue.Commit());
+  queue.ReserveSlot().payload = 11;
+  EXPECT_TRUE(queue.Commit());
+  EXPECT_FALSE(queue.Commit());
+
+  queue.GetReadySlots(ready);
+  ASSERT_EQ(ready.size(), 1);
+  queue.FreeSlots(ready.size());
+  EXPECT_FALSE(queue.Commit());
+}
+
+TEST(CBCDLockFreeRingBufferTest, BoundsConcurrentProducerReservations)
+{
+  constexpr std::size_t num_producers = 4;
+  constexpr std::size_t values_per_producer = 500;
+  constexpr std::size_t capacity = 7;
+  LockFreeRingBuffer<std::size_t> queue;
+  queue.Preallocate(capacity);
+
+  std::vector<std::thread> producers;
+  producers.reserve(num_producers);
+  for (std::size_t producer = 0; producer < num_producers; ++producer)
+    producers.emplace_back(
+      [producer, &queue]
+      {
+        for (std::size_t value = 0; value < values_per_producer; ++value)
+        {
+          auto& slot = queue.ReserveSlot();
+          slot.payload = producer * values_per_producer + value;
+          queue.PublishSlot(slot);
+        }
+      });
+
+  std::vector<std::uint8_t> seen(num_producers * values_per_producer, 0);
+  std::size_t num_consumed = 0;
+  while (num_consumed < seen.size())
+  {
+    num_consumed += queue.ProcessReady(
+      [&seen](const std::size_t value)
+      {
+        ASSERT_LT(value, seen.size());
+        EXPECT_EQ(seen[value], 0);
+        seen[value] = 1;
+      });
+    if (num_consumed < seen.size())
+      std::this_thread::yield();
+  }
+  for (auto& producer : producers)
+    producer.join();
+
+  EXPECT_TRUE(queue.Empty());
+  for (const auto count : seen)
+    EXPECT_EQ(count, 1);
+}
+
 TEST(CBCDCommittedSPSCQueueTest, ReusesConsumedSlotsAcrossWrap)
 {
   CommittedSPSCQueue<int> queue;

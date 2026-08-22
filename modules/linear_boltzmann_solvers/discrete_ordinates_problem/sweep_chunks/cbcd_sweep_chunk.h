@@ -60,6 +60,9 @@ public:
   /// Stop the aggregated communicator thread.
   void StopCommunicator();
 
+  /// Publish committed traffic from one static worker's scheduler pass.
+  void PublishOutgoingGeneration(std::size_t begin_angle_set, std::size_t end_angle_set);
+
   /// Refresh cached kernel arguments once at the start of a sweep.
   void RefreshCachedKernelArgs();
 

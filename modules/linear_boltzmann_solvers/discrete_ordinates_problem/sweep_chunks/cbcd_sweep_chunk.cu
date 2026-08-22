@@ -99,19 +99,12 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       }
     }
 
-    // Device CBCD obeys the same user-facing packet target as CPU CBC and AAHD. A single
-    // indivisible face may exceed the target, but full-peer payload volume must never be
-    // mistaken for a latency/flow-control policy (and can be zero on a source-only rank).
-    const auto max_message_bytes =
-      static_cast<std::size_t>(problem_.GetOptions().max_mpi_message_size);
-
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
     async_comm_ = std::make_unique<CBCD_AsynchronousCommunicator>(
       base_angle_sets,
       angle_sets_.front()->GetCommunicatorSet(),
       incoming_source_partitions_by_angle_set,
       delayed_incoming_source_partitions_by_angle_set,
-      max_message_bytes,
       capacities);
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);
@@ -135,6 +128,13 @@ CBCDSweepChunk::StopCommunicator()
 {
   if (async_comm_)
     async_comm_->Stop();
+}
+
+void
+CBCDSweepChunk::PublishOutgoingGeneration(const std::size_t begin_angle_set,
+                                          const std::size_t end_angle_set)
+{
+  async_comm_->PublishOutgoingGeneration(begin_angle_set, end_angle_set);
 }
 
 void

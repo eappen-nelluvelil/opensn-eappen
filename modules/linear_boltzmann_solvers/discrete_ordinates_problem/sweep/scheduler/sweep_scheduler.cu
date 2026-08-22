@@ -138,6 +138,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
           ++i;
         }
+        cbcd_sweep_chunk.PublishOutgoingGeneration(begin, end);
         if ((not active_angle_set_ids.empty()) and (not any_work_done))
           std::this_thread::yield();
       }

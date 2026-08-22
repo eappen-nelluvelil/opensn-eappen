@@ -96,9 +96,11 @@ struct AngleSetCapacity
 /**
  * Aggregated CBCD communicator with one dedicated progress thread.
  *
- * Each angle-set worker publishes completed device batches through its own SPSC queue. The
- * communication thread drains only committed batches, serializes packets subject to the configured
- * message-size limit, and maintains a finite nonblocking-send window for every destination. The
+ * Each angle-set worker commits completed device batches through its own SPSC queue. At the end of
+ * one static scheduler pass, the worker publishes its exact angle-set range as one generation. The
+ * communication thread drains only committed batches and serializes one packet per destination
+ * from the ready-producer generations observed in that progress turn. Packets are split only at
+ * MPI's representable count bound. The
  * communication thread also probes for incoming messages, deserializes them into compact
  * `IncomingFaceBatch` payloads, and publishes those batches into per-angle-set incoming mailboxes.
  *
@@ -110,10 +112,10 @@ struct AngleSetCapacity
  * - each angle-set owner thread only drains its own incoming mailbox.
  *
  * Aggregated communicator flow:
- * 1. A sweep worker fills all non-local face payloads from one completed device batch and commits
- *    the angle-set queue once.
- * 2. The communication thread gathers committed slots and serializes one or more MPI messages
- *    subject to the configured byte and per-destination in-flight limits.
+ * 1. A sweep worker fills all non-local face payloads from completed device batches, commits each
+ *    angle-set queue, and publishes its static angle-set range after one scheduler pass.
+ * 2. The communication thread gathers the published producer generation and serializes one or more
+ *    MPI messages per destination, split only when required by MPI's count representation.
  * 3. The destination rank probes for those messages, maps the sending partition to its local
  *    source slot, and reconstructs one compact `IncomingFaceBatch` per angle-set section.
  * 4. The communication thread publishes each reconstructed batch into the mailbox owned by
@@ -132,8 +134,6 @@ public:
    * \param incoming_source_partitions Normal-incoming source partitions grouped by angle set.
    * \param delayed_incoming_source_partitions Delayed-incoming source partitions grouped by
    * angle set.  Empty for acyclic SPDSes.
-   * \param max_message_bytes Maximum serialized MPI payload size. A value of zero disables
-   * message-size splitting.
    * \param capacities Queue-capacity summary for each angle set.
    */
   CBCD_AsynchronousCommunicator(
@@ -141,7 +141,6 @@ public:
     const MPICommunicatorSet& comm_set,
     const std::vector<std::vector<int>>& incoming_source_partitions,
     const std::vector<std::vector<int>>& delayed_incoming_source_partitions,
-    std::size_t max_message_bytes,
     const std::vector<AngleSetCapacity>& capacities);
 
   ~CBCD_AsynchronousCommunicator();
@@ -178,8 +177,11 @@ public:
     fill(slot.payload.psi_data.data());
   }
 
-  /// Atomically expose every outgoing record produced by the latest completed device batch.
+  /// Commit every outgoing record produced by the latest completed device batch.
   void CommitOutgoingBatch(std::size_t angle_set_id);
+
+  /// Publish the committed outgoing generation produced by one static worker pass.
+  void PublishOutgoingGeneration(std::size_t begin_angle_set, std::size_t end_angle_set);
 
   /// Report whether every expected delayed face record for one angle set has arrived.
   bool AreDelayedReceivesComplete(std::size_t angle_set_id) const noexcept;
@@ -227,40 +229,58 @@ private:
   struct ProducerQueue
   {
     std::unique_ptr<CommittedSPSCQueue<OutgoingFaceData>> queue;
+    bool has_unpublished_commit = false;
+  };
+
+  /// Static angle-set partition advanced by one worker during one scheduler pass.
+  struct ProducerGeneration
+  {
+    std::size_t begin_angle_set = 0;
+    std::size_t end_angle_set = 0;
   };
 
   /// Communication state for one destination partition.
   struct DestinationState
   {
     int dest_rank = 0;
-    std::size_t in_flight_sends = 0;
+    int mapped_rank = 0;
   };
 
   /// One in-flight nonblocking MPI send and its owned serialized bytes.
   struct InFlightSend
   {
-    mpi::Request request;
     ByteArray data;
-    std::size_t destination_index = 0;
   };
 
-  /// One message under construction for a destination and a single angle set.
+  /// One persistent message under construction for a destination and traffic kind.
   struct SendBuilder
   {
-    std::array<std::vector<const OutgoingFaceData*>, 2> entries_by_kind;
-    std::size_t payload_bytes = sizeof(std::size_t);
+    ByteArray data;
+    std::size_t num_sections = 0;
+    std::size_t current_angle_set_id = static_cast<std::size_t>(-1);
+    std::size_t current_section_entry_count_offset = static_cast<std::size_t>(-1);
+    std::size_t num_records = 0;
 
-    bool Empty() const noexcept
-    {
-      return entries_by_kind[0].empty() and entries_by_kind[1].empty();
-    }
+    bool Empty() const noexcept { return num_records == 0; }
 
-    void Clear()
-    {
-      entries_by_kind[0].clear();
-      entries_by_kind[1].clear();
-      payload_bytes = sizeof(std::size_t);
-    }
+    void Clear();
+  };
+
+  /// Exact communication counts collected by the progress thread for one sweep.
+  struct CommunicationMetrics
+  {
+    std::array<std::size_t, 2> sent_messages{};
+    std::array<std::size_t, 2> sent_sections{};
+    std::array<std::size_t, 2> sent_records{};
+    std::array<std::size_t, 2> sent_bytes{};
+    std::array<std::size_t, 2> received_messages{};
+    std::array<std::size_t, 2> received_sections{};
+    std::array<std::size_t, 2> received_records{};
+    std::array<std::size_t, 2> received_bytes{};
+    std::size_t producer_generations = 0;
+    std::size_t producer_queue_visits = 0;
+    std::size_t idle_progress_turns = 0;
+    std::size_t peak_outstanding_sends = 0;
   };
 
   /// Run the communication-thread progress loop.
@@ -268,8 +288,11 @@ private:
   /// Drain outgoing queues, serialize batches, and post MPI sends.
   bool SerializeAndSend();
   /// Serialize and post one completed message builder.
-  void
-  PostSendBuilder(std::size_t destination_index, std::size_t angle_set_id, SendBuilder& builder);
+  void PostSendBuilder(std::size_t destination_index, CBCDMessageKind kind, SendBuilder& builder);
+  /// Append one outgoing face record to a persistent destination builder.
+  void AppendToSendBuilder(SendBuilder& builder, const OutgoingFaceData& entry);
+  /// Post all partial builders at the ready-producer generation boundary.
+  bool FlushSendBuilders();
   /// Probe for incoming MPI messages, deserialize them, and publish mailbox batches.
   bool ProbeAndReceive();
   /// Retire completed nonblocking sends.
@@ -283,8 +306,6 @@ private:
   std::size_t num_angle_sets_;
   /// MPI tag shared by all communicator messages in this instance.
   int mpi_tag_;
-  /// Maximum serialized MPI payload size.
-  std::size_t max_message_bytes_;
   /// Local MPI rank.
   int my_rank_ = 0;
   /// Local-communicator source rank to global partition map.
@@ -300,18 +321,24 @@ private:
   std::vector<DestinationState> destination_states_;
   /// Destination-rank to communication-state index map.
   std::unordered_map<int, std::size_t> dest_to_state_index_;
-  /// Reusable message builders indexed by destination state.
-  std::vector<SendBuilder> send_builders_;
-  /// Nonempty builder indices in the current producer-queue scan.
-  std::vector<std::size_t> active_builder_destinations_;
-  /// Membership flags for `active_builder_destinations_`.
-  std::vector<std::uint8_t> builder_is_active_;
+  /// Persistent normal/delayed message builders indexed by destination state.
+  std::vector<std::array<SendBuilder, 2>> send_builders_;
+  /// Multi-producer doorbell containing static worker generations with committed traffic.
+  LockFreeRingBuffer<ProducerGeneration> ready_producer_queue_;
+  /// Scratch generation slots drained during one producer-service round.
+  std::vector<LockFreeRingBuffer<ProducerGeneration>::Slot*> ready_producer_slot_cache_;
   /// Per-angle-set incoming mailboxes.
   std::vector<std::unique_ptr<LockFreeRingBuffer<IncomingFaceBatch>>> incoming_mailboxes_;
   /// Reusable receive buffer for one incoming MPI payload.
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
   std::vector<InFlightSend> in_flight_sends_;
+  /// MPI requests aligned with `in_flight_sends_` for batched completion tests.
+  std::vector<mpi::Request> in_flight_send_requests_;
+  /// Indices returned by `MPI_Testsome`, retained to avoid progress-loop allocations.
+  std::vector<int> completed_send_indices_;
+  /// Completed send buffers available for persistent packet-builder reuse.
+  std::vector<ByteArray> reusable_send_buffers_;
   /// Termination flag for the communication thread.
   std::atomic<bool> stop_requested_{false};
   /// Per-angle-set local completion flags.
@@ -330,10 +357,10 @@ private:
   std::vector<std::vector<std::vector<std::uint8_t>>> delayed_face_seen_by_source_and_angle_set_;
   /// Dedicated communication thread.
   std::thread comm_thread_;
-  /// Next producer queue serviced by the communication thread.
-  std::size_t next_outgoing_queue_ = 0;
   /// Scratch vector used while gathering one committed outgoing prefix.
   std::vector<CommittedSPSCQueue<OutgoingFaceData>::Slot*> slot_cache_;
+  /// Progress-thread-only communication accounting for the active sweep.
+  CommunicationMetrics metrics_;
 };
 
 } // namespace opensn

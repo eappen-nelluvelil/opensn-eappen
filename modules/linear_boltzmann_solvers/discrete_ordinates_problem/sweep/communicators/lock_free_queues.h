@@ -74,7 +74,27 @@ public:
    */
   Slot& ReserveSlot()
   {
-    const auto idx = head_.fetch_add(1, std::memory_order_relaxed) % buffer_.size();
+    const auto capacity = buffer_.size();
+    assert(capacity > 0);
+
+    auto reservation = head_.load(std::memory_order_relaxed);
+    while (true)
+    {
+      const auto consumed = consumed_tail_.load(std::memory_order_acquire);
+      if (reservation - consumed >= capacity)
+      {
+        std::this_thread::yield();
+        reservation = head_.load(std::memory_order_relaxed);
+        continue;
+      }
+      if (head_.compare_exchange_weak(reservation,
+                                      reservation + 1,
+                                      std::memory_order_relaxed,
+                                      std::memory_order_relaxed))
+        break;
+    }
+
+    const auto idx = reservation % capacity;
     while (buffer_[idx].ready.load(std::memory_order_acquire))
       std::this_thread::yield();
     return buffer_[idx];
@@ -122,6 +142,7 @@ public:
       buffer_[tail_ % capacity].ready.store(false, std::memory_order_release);
       ++tail_;
     }
+    consumed_tail_.store(tail_, std::memory_order_release);
   }
 
   /**
@@ -149,6 +170,7 @@ public:
       ++tail_;
       ++count;
     }
+    consumed_tail_.store(tail_, std::memory_order_release);
     return count;
   }
 
@@ -167,6 +189,8 @@ private:
   alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> head_{0};
   /// Consumer drain index.
   alignas(std::hardware_destructive_interference_size) std::size_t tail_{0};
+  /// Consumer-published reclamation index used to bound producer reservations.
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> consumed_tail_{0};
 };
 
 /**
@@ -216,8 +240,18 @@ public:
     return buffer_[producer_head_++ % capacity];
   }
 
-  /// Publish every slot reserved since the preceding commit.
-  void Commit() { committed_head_.store(producer_head_, std::memory_order_release); }
+  /**
+   * Publish every slot reserved since the preceding commit.
+   *
+   * \return `true` when this call publishes records not exposed by the preceding commit.
+   */
+  bool Commit()
+  {
+    const bool published_new_records =
+      producer_head_ != committed_head_.load(std::memory_order_relaxed);
+    committed_head_.store(producer_head_, std::memory_order_release);
+    return published_new_records;
+  }
 
   /// Gather the committed, not-yet-consumed prefix.
   void GetReadySlots(std::vector<Slot*>& out,
