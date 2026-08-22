@@ -117,14 +117,14 @@ struct DestinationCapacity
 /**
  * Aggregated CBCD communicator with one dedicated progress thread.
  *
- * Each angle-set worker commits completed device batches through its own SPSC queue. The
- * communication thread deterministically inspects every producer queue and serializes each
- * committed prefix into persistent per-destination, per-traffic-kind builders. Exactly one standard
- * nonblocking send may be active per channel; records produced while it is active remain in the
- * builder and are coalesced for the following transaction. Normal and delayed traffic use
- * independent semantic channels: normal records unlock the current dependency DAG, whereas delayed
- * records populate only the next-sweep bank and therefore do not require a cross-angle-set ordering
- * gate. Packets are split only at MPI's representable count bound. The communication thread also
+ * Each angle-set worker commits completed device batches through its own SPSC queue and marks its
+ * index in a fixed-universe atomic ready set. The communication thread services only marked
+ * producers and serializes each committed prefix into persistent per-destination, per-traffic-kind
+ * builders. Exactly one standard nonblocking send may be active per channel; records produced while
+ * it is active remain in the builder and are coalesced for the following transaction. Normal records
+ * unlock the current dependency DAG. Delayed records populate only the next-sweep bank and remain
+ * buffered until the exact topology proves that every normal record for that destination has been
+ * issued. Packets are split only at MPI's representable count bound. The communication thread also
  * probes for incoming messages, deserializes them into compact
  * `IncomingFaceBatch` payloads, and publishes those batches into per-angle-set incoming mailboxes.
  *
@@ -302,6 +302,7 @@ private:
     std::array<std::size_t, NUM_CBCD_MESSAGE_KINDS> received_sections{};
     std::array<std::size_t, NUM_CBCD_MESSAGE_KINDS> received_records{};
     std::array<std::size_t, NUM_CBCD_MESSAGE_KINDS> received_bytes{};
+    std::size_t producer_notifications = 0;
     std::size_t producer_queue_visits = 0;
     std::size_t idle_progress_turns = 0;
     std::size_t peak_outstanding_sends = 0;
@@ -343,6 +344,10 @@ private:
     delayed_source_partition_to_slot_by_angle_set_;
   /// Per-angle-set outgoing queues. Static scheduling gives each queue one producer.
   std::vector<std::unique_ptr<ProducerQueue>> outgoing_queues_;
+  /// Coalesced event set identifying producer queues with newly committed records.
+  AtomicReadyIndexSet ready_producers_;
+  /// Producer IDs taken from one atomic ready-set snapshot.
+  std::vector<std::size_t> ready_producer_ids_;
   /// Communication state for every possible destination partition.
   std::vector<DestinationState> destination_states_;
   /// Destination-rank to communication-state index map.

@@ -4,13 +4,112 @@
 #pragma once
 
 #include <atomic>
+#include <bit>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <vector>
 
 namespace opensn
 {
+
+/**
+ * Fixed-universe, multi-producer/single-consumer ready-index set.
+ *
+ * Producers atomically mark indices whose private queues contain committed work. The sole
+ * consumer takes a snapshot with atomic exchanges and services exactly the marked queues.
+ * Repeated marks coalesce, which is safe because queue consumers drain the complete committed
+ * prefix. A mark racing after an exchange remains set for the next snapshot; a mark racing before
+ * an exchange is acquired by that exchange. Thus no separate ownership flag or bounded token ring
+ * is needed, and an idle consumer examines ceil(num_indices / word_bits) atomic words rather than
+ * every producer queue.
+ */
+class AtomicReadyIndexSet
+{
+public:
+  /// Number of index bits represented by one atomic storage word.
+  static constexpr std::size_t WORD_BITS = std::numeric_limits<std::uint64_t>::digits;
+  static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
+                "CBCD ready-index words must be lock-free.");
+
+  /// Allocate the exact number of words needed for `num_indices` possible indices.
+  void Initialize(const std::size_t num_indices)
+  {
+    num_indices_ = num_indices;
+    num_words_ = num_indices == 0 ? 0 : 1 + (num_indices - 1) / WORD_BITS;
+    words_ = num_words_ == 0 ? nullptr : std::make_unique<ReadyWord[]>(num_words_);
+    Clear();
+  }
+
+  /// Mark one index ready. Duplicate marks may coalesce until the consumer takes a snapshot.
+  void Notify(const std::size_t index)
+  {
+    if (index >= num_indices_)
+      throw std::out_of_range("CBCD ready-index notification is outside its fixed universe.");
+    const auto word_index = index / WORD_BITS;
+    const auto bit_index = index % WORD_BITS;
+    words_[word_index].bits.fetch_or(std::uint64_t{1} << bit_index,
+                                     std::memory_order_release);
+  }
+
+  /**
+   * Atomically take every currently marked index.
+   *
+   * The returned order is increasing and each index occurs at most once in a snapshot.
+   */
+  std::size_t TakeReady(std::vector<std::size_t>& ready_indices)
+  {
+    ready_indices.clear();
+    for (std::size_t word_index = 0; word_index < num_words_; ++word_index)
+    {
+      // An empty word is the common progress-loop state. Avoid an unnecessary read-modify-write
+      // that would take exclusive ownership of its cache line and interfere with producers.
+      if (words_[word_index].bits.load(std::memory_order_relaxed) == 0)
+        continue;
+      auto ready_bits = words_[word_index].bits.exchange(0, std::memory_order_acq_rel);
+      while (ready_bits != 0)
+      {
+        const auto bit_index = static_cast<std::size_t>(std::countr_zero(ready_bits));
+        const auto index = word_index * WORD_BITS + bit_index;
+        if (index >= num_indices_)
+          throw std::logic_error("CBCD ready-index set contains an invalid high bit.");
+        ready_indices.push_back(index);
+        ready_bits &= ready_bits - 1;
+      }
+    }
+    return ready_indices.size();
+  }
+
+  /// Report whether no ready-index notification is outstanding.
+  bool Empty() const noexcept
+  {
+    for (std::size_t i = 0; i < num_words_; ++i)
+      if (words_[i].bits.load(std::memory_order_acquire) != 0)
+        return false;
+    return true;
+  }
+
+  /// Clear every notification. This is only valid while producers and the consumer are stopped.
+  void Clear() noexcept
+  {
+    for (std::size_t i = 0; i < num_words_; ++i)
+      words_[i].bits.store(0, std::memory_order_relaxed);
+  }
+
+private:
+  /// Keep independently updated ready words off the same destructive-interference region.
+  struct alignas(std::hardware_destructive_interference_size) ReadyWord
+  {
+    std::atomic<std::uint64_t> bits{0};
+  };
+
+  std::size_t num_indices_ = 0;
+  std::size_t num_words_ = 0;
+  std::unique_ptr<ReadyWord[]> words_;
+};
 
 /**
  * Bounded single-producer, single-consumer queue with explicit batch commits.

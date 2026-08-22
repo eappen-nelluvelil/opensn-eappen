@@ -266,6 +266,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (auto& builders : send_builders_)
     for (auto& builder : builders)
       builder.Clear();
+  ready_producers_.Initialize(num_angle_sets_);
+  ready_producer_ids_.reserve(num_angle_sets_);
   log.Log0Verbose1() << "CBCD communicator: producer_queues=" << num_angle_sets_
                      << ", destinations=" << destination_states_.size() << ".";
 
@@ -307,7 +309,8 @@ void
 CBCD_AsynchronousCommunicator::CommitOutgoingBatch(const std::size_t angle_set_id)
 {
   assert(angle_set_id < outgoing_queues_.size());
-  outgoing_queues_[angle_set_id]->queue->Commit();
+  if (outgoing_queues_[angle_set_id]->queue->Commit())
+    ready_producers_.Notify(angle_set_id);
 }
 
 bool
@@ -340,6 +343,8 @@ CBCD_AsynchronousCommunicator::Start()
   for (const auto& producer : outgoing_queues_)
     if (not producer->queue->Empty())
       throw std::logic_error("CBCD communicator: stale producer state at sweep start.");
+  if (not ready_producers_.Empty())
+    throw std::logic_error("CBCD communicator: stale producer notification at sweep start.");
 
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& done : angle_set_done_)
@@ -389,6 +394,7 @@ CBCD_AsynchronousCommunicator::Stop()
                      << ", received_sections=" << sum_lanes(metrics_.received_sections)
                      << ", received_records=" << sum_lanes(metrics_.received_records)
                      << ", received_bytes=" << sum_lanes(metrics_.received_bytes)
+                     << ", producer_notifications=" << metrics_.producer_notifications
                      << ", producer_queue_visits=" << metrics_.producer_queue_visits
                      << ", idle_progress_turns=" << metrics_.idle_progress_turns
                      << ", peak_outstanding_sends=" << metrics_.peak_outstanding_sends << ".";
@@ -401,8 +407,8 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
 
   try
   {
-    // Retire completed sends first, service one incoming message next, then inspect every
-    // producer. These are complete semantic progress rounds rather than empirical work quotas.
+    // Retire completed sends first, service one incoming message next, then service every
+    // producer marked by the atomic ready set. These are semantic events, not empirical quotas.
     while (true)
     {
       bool work_done = PollInFlightSends();
@@ -554,6 +560,7 @@ CBCD_AsynchronousCommunicator::PostNextSend(const std::size_t destination_index,
 bool
 CBCD_AsynchronousCommunicator::FlushSendBuilders()
 {
+  constexpr auto normal_index = static_cast<std::size_t>(CBCDMessageKind::NORMAL_FACE_PSI);
   bool sent_any = false;
   for (std::size_t destination_index = 0; destination_index < send_builders_.size();
        ++destination_index)
@@ -565,6 +572,13 @@ CBCD_AsynchronousCommunicator::FlushSendBuilders()
       const auto kind_index = static_cast<std::size_t>(kind);
       auto& destination = destination_states_[destination_index];
 
+      // Both traffic kinds share a communicator and tag. Delayed data seeds only the next
+      // sweep, so retain it until the exact topology count proves that all normal records for
+      // this destination have been issued. MPI's non-overtaking rule then preserves the
+      // normal-before-delayed wire order without a guessed size or time threshold.
+      if (kind == CBCDMessageKind::DELAYED_FACE_PSI and
+          destination.sent_records[normal_index] != destination.record_bounds[normal_index])
+        continue;
       if (destination.send_in_flight[kind_index])
         continue;
 
@@ -590,11 +604,15 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
   bool made_progress = false;
   constexpr std::size_t section_header_bytes = sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
   constexpr auto mpi_max_message_bytes = static_cast<std::size_t>(std::numeric_limits<int>::max());
-  // Inspect each SPSC shard exactly once per progress round. Commit() publishes the producer's
-  // complete reserved prefix with release ordering and GetReadySlots() acquires it; no separate
-  // notification state is necessary for correctness or liveness.
-  for (std::size_t angle_set_id = 0; angle_set_id < outgoing_queues_.size(); ++angle_set_id)
+  metrics_.producer_notifications += ready_producers_.TakeReady(ready_producer_ids_);
+
+  // Each ready-set bit names an SPSC shard with a committed prefix. An exchange racing before a
+  // producer's mark leaves the bit for the next call; an exchange racing after it acquires the
+  // queue's preceding release commit. Duplicate marks can only cause a harmless empty revisit.
+  for (const auto angle_set_id : ready_producer_ids_)
   {
+    if (angle_set_id >= outgoing_queues_.size())
+      throw std::logic_error("CBCD communicator: invalid ready producer index.");
     auto& producer = *outgoing_queues_[angle_set_id];
     ++metrics_.producer_queue_visits;
     auto& queue = *producer.queue;
@@ -848,6 +866,9 @@ CBCD_AsynchronousCommunicator::AllAngleSetsComplete() const
   for (const auto& producer_queue : outgoing_queues_)
     if (not producer_queue->queue->Empty())
       return false;
+
+  if (not ready_producers_.Empty())
+    return false;
 
   for (const auto& builders : send_builders_)
     for (const auto& builder : builders)

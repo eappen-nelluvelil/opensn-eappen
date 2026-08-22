@@ -2,13 +2,96 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
+#include <array>
 #include <atomic>
 #include <gtest/gtest.h>
+#include <memory>
 #include <thread>
 #include <vector>
 
 namespace opensn
 {
+
+TEST(CBCDAtomicReadyIndexSetTest, CoalescesAndOrdersFixedUniverseIndices)
+{
+  const auto second_word_index = AtomicReadyIndexSet::WORD_BITS;
+  AtomicReadyIndexSet ready;
+  ready.Initialize(second_word_index + 2);
+  std::vector<std::size_t> indices;
+
+  EXPECT_TRUE(ready.Empty());
+  ready.Notify(second_word_index + 1);
+  ready.Notify(3);
+  ready.Notify(3);
+  EXPECT_FALSE(ready.Empty());
+
+  EXPECT_EQ(ready.TakeReady(indices), 2);
+  ASSERT_EQ(indices.size(), 2);
+  EXPECT_EQ(indices[0], 3);
+  EXPECT_EQ(indices[1], second_word_index + 1);
+  EXPECT_TRUE(ready.Empty());
+  EXPECT_THROW(ready.Notify(second_word_index + 2), std::out_of_range);
+}
+
+TEST(CBCDAtomicReadyIndexSetTest, ConcurrentMarksDoNotLoseCommittedShardWork)
+{
+  constexpr std::size_t num_producers = 8;
+  constexpr std::size_t records_per_producer = 2000;
+  AtomicReadyIndexSet ready;
+  ready.Initialize(num_producers);
+
+  std::vector<std::unique_ptr<CommittedSPSCQueue<std::size_t>>> queues;
+  queues.reserve(num_producers);
+  for (std::size_t producer = 0; producer < num_producers; ++producer)
+  {
+    auto queue = std::make_unique<CommittedSPSCQueue<std::size_t>>();
+    queue->Preallocate(records_per_producer);
+    queues.push_back(std::move(queue));
+  }
+
+  std::vector<std::thread> producers;
+  producers.reserve(num_producers);
+  for (std::size_t producer = 0; producer < num_producers; ++producer)
+    producers.emplace_back(
+      [producer, &ready, &queues]
+      {
+        for (std::size_t record = 0; record < records_per_producer; ++record)
+        {
+          queues[producer]->ReserveSlot().payload = record;
+          if (queues[producer]->Commit())
+            ready.Notify(producer);
+        }
+      });
+
+  std::array<std::size_t, num_producers> next_expected{};
+  std::vector<std::size_t> ready_indices;
+  std::size_t records_consumed = 0;
+  while (records_consumed != num_producers * records_per_producer)
+  {
+    ready.TakeReady(ready_indices);
+    if (ready_indices.empty())
+    {
+      std::this_thread::yield();
+      continue;
+    }
+    for (const auto producer : ready_indices)
+      records_consumed += queues[producer]->ProcessReady(
+        [producer, &next_expected](const std::size_t record)
+        { EXPECT_EQ(record, next_expected[producer]++); });
+  }
+
+  for (auto& producer : producers)
+    producer.join();
+
+  // A producer mark can race after the consumer's snapshot while its preceding committed
+  // record is nevertheless included in the queue drain. Consume that permitted redundant mark.
+  ready.TakeReady(ready_indices);
+  for (const auto producer : ready_indices)
+    EXPECT_EQ(queues[producer]->ProcessReady([](const std::size_t) {}), 0);
+  EXPECT_TRUE(ready.Empty());
+  for (const auto expected : next_expected)
+    EXPECT_EQ(expected, records_per_producer);
+}
 
 TEST(CBCDCommittedSPSCQueueTest, PublishesOnlyCompleteBatches)
 {
