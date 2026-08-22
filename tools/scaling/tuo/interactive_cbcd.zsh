@@ -31,6 +31,7 @@ profile_names=${OPENSN_TUO_PROFILES:-baseline,caliper,caliper-mpi,pmpi}
 profile_divisor=${OPENSN_TUO_PROFILE_DIVISOR:-39}
 profile_iterations=${OPENSN_TUO_PROFILE_ITERATIONS:-10}
 profile_time=${OPENSN_TUO_PROFILE_TIME_LIMIT:-6h}
+progress_interval=${OPENSN_TUO_PROGRESS_INTERVAL:-60}
 bank=${OPENSN_TUO_BANK:-}
 worker_count=${OPENSN_CBCD_NUM_WORKERS:-}
 
@@ -55,6 +56,9 @@ Commands:
   collect-batch [POLICY]        collect one study or compare both studies
   prepare-profile               prepare resource-aware profiling jobs
   submit-profile                submit resource-aware profiling jobs
+  run-profile-interactive [P]   run profile P, or every selected profile, via pdebug
+  run-profile-interactive-here P
+                                run profile P in the current allocation
   collect-profile               collect the resource-aware profiling inventory
   paths                         print selected paths and study settings
 
@@ -81,6 +85,14 @@ check_nodes()
   esac
 }
 
+check_profile()
+{
+  case $1 in
+    baseline|caliper|caliper-mpi|pmpi|caliper-rocm|rocprof|hpctoolkit|omniperf) ;;
+    *) print -u2 "Unknown profile: $1"; exit 2 ;;
+  esac
+}
+
 check_settings()
 {
   [[ $interactive_iterations == <1-> ]] || {
@@ -93,6 +105,10 @@ check_settings()
   }
   [[ $profile_divisor == <1-> && $profile_iterations == <1-> ]] || {
     print -u2 'Profile divisor and iteration count must be positive.'
+    exit 2
+  }
+  [[ $progress_interval == <0-> ]] || {
+    print -u2 'OPENSN_TUO_PROGRESS_INTERVAL must be a nonnegative number of seconds.'
     exit 2
   }
   [[ -z $worker_count || $worker_count == <1-> ]] || {
@@ -124,6 +140,96 @@ allocation()
   )
   [[ -z $bank ]] || command+=(-B "$bank")
   print -r -l -- "${command[@]}"
+}
+
+print_latest_progress()
+{
+  local result_root=$1
+  local stdout_path stderr_path
+  stdout_path=$(
+    { find "$result_root" -type f -name stdout.txt -printf '%T@ %p\n' 2>/dev/null || true } |
+      sort -nr |
+      head -n 1 |
+      cut -d' ' -f2-
+  )
+  [[ -n $stdout_path ]] || {
+    print -- "  no stdout file was produced under $result_root"
+    return
+  }
+
+  print -- "  output=$stdout_path"
+  grep -E \
+    'CBCD scheduler|WGS groups .*iteration|WGS groups .*final|avg_sweep_time|unknowns =|OPENSN_TUO_SCALAR_FLUX_MAX|OpenSn finished' \
+    "$stdout_path" | tail -n 20 || true
+  stderr_path=${stdout_path:h}/stderr.txt
+  if [[ -s $stderr_path ]]; then
+    print -- '  latest stderr:'
+    tail -n 20 "$stderr_path"
+  fi
+}
+
+monitor_generated_job()
+{
+  local job_pid=$1
+  local result_root=$2
+  local stdout_path latest_line previous_line=''
+
+  while kill -0 "$job_pid" 2>/dev/null; do
+    sleep "$progress_interval"
+    kill -0 "$job_pid" 2>/dev/null || break
+    stdout_path=$(
+      { find "$result_root" -type f -name stdout.txt -printf '%T@ %p\n' 2>/dev/null || true } |
+        sort -nr |
+        head -n 1 |
+        cut -d' ' -f2-
+    )
+    if [[ -z $stdout_path ]]; then
+      print -- "[$(date '+%Y-%m-%d %H:%M:%S')] still running; output directory is being created"
+      continue
+    fi
+    latest_line=$(
+      grep -E \
+        'CBCD scheduler|CBCD communication summary|WGS groups .*iteration|WGS groups .*final|avg_sweep_time|unknowns =|OPENSN_TUO_SCALAR_FLUX_MAX|OpenSn finished' \
+        "$stdout_path" | tail -n 1 || true
+    )
+    if [[ -n $latest_line && $latest_line != $previous_line ]]; then
+      print -- "[$(date '+%Y-%m-%d %H:%M:%S')] progress: $latest_line"
+      previous_line=$latest_line
+    else
+      print -- "[$(date '+%Y-%m-%d %H:%M:%S')] still running; output=$stdout_path"
+    fi
+  done
+}
+
+run_generated_job()
+{
+  local description=$1
+  local job=$2
+  local result_root=$3
+  local job_rc job_pid monitor_pid=0
+
+  print -- "[$(date '+%Y-%m-%d %H:%M:%S')] $description started"
+  print -- "  job=$job"
+  set +e
+  zsh "$job" &
+  job_pid=$!
+  if (( progress_interval > 0 )); then
+    monitor_generated_job "$job_pid" "$result_root" &
+    monitor_pid=$!
+  fi
+  wait "$job_pid"
+  job_rc=$?
+  if (( monitor_pid > 0 )); then
+    kill "$monitor_pid" 2>/dev/null
+    wait "$monitor_pid" 2>/dev/null
+  fi
+  set -e
+  print_latest_progress "$result_root"
+  if (( job_rc != 0 )); then
+    print -u2 -- "[$(date '+%Y-%m-%d %H:%M:%S')] $description failed (rc=$job_rc)"
+    return $job_rc
+  fi
+  print -- "[$(date '+%Y-%m-%d %H:%M:%S')] $description completed"
 }
 
 build_here()
@@ -256,7 +362,10 @@ run_here()
     print -u2 'Run prepare-interactive first.'
     exit 1
   }
-  zsh "$study/jobs/strong-$nodes.zsh"
+  run_generated_job \
+    "policy=$policy nodes=$nodes" \
+    "$study/jobs/strong-$nodes.zsh" \
+    "$study/results/strong/nodes-$nodes"
 }
 
 run_one()
@@ -369,8 +478,11 @@ collect_batch()
   compare_pair batch
 }
 
-prepare_profile()
+prepare_profile_for()
 {
+  local study_queue=$1
+  local time_limit=$profile_time
+  [[ $study_queue == pdebug ]] && time_limit=$interactive_time
   require_build
   local -a optional_args=()
   [[ -z $bank ]] || optional_args+=(--bank "$bank")
@@ -388,17 +500,80 @@ prepare_profile()
     --profiles "$profile_names" \
     --max-iterations "$profile_iterations" \
     --worker-policy resource-aware \
-    --queue pbatch \
-    --time-limit "$profile_time" \
+    --queue "$study_queue" \
+    --time-limit "$time_limit" \
     --refresh \
     --no-save-angular-flux \
     "${optional_args[@]}"
+}
+
+
+prepare_profile()
+{
+  prepare_profile_for pbatch
 }
 
 submit_profile()
 {
   prepare_profile
   zsh "$profile_root/submit.zsh" --nodes "$profile_nodes" --profiles "$profile_names"
+}
+
+run_profile_interactive_here()
+{
+  local profile=$1
+  check_profile "$profile"
+  local ran=0
+  local nodes job
+  for nodes in ${(s:,:)profile_nodes}; do
+    check_nodes "$nodes"
+    job=$profile_root/jobs/$profile-$nodes.zsh
+    [[ -x $job ]] || continue
+    run_generated_job \
+      "profile=$profile nodes=$nodes" \
+      "$job" \
+      "$profile_root/results/$profile/nodes-$nodes"
+    ran=1
+  done
+  (( ran == 1 )) || {
+    print -u2 "No generated jobs selected for profile '$profile'."
+    exit 1
+  }
+}
+
+run_profile_interactive()
+{
+  require_build
+  (( $# <= 1 )) || usage
+  prepare_profile_for pdebug
+
+  local -a selected_profiles
+  if (( $# == 1 )); then
+    check_profile "$1"
+    selected_profiles=("$1")
+  else
+    selected_profiles=("${(@s:,:)profile_names}")
+  fi
+
+  local profile nodes max_nodes job
+  for profile in "${selected_profiles[@]}"; do
+    check_profile "$profile"
+    max_nodes=0
+    for nodes in ${(s:,:)profile_nodes}; do
+      check_nodes "$nodes"
+      job=$profile_root/jobs/$profile-$nodes.zsh
+      [[ -x $job ]] || continue
+      (( nodes > max_nodes )) && max_nodes=$nodes
+    done
+    (( max_nodes > 0 )) || {
+      print -u2 "No generated jobs selected for profile '$profile'."
+      exit 1
+    }
+
+    print -- "[$(date '+%Y-%m-%d %H:%M:%S')] requesting $max_nodes pdebug node(s) for $profile"
+    local -a command=("${(@f)$(allocation "$max_nodes")}")
+    "$command[@]" zsh "$script" run-profile-interactive-here "$profile"
+  done
 }
 
 collect_profile()
@@ -430,6 +605,7 @@ paths()
   print -- "profiles=$profile_names"
   print -- "profile_divisor=$profile_divisor"
   print -- "profile_iterations=$profile_iterations"
+  print -- "progress_interval_seconds=$progress_interval"
   print -- "fixed_workers=${worker_count:-unset}"
 }
 
@@ -453,6 +629,8 @@ case $command in
   collect-batch) (( $# <= 1 )) || usage; collect_batch "$@" ;;
   prepare-profile) (( $# == 0 )) || usage; prepare_profile ;;
   submit-profile) (( $# == 0 )) || usage; submit_profile ;;
+  run-profile-interactive) (( $# <= 1 )) || usage; run_profile_interactive "$@" ;;
+  run-profile-interactive-here) (( $# == 1 )) || usage; run_profile_interactive_here "$1" ;;
   collect-profile) (( $# == 0 )) || usage; collect_profile ;;
   paths) (( $# == 0 )) || usage; paths ;;
   *) usage ;;

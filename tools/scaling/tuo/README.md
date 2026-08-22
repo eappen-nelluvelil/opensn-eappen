@@ -89,6 +89,54 @@ zsh "$HELPER" rebuild
 Unlike `build`, `rebuild` never treats an existing executable as proof that the
 new source has already been compiled.
 
+## One-command validation workflow
+
+After exporting the checkout, build, mesh, results, and bank paths from section 1,
+the executable wrapper can rebuild the selected checkout and perform the complete
+resource-aware smoke/profile pass:
+
+```zsh
+RUNNER=$OPENSN_SOURCE/tools/scaling/tuo/run_cbcd_validation.zsh
+
+export OPENSN_TUO_INTERACTIVE_ITERATIONS=2
+export OPENSN_TUO_PROFILE_ITERATIONS=3
+export OPENSN_TUO_PROFILE_NODES=1,2,4
+export OPENSN_TUO_PROFILES=baseline,caliper-mpi,pmpi
+
+"$RUNNER" smoke-profile update-3-topology-flow
+```
+
+The wrapper runs only the resource-aware policy. It rebuilds OpenSn, runs and
+collects the 1/2/4-node strong-scaling smoke study, then obtains a separate
+`pdebug` allocation for each selected profile and collects the profile inventory.
+It prints timestamps, the generated job and result paths, each completed case's
+WGS/sweep metrics, and the final study locations. While a case is running it
+prints a heartbeat or the newest WGS/communication progress line once per minute.
+Set `OPENSN_TUO_PROGRESS_INTERVAL` to another number of seconds, or to zero to
+disable the heartbeat. Existing meshes are reused.
+
+Once that validation is satisfactory, submit the larger resource-aware strong/
+weak campaign with the same executable and a distinct label:
+
+```zsh
+export OPENSN_TUO_NODES=1,2,4,8,16,32,64,128,256
+export OPENSN_TUO_REPETITIONS=3
+export OPENSN_TUO_MAX_ITERATIONS=10
+export OPENSN_TUO_BATCH_TIME_LIMIT=4h
+
+"$RUNNER" submit-scaling update-3-topology-flow-scaling
+```
+
+After the selected jobs finish, the same wrapper collects whichever result
+types exist for that label:
+
+```zsh
+"$RUNNER" collect update-3-topology-flow-scaling
+```
+
+The lower-level helper commands remain available for targeted reruns and custom
+study configurations.
+
 ## 3. Interactive 1/2/4-node policy comparison
 
 Do not set a fixed worker count for this comparison:
@@ -243,6 +291,19 @@ counts, message volumes, rank maxima, and time in `SerializeAndSend`,
 `ProbeAndReceive`, and `PollInFlightSends` at 2 versus 4 nodes. The `pmpi`
 report is named `mpi.txt`. Use the uninstrumented baseline and scaling studies
 for performance conclusions; profiler timings are diagnostic only.
+
+To run the same selected profiles through `pdebug` instead of submitting
+`pbatch` jobs, use:
+
+```zsh
+zsh "$HELPER" run-profile-interactive
+zsh "$HELPER" collect-profile
+```
+
+One allocation is requested per profile, sized to the largest node count selected
+for that profile. Inside it, the generated 1-, 2-, and 4-node jobs run in order,
+with progress and output paths printed after every case. A single profile can be
+selected, for example `zsh "$HELPER" run-profile-interactive pmpi`.
 
 `caliper-rocm`, `rocprof`, and `hpctoolkit` also preserve the requested
 four-ranks-per-node layout when explicitly selected. For example, a focused

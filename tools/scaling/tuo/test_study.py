@@ -593,6 +593,7 @@ class SimplicityTests(unittest.TestCase):
             MODULE_PATH,
             MODULE_PATH.with_name("bootstrap.zsh"),
             MODULE_PATH.with_name("interactive_cbcd.zsh"),
+            MODULE_PATH.with_name("run_cbcd_validation.zsh"),
             MODULE_PATH.with_name("README.md"),
         )
         terms = ("hash" + "lib", "sha" + "256", "check" + "sum", "finger" + "print")
@@ -607,7 +608,11 @@ class SimplicityTests(unittest.TestCase):
                 self.assertNotIn(removed_option, source)
 
     def test_shell_helpers_are_valid_and_policy_order_alternates(self):
-        for name in ("bootstrap.zsh", "interactive_cbcd.zsh"):
+        for name in (
+            "bootstrap.zsh",
+            "interactive_cbcd.zsh",
+            "run_cbcd_validation.zsh",
+        ):
             path = MODULE_PATH.with_name(name)
             result = subprocess.run(
                 ["zsh", "-n", str(path)],
@@ -634,7 +639,15 @@ class SimplicityTests(unittest.TestCase):
         self.assertIn('run_here "$1" 1', helper)
         self.assertIn('prepare_one batch "$1"', helper)
         self.assertIn("prepare-profile", helper)
+        self.assertIn("run-profile-interactive", helper)
+        self.assertIn("monitor_generated_job", helper)
         self.assertIn("rebuild-here", helper)
+
+        runner = MODULE_PATH.with_name("run_cbcd_validation.zsh").read_text()
+        self.assertIn("smoke-profile", runner)
+        self.assertIn("submit-scaling", runner)
+        self.assertIn("collect", runner)
+        self.assertIn("run-interactive resource-aware", runner)
 
 
 if __name__ == "__main__":
