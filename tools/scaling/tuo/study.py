@@ -326,8 +326,7 @@ def profile_command(profile, nodes, ranks):
             f'{launch} "$binary" --verbose 1 --caliper="runtime-report('
             'output=\\"$result/mpi-regions.txt\\",aggregate_across_ranks,'
             'calc.inclusive,print.metadata,order_by_time,max_column_width=180,'
-            'profile.mpi,mpi.message.count,mpi.message.size,comm.stats,'
-            'region.count,region.stats)" -i "$input"'
+            'profile.mpi,region.count,region.stats)" -i "$input"'
         )
         return "", command
     if profile == "pmpi":

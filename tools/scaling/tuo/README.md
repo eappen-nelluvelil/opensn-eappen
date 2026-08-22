@@ -270,7 +270,7 @@ strong-scaling problem for ten iterations at 1, 2, and 4 nodes with:
 
 - an uninstrumented baseline,
 - a Caliper runtime region report,
-- a combined Caliper region/MPI/message-volume report, and
+- a Caliper region/MPI-function timing report, and
 - a Caliper PMPI call report.
 
 Prepare and submit all four profiles with:
@@ -292,11 +292,15 @@ inventory with:
 zsh "$HELPER" collect-profile
 ```
 
-The combined report is named `mpi-regions.txt`; use it to compare MPI call
-counts, message volumes, rank maxima, and time in `SerializeAndSend`,
-`ProbeAndReceive`, and `PollInFlightSends` at 2 versus 4 nodes. The `pmpi`
-report is named `mpi.txt`. Use the uninstrumented baseline and scaling studies
-for performance conclusions; profiler timings are diagnostic only.
+The combined report is named `mpi-regions.txt`; use it to compare MPI function
+and OpenSn region timings at 2 versus 4 nodes. The profile deliberately omits
+Caliper's message-request and communication-pattern tracking. Those services
+add request bookkeeping to the communicator's progress loop, while OpenSn does
+not define the Caliper communication regions needed by `comm.stats`. Exact CBCD
+message, record, section, and byte counts are reported by the communicator
+itself. The `pmpi` report is named `mpi.txt`. Use the uninstrumented baseline
+and scaling studies for performance conclusions; profiler timings are
+diagnostic only.
 
 To run the same selected profiles through `pdebug` instead of submitting
 `pbatch` jobs, use:

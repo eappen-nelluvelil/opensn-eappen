@@ -226,8 +226,10 @@ class PreparationTests(unittest.TestCase):
                 self.assertNotRegex(job, r"(?m)^(?:\s*local\s+)?status=")
                 self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
                 if profile == "caliper-mpi":
-                    self.assertIn("mpi.message.size", job)
-                    self.assertIn("comm.stats", job)
+                    self.assertIn("profile.mpi", job)
+                    self.assertNotIn("mpi.message.count", job)
+                    self.assertNotIn("mpi.message.size", job)
+                    self.assertNotIn("comm.stats", job)
                 if profile == "rocprof":
                     self.assertIn('*/rank-*/*.csv', job)
 
