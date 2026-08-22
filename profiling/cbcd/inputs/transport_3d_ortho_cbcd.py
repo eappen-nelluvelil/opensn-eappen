@@ -32,8 +32,8 @@ if __name__ == "__main__":
     cells_per_axis = get_int_option("profile_cells_per_axis", 18)
     max_iterations = get_int_option("profile_max_iterations", 100)
     num_groups = 21
-    num_polar = 4
-    num_azimuthal = 8
+    num_polar = get_int_option("profile_num_polar", 4)
+    num_azimuthal = get_int_option("profile_num_azimuthal", 8)
 
     length = 5.0
     minimum = -0.5 * length
