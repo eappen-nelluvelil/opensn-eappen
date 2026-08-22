@@ -842,6 +842,11 @@ def summarize(rows):
             row[f"{field}_max"] = max(flux_values)
             row[f"{field}_ulp_span"] = binary64_ulp_span(flux_values)
         summary.append(row)
+    strong_unknowns = {
+        row["median_unknowns"] for row in summary if row["kind"] == "strong"
+    }
+    if len(strong_unknowns) > 1:
+        raise RuntimeError("strong-scaling points use different global unknown counts")
     return summary
 
 
@@ -883,10 +888,10 @@ def monotonic_failures(rows, tolerance):
     )
     failures = []
     for previous, current in zip(strong, strong[1:]):
-        limit = previous["median_avg_sweep_time_s"] * (1.0 + tolerance)
-        if current["median_avg_sweep_time_s"] > limit:
+        limit = previous["metric"] * (1.0 + tolerance)
+        if current["metric"] > limit:
             failures.append(
-                f"strong sweep time increased from {previous['nodes']} to "
+                f"strong sweep time per unknown increased from {previous['nodes']} to "
                 f"{current['nodes']} nodes"
             )
     return failures
@@ -948,6 +953,7 @@ def collect(args):
     summary = summarize(rows)
     write_rows(study / "summary.csv", summary)
     write_summary(study / "summary.md", record, summary)
+    plot_series(study, "Tuolumne CBCD", ((record["label"], summary),))
     monotonic = monotonic_failures(summary, args.monotonic_tolerance)
     (study / "collection.json").write_text(
         json.dumps(
@@ -963,6 +969,8 @@ def collect(args):
         )
         + "\n"
     )
+    for failure in monotonic:
+        print(f"Scaling warning: {failure}")
     if args.require_monotonic and monotonic:
         raise RuntimeError("; ".join(monotonic))
     print(f"Collected {len(rows)} successful trial(s) in {study}")
@@ -1105,7 +1113,7 @@ def compare(args):
         {
             "kind": row["kind"],
             "nodes": int(row["nodes"]),
-            "median_avg_sweep_time_s": float(row["median_avg_sweep_time_s"]),
+            "metric": float(row["metric"]),
         }
         for row in candidate
     ]
@@ -1154,9 +1162,11 @@ def collect_profile(args):
     for case in record["cases"]:
         root = study / "results" / case["profile"] / f"nodes-{case['nodes']}"
         case_completed = False
+        case_has_run = False
         for run in sorted(root.glob("run-*")):
             if not run.is_dir():
                 continue
+            case_has_run = True
             try:
                 values = read_result(
                     run / "stdout.txt",
@@ -1175,11 +1185,35 @@ def collect_profile(args):
                     "run": run.name,
                     "completed": values is not None,
                     "avg_sweep_time_s": values["avg_sweep_time_s"] if values else None,
+                    "unknowns": values["unknowns"] if values else None,
+                    "sweep_time_per_unknown_ns": (
+                        values["avg_sweep_time_s"] / values["unknowns"] * 1.0e9
+                        if values
+                        else None
+                    ),
                     "wgs_iterations": values["wgs_iterations"] if values else None,
                     "scheduler_workers": values["scheduler_workers"] if values else None,
                     "scalar_flux_max_g0": values["scalar_flux_max_g0"] if values else None,
                     "scalar_flux_max_g63": values["scalar_flux_max_g63"] if values else None,
                     "result_directory": str(run),
+                }
+            )
+        if not case_has_run:
+            rows.append(
+                {
+                    "profile": case["profile"],
+                    "nodes": case["nodes"],
+                    "ranks": case["ranks"],
+                    "run": "not-started",
+                    "completed": False,
+                    "avg_sweep_time_s": None,
+                    "unknowns": None,
+                    "sweep_time_per_unknown_ns": None,
+                    "wgs_iterations": None,
+                    "scheduler_workers": None,
+                    "scalar_flux_max_g0": None,
+                    "scalar_flux_max_g63": None,
+                    "result_directory": str(root),
                 }
             )
         if not case_completed:
@@ -1190,9 +1224,10 @@ def collect_profile(args):
         "",
         (
             "| Profile | Nodes | Ranks | Run | Completed | Sweep (s) | "
-            "Iterations | Workers | Flux max g0 | Flux max g63 | Result directory |"
+            "Sweep time/unknown (ns) | Unknowns | Iterations | Workers | "
+            "Flux max g0 | Flux max g63 | Result directory |"
         ),
-        "|---|---:|---:|---|---|---:|---:|---:|---:|---:|---|",
+        "|---|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         sweep = (
@@ -1200,16 +1235,22 @@ def collect_profile(args):
             if row["avg_sweep_time_s"] is None
             else f"{row['avg_sweep_time_s']:.8g}"
         )
+        sweep_per_unknown = (
+            "n/a"
+            if row["sweep_time_per_unknown_ns"] is None
+            else f"{row['sweep_time_per_unknown_ns']:.8g}"
+        )
         lines.append(
             f"| {row['profile']} | {row['nodes']} | {row['ranks']} | {row['run']} "
-            f"| {row['completed']} | {sweep} | {row['wgs_iterations'] or 'n/a'} "
+            f"| {row['completed']} | {sweep} | {sweep_per_unknown} "
+            f"| {row['unknowns'] or 'n/a'} | {row['wgs_iterations'] or 'n/a'} "
             f"| {row['scheduler_workers'] or 'n/a'} "
             f"| {row['scalar_flux_max_g0'] if row['completed'] else 'n/a'} "
             f"| {row['scalar_flux_max_g63'] if row['completed'] else 'n/a'} "
             f"| `{row['result_directory']}` |"
         )
     (study / "profile-summary.md").write_text("\n".join(lines) + "\n")
-    if incomplete_cases:
+    if incomplete_cases and not getattr(args, "allow_incomplete", False):
         raise RuntimeError(
             "profile cases have no successful run: " + ", ".join(incomplete_cases)
         )
@@ -1313,6 +1354,7 @@ def parser():
         "collect-profile", help="collect profile results"
     )
     profile_collect.add_argument("--study", type=Path, required=True)
+    profile_collect.add_argument("--allow-incomplete", action="store_true")
     profile_collect.set_defaults(function=collect_profile)
     return top
 

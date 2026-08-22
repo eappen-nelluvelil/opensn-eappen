@@ -1,7 +1,9 @@
 """Tests for the deliberately simple Tuolumne CBCD study workflow."""
 
+import csv
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -194,6 +196,29 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(defaults.repetitions, 3)
         self.assertEqual(defaults.max_iterations, 10)
 
+    def test_full_scaling_campaign_generates_one_hour_strong_and_weak_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(
+                root,
+                nodes=STUDY.DEFAULT_NODES,
+                kinds=("strong", "weak"),
+                repetitions=3,
+                queue="pbatch",
+                time_limit="1h",
+                worker_policy="resource-aware",
+                max_iterations=10,
+            )
+            create_meshes(args.mesh_dir, STUDY.WEAK_DIVISORS.values())
+            STUDY.prepare(args)
+            record = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(len(record["cases"]), 18)
+            for name in ("strong-256.zsh", "weak-256.zsh"):
+                job = (args.output / "jobs" / name).read_text()
+                self.assertIn("#flux: -N 256", job)
+                self.assertIn("#flux: -n 1024", job)
+                self.assertIn("#flux: -t 1h", job)
+
     def test_profile_jobs_are_valid_zsh_and_keep_default_launch_unmodified(self):
         args = SimpleNamespace(
             label="profile",
@@ -260,6 +285,48 @@ class PreparationTests(unittest.TestCase):
                 {case for case in cases if case[0] == "omniperf"},
                 {("omniperf", 1, 1)},
             )
+
+    def test_full_node_profile_campaign_uses_production_rank_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = prepare_args(
+                root,
+                output=root / "profile-study",
+                queue="pbatch",
+                time_limit="1h",
+                worker_policy="resource-aware",
+            )
+            args.profile_nodes = STUDY.DEFAULT_NODES
+            args.profile_divisor = 39
+            args.profiles = ("baseline", "caliper-mpi", "pmpi")
+            create_meshes(args.mesh_dir, (39,))
+
+            STUDY.prepare_profile(args)
+
+            record = json.loads((args.output / "manifest.json").read_text())
+            self.assertEqual(len(record["cases"]), 27)
+            self.assertIn(
+                {
+                    "id": "caliper-mpi-256",
+                    "profile": "caliper-mpi",
+                    "nodes": 256,
+                    "ranks": 1024,
+                    "job": str(args.output.resolve() / "jobs/caliper-mpi-256.zsh"),
+                },
+                record["cases"],
+            )
+            job = (args.output / "jobs/caliper-mpi-256.zsh").read_text()
+            self.assertIn("#flux: -N 256", job)
+            self.assertIn("#flux: -n 1024", job)
+            self.assertIn("#flux: -t 1h", job)
+            for job_path in (args.output / "jobs").glob("*.zsh"):
+                syntax = subprocess.run(
+                    ["zsh", "-n", str(job_path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
     def test_failure_trap_executes_under_zsh_and_preserves_exit_code(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -387,6 +454,22 @@ class ResultTests(unittest.TestCase):
         self.assertEqual(summary[0]["scalar_flux_max_g0_ulp_span"], 4)
         self.assertEqual(summary[0]["scalar_flux_max_g63_ulp_span"], 0)
 
+    def test_strong_scaling_requires_one_exact_global_unknown_count(self):
+        rows = [result_values(1), result_values(2)]
+        rows[1]["unknowns"] += 1
+        with self.assertRaisesRegex(RuntimeError, "different global unknown counts"):
+            STUDY.summarize(rows)
+
+    def test_monotonic_check_uses_sweep_time_per_unknown_metric(self):
+        rows = [
+            {"kind": "strong", "nodes": 1, "metric": 1.0},
+            {"kind": "strong", "nodes": 2, "metric": 1.25},
+        ]
+        self.assertEqual(
+            STUDY.monotonic_failures(rows, 0.0),
+            ["strong sweep time per unknown increased from 1 to 2 nodes"],
+        )
+
     def test_collection_uses_all_successful_repeat_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -463,6 +546,63 @@ class ResultTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "pmpi-4"):
                 STUDY.collect_profile(SimpleNamespace(study=study))
             self.assertTrue((study / "profile-summary.md").is_file())
+
+    def test_profile_collection_reports_sweep_time_per_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            study = Path(directory)
+            run = study / "results/baseline/nodes-4/run-complete"
+            run.mkdir(parents=True)
+            (study / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "type": "profile",
+                        "label": "test-profile",
+                        "cases": [
+                            {
+                                "id": "baseline-4",
+                                "profile": "baseline",
+                                "nodes": 4,
+                                "ranks": 16,
+                            }
+                        ],
+                    }
+                )
+            )
+            values = result_values(4, sweep=2.0)
+            values["unknowns"] = 4_000_000_000
+            with mock.patch.object(STUDY, "read_result", return_value=values):
+                STUDY.collect_profile(SimpleNamespace(study=study))
+            with (study / "profile-summary.csv").open() as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual(row["unknowns"], "4000000000")
+            self.assertEqual(float(row["sweep_time_per_unknown_ns"]), 0.5)
+
+    def test_incomplete_profile_inventory_can_be_collected_for_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            study = Path(directory)
+            (study / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "type": "profile",
+                        "label": "test-profile",
+                        "cases": [
+                            {
+                                "id": "pmpi-4",
+                                "profile": "pmpi",
+                                "nodes": 4,
+                                "ranks": 16,
+                            }
+                        ],
+                    }
+                )
+            )
+            STUDY.collect_profile(
+                SimpleNamespace(study=study, allow_incomplete=True)
+            )
+            self.assertTrue((study / "profile-summary.md").is_file())
+            self.assertIn(
+                "not-started", (study / "profile-summary.md").read_text()
+            )
 
 
 class SubmissionAndPolicyComparisonTests(unittest.TestCase):
@@ -672,6 +812,106 @@ class SimplicityTests(unittest.TestCase):
         self.assertIn("submit-scaling", runner)
         self.assertIn("collect", runner)
         self.assertIn("run-interactive resource-aware", runner)
+
+    def test_full_campaign_prepares_everything_before_submitting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            helper = source / "tools/scaling/tuo/interactive_cbcd.zsh"
+            helper.parent.mkdir(parents=True)
+            helper.write_text(
+                """#!/bin/zsh
+set -euo pipefail
+print -- "$* batch_time=$OPENSN_TUO_BATCH_TIME_LIMIT profile_time=$OPENSN_TUO_PROFILE_TIME_LIMIT profile_nodes=$OPENSN_TUO_PROFILE_NODES" >> "$CALL_LOG"
+case $1 in
+  paths|rebuild) ;;
+  prepare-batch)
+    root=$OPENSN_TUO_BATCH_ROOT/resource-aware
+    mkdir -p -- "$root"
+    print -- '{}' >| "$root/manifest.json"
+    print -r -l -- '#!/bin/zsh' 'print -- generated-batch-submit >> "$CALL_LOG"' >| "$root/submit.zsh"
+    chmod +x "$root/submit.zsh"
+    ;;
+  prepare-profile)
+    root=$OPENSN_TUO_PROFILE_ROOT
+    mkdir -p -- "$root"
+    print -- '{}' >| "$root/manifest.json"
+    print -r -l -- '#!/bin/zsh' 'print -- generated-profile-submit >> "$CALL_LOG"' >| "$root/submit.zsh"
+    chmod +x "$root/submit.zsh"
+    ;;
+esac
+"""
+            )
+            helper.chmod(0o700)
+            call_log = root / "calls.txt"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "OPENSN_SOURCE": str(source),
+                    "OPENSN_TUO_ROOT": str(root / "build-root"),
+                    "OPENSN_TUO_BUILD": str(root / "build-opensn"),
+                    "OPENSN_TUO_RESULTS": str(root / "results"),
+                    "CALL_LOG": str(call_log),
+                }
+            )
+            runner = MODULE_PATH.with_name("run_cbcd_validation.zsh")
+            completed = subprocess.run(
+                ["zsh", str(runner), "submit-campaign", "full-scale"],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("scaling_jobs=18", completed.stdout)
+            self.assertIn("profile_jobs=27", completed.stdout)
+            calls = call_log.read_text().splitlines()
+            self.assertEqual(
+                [line.split()[0] for line in calls],
+                [
+                    "paths",
+                    "rebuild",
+                    "prepare-batch",
+                    "prepare-profile",
+                    "generated-batch-submit",
+                    "generated-profile-submit",
+                ],
+            )
+            for line in calls[:4]:
+                self.assertIn("batch_time=1h", line)
+                self.assertIn("profile_time=1h", line)
+                self.assertIn(
+                    "profile_nodes=1,2,4,8,16,32,64,128,256", line
+                )
+
+    def test_full_campaign_refuses_an_existing_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            helper = source / "tools/scaling/tuo/interactive_cbcd.zsh"
+            helper.parent.mkdir(parents=True)
+            helper.write_text("#!/bin/zsh\nexit 0\n")
+            helper.chmod(0o700)
+            results = root / "results"
+            existing = results / "used-batch/resource-aware"
+            existing.mkdir(parents=True)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "OPENSN_SOURCE": str(source),
+                    "OPENSN_TUO_RESULTS": str(results),
+                }
+            )
+            runner = MODULE_PATH.with_name("run_cbcd_validation.zsh")
+            completed = subprocess.run(
+                ["zsh", str(runner), "submit-campaign", "used"],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("Choose a new label", completed.stderr)
 
 
 if __name__ == "__main__":

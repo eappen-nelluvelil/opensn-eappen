@@ -115,24 +115,63 @@ prints a heartbeat or the newest WGS/communication progress line once per minute
 Set `OPENSN_TUO_PROGRESS_INTERVAL` to another number of seconds, or to zero to
 disable the heartbeat. Existing meshes are reused.
 
-Once that validation is satisfactory, submit the larger resource-aware strong/
-weak campaign with the same executable and a distinct label:
+To skip another interactive smoke pass and submit the complete batch campaign,
+use one fresh label:
 
 ```zsh
 export OPENSN_TUO_NODES=1,2,4,8,16,32,64,128,256
 export OPENSN_TUO_REPETITIONS=3
 export OPENSN_TUO_MAX_ITERATIONS=10
-export OPENSN_TUO_BATCH_TIME_LIMIT=4h
 
-"$RUNNER" submit-scaling update-3-topology-flow-scaling
+"$RUNNER" submit-campaign update-3-topology-restored-full
 ```
 
-After the selected jobs finish, the same wrapper collects whichever result
-types exist for that label:
+`submit-campaign` rebuilds the selected checkout, validates all nine existing
+meshes, and prepares both studies before submitting any job. It then submits:
+
+- 18 uninstrumented resource-aware scaling jobs: strong and weak at every
+  selected node count, with three trials in each allocation; and
+- 27 diagnostic strong-scaling jobs: baseline, Caliper-MPI, and PMPI at the
+  same nine node counts.
+
+Every submitted allocation has an exact one-hour limit. The profile campaign
+uses the d39 strong problem so that communication and synchronization costs can
+be compared at fixed global work. The uninstrumented campaign supplies the
+production baseline measurements for both strong and weak scaling. A fresh
+label is mandatory: the command refuses an existing study directory instead
+of risking duplicate submissions.
+
+The build directory referenced by the generated jobs must remain unchanged
+until the campaign has finished. Inspect the queue and write partial summaries
+at any time with:
 
 ```zsh
-"$RUNNER" collect update-3-topology-flow-scaling
+"$RUNNER" status update-3-topology-restored-full
 ```
+
+After all jobs finish, collect the CSV, Markdown, and strong/weak PDF results:
+
+```zsh
+"$RUNNER" collect update-3-topology-restored-full
+```
+
+If a one-hour job fails, resubmit only that generated job with a longer
+command-line time limit. Flux command-line options override the corresponding
+submission-script directive:
+
+```zsh
+LABEL=update-3-topology-restored-full
+BATCH_ROOT=$OPENSN_TUO_RESULTS/$LABEL-batch/resource-aware
+PROFILE_ROOT=$OPENSN_TUO_RESULTS/$LABEL-profile/resource-aware
+
+flux batch --time-limit=2h "$BATCH_ROOT/jobs/strong-256.zsh"
+flux batch --time-limit=2h "$BATCH_ROOT/jobs/weak-256.zsh"
+flux batch --time-limit=2h "$PROFILE_ROOT/jobs/caliper-mpi-256.zsh"
+```
+
+Do not rerun `submit-campaign` to retry one point. Each retry creates a new run
+directory, and the collectors use every successful replacement while retaining
+failed attempts for diagnosis.
 
 The lower-level helper commands remain available for targeted reruns and custom
 study configurations.
@@ -219,7 +258,7 @@ The defaults prepare strong and weak cases at 1, 2, 4, 8, 16, 32, 64, 128, and
 export OPENSN_TUO_NODES=1,2,4,8,16,32,64,128,256
 export OPENSN_TUO_REPETITIONS=3
 export OPENSN_TUO_MAX_ITERATIONS=10
-export OPENSN_TUO_BATCH_TIME_LIMIT=4h
+export OPENSN_TUO_BATCH_TIME_LIMIT=1h
 
 zsh "$HELPER" prepare-batch
 zsh "$HELPER" submit-batch
@@ -281,6 +320,7 @@ export OPENSN_TUO_PROFILE_NODES=1,2,4
 export OPENSN_TUO_PROFILE_DIVISOR=39
 export OPENSN_TUO_PROFILE_ITERATIONS=10
 export OPENSN_TUO_PROFILES=baseline,caliper,caliper-mpi,pmpi
+export OPENSN_TUO_PROFILE_TIME_LIMIT=1h
 
 zsh "$HELPER" submit-profile
 ```

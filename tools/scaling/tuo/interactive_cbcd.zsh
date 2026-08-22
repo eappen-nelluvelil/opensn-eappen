@@ -668,10 +668,12 @@ paths()
   print -- "batch_nodes=$batch_nodes"
   print -- "batch_repetitions=$batch_repetitions"
   print -- "batch_iterations=$batch_iterations"
+  print -- "batch_time_limit=$batch_time"
   print -- "profile_nodes=$profile_nodes"
   print -- "profiles=$profile_names"
   print -- "profile_divisor=$profile_divisor"
   print -- "profile_iterations=$profile_iterations"
+  print -- "profile_time_limit=$profile_time"
   print -- "progress_interval_seconds=$progress_interval"
   print -- "fixed_workers=${worker_count:-unset}"
 }
