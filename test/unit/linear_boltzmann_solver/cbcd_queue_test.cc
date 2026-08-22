@@ -10,6 +10,99 @@
 namespace opensn
 {
 
+TEST(CBCDCoalescedDoorbellTest, CoversCommitBeforeAndAfterConsumerClear)
+{
+  CoalescedDoorbell doorbell;
+
+  // The first publication needs a queue token. A second publication before the clear is
+  // coalesced, but still writes the state that Release() acquires.
+  EXPECT_TRUE(doorbell.Notify());
+  EXPECT_FALSE(doorbell.Notify());
+  EXPECT_TRUE(doorbell.Release());
+
+  // When the committed-queue recheck is nonempty, the consumer can retain ownership without
+  // publishing another token.
+  EXPECT_TRUE(doorbell.TryRetain());
+  EXPECT_TRUE(doorbell.IsOutstanding());
+  EXPECT_TRUE(doorbell.Release());
+
+  // A producer publication after the clear observes false and must enqueue a new token.
+  EXPECT_TRUE(doorbell.Notify());
+  EXPECT_FALSE(doorbell.TryRetain());
+  EXPECT_TRUE(doorbell.Release());
+  EXPECT_FALSE(doorbell.IsOutstanding());
+}
+
+TEST(CBCDCoalescedDoorbellTest, ConcurrentQueueCompositionDrainsEveryCommit)
+{
+  constexpr std::size_t num_values = 10000;
+  CommittedSPSCQueue<std::size_t> queue;
+  queue.Preallocate(num_values);
+  LockFreeRingBuffer<std::size_t> notifications;
+  notifications.Preallocate(1);
+  CoalescedDoorbell doorbell;
+  std::atomic<bool> producer_finished{false};
+
+  std::thread producer(
+    [&]
+    {
+      for (std::size_t value = 0; value < num_values; ++value)
+      {
+        queue.ReserveSlot().payload = value;
+        queue.Commit();
+        if (doorbell.Notify())
+        {
+          auto& slot = notifications.ReserveSlot();
+          slot.payload = 0;
+          notifications.PublishSlot(slot);
+        }
+      }
+      producer_finished.store(true, std::memory_order_release);
+    });
+
+  std::vector<LockFreeRingBuffer<std::size_t>::Slot*> notification_slots;
+  std::vector<CommittedSPSCQueue<std::size_t>::Slot*> ready;
+  std::size_t expected_value = 0;
+  bool fifo_order_preserved = true;
+  bool ownership_preserved = true;
+  while (expected_value < num_values or
+         not producer_finished.load(std::memory_order_acquire) or
+         doorbell.IsOutstanding() or not notifications.Empty())
+  {
+    notifications.GetReadySlots(notification_slots);
+    if (notification_slots.empty())
+    {
+      std::this_thread::yield();
+      continue;
+    }
+
+    // Match the communicator protocol: release the bounded notification slot before
+    // servicing its producer so a racing producer can republish without blocking.
+    notifications.FreeSlots(notification_slots.size());
+    while (true)
+    {
+      queue.GetReadySlots(ready);
+      for (const auto* slot : ready)
+        fifo_order_preserved &= slot->payload == expected_value++;
+      queue.FreeSlots(ready.size());
+
+      ownership_preserved &= doorbell.Release();
+      if (queue.Empty())
+        break;
+      if (not doorbell.TryRetain())
+        break;
+    }
+  }
+  producer.join();
+
+  EXPECT_TRUE(fifo_order_preserved);
+  EXPECT_TRUE(ownership_preserved);
+  EXPECT_EQ(expected_value, num_values);
+  EXPECT_TRUE(queue.Empty());
+  EXPECT_TRUE(notifications.Empty());
+  EXPECT_FALSE(doorbell.IsOutstanding());
+}
+
 TEST(CBCDCommittedSPSCQueueTest, PublishesOnlyCompleteBatches)
 {
   CommittedSPSCQueue<int> queue;
@@ -94,6 +187,27 @@ TEST(CBCDLockFreeRingBufferTest, BoundsConcurrentProducerReservations)
   EXPECT_TRUE(queue.Empty());
   for (const auto count : seen)
     EXPECT_EQ(count, 1);
+}
+
+TEST(CBCDLockFreeRingBufferTest, FullSnapshotStopsAtExactCapacity)
+{
+  constexpr std::size_t capacity = 4;
+  LockFreeRingBuffer<std::size_t> queue;
+  queue.Preallocate(capacity);
+  for (std::size_t value = 0; value < capacity; ++value)
+  {
+    auto& slot = queue.ReserveSlot();
+    slot.payload = value;
+    queue.PublishSlot(slot);
+  }
+
+  std::vector<LockFreeRingBuffer<std::size_t>::Slot*> ready;
+  queue.GetReadySlots(ready);
+  ASSERT_EQ(ready.size(), capacity);
+  for (std::size_t value = 0; value < capacity; ++value)
+    EXPECT_EQ(ready[value]->payload, value);
+  queue.FreeSlots(ready.size());
+  EXPECT_TRUE(queue.Empty());
 }
 
 TEST(CBCDCommittedSPSCQueueTest, ReusesConsumedSlotsAcrossWrap)

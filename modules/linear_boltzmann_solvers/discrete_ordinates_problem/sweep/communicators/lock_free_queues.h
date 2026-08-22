@@ -14,6 +14,39 @@ namespace opensn
 {
 
 /**
+ * Race-free ownership state for a coalesced producer notification.
+ *
+ * Every producer publication calls Notify(), including publications made while a notification
+ * is already outstanding. That unconditional read-modify-write gives Release() an acquire edge
+ * from the latest pre-clear publication. A publication after Release() observes the cleared state
+ * and must enqueue a new notification. The consumer may instead retain ownership with TryRetain()
+ * when its queue recheck finds additional committed work.
+ */
+class CoalescedDoorbell
+{
+public:
+  /// Publish producer ownership; return true only when a new notification must be enqueued.
+  bool Notify() noexcept { return not outstanding_.exchange(true, std::memory_order_acq_rel); }
+
+  /// Release consumer ownership and acquire every producer publication preceding this clear.
+  bool Release() noexcept { return outstanding_.exchange(false, std::memory_order_acq_rel); }
+
+  /// Retain consumer ownership if no producer has already reclaimed it.
+  bool TryRetain() noexcept
+  {
+    bool expected = false;
+    return outstanding_.compare_exchange_strong(
+      expected, true, std::memory_order_acq_rel, std::memory_order_acquire);
+  }
+
+  /// Report whether a notification is queued or owned by the consumer.
+  bool IsOutstanding() const noexcept { return outstanding_.load(std::memory_order_acquire); }
+
+private:
+  std::atomic<bool> outstanding_{false};
+};
+
+/**
  * Bounded lock-free multi-producer, single-consumer ring buffer.
  *
  * Producers reserve slots through an atomic head counter and publish them with a per-slot
@@ -120,8 +153,9 @@ public:
       return;
 
     const auto capacity = buffer_.size();
+    const auto count_limit = max_count < capacity ? max_count : capacity;
     auto current_tail = tail_;
-    while (out.size() < max_count and
+    while (out.size() < count_limit and
            buffer_[current_tail % capacity].ready.load(std::memory_order_acquire))
     {
       out.push_back(&buffer_[current_tail % capacity]);

@@ -8,6 +8,9 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <limits>
+#include <map>
+#include <stdexcept>
 
 namespace opensn
 {
@@ -58,6 +61,51 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     delayed_incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     std::vector<AngleSetCapacity> capacities(angle_sets_.size());
+    std::map<int, DestinationCapacity> destination_capacity_map;
+    constexpr std::size_t section_header_bytes = sizeof(std::uint8_t) + 2 * sizeof(std::size_t);
+    const auto checked_add = [](const std::size_t lhs,
+                                const std::size_t rhs,
+                                const char* const description)
+    {
+      if (rhs > std::numeric_limits<std::size_t>::max() - lhs)
+        throw std::overflow_error(description);
+      return lhs + rhs;
+    };
+    const auto checked_multiply = [](const std::size_t lhs,
+                                     const std::size_t rhs,
+                                     const char* const description)
+    {
+      if (lhs != 0 and rhs > std::numeric_limits<std::size_t>::max() / lhs)
+        throw std::overflow_error(description);
+      return lhs * rhs;
+    };
+    const auto account_outgoing_face = [&destination_capacity_map,
+                                        &checked_add,
+                                        &checked_multiply](
+                                         const int dest_rank,
+                                         const CBCDMessageKind kind,
+                                         const std::size_t payload_values)
+    {
+      auto& capacity = destination_capacity_map[dest_rank];
+      capacity.dest_rank = dest_rank;
+      const auto kind_index = static_cast<std::size_t>(kind);
+      auto& records = capacity.records[kind_index];
+      auto& builder_bytes = capacity.builder_bytes[kind_index];
+      if (records == 0)
+        builder_bytes = sizeof(std::size_t);
+      const auto payload_bytes = checked_multiply(
+        payload_values, sizeof(double), "CBCD communicator: static face-payload size overflow.");
+      const auto record_bytes = checked_add(sizeof(std::uint32_t) + sizeof(std::size_t),
+                                            payload_bytes,
+                                            "CBCD communicator: static record size overflow.");
+      builder_bytes = checked_add(
+        builder_bytes,
+        checked_add(section_header_bytes,
+                    record_bytes,
+                    "CBCD communicator: static section size overflow."),
+        "CBCD communicator: static destination size overflow.");
+      records = checked_add(records, 1, "CBCD communicator: static record-count overflow.");
+    };
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
     {
       const auto stride = fluds_list[as_ss_idx]->GetStrideSize();
@@ -82,22 +130,38 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       {
         for (const auto& face_info : common_data.GetOutgoingNonlocalFaces(cell_local_id))
         {
+          const auto payload_values = checked_multiply(
+            face_info.num_face_nodes, stride, "CBCD communicator: static face-value overflow.");
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
-                     static_cast<std::size_t>(face_info.num_face_nodes) * stride);
+                     payload_values);
+          account_outgoing_face(common_data.GetOutgoingLocalities()[face_info.dest_slot],
+                                CBCDMessageKind::NORMAL_FACE_PSI,
+                                payload_values);
         }
         for (const auto& face_info : common_data.GetIncomingNonlocalFaces(cell_local_id))
           ++capacities[as_ss_idx].incoming_faces_by_source[face_info.source_slot];
         for (const auto& face_info : common_data.GetDelayedOutgoingNonlocalFaces(cell_local_id))
         {
+          const auto payload_values = checked_multiply(
+            face_info.num_face_nodes, stride, "CBCD communicator: static face-value overflow.");
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
-                     static_cast<std::size_t>(face_info.num_face_nodes) * stride);
+                     payload_values);
+          account_outgoing_face(
+            common_data.GetDelayedOutgoingLocalities()[face_info.dest_slot],
+            CBCDMessageKind::DELAYED_FACE_PSI,
+            payload_values);
         }
         for (const auto& face_info : common_data.GetDelayedIncomingNonlocalFaces(cell_local_id))
           ++capacities[as_ss_idx].delayed_incoming_faces_by_source[face_info.source_slot];
       }
     }
+
+    std::vector<DestinationCapacity> destination_capacities;
+    destination_capacities.reserve(destination_capacity_map.size());
+    for (const auto& [dest_rank, capacity] : destination_capacity_map)
+      destination_capacities.push_back(capacity);
 
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
     async_comm_ = std::make_unique<CBCD_AsynchronousCommunicator>(
@@ -105,7 +169,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       angle_sets_.front()->GetCommunicatorSet(),
       incoming_source_partitions_by_angle_set,
       delayed_incoming_source_partitions_by_angle_set,
-      capacities);
+      capacities,
+      destination_capacities);
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);
   }
@@ -128,13 +193,6 @@ CBCDSweepChunk::StopCommunicator()
 {
   if (async_comm_)
     async_comm_->Stop();
-}
-
-void
-CBCDSweepChunk::PublishOutgoingGeneration(const std::size_t begin_angle_set,
-                                          const std::size_t end_angle_set)
-{
-  async_comm_->PublishOutgoingGeneration(begin_angle_set, end_angle_set);
 }
 
 void
