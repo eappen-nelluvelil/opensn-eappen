@@ -360,8 +360,7 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
                                       std::span<const std::uint32_t> cell_local_ids)
 {
   if (common_data_.GetNumOutgoingBoundaryNodes() == 0 and
-      common_data_.GetNumOutgoingNonlocalFaces() == 0 and
-      common_data_.GetNumDelayedOutgoingNonlocalNodes() == 0)
+      common_data_.GetNumOutgoingNonlocalFaces() == 0)
     return;
 
   CALI_CXX_MARK_SCOPE("CBCD_FLUDS::CopyOutgoingPsiBackToHost");
@@ -418,11 +417,22 @@ CBCD_FLUDS::CopyOutgoingPsiBackToHost(CBCDSweepChunk& sweep_chunk,
           }
         });
     }
+  }
+}
 
-    // Stage every delayed outgoing nonlocal payload for this cell through the same queue,
-    // tagged `DELAYED_FACE_PSI` so the receiver routes it into the lagged-incoming `_new`
-    // bank rather than the normal nonlocal bank.  Producer-side memcpy reads from
-    // `delayed_nonlocal_outgoing_psi_` via the delayed node-copy plan built at construction.
+void
+CBCD_FLUDS::EnqueueDelayedOutgoingPsi(CBCD_AsynchronousCommunicator& async_comm,
+                                      const std::size_t angle_set_id)
+{
+  if (common_data_.GetNumDelayedOutgoingNonlocalFaces() == 0)
+    return;
+
+  CALI_CXX_MARK_SCOPE("CBCD_FLUDS::EnqueueDelayedOutgoingPsi");
+
+  const std::size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
+  for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
+       ++cell_local_id)
+  {
     for (const auto& face_info : common_data_.GetDelayedOutgoingNonlocalFaces(cell_local_id))
     {
       const std::size_t face_data_size =

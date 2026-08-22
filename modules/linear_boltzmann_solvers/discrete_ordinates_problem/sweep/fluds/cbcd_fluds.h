@@ -141,6 +141,15 @@ public:
                                  std::span<const std::uint32_t> cell_local_ids);
 
   /**
+   * Enqueue the complete lagged non-local output bank after the normal DAG has finished.
+   *
+   * Lagged edges never unlock current-sweep work. Deferring this bulk exchange prevents it
+   * from occupying normal-traffic queue and MPI credits on the critical wavefront.
+   */
+  void EnqueueDelayedOutgoingPsi(CBCD_AsynchronousCommunicator& async_comm,
+                                 std::size_t angle_set_id);
+
+  /**
    * Scatter one received non-local face payload into the mapped incoming buffer.
    *
    * \param source_slot Source-locality slot for the sending partition.

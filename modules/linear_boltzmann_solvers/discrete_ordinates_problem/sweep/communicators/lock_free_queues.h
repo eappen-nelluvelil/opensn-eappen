@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <new>
 #include <thread>
@@ -20,11 +21,10 @@ namespace opensn
  * is bounded and reuses preallocated slots; it performs no dynamic allocation once the
  * storage has been initialized.
  *
- * In the CBCD aggregated communicator, LockFreeRingBuffer serves two roles:
- * 1. an outgoing per-destination queue written by sweep worker threads and drained by the
- *    communication thread,
- * 2. an incoming per-angle-set queue written by the communication thread and drained by the
- *    owning angleset worker thread.
+ * In the CBCD aggregated communicator, LockFreeRingBuffer is the incoming per-angle-set
+ * mailbox written by the communication thread and drained by the owning angle-set worker.
+ * Outgoing traffic uses the committed SPSC queue below because static angle-set scheduling
+ * gives each producer shard exactly one worker.
  *
  * LockFreeRingBuffer works under the following assumptions:
  * - producers reserve one slot, write the payload in place, and publish the slot exactly
@@ -92,7 +92,8 @@ public:
    *
    * \param out Output vector of ready slot pointers.
    */
-  void GetReadySlots(std::vector<Slot*>& out)
+  void GetReadySlots(std::vector<Slot*>& out,
+                     const std::size_t max_count = static_cast<std::size_t>(-1))
   {
     out.clear();
     if (buffer_.empty())
@@ -100,7 +101,8 @@ public:
 
     const auto capacity = buffer_.size();
     auto current_tail = tail_;
-    while (buffer_[current_tail % capacity].ready.load(std::memory_order_acquire))
+    while (out.size() < max_count and
+           buffer_[current_tail % capacity].ready.load(std::memory_order_acquire))
     {
       out.push_back(&buffer_[current_tail % capacity]);
       ++current_tail;
@@ -165,6 +167,92 @@ private:
   alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> head_{0};
   /// Consumer drain index.
   alignas(std::hardware_destructive_interference_size) std::size_t tail_{0};
+};
+
+/**
+ * Bounded single-producer, single-consumer queue with explicit batch commits.
+ *
+ * The producer may reserve and fill any number of slots, but none of those slots become
+ * visible to the consumer until Commit() publishes the producer head. This is useful for
+ * CBCD outgoing traffic: one angle-set worker fills all face records produced by a completed
+ * device batch and then exposes the batch atomically to the communication thread.
+ *
+ * Unlike LockFreeRingBuffer, a slow producer cannot leave a globally visible publication
+ * hole. The producer and consumer retain private monotonically increasing heads and exchange
+ * only the committed and consumed positions.
+ */
+template <typename T>
+class CommittedSPSCQueue
+{
+public:
+  /// Queue slot owned by exactly one side at a time.
+  struct Slot
+  {
+    T payload;
+  };
+
+  /// Allocate the fixed queue storage.
+  void Preallocate(const std::size_t capacity) { buffer_ = std::vector<Slot>(capacity); }
+
+  /// Initialize every slot payload in place.
+  template <typename Callback>
+  void InitializeSlots(Callback&& cb)
+  {
+    for (auto& slot : buffer_)
+      cb(slot.payload);
+  }
+
+  /**
+   * Reserve one producer slot.
+   *
+   * The returned slot remains invisible to the consumer until a subsequent Commit().
+   */
+  Slot& ReserveSlot()
+  {
+    const auto capacity = buffer_.size();
+    assert(capacity > 0);
+    while (producer_head_ - consumed_head_.load(std::memory_order_acquire) >= capacity)
+      std::this_thread::yield();
+    return buffer_[producer_head_++ % capacity];
+  }
+
+  /// Publish every slot reserved since the preceding commit.
+  void Commit() { committed_head_.store(producer_head_, std::memory_order_release); }
+
+  /// Gather the committed, not-yet-consumed prefix.
+  void GetReadySlots(std::vector<Slot*>& out,
+                     const std::size_t max_count = static_cast<std::size_t>(-1))
+  {
+    out.clear();
+    if (buffer_.empty())
+      return;
+
+    const auto committed = committed_head_.load(std::memory_order_acquire);
+    const auto capacity = buffer_.size();
+    for (auto current = consumer_head_; current < committed and out.size() < max_count; ++current)
+      out.push_back(&buffer_[current % capacity]);
+  }
+
+  /// Release a prefix returned by GetReadySlots().
+  void FreeSlots(const std::size_t count)
+  {
+    consumer_head_ += count;
+    consumed_head_.store(consumer_head_, std::memory_order_release);
+  }
+
+  /// Check whether no committed records await the consumer.
+  bool Empty() const { return consumer_head_ == committed_head_.load(std::memory_order_acquire); }
+
+private:
+  std::vector<Slot> buffer_;
+  /// Private producer reservation position.
+  std::size_t producer_head_ = 0;
+  /// Producer-published batch boundary.
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> committed_head_{0};
+  /// Private consumer position.
+  std::size_t consumer_head_ = 0;
+  /// Consumer-published reclamation boundary.
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> consumed_head_{0};
 };
 
 } // namespace opensn

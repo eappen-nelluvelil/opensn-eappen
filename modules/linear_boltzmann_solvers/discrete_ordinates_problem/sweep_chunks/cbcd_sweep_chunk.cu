@@ -8,8 +8,6 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
 #include <algorithm>
-#include <set>
-#include <unordered_map>
 
 namespace opensn
 {
@@ -59,7 +57,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     std::vector<std::vector<int>> delayed_incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     delayed_incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
-    std::unordered_map<int, std::vector<std::size_t>> source_as_section_bytes;
     std::vector<AngleSetCapacity> capacities(angle_sets_.size());
     for (std::size_t as_ss_idx = 0; as_ss_idx < angle_sets_.size(); ++as_ss_idx)
     {
@@ -74,8 +71,12 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                                              common_data.GetNumDelayedOutgoingNonlocalFaces();
       capacities[as_ss_idx].incoming_faces = common_data.GetNumIncomingNonlocalFaces() +
                                              common_data.GetNumDelayedIncomingNonlocalFaces();
+      capacities[as_ss_idx].incoming_faces_by_source.assign(
+        common_data.GetIncomingSourcePartitions().size(), 0);
       capacities[as_ss_idx].delayed_incoming_faces =
         common_data.GetNumDelayedIncomingNonlocalFaces();
+      capacities[as_ss_idx].delayed_incoming_faces_by_source.assign(
+        common_data.GetDelayedIncomingSourcePartitions().size(), 0);
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -85,78 +86,24 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
                      static_cast<std::size_t>(face_info.num_face_nodes) * stride);
         }
+        for (const auto& face_info : common_data.GetIncomingNonlocalFaces(cell_local_id))
+          ++capacities[as_ss_idx].incoming_faces_by_source[face_info.source_slot];
         for (const auto& face_info : common_data.GetDelayedOutgoingNonlocalFaces(cell_local_id))
         {
           capacities[as_ss_idx].max_outgoing_face_values =
             std::max(capacities[as_ss_idx].max_outgoing_face_values,
                      static_cast<std::size_t>(face_info.num_face_nodes) * stride);
         }
-      }
-
-      std::unordered_map<std::uint32_t, std::size_t> incoming_entries_by_source_slot;
-      std::unordered_map<std::uint32_t, std::size_t> incoming_values_by_source_slot;
-      for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
-           ++cell_local_id)
-      {
-        for (const auto& face_info : common_data.GetIncomingNonlocalFaces(cell_local_id))
-        {
-          if (face_info.num_nodes == 0)
-            continue;
-          ++incoming_entries_by_source_slot[face_info.source_slot];
-          incoming_values_by_source_slot[face_info.source_slot] +=
-            static_cast<std::size_t>(face_info.num_nodes) * stride;
-          const auto source_partition =
-            common_data.GetIncomingSourcePartitions()[face_info.source_slot];
-          auto& per_as_bytes = source_as_section_bytes[source_partition];
-          if (per_as_bytes.empty())
-            per_as_bytes.assign(angle_sets_.size(), 0);
-          per_as_bytes[as_ss_idx] +=
-            sizeof(std::uint32_t) + sizeof(std::size_t) +
-            static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
-        }
-        // Mirror the sizing loop for delayed incoming faces so the receiver's mailbox
-        // batches are big enough to hold delayed-face-psi sections too. Delayed and normal
-        // source-slot indices occupy independent spaces.
         for (const auto& face_info : common_data.GetDelayedIncomingNonlocalFaces(cell_local_id))
-        {
-          if (face_info.num_nodes == 0)
-            continue;
-          ++incoming_entries_by_source_slot[face_info.source_slot];
-          incoming_values_by_source_slot[face_info.source_slot] +=
-            static_cast<std::size_t>(face_info.num_nodes) * stride;
-          const auto source_partition =
-            common_data.GetDelayedIncomingSourcePartitions()[face_info.source_slot];
-          auto& per_as_bytes = source_as_section_bytes[source_partition];
-          if (per_as_bytes.empty())
-            per_as_bytes.assign(angle_sets_.size(), 0);
-          per_as_bytes[as_ss_idx] +=
-            sizeof(std::uint32_t) + sizeof(std::size_t) +
-            static_cast<std::size_t>(face_info.num_nodes) * stride * sizeof(double);
-        }
+          ++capacities[as_ss_idx].delayed_incoming_faces_by_source[face_info.source_slot];
       }
-      for (const auto& [_, count] : incoming_entries_by_source_slot)
-        capacities[as_ss_idx].max_incoming_batch_entries =
-          std::max(capacities[as_ss_idx].max_incoming_batch_entries, count);
-      for (const auto& [_, values] : incoming_values_by_source_slot)
-        capacities[as_ss_idx].max_incoming_batch_values =
-          std::max(capacities[as_ss_idx].max_incoming_batch_values, values);
     }
 
-    // Retain the proven eager communicator's topology-derived full-peer payload bound.
-    // A smaller configured packet size is a separate performance experiment: combining it
-    // with restoration of pipelined sends would make the Tuo comparison ambiguous.
-    std::size_t max_message_bytes = 0;
-    for (const auto& [_, per_as_bytes] : source_as_section_bytes)
-    {
-      std::size_t msg_size_in_bytes = sizeof(std::size_t);
-      for (const auto& section_bytes : per_as_bytes)
-      {
-        if (section_bytes == 0)
-          continue;
-        msg_size_in_bytes += 2 * sizeof(std::size_t) + section_bytes;
-      }
-      max_message_bytes = std::max(max_message_bytes, msg_size_in_bytes);
-    }
+    // Device CBCD obeys the same user-facing packet target as CPU CBC and AAHD. A single
+    // indivisible face may exceed the target, but full-peer payload volume must never be
+    // mistaken for a latency/flow-control policy (and can be zero on a source-only rank).
+    const auto max_message_bytes =
+      static_cast<std::size_t>(problem_.GetOptions().max_mpi_message_size);
 
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
     async_comm_ = std::make_unique<CBCD_AsynchronousCommunicator>(

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <stdexcept>
 #include <thread>
 
 namespace opensn
@@ -220,6 +221,9 @@ CBCD_AngleSet::FlushCompletedBatch(CBCDSweepChunk& sweep_chunk)
     GetID(),
     GetAngleIndices(),
     {completed_cell_ids.data(), static_cast<std::size_t>(batch_state_.completed_count)});
+  // The communication thread sees either the entire completed GPU batch or none of it.
+  // This prevents a fast progress loop from turning one batch into many one-face messages.
+  async_comm_->CommitOutgoingBatch(GetID());
   completed_cell_ids.clear();
   batch_state_.ReleaseBuffer(batch_state_.completed_buffer_index);
   batch_state_.completed_buffer_index = 0;
@@ -331,6 +335,9 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
                                                   entry.source_face_index,
                                                   psi_base + entry.payload_offset,
                                                   entry.payload_size);
+            if (remaining_deps_[cell_local_id] <= 0)
+              throw std::logic_error(
+                "CBCD angle set: duplicate normal face or dependency-counter underflow.");
             if (--remaining_deps_[cell_local_id] == 0)
               cbcd_fluds_.GetLocalCellIDs(batch_state_.ready_buffer_index)
                 .push_back(static_cast<std::uint32_t>(cell_local_id));
@@ -368,13 +375,16 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk)
     work_done = true;
   }
 
-  // Publish local completion only after every locally produced delayed face has entered
-  // the outgoing queue. Delayed receive completion uses the exact expected face count.
+  // Lagged edges are outside the current dependency DAG. Publish their completed `_new`
+  // bank only at the local DAG tail so bulk lagged traffic cannot consume normal-wavefront
+  // credits. Commit the tail batch before advertising local completion.
   const bool all_local_work_complete = (num_completed_tasks_ == num_tasks_) and
                                        (not batch_state_.kernel_in_flight) and
                                        (not batch_state_.completed_batch_pending);
   if (all_local_work_complete and (not local_completion_signaled_))
   {
+    cbcd_fluds_.EnqueueDelayedOutgoingPsi(*async_comm_, GetID());
+    async_comm_->CommitOutgoingBatch(GetID());
     async_comm_->SignalAngleSetComplete(GetID());
     local_completion_signaled_ = true;
     work_done = true;
