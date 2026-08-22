@@ -366,6 +366,25 @@ class ResultTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "inconsistent numerical signature"):
             STUDY.summarize(rows)
 
+    def test_roundoff_scale_flux_variation_is_measured_without_a_magic_tolerance(self):
+        rows = [result_values(1) for _ in range(3)]
+        flux_values = (
+            5.73598477615347879e-1,
+            5.73598477615347768e-1,
+            5.73598477615347435e-1,
+        )
+        for row, value in zip(rows, flux_values):
+            row["scalar_flux_max_g0"] = value
+
+        summary = STUDY.summarize(rows)
+
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0]["scalar_flux_max_g0"], sorted(flux_values)[1])
+        self.assertEqual(summary[0]["scalar_flux_max_g0_min"], min(flux_values))
+        self.assertEqual(summary[0]["scalar_flux_max_g0_max"], max(flux_values))
+        self.assertEqual(summary[0]["scalar_flux_max_g0_ulp_span"], 4)
+        self.assertEqual(summary[0]["scalar_flux_max_g63_ulp_span"], 0)
+
     def test_collection_uses_all_successful_repeat_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -640,6 +659,9 @@ class SimplicityTests(unittest.TestCase):
         self.assertIn('prepare_one batch "$1"', helper)
         self.assertIn("prepare-profile", helper)
         self.assertIn("run-profile-interactive", helper)
+        self.assertIn("resume-profile-interactive", helper)
+        self.assertIn("profile_case_complete", helper)
+        self.assertIn('run-profile-interactive-here "$profile" "$selected_nodes"', helper)
         self.assertIn("monitor_generated_job", helper)
         self.assertIn("rebuild-here", helper)
 

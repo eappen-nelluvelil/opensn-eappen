@@ -204,6 +204,12 @@ observables, and the selected worker count. Iteration counts may differ between
 node counts because CBCD cycles and lagged flux change with decomposition; the
 two policies must agree at the same node count.
 
+Within repeated measurements of one point, discrete properties (unknown and
+lagged-unknown counts, WGS status and iterations, and worker count) must match
+exactly. Scalar-flux maxima are summarized by their median, minimum, maximum,
+and exact binary64 ULP span. This exposes scheduling-scale floating variation
+without embedding an empirical acceptance tolerance in the collector.
+
 ## 4. Larger pbatch strong/weak studies
 
 The defaults prepare strong and weak cases at 1, 2, 4, 8, 16, 32, 64, 128, and
@@ -304,6 +310,19 @@ One allocation is requested per profile, sized to the largest node count selecte
 for that profile. Inside it, the generated 1-, 2-, and 4-node jobs run in order,
 with progress and output paths printed after every case. A single profile can be
 selected, for example `zsh "$HELPER" run-profile-interactive pmpi`.
+
+If a node or allocation fails partway through the sequence, resume it with:
+
+```zsh
+zsh "$HELPER" resume-profile-interactive
+zsh "$HELPER" collect-profile
+```
+
+The resume command keeps the complete manifest, skips only cases with a
+validated successful run and zero exit code, and creates a new result directory
+for every retry. It requests a fresh allocation per incomplete profile and
+continues to later profiles if one allocation fails. Select one profile with,
+for example, `zsh "$HELPER" resume-profile-interactive baseline`.
 
 `caliper-rocm`, `rocprof`, and `hpctoolkit` also preserve the requested
 four-ranks-per-node layout when explicitly selected. For example, a focused

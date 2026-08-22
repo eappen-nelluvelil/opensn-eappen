@@ -57,8 +57,10 @@ Commands:
   prepare-profile               prepare resource-aware profiling jobs
   submit-profile                submit resource-aware profiling jobs
   run-profile-interactive [P]   run profile P, or every selected profile, via pdebug
-  run-profile-interactive-here P
-                                run profile P in the current allocation
+  resume-profile-interactive [P]
+                                run only incomplete cases and continue after failures
+  run-profile-interactive-here P [NODES]
+                                run profile P in the current allocation; optionally select nodes
   collect-profile               collect the resource-aware profiling inventory
   paths                         print selected paths and study settings
 
@@ -522,10 +524,11 @@ submit_profile()
 run_profile_interactive_here()
 {
   local profile=$1
+  local selected_nodes=${2:-$profile_nodes}
   check_profile "$profile"
   local ran=0
   local nodes job
-  for nodes in ${(s:,:)profile_nodes}; do
+  for nodes in ${(s:,:)selected_nodes}; do
     check_nodes "$nodes"
     job=$profile_root/jobs/$profile-$nodes.zsh
     [[ -x $job ]] || continue
@@ -539,6 +542,20 @@ run_profile_interactive_here()
     print -u2 "No generated jobs selected for profile '$profile'."
     exit 1
   }
+}
+
+profile_case_complete()
+{
+  local profile=$1
+  local nodes=$2
+  local root=$profile_root/results/$profile/nodes-$nodes
+  local run
+  for run in "$root"/run-*(N/); do
+    if [[ -f $run/SUCCESS && -r $run/exit_code.txt && $(<"$run/exit_code.txt") == 0 ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 run_profile_interactive()
@@ -574,6 +591,56 @@ run_profile_interactive()
     local -a command=("${(@f)$(allocation "$max_nodes")}")
     "$command[@]" zsh "$script" run-profile-interactive-here "$profile"
   done
+}
+
+resume_profile_interactive()
+{
+  require_build
+  (( $# <= 1 )) || usage
+  if [[ -r $profile_root/manifest.json ]]; then
+    print -- "Reusing prepared profile study: $profile_root"
+  else
+    prepare_profile_for pdebug
+  fi
+
+  local -a selected_profiles
+  if (( $# == 1 )); then
+    check_profile "$1"
+    selected_profiles=("$1")
+  else
+    selected_profiles=("${(@s:,:)profile_names}")
+  fi
+
+  local overall_rc=0
+  local profile nodes max_nodes selected_nodes
+  local -a incomplete_nodes command
+  for profile in "${selected_profiles[@]}"; do
+    incomplete_nodes=()
+    max_nodes=0
+    for nodes in ${(s:,:)profile_nodes}; do
+      check_nodes "$nodes"
+      [[ -x $profile_root/jobs/$profile-$nodes.zsh ]] || continue
+      if profile_case_complete "$profile" "$nodes"; then
+        print -- "[$(date '+%Y-%m-%d %H:%M:%S')] profile=$profile nodes=$nodes already complete"
+        continue
+      fi
+      incomplete_nodes+=("$nodes")
+      (( nodes > max_nodes )) && max_nodes=$nodes
+    done
+    if (( ${#incomplete_nodes} == 0 )); then
+      print -- "[$(date '+%Y-%m-%d %H:%M:%S')] profile=$profile has no incomplete cases"
+      continue
+    fi
+
+    selected_nodes=${(j:,:)incomplete_nodes}
+    print -- "[$(date '+%Y-%m-%d %H:%M:%S')] requesting $max_nodes pdebug node(s) for profile=$profile nodes=$selected_nodes"
+    command=("${(@f)$(allocation "$max_nodes")}")
+    if ! "$command[@]" zsh "$script" run-profile-interactive-here "$profile" "$selected_nodes"; then
+      print -u2 -- "[$(date '+%Y-%m-%d %H:%M:%S')] profile=$profile remains incomplete"
+      overall_rc=1
+    fi
+  done
+  return $overall_rc
 }
 
 collect_profile()
@@ -630,7 +697,8 @@ case $command in
   prepare-profile) (( $# == 0 )) || usage; prepare_profile ;;
   submit-profile) (( $# == 0 )) || usage; submit_profile ;;
   run-profile-interactive) (( $# <= 1 )) || usage; run_profile_interactive "$@" ;;
-  run-profile-interactive-here) (( $# == 1 )) || usage; run_profile_interactive_here "$1" ;;
+  resume-profile-interactive) (( $# <= 1 )) || usage; resume_profile_interactive "$@" ;;
+  run-profile-interactive-here) (( $# >= 1 && $# <= 2 )) || usage; run_profile_interactive_here "$@" ;;
   collect-profile) (( $# == 0 )) || usage; collect_profile ;;
   paths) (( $# == 0 )) || usage; paths ;;
   *) usage ;;

@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import statistics
+import struct
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -746,6 +747,19 @@ def spread(values):
     )
 
 
+def ordered_binary64(value):
+    """Map a finite Python float to an integer preserving IEEE-754 total order."""
+    bits = struct.unpack(">Q", struct.pack(">d", value))[0]
+    sign = 1 << 63
+    return (~bits & ((1 << 64) - 1)) if bits & sign else bits | sign
+
+
+def binary64_ulp_span(values):
+    """Return the exact number of binary64 representable steps spanning values."""
+    positions = [ordered_binary64(value) for value in values]
+    return max(positions) - min(positions)
+
+
 def summarize(rows):
     grouped = {}
     for row in rows:
@@ -762,6 +776,12 @@ def summarize(rows):
     summary = []
     for kind, nodes in sorted(grouped):
         values = grouped[(kind, nodes)]
+        # Integer/enumerated properties describe the exact study point and must agree.
+        # Scalar-flux maxima are floating observables from an asynchronously scheduled
+        # reduction. Treating their binary64 bit patterns as part of this key rejected
+        # repeated runs that differed by only a few representable values. There is no
+        # computation-wide error bound available here from which to derive an acceptance
+        # tolerance, so preserve their median, extrema, and exact ULP span instead.
         signatures = {
             (
                 value["unknowns"],
@@ -769,7 +789,6 @@ def summarize(rows):
                 value["wgs_status"],
                 value["wgs_iterations"],
                 value["scheduler_workers"],
-                *(value[f"scalar_flux_max_g{group}"] for group in SCALAR_FLUX_GROUPS),
             )
             for value in values
         }
@@ -816,8 +835,13 @@ def summarize(rows):
                 value["wall_time_s"] for value in values
             ),
         }
-        for index, group in enumerate(SCALAR_FLUX_GROUPS, start=5):
-            row[f"scalar_flux_max_g{group}"] = signature[index]
+        for group in SCALAR_FLUX_GROUPS:
+            field = f"scalar_flux_max_g{group}"
+            flux_values = [value[field] for value in values]
+            row[field] = statistics.median(flux_values)
+            row[f"{field}_min"] = min(flux_values)
+            row[f"{field}_max"] = max(flux_values)
+            row[f"{field}_ulp_span"] = binary64_ulp_span(flux_values)
         summary.append(row)
     return summary
 
@@ -830,9 +854,13 @@ def write_summary(path, record, rows):
         "",
         (
             "| Kind | Nodes | Trials | Metric | MAD | IQR | Unit | Efficiency | "
-            "Sweep (s) | Iterations | Workers | Residual | Flux max g0 | Flux max g63 |"
+            "Sweep (s) | Iterations | Workers | Residual | Flux max g0 | g0 ULP span | "
+            "Flux max g63 | g63 ULP span |"
         ),
-        "|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+        (
+            "|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|"
+            "---:|---:|"
+        ),
     ]
     for row in rows:
         lines.append(
@@ -841,7 +869,10 @@ def write_summary(path, record, rows):
             f"| {row['metric_unit']} | {row['efficiency_percent']:.2f}% "
             f"| {row['median_avg_sweep_time_s']:.8g} | {row['wgs_iterations']} "
             f"| {row['scheduler_workers']} | {row['median_final_residual']:.8g} "
-            f"| {row['scalar_flux_max_g0']:.17e} | {row['scalar_flux_max_g63']:.17e} |"
+            f"| {row['scalar_flux_max_g0']:.17e} "
+            f"| {row['scalar_flux_max_g0_ulp_span']} "
+            f"| {row['scalar_flux_max_g63']:.17e} "
+            f"| {row['scalar_flux_max_g63_ulp_span']} |"
         )
     path.write_text("\n".join(lines) + "\n")
 
