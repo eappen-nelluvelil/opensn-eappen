@@ -117,16 +117,15 @@ struct DestinationCapacity
 /**
  * Aggregated CBCD communicator with one dedicated progress thread.
  *
- * Each angle-set worker commits completed device batches through its own SPSC queue. The first
- * unserviced commit publishes that angle-set ID through a coalescing doorbell; later commits remain
- * covered until the communication thread drains the producer. The communication thread serializes
- * committed records into persistent per-destination, per-traffic-kind builders. Exactly one
- * synchronous wire transaction may be active per channel; records produced while it is active
- * remain in the builder and are coalesced for the following transaction. Exact topology counts
- * ensure that delayed traffic is issued only after every normal record to that destination, so it
- * cannot precede traffic that unlocks the current dependency DAG. Packets are split only at MPI's
- * representable count bound. The communication thread also probes for incoming messages,
- * deserializes them into compact
+ * Each angle-set worker commits completed device batches through its own SPSC queue. The
+ * communication thread deterministically inspects every producer queue and serializes each
+ * committed prefix into persistent per-destination, per-traffic-kind builders. Exactly one standard
+ * nonblocking send may be active per channel; records produced while it is active remain in the
+ * builder and are coalesced for the following transaction. Normal and delayed traffic use
+ * independent semantic channels: normal records unlock the current dependency DAG, whereas delayed
+ * records populate only the next-sweep bank and therefore do not require a cross-angle-set ordering
+ * gate. Packets are split only at MPI's representable count bound. The communication thread also
+ * probes for incoming messages, deserializes them into compact
  * `IncomingFaceBatch` payloads, and publishes those batches into per-angle-set incoming mailboxes.
  *
  * The aggregated communicator assumes the following communication patterns and sweep worker
@@ -137,9 +136,9 @@ struct DestinationCapacity
  * - each angle-set owner thread only drains its own incoming mailbox.
  *
  * Aggregated communicator flow:
- * 1. A sweep worker fills all non-local face payloads from a completed device batch, commits the
- *    angle-set queue, and publishes a coalesced notification for that producer.
- * 2. The communication thread drains notified producers and serializes one or more MPI messages
+ * 1. A sweep worker fills all non-local face payloads from a completed device batch and atomically
+ *    commits the angle-set queue prefix.
+ * 2. The communication thread drains committed producers and serializes one or more MPI messages
  *    per destination and traffic kind, split only when required by MPI's count representation.
  * 3. The destination rank probes for those messages, maps the sending partition to its local
  *    source slot, and reconstructs one compact `IncomingFaceBatch` per angle-set section.
@@ -253,14 +252,6 @@ private:
   struct ProducerQueue
   {
     std::unique_ptr<CommittedSPSCQueue<OutgoingFaceData>> queue;
-    /// True while a doorbell is queued or the communication thread owns this producer.
-    CoalescedDoorbell notification;
-  };
-
-  /// Coalesced notification identifying one producer queue with committed traffic.
-  struct ProducerNotification
-  {
-    std::size_t angle_set_id = 0;
   };
 
   /// Communication state for one destination partition.
@@ -311,7 +302,6 @@ private:
     std::array<std::size_t, NUM_CBCD_MESSAGE_KINDS> received_sections{};
     std::array<std::size_t, NUM_CBCD_MESSAGE_KINDS> received_records{};
     std::array<std::size_t, NUM_CBCD_MESSAGE_KINDS> received_bytes{};
-    std::size_t producer_notifications = 0;
     std::size_t producer_queue_visits = 0;
     std::size_t idle_progress_turns = 0;
     std::size_t peak_outstanding_sends = 0;
@@ -322,9 +312,7 @@ private:
   /// Drain outgoing queues, serialize batches, and post MPI sends.
   bool SerializeAndSend();
   /// Move a complete builder into its destination's ordered pending-packet lane.
-  void QueueSendBuilder(std::size_t destination_index,
-                        CBCDMessageKind kind,
-                        SendBuilder& builder);
+  void QueueSendBuilder(std::size_t destination_index, CBCDMessageKind kind, SendBuilder& builder);
   /// Post the highest-priority pending packet when the destination channel is idle.
   bool PostNextSend(std::size_t destination_index, CBCDMessageKind kind);
   /// Append one outgoing face record to a persistent destination builder.
@@ -362,16 +350,9 @@ private:
   /// Persistent normal/delayed message builders indexed by destination state.
   std::vector<std::array<SendBuilder, NUM_CBCD_MESSAGE_KINDS>> send_builders_;
   /// Complete packets awaiting their destination's single active wire channel.
-  std::vector<std::array<std::deque<SendBuilder>, NUM_CBCD_MESSAGE_KINDS>>
-    pending_send_packets_;
-  /// Multi-producer doorbell containing at most one notification per angle-set producer.
-  LockFreeRingBuffer<ProducerNotification> ready_producer_queue_;
-  /// Scratch notification slots drained during one producer-service round.
-  std::vector<LockFreeRingBuffer<ProducerNotification>::Slot*> ready_producer_slot_cache_;
-  /// Copied producer IDs whose doorbell slots have already been released.
-  std::vector<std::size_t> ready_producer_ids_;
+  std::vector<std::array<std::deque<SendBuilder>, NUM_CBCD_MESSAGE_KINDS>> pending_send_packets_;
   /// Per-angle-set incoming mailboxes.
-  std::vector<std::unique_ptr<LockFreeRingBuffer<IncomingFaceBatch>>> incoming_mailboxes_;
+  std::vector<std::unique_ptr<CommittedSPSCQueue<IncomingFaceBatch>>> incoming_mailboxes_;
   /// Reusable receive buffer for one incoming MPI payload.
   ByteArray recv_buffer_;
   /// Outstanding nonblocking sends owned by the communication thread.
