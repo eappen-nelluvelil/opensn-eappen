@@ -329,12 +329,8 @@ private:
   bool PostNextSend(std::size_t destination_index, CBCDMessageKind kind);
   /// Append one outgoing face record to a persistent destination builder.
   void AppendToSendBuilder(SendBuilder& builder, const OutgoingFaceData& entry);
-  /// Start eligible transactions for one destination in normal-then-delayed order.
-  bool TryStartDestination(std::size_t destination_index);
-  /// Record one destination whose traffic state changed during the current progress operation.
-  void MarkDestinationForActivation(std::size_t destination_index);
-  /// Start eligible transactions for, and clear, the destinations marked for activation.
-  bool StartMarkedDestinations();
+  /// Start one transaction on each idle destination, retaining active builders for coalescing.
+  bool FlushSendBuilders();
   /// Probe for incoming MPI messages, deserialize them, and publish mailbox batches.
   bool ProbeAndReceive();
   /// Retire completed nonblocking sends.
@@ -374,10 +370,6 @@ private:
   std::vector<LockFreeRingBuffer<ProducerNotification>::Slot*> ready_producer_slot_cache_;
   /// Copied producer IDs whose doorbell slots have already been released.
   std::vector<std::size_t> ready_producer_ids_;
-  /// Destination IDs affected by producer traffic or send completions in one progress operation.
-  std::vector<std::size_t> destinations_to_activate_;
-  /// Duplicate-suppression flags aligned with `destination_states_`.
-  std::vector<std::uint8_t> destination_activation_pending_;
   /// Per-angle-set incoming mailboxes.
   std::vector<std::unique_ptr<LockFreeRingBuffer<IncomingFaceBatch>>> incoming_mailboxes_;
   /// Reusable receive buffer for one incoming MPI payload.

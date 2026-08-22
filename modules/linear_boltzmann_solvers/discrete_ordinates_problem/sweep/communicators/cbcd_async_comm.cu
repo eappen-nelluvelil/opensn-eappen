@@ -263,8 +263,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   }
   send_builders_.resize(destination_states_.size());
   pending_send_packets_.resize(destination_states_.size());
-  destination_activation_pending_.resize(destination_states_.size(), std::uint8_t{0});
-  destinations_to_activate_.reserve(destination_states_.size());
   for (auto& builders : send_builders_)
     for (auto& builder : builders)
       builder.Clear();
@@ -363,10 +361,6 @@ CBCD_AsynchronousCommunicator::Start()
       throw std::logic_error("CBCD communicator: stale producer state at sweep start.");
   if (not ready_producer_queue_.Empty())
     throw std::logic_error("CBCD communicator: stale producer notification at sweep start.");
-  if (not destinations_to_activate_.empty() or
-      std::ranges::any_of(destination_activation_pending_,
-                          [](const std::uint8_t pending) { return pending != 0; }))
-    throw std::logic_error("CBCD communicator: stale destination activation at sweep start.");
 
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& done : angle_set_done_)
@@ -436,8 +430,7 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
     {
       bool work_done = PollInFlightSends();
       work_done |= ProbeAndReceive();
-      if (not ready_producer_queue_.Empty())
-        work_done |= SerializeAndSend();
+      work_done |= SerializeAndSend();
 
       if (stop_requested_.load(std::memory_order_acquire) and AllAngleSetsComplete())
       {
@@ -590,60 +583,38 @@ CBCD_AsynchronousCommunicator::PostNextSend(const std::size_t destination_index,
 }
 
 bool
-CBCD_AsynchronousCommunicator::TryStartDestination(const std::size_t destination_index)
+CBCD_AsynchronousCommunicator::FlushSendBuilders()
 {
-  assert(destination_index < send_builders_.size());
   constexpr auto normal_index = static_cast<std::size_t>(CBCDMessageKind::NORMAL_FACE_PSI);
   bool sent_any = false;
-  constexpr std::array traffic_priority{CBCDMessageKind::NORMAL_FACE_PSI,
-                                        CBCDMessageKind::DELAYED_FACE_PSI};
-  for (const auto kind : traffic_priority)
+  for (std::size_t destination_index = 0; destination_index < send_builders_.size();
+       ++destination_index)
   {
-    const auto kind_index = static_cast<std::size_t>(kind);
-    auto& destination = destination_states_[destination_index];
+    constexpr std::array traffic_priority{CBCDMessageKind::NORMAL_FACE_PSI,
+                                          CBCDMessageKind::DELAYED_FACE_PSI};
+    for (const auto kind : traffic_priority)
+    {
+      const auto kind_index = static_cast<std::size_t>(kind);
+      auto& destination = destination_states_[destination_index];
 
-    // Both traffic kinds share a communicator and tag, so MPI preserves their issue order.
-    // A delayed packet seeds only the next sweep and must never overtake a later normal
-    // packet that unlocks the current dependency DAG. The exact topology count proves
-    // when every normal record for this destination has already been issued.
-    if (kind == CBCDMessageKind::DELAYED_FACE_PSI and
-        destination.sent_records[normal_index] != destination.record_bounds[normal_index])
-      continue;
-    if (destination.send_in_flight[kind_index])
-      continue;
+      // Both traffic kinds share a communicator and tag, so MPI preserves their issue order.
+      // A delayed packet seeds only the next sweep and must never overtake a later normal
+      // packet that unlocks the current dependency DAG. The exact topology count proves
+      // when every normal record for this destination has already been issued.
+      if (kind == CBCDMessageKind::DELAYED_FACE_PSI and
+          destination.sent_records[normal_index] != destination.record_bounds[normal_index])
+        continue;
+      if (destination.send_in_flight[kind_index])
+        continue;
 
-    auto& builder = send_builders_[destination_index][kind_index];
-    auto& pending_packets = pending_send_packets_[destination_index][kind_index];
-    if (pending_packets.empty() and not builder.Empty())
-      QueueSendBuilder(destination_index, kind, builder);
+      auto& builder = send_builders_[destination_index][kind_index];
+      auto& pending_packets = pending_send_packets_[destination_index][kind_index];
+      if (pending_packets.empty() and not builder.Empty())
+        QueueSendBuilder(destination_index, kind, builder);
 
-    sent_any |= PostNextSend(destination_index, kind);
+      sent_any |= PostNextSend(destination_index, kind);
+    }
   }
-  return sent_any;
-}
-
-void
-CBCD_AsynchronousCommunicator::MarkDestinationForActivation(
-  const std::size_t destination_index)
-{
-  assert(destination_index < destination_activation_pending_.size());
-  if (destination_activation_pending_[destination_index] != 0)
-    return;
-  destination_activation_pending_[destination_index] = 1;
-  destinations_to_activate_.push_back(destination_index);
-}
-
-bool
-CBCD_AsynchronousCommunicator::StartMarkedDestinations()
-{
-  bool sent_any = false;
-  for (const auto destination_index : destinations_to_activate_)
-  {
-    assert(destination_activation_pending_[destination_index] != 0);
-    destination_activation_pending_[destination_index] = 0;
-    sent_any |= TryStartDestination(destination_index);
-  }
-  destinations_to_activate_.clear();
   return sent_any;
 }
 
@@ -660,7 +631,7 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
   constexpr auto mpi_max_message_bytes = static_cast<std::size_t>(std::numeric_limits<int>::max());
   ready_producer_queue_.GetReadySlots(ready_producer_slot_cache_);
   if (ready_producer_slot_cache_.empty())
-    return false;
+    return FlushSendBuilders();
 
   // Copy the IDs and release the doorbell slots before servicing producers. A producer may
   // need to republish while it is being drained; retaining a full ring here would make that
@@ -698,7 +669,6 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
         if (destination_it == dest_to_state_index_.end())
           throw std::logic_error("CBCD communicator: outgoing record has an unknown destination.");
         const auto destination_index = destination_it->second;
-        MarkDestinationForActivation(destination_index);
         const auto kind_index = static_cast<std::size_t>(entry.kind);
         if (kind_index >= send_builders_[destination_index].size() or
             entry.angle_set_id != angle_set_id)
@@ -765,10 +735,9 @@ CBCD_AsynchronousCommunicator::SerializeAndSend()
     }
   }
 
-  // A drained notification snapshot is the semantic flush boundary. Start only destinations
-  // whose builders changed; send completion reactivates a destination when its channel becomes
-  // idle. This preserves the exact flow protocol without repeatedly scanning unrelated ranks.
-  made_progress |= StartMarkedDestinations();
+  // A drained notification snapshot is the semantic flush boundary. Active channels keep
+  // accumulating into their persistent builders; idle channels start exactly one transaction.
+  made_progress |= FlushSendBuilders();
   return made_progress;
 }
 
@@ -933,7 +902,6 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
     assert(kind_index < destination.send_in_flight.size());
     assert(destination.send_in_flight[kind_index]);
     destination.send_in_flight[kind_index] = false;
-    MarkDestinationForActivation(in_flight.destination_index);
     in_flight.data.Clear();
     reusable_send_buffers_.push_back(std::move(in_flight.data));
     if (i + 1 != in_flight_sends_.size())
@@ -944,7 +912,6 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
     in_flight_sends_.pop_back();
     in_flight_send_requests_.pop_back();
   }
-  StartMarkedDestinations();
   assert(in_flight_sends_.size() == in_flight_send_requests_.size());
   return not completed_send_indices_.empty();
 }
