@@ -435,11 +435,12 @@ CBC_SPDS::BuildLocalFaceReuseData()
 {
   CALI_CXX_MARK_SCOPE("CBC_SPDS::BuildLocalFaceReuseData");
 
-  const auto num_loc_cells = grid_->local_cells.size();
+  const auto num_loc_cells = grid_->GetLocalCellCount();
   cell_face_offsets_.assign(num_loc_cells + 1, 0);
   std::size_t total_num_faces = 0;
-  for (const auto& cell : grid_->local_cells)
+  for (const auto& cell_ptr : grid_->GetLocalCells())
   {
+    const auto& cell = *cell_ptr;
     cell_face_offsets_[cell.local_id] = static_cast<std::uint32_t>(total_num_faces);
     total_num_faces += cell.faces.size();
   }
@@ -458,7 +459,7 @@ CBC_SPDS::BuildLocalFaceReuseData()
       static_cast<std::uint32_t>(face_producer_task_ranks_.size());
 
     const auto producer_cell_local_id = spls_[producer_rank];
-    const auto& cell = grid_->local_cells[producer_cell_local_id];
+    const auto& cell = grid_->GetLocalCell(producer_cell_local_id);
     const auto& face_orientations = cell_face_orientations_[producer_cell_local_id];
 
     for (std::size_t f = 0; f < cell.faces.size(); ++f)
