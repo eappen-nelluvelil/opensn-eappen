@@ -4,6 +4,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/profiling/cbcd_profiler.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/runtime.h"
 #include "framework/utils/error.h"
@@ -55,9 +56,11 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const MPICommunicatorSet& comm_set,
   const std::vector<std::vector<int>>& incoming_source_partitions,
   const std::size_t max_message_bytes,
-  const std::vector<AngleSetCommunicationBounds>& bounds)
+  const std::vector<AngleSetCommunicationBounds>& bounds,
+  CBCDProfiler* profiler)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
+    profiler_(profiler),
     communication_bounds_(bounds),
     mpi_tag_(static_cast<int>(angle_sets.size())),
     angle_set_complete_(angle_sets.size())
@@ -226,11 +229,51 @@ CBCD_AsynchronousCommunicator::CommThreadLoop()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::CommThreadLoop");
 
+  if (profiler_ == nullptr)
+  {
+    while (true)
+    {
+      bool work_done = FlushOutgoing();
+      work_done |= ProbeAndReceive();
+      work_done |= PollInFlightSends();
+
+      if (stop_requested_.load(std::memory_order_acquire) and AllAngleSetsComplete())
+      {
+        FlushOutgoing();
+        while (not in_flight_sends_.empty())
+        {
+          PollInFlightSends();
+          if (not in_flight_sends_.empty())
+            std::this_thread::yield();
+        }
+        return;
+      }
+
+      if (not work_done)
+        std::this_thread::yield();
+    }
+  }
+
   while (true)
   {
+    const auto flush_start = CBCDProfiler::Clock::now();
     bool work_done = FlushOutgoing();
+    profiler_->RecordCommunicationPhase(
+      CBCDProfiler::CommunicationPhase::FLUSH_OUTGOING,
+      CBCDProfiler::ElapsedNanoseconds(flush_start, CBCDProfiler::Clock::now()));
+
+    const auto receive_start = CBCDProfiler::Clock::now();
     work_done |= ProbeAndReceive();
+    profiler_->RecordCommunicationPhase(
+      CBCDProfiler::CommunicationPhase::PROBE_AND_RECEIVE,
+      CBCDProfiler::ElapsedNanoseconds(receive_start, CBCDProfiler::Clock::now()));
+
+    const auto poll_start = CBCDProfiler::Clock::now();
     work_done |= PollInFlightSends();
+    profiler_->RecordCommunicationPhase(
+      CBCDProfiler::CommunicationPhase::POLL_SENDS,
+      CBCDProfiler::ElapsedNanoseconds(poll_start, CBCDProfiler::Clock::now()));
+    profiler_->RecordCommunicationIteration(work_done);
 
     if (stop_requested_.load(std::memory_order_acquire) and AllAngleSetsComplete())
     {
@@ -273,12 +316,14 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
     };
 
     const auto num_sections = active_angle_set_ids_.size();
+    std::size_t num_face_records = 0;
     write_bytes(&num_sections, sizeof(std::size_t));
     for (const auto angle_set_id : active_angle_set_ids_)
     {
       auto& entries = pending_records_by_angle_set_[angle_set_id];
       write_bytes(&angle_set_id, sizeof(std::size_t));
       const auto num_entries = entries.size();
+      num_face_records += num_entries;
       write_bytes(&num_entries, sizeof(std::size_t));
       for (const auto* entry : entries)
       {
@@ -293,6 +338,8 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
     const auto mapped_rank = comm_set_.MapIonJ(channel.destination_rank, channel.destination_rank);
     in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
     in_flight_sends_.push_back(std::move(in_flight));
+    if (profiler_)
+      profiler_->RecordSend(current_payload_bytes, num_face_records);
     current_payload_bytes = sizeof(std::size_t);
     active_angle_set_ids_.clear();
 
@@ -377,10 +424,12 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 
       detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data())};
       const auto num_sections = reader.LoadSize();
+      std::size_t num_face_records = 0;
       for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
       {
         const auto angle_set_id = reader.LoadSize();
         const auto num_entries = reader.LoadSize();
+        num_face_records += num_entries;
 
         const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
         const auto source_partition_index = source_indices.find(source_partition)->second;
@@ -414,6 +463,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         }
         incoming_mailboxes_[angle_set_id]->PublishSlot();
       }
+      if (profiler_)
+        profiler_->RecordReceive(static_cast<std::uint64_t>(num_bytes), num_face_records);
     }
   }
   return received_any;
