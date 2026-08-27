@@ -94,10 +94,15 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
     angle_set->ResetSweepDependencies();
 
   const auto num_workers = pool_.GetSize();
+  auto* profiler = cbcd_sweep_chunk.GetProfiler();
+  if (profiler)
+    profiler->BeginSweep(num_workers);
   cbcd_sweep_chunk.StartCommunicator(num_workers);
   pool_.ExecuteBatch(
-    [num_workers, num_angle_sets, &angle_sets, &cbcd_sweep_chunk](std::size_t worker_id)
+    [num_workers, num_angle_sets, &angle_sets, &cbcd_sweep_chunk, profiler](std::size_t worker_id)
     {
+      if (profiler)
+        profiler->RecordWorkerStart(worker_id, CBCDProfiler::Clock::now());
       const auto chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
       const auto begin = std::min(worker_id * chunk_size, num_angle_sets);
       const auto end = std::min(begin + chunk_size, num_angle_sets);
@@ -141,18 +146,48 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
           ++i;
         }
-        if (not any_work_done)
+        if (any_work_done)
+        {
+          if (profiler)
+            profiler->RecordWorkerIdleEnd(worker_id, CBCDProfiler::Clock::now());
+        }
+        else
+        {
+          if (profiler)
+          {
+            profiler->RecordWorkerIdleStart(worker_id, CBCDProfiler::Clock::now());
+            profiler->RecordWorkerYield(worker_id);
+          }
           std::this_thread::yield();
+        }
       }
+      if (profiler)
+        profiler->RecordWorkerStop(worker_id, CBCDProfiler::Clock::now());
     });
 
+  CBCDProfiler::TimePoint communicator_stop_start;
+  if (profiler)
+    communicator_stop_start = CBCDProfiler::Clock::now();
   cbcd_sweep_chunk.StopCommunicator();
+  if (profiler)
+    profiler->RecordCommunicatorDrain(
+      CBCDProfiler::ElapsedNanoseconds(communicator_stop_start, CBCDProfiler::Clock::now()));
+
+  CBCDProfiler::TimePoint barrier_start;
+  if (profiler)
+    barrier_start = CBCDProfiler::Clock::now();
   opensn::mpi_comm.barrier();
+  if (profiler)
+    profiler->RecordEndBarrier(
+      CBCDProfiler::ElapsedNanoseconds(barrier_start, CBCDProfiler::Clock::now()));
 
   cbcd_sweep_chunk.GetProblem().CopyPhiAndOutflowBackToHost();
 
   for (auto* angle_set : angle_sets)
     angle_set->ResetSweepBuffers();
+
+  if (profiler)
+    profiler->FinishSweep();
 }
 
 } // namespace opensn

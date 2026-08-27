@@ -57,6 +57,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
 
   if (not angle_sets_.empty())
   {
+    profiler_ = CBCDProfiler::Create(angle_sets_.size());
     std::vector<std::vector<int>> incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
     std::unordered_map<int, std::vector<std::size_t>> section_bytes_by_source;
@@ -136,7 +137,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                                                       angle_sets_.front()->GetCommunicatorSet(),
                                                       incoming_source_partitions_by_angle_set,
                                                       max_message_bytes,
-                                                      communication_bounds);
+                                                      communication_bounds,
+                                                      profiler_.get());
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);
   }
@@ -184,6 +186,9 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
                       const std::uint32_t* local_cell_ids)
 {
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
+
+  if (profiler_)
+    profiler_->RecordKernelLaunch(angle_set_id, num_ready_cells);
 
   auto& launch = kernel_launches_[angle_set_id];
   auto& stream = angle_sets_[angle_set_id]->GetStream();
