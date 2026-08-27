@@ -21,6 +21,7 @@ namespace opensn
 {
 
 class AngleSet;
+class CBCDProfiler;
 class MPICommunicatorSet;
 
 /// Metadata for one received face within an incoming batch.
@@ -95,7 +96,8 @@ public:
                                 const MPICommunicatorSet& comm_set,
                                 const std::vector<std::vector<int>>& incoming_source_partitions,
                                 std::size_t max_message_bytes,
-                                const std::vector<AngleSetCommunicationBounds>& bounds);
+                                const std::vector<AngleSetCommunicationBounds>& bounds,
+                                CBCDProfiler* profiler);
 
   ~CBCD_AsynchronousCommunicator();
 
@@ -169,6 +171,7 @@ private:
   /// Immutable communicator topology and per-angle-set bounds.
   const MPICommunicatorSet& comm_set_;
   std::size_t num_angle_sets_;
+  CBCDProfiler* profiler_ = nullptr;
   std::vector<AngleSetCommunicationBounds> communication_bounds_;
   /// Worker count and MPI message parameters.
   std::size_t num_workers_ = 0;

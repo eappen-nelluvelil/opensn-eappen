@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/cbcd_angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/profiling/cbcd_profiler.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/arguments.h"
@@ -53,6 +54,9 @@ public:
   /// Refresh problem-dependent arguments cached for each angle set.
   void RefreshKernelArguments();
 
+  /// Return optional rank-local CBCD instrumentation.
+  CBCDProfiler* GetProfiler() const { return profiler_.get(); }
+
   using SweepChunk::Sweep;
   /// Launch one ready-cell batch.
   void Sweep(std::uint32_t num_ready_cells,
@@ -73,6 +77,7 @@ private:
   };
   /// Owning problem and groupset-wide aggregated communicator.
   DiscreteOrdinatesProblem& problem_;
+  std::unique_ptr<CBCDProfiler> profiler_;
   std::unique_ptr<CBCD_AsynchronousCommunicator> async_comm_;
   /// Angle sets and their persistent kernel launches in scheduler order.
   std::vector<CBCD_AngleSet*> angle_sets_;
