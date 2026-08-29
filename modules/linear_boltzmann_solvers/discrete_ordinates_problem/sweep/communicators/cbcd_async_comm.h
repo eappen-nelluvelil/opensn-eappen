@@ -178,9 +178,8 @@ private:
   int mpi_tag_;
   std::size_t message_limit_ = 0;
   int my_rank_ = 0;
-  /// Unique receive peers in partition and communicator-rank coordinates.
-  std::vector<int> source_partitions_;
-  std::vector<int> source_ranks_;
+  /// Source partition indexed by its receive-communicator rank.
+  std::unordered_map<int, int> source_partition_by_rank_;
   /// Per-angle-set map from source partition to compact source index.
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_index_by_angle_set_;
   /// Unique destinations and their compact communication channels.

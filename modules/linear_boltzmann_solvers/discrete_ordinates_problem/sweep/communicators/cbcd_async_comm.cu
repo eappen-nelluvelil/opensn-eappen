@@ -93,10 +93,10 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   }
 
   my_rank_ = opensn::mpi_comm.rank();
-  source_partitions_.assign(sources.begin(), sources.end());
-  source_ranks_.reserve(source_partitions_.size());
-  for (const int source_partition : source_partitions_)
-    source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
+  source_partition_by_rank_.reserve(sources.size());
+  for (const int source_partition : sources)
+    source_partition_by_rank_.emplace(comm_set_.MapIonJ(source_partition, my_rank_),
+                                      source_partition);
 
   source_partition_to_index_by_angle_set_.resize(angle_sets.size());
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
@@ -407,63 +407,61 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
 
   bool received_any = false;
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
-  for (std::size_t source_index = 0; source_index < source_ranks_.size(); ++source_index)
+  while (true)
   {
-    const int source_partition = source_partitions_[source_index];
-    const int source_rank = source_ranks_[source_index];
-    mpi::Status status;
+    auto message = recv_comm.improbe(mpi::ANY_SOURCE, mpi_tag_);
+    if (not message)
+      break;
 
-    while (recv_comm.iprobe(source_rank, mpi_tag_, status))
+    received_any = true;
+    const auto source_partition = source_partition_by_rank_.find(message.source())->second;
+    const auto num_bytes = message.count<std::byte>();
+    recv_buffer_.Data().resize(static_cast<std::size_t>(num_bytes));
+    message.recv(recv_buffer_.Data());
+
+    detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data())};
+    const auto num_sections = reader.LoadSize();
+    std::size_t num_face_records = 0;
+    for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
     {
-      received_any = true;
-      const auto num_bytes = status.count<std::byte>();
-      recv_buffer_.Data().resize(static_cast<std::size_t>(num_bytes));
-      recv_comm.recv(source_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
+      const auto angle_set_id = reader.LoadSize();
+      const auto num_entries = reader.LoadSize();
+      num_face_records += num_entries;
 
-      detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data())};
-      const auto num_sections = reader.LoadSize();
-      std::size_t num_face_records = 0;
-      for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
+      const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
+      const auto source_partition_index = source_indices.find(source_partition)->second;
+
+      const auto* const section_ptr = reader.Data();
+      std::size_t total_values = 0;
+      for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
       {
-        const auto angle_set_id = reader.LoadSize();
-        const auto num_entries = reader.LoadSize();
-        num_face_records += num_entries;
-
-        const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
-        const auto source_partition_index = source_indices.find(source_partition)->second;
-
-        const auto* const section_ptr = reader.Data();
-        std::size_t total_values = 0;
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          reader.LoadFaceIndex();
-          const auto data_size = reader.LoadSize();
-          reader.SkipBytes(data_size * sizeof(double));
-          total_values += data_size;
-        }
-        auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-        batch.source_partition_index = source_partition_index;
-        batch.faces.resize(num_entries);
-        batch.psi_values.resize(total_values);
-        detail::BufferReader section_reader{section_ptr};
-        std::size_t value_offset = 0;
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          auto& face = batch.faces[entry_index];
-          face.incoming_face_index = section_reader.LoadFaceIndex();
-          face.psi_offset = value_offset;
-          const auto num_psi_values = section_reader.LoadSize();
-          std::memcpy(batch.psi_values.data() + value_offset,
-                      section_reader.Data(),
-                      num_psi_values * sizeof(double));
-          section_reader.SkipBytes(num_psi_values * sizeof(double));
-          value_offset += num_psi_values;
-        }
-        incoming_mailboxes_[angle_set_id]->PublishSlot();
+        reader.LoadFaceIndex();
+        const auto data_size = reader.LoadSize();
+        reader.SkipBytes(data_size * sizeof(double));
+        total_values += data_size;
       }
-      if (profiler_)
-        profiler_->RecordReceive(static_cast<std::uint64_t>(num_bytes), num_face_records);
+      auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+      batch.source_partition_index = source_partition_index;
+      batch.faces.resize(num_entries);
+      batch.psi_values.resize(total_values);
+      detail::BufferReader section_reader{section_ptr};
+      std::size_t value_offset = 0;
+      for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+      {
+        auto& face = batch.faces[entry_index];
+        face.incoming_face_index = section_reader.LoadFaceIndex();
+        face.psi_offset = value_offset;
+        const auto num_psi_values = section_reader.LoadSize();
+        std::memcpy(batch.psi_values.data() + value_offset,
+                    section_reader.Data(),
+                    num_psi_values * sizeof(double));
+        section_reader.SkipBytes(num_psi_values * sizeof(double));
+        value_offset += num_psi_values;
+      }
+      incoming_mailboxes_[angle_set_id]->PublishSlot();
     }
+    if (profiler_)
+      profiler_->RecordReceive(static_cast<std::uint64_t>(num_bytes), num_face_records);
   }
   return received_any;
 }
