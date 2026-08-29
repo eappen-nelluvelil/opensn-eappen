@@ -192,7 +192,7 @@ class PreparationTests(unittest.TestCase):
 
         text = runner.read_text()
         self.assertIn("build-opensn-cbcd-v2-cycles-$short", text)
-        self.assertIn("OPENSN_TUO_PROFILE_NODES=1,2,4", text)
+        self.assertIn("OPENSN_TUO_CYCLE_NODES:-1,2,4", text)
         self.assertIn("OPENSN_TUO_PROFILE_KINDS=strong", text)
         self.assertIn("OPENSN_TUO_CYCLE_ITERATIONS:-10", text)
         self.assertIn(

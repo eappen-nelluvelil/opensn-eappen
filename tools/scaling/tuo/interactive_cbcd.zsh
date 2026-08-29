@@ -49,7 +49,7 @@ Commands:
   prepare-interactive [POLICY]  prepare one or both 1/2/4-node policy studies
   run-interactive [POLICY]      run one or both policies in one allocation
   run-interactive-here [POLICY] run one or both policies in the current allocation
-  run POLICY NODES              run one policy at 1, 2, or 4 nodes
+  run POLICY NODES              run one policy at 1, 2, 4, or 8 nodes
   run-here POLICY NODES         run one policy in the current allocation
   collect-interactive [POLICY]  collect one study or compare both studies
   prepare-batch [POLICY]        prepare one or both strong/weak pbatch studies
@@ -83,8 +83,8 @@ check_policy()
 check_nodes()
 {
   case $1 in
-    1|2|4) ;;
-    *) print -u2 'NODES must be 1, 2, or 4.'; exit 2 ;;
+    1|2|4|8) ;;
+    *) print -u2 'NODES must be 1, 2, 4, or 8.'; exit 2 ;;
   esac
 }
 

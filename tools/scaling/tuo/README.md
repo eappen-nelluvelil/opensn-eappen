@@ -180,7 +180,7 @@ study configurations.
 
 The cycle-capable CBCD runner fixes the profile study to the exact checkout,
 enables cycle handling explicitly in the generated input, disables saved
-angular flux, and runs strong-scaling diagnostics at 1, 2, and 4 nodes. The d39
+angular flux, and runs strong-scaling diagnostics at selected node counts. The d39
 unstructured problem uses 448 directions and 64 groups; the collected inventory
 records its lagged-unknown count at each decomposition.
 
@@ -189,15 +189,18 @@ bank, run the core profile suite with one command:
 
 ```zsh
 export OPENSN_TUO_BANK=YOUR_LC_BANK
+export OPENSN_TUO_CYCLE_NODES=1,2,4,8
 RUN_CYCLES=$SOURCE/tools/scaling/tuo/run_cycle_cbcd_profile.zsh
 
 zsh "$RUN_CYCLES" run
 ```
 
-The default order is `cbcd-metrics`, `baseline`, `pmpi`, and `caliper`. Each
-profiler obtains its own four-node `pdebug` allocation and runs the 1-, 2-, and
-4-node cases inside it. To obtain the most useful internal measurements first,
-or to avoid waiting for every profiler, select one profile:
+The default order is `cbcd-metrics`, `baseline`, `pmpi`, and `caliper`. With the
+setting above, each profiler obtains its own eight-node `pdebug` allocation and
+runs the 1-, 2-, 4-, and 8-node cases inside it. Omit
+`OPENSN_TUO_CYCLE_NODES` to retain the 1-, 2-, and 4-node default. To obtain the
+most useful internal measurements first, or to avoid waiting for every profiler,
+select one profile:
 
 ```zsh
 zsh "$RUN_CYCLES" run cbcd-metrics

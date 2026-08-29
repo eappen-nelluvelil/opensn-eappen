@@ -9,8 +9,8 @@ usage: $0 ACTION [PROFILE]
 
 Actions:
   build      build this exact checkout in the shared Tuo dependency stack
-  run        run fresh 1/2/4-node strong profiles
-  resume     run only incomplete 1/2/4-node strong profile cases
+  run        run fresh strong profiles at the selected node counts
+  resume     run only incomplete strong profile cases
   collect    collect the profile inventory and CBCD metrics
   status     collect available results and show the user's Flux jobs
   paths      print the resolved checkout, build, and result paths
@@ -19,6 +19,7 @@ PROFILE is optional for run and resume. Without it, the runner processes
 cbcd-metrics, baseline, pmpi, and caliper in that order. Set
 OPENSN_TUO_BANK before running. OPENSN_TUO_CYCLE_LABEL may select a new
 campaign; its default includes the exact source revision.
+Set OPENSN_TUO_CYCLE_NODES to select 1, 2, 4, and/or 8 nodes.
 EOF
   exit 2
 }
@@ -46,7 +47,7 @@ export OPENSN_TUO_MESH_DIR=${OPENSN_TUO_MESH_DIR:-$study_root/builds/gfx942/mesh
 export OPENSN_TUO_RESULTS=${OPENSN_TUO_RESULTS:-/p/lustre5/${USER}/opensn-results}
 export OPENSN_TUO_LABEL=${OPENSN_TUO_CYCLE_LABEL:-cbcd-v2-cycles-$short-pdebug-1}
 export OPENSN_TUO_PROFILE_ROOT=$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile/resource-aware
-export OPENSN_TUO_PROFILE_NODES=1,2,4
+export OPENSN_TUO_PROFILE_NODES=${OPENSN_TUO_CYCLE_NODES:-1,2,4}
 export OPENSN_TUO_PROFILE_KINDS=strong
 export OPENSN_TUO_PROFILE_DIVISOR=39
 export OPENSN_TUO_PROFILE_ITERATIONS=${OPENSN_TUO_CYCLE_ITERATIONS:-10}
