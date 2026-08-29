@@ -103,13 +103,9 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
     {
       if (profiler)
         profiler->RecordWorkerStart(worker_id, CBCDProfiler::Clock::now());
-      const auto chunk_size = (num_angle_sets + num_workers - 1) / num_workers;
-      const auto begin = std::min(worker_id * chunk_size, num_angle_sets);
-      const auto end = std::min(begin + chunk_size, num_angle_sets);
-
       std::vector<std::size_t> active_angle_set_ids;
-      active_angle_set_ids.reserve(end - begin);
-      for (std::size_t i = begin; i < end; ++i)
+      active_angle_set_ids.reserve((num_angle_sets + num_workers - 1) / num_workers);
+      for (std::size_t i = worker_id; i < num_angle_sets; i += num_workers)
         active_angle_set_ids.push_back(i);
 
       while (not active_angle_set_ids.empty())
