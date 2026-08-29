@@ -173,6 +173,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
     profiler->RecordCommunicatorDrain(
       CBCDProfiler::ElapsedNanoseconds(communicator_stop_start, CBCDProfiler::Clock::now()));
 
+  cbcd_sweep_chunk.ExchangeDelayedPsi();
+
   CBCDProfiler::TimePoint barrier_start;
   if (profiler)
     barrier_start = CBCDProfiler::Clock::now();

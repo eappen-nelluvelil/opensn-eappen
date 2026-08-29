@@ -84,6 +84,23 @@ public:
   /// Return device pointers consumed by the CBCD kernel.
   CBCD_FLUDSPointerSet& GetDevicePointerSet() { return pointer_set_; }
 
+  /// Return whether this angle set owns any lagged flux storage.
+  bool HasDelayedFluxes() const noexcept { return common_data_.HasDelayedFluxes(); }
+
+  /// Copy the fixed delayed-local old iterate to the device before a sweep.
+  void PrepareDelayedPsiForSweep();
+
+  /// Copy the delayed-local new iterate to host storage after a sweep.
+  void FinishDelayedPsiSweep();
+
+  /// Return exact delayed payload sizes for a peer metadata index.
+  std::size_t GetDelayedOutgoingValueCount(std::size_t destination_index) const;
+  std::size_t GetDelayedIncomingValueCount(std::size_t source_index) const;
+
+  /// Pack and unpack delayed nonlocal payloads in deterministic face order.
+  void PackDelayedOutgoingPsi(std::size_t destination_index, std::span<double> destination) const;
+  void UnpackDelayedIncomingPsi(std::size_t source_index, std::span<const double> source);
+
   /// Gather incoming boundary psi into mapped CBCD storage.
   void LoadIncomingBoundaryPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet& angle_set);
 
@@ -106,6 +123,12 @@ public:
   void AllocateOutgoingPsi() override {}
 
   void AllocatePrelocIOutgoingPsi() override {}
+  void AllocateDelayedLocalPsi() override {}
+  void AllocateDelayedPrelocIOutgoingPsi() override {}
+  void SetDelayedLocalPsiOldToNew() override;
+  void SetDelayedLocalPsiNewToOld() override;
+  void SetDelayedOutgoingPsiOldToNew() override;
+  void SetDelayedOutgoingPsiNewToOld() override;
 
 private:
   /// Immutable indexing and communication metadata shared by this SPDS.
@@ -125,6 +148,15 @@ private:
   crb::MappedHostVector<double> outgoing_boundary_psi_;
   crb::MappedHostVector<double> incoming_nonlocal_psi_;
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
+  /// Device-local delayed faces and their host old/new Krylov views.
+  crb::DeviceMemory<double> delayed_local_psi_old_;
+  crb::DeviceMemory<double> delayed_local_psi_new_;
+  crb::HostVector<double> host_delayed_local_psi_old_;
+  crb::HostVector<double> host_delayed_local_psi_new_;
+  /// Host-mapped delayed nonlocal banks used by the bulk exchange epoch.
+  crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_old_;
+  crb::MappedHostVector<double> delayed_nonlocal_incoming_psi_new_;
+  crb::MappedHostVector<double> delayed_nonlocal_outgoing_psi_;
   /// Stream associated with this angle set.
   crb::Stream stream_;
   /// Triple-buffered ready, launched, and completed cell batches.
@@ -141,6 +173,9 @@ private:
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
   /// Precomputed contiguous copies into serialized outgoing nonlocal faces.
   std::vector<OutgoingPsiCopy> outgoing_psi_copy_plan_;
+
+  /// Allocate lagged banks and expose their host old/new views.
+  void AllocateDelayedPsi();
 
   /// Refresh the device pointer bundle after storage allocation.
   void CreatePointerSet();

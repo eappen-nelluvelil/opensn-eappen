@@ -367,15 +367,11 @@ BuildCBCSPDS(SweepRuntime& runtime,
                                                        work[i].omega,
                                                        grid,
                                                        face_neighbor_info,
-                                                       allow_cycles_map.at(work[i].quadrature) and
-                                                         not use_gpus);
+                                                       allow_cycles_map.at(work[i].quadrature));
               });
   for (size_t i = 0; i < work.size(); ++i)
     runtime.quadrature_spds_map[work[i].quadrature].push_back(std::move(result[i]));
   log.Log() << program_timer.GetTimeString() << " SPDS construction done.";
-
-  if (use_gpus)
-    return;
 
   const auto spds_list = GetCBCSPDSList(runtime);
   std::vector<std::vector<int>> local_dependencies(spds_list.size());
@@ -571,13 +567,172 @@ UnpackCBCSPDSLocationEdgeWeights(const std::vector<std::byte>& bytes)
   return edge_weights;
 }
 
+bool
+IsLocationGraphAcyclic(const CBC_SPDS& spds)
+{
+  const auto& dependencies = spds.GetGlobalDependencies();
+  std::vector<std::vector<int>> successors(dependencies.size());
+  std::vector<std::size_t> indegrees(dependencies.size(), 0);
+  for (std::size_t downstream = 0; downstream < dependencies.size(); ++downstream)
+    for (const int upstream : dependencies[downstream])
+    {
+      successors[static_cast<std::size_t>(upstream)].push_back(static_cast<int>(downstream));
+      ++indegrees[downstream];
+    }
+
+  std::vector<int> ready;
+  ready.reserve(dependencies.size());
+  for (std::size_t rank = 0; rank < indegrees.size(); ++rank)
+    if (indegrees[rank] == 0)
+      ready.push_back(static_cast<int>(rank));
+
+  std::size_t num_processed = 0;
+  while (not ready.empty())
+  {
+    const int upstream = ready.back();
+    ready.pop_back();
+    ++num_processed;
+    for (const int downstream : successors[static_cast<std::size_t>(upstream)])
+      if (--indegrees[static_cast<std::size_t>(downstream)] == 0)
+        ready.push_back(downstream);
+  }
+  return num_processed == dependencies.size();
+}
+
+std::vector<bool>
+FindAcyclicGlobalCellGraphs(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list,
+                            const std::vector<bool>& active)
+{
+  if (std::ranges::none_of(active, [](const bool value) { return value; }))
+    return std::vector<bool>(spds_list.size(), true);
+
+  struct EliminationState
+  {
+    std::vector<unsigned int> remaining_dependencies;
+    std::vector<std::uint32_t> ready_cells;
+    std::size_t num_processed = 0;
+  };
+
+  std::vector<EliminationState> states(spds_list.size());
+  for (std::size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
+  {
+    if (not active[spds_ordinal])
+      continue;
+    const auto& tasks = spds_list[spds_ordinal]->GetTaskList();
+    auto& state = states[spds_ordinal];
+    state.remaining_dependencies.reserve(tasks.size());
+    state.ready_cells.reserve(tasks.size());
+    for (std::size_t cell_local_id = 0; cell_local_id < tasks.size(); ++cell_local_id)
+    {
+      state.remaining_dependencies.push_back(tasks[cell_local_id].num_dependencies);
+      if (tasks[cell_local_id].num_dependencies == 0)
+        state.ready_cells.push_back(static_cast<std::uint32_t>(cell_local_id));
+    }
+  }
+
+  const auto num_ranks = static_cast<std::size_t>(opensn::mpi_comm.size());
+  while (true)
+  {
+    std::vector<std::vector<std::uint64_t>> outgoing(num_ranks);
+    std::uint64_t local_num_processed = 0;
+    for (std::size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
+    {
+      if (not active[spds_ordinal])
+        continue;
+
+      const auto& spds = *spds_list[spds_ordinal];
+      const auto& tasks = spds.GetTaskList();
+      const auto& orientations = spds.GetCellFaceOrientations();
+      const auto& delayed_successors = spds.GetDelayedLocationSuccessors();
+      const auto& grid = *spds.GetGrid();
+      auto& state = states[spds_ordinal];
+      while (not state.ready_cells.empty())
+      {
+        const auto cell_local_id = state.ready_cells.back();
+        state.ready_cells.pop_back();
+        ++state.num_processed;
+        ++local_num_processed;
+
+        for (const auto successor : tasks[cell_local_id].successors)
+        {
+          auto& count = state.remaining_dependencies[successor];
+          OpenSnLogicalErrorIf(count == 0,
+                               "CBC global DAG verifier observed a duplicate local edge.");
+          if (--count == 0)
+            state.ready_cells.push_back(successor);
+        }
+
+        const auto& cell = grid.local_cells[cell_local_id];
+        for (std::size_t face_id = 0; face_id < cell.faces.size(); ++face_id)
+        {
+          const auto& face = cell.faces[face_id];
+          if (orientations[cell_local_id][face_id] != FaceOrientation::OUTGOING or
+              not face.has_neighbor or face.IsNeighborLocal(&grid))
+            continue;
+          const int destination = grid.cells[face.neighbor_id].partition_id;
+          if (std::ranges::find(delayed_successors, destination) != delayed_successors.end())
+            continue;
+          auto& payload = outgoing[static_cast<std::size_t>(destination)];
+          payload.push_back(spds_ordinal);
+          payload.push_back(face.neighbor_id);
+        }
+      }
+    }
+
+    std::vector<std::uint64_t> incoming;
+    opensn::mpi_comm.all_to_all(outgoing, incoming);
+    OpenSnLogicalErrorIf(incoming.size() % 2 != 0, "Malformed CBC global DAG payload.");
+    for (std::size_t i = 0; i < incoming.size(); i += 2)
+    {
+      const auto spds_ordinal = static_cast<std::size_t>(incoming[i]);
+      const auto cell_global_id = incoming[i + 1];
+      OpenSnLogicalErrorIf(spds_ordinal >= spds_list.size() or not active[spds_ordinal],
+                           "Invalid SPDS ordinal in CBC global DAG payload.");
+      const auto& grid = *spds_list[spds_ordinal]->GetGrid();
+      OpenSnLogicalErrorIf(not grid.IsCellLocal(cell_global_id),
+                           "CBC global DAG payload names a nonlocal destination cell.");
+      const auto cell_local_id = grid.MapCellGlobalID2LocalID(cell_global_id);
+      auto& state = states[spds_ordinal];
+      auto& count = state.remaining_dependencies[cell_local_id];
+      OpenSnLogicalErrorIf(count == 0, "CBC global DAG verifier observed a duplicate remote edge.");
+      if (--count == 0)
+        state.ready_cells.push_back(static_cast<std::uint32_t>(cell_local_id));
+    }
+
+    std::uint64_t global_num_processed = 0;
+    opensn::mpi_comm.all_reduce(
+      local_num_processed, global_num_processed, mpi::op::sum<std::uint64_t>());
+    if (global_num_processed == 0)
+      break;
+  }
+
+  std::vector<std::uint64_t> local_residual_sizes(spds_list.size(), 0);
+  for (std::size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
+    if (active[spds_ordinal])
+      local_residual_sizes[spds_ordinal] =
+        spds_list[spds_ordinal]->GetTaskList().size() - states[spds_ordinal].num_processed;
+  std::vector<std::uint64_t> global_residual_sizes(spds_list.size(), 0);
+  if (not spds_list.empty())
+    opensn::mpi_comm.all_reduce(local_residual_sizes.data(),
+                                local_residual_sizes.size(),
+                                global_residual_sizes.data(),
+                                mpi::op::sum<std::uint64_t>());
+
+  std::vector<bool> acyclic(spds_list.size(), true);
+  for (std::size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
+    if (active[spds_ordinal])
+      acyclic[spds_ordinal] = global_residual_sizes[spds_ordinal] == 0;
+  return acyclic;
+}
+
 void
-AccumulateCBCGlobalEdgeWeights(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list)
+AccumulateCBCGlobalEdgeWeights(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list,
+                               const std::vector<bool>& needs_global_fas)
 {
   const int comm_size = opensn::mpi_comm.size();
   for (size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
   {
-    if (not spds_list[spds_ordinal]->AreCyclesAllowed())
+    if (not needs_global_fas[spds_ordinal])
       continue;
 
     const int owner = GetSweepGraphOwner(spds_ordinal);
@@ -608,23 +763,25 @@ AccumulateCBCGlobalEdgeWeights(const std::vector<std::shared_ptr<CBC_SPDS>>& spd
 }
 
 void
-BuildOwnedCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list)
+BuildOwnedCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list,
+                      const std::vector<bool>& needs_global_fas)
 {
   log.Log0Verbose1() << program_timer.GetTimeString() << " Build global sweep FAS for CBC SPDS.";
   for (size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
-    if (spds_list[spds_ordinal]->AreCyclesAllowed() and
+    if (needs_global_fas[spds_ordinal] and
         opensn::mpi_comm.rank() == GetSweepGraphOwner(spds_ordinal))
       spds_list[spds_ordinal]->BuildGlobalSweepFAS();
 }
 
 std::vector<int>
-GatherCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list)
+GatherCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list,
+                  const std::vector<bool>& needs_global_fas)
 {
   log.Log0Verbose1() << program_timer.GetTimeString() << " Gather FAS for CBC SPDS.";
   std::vector<int> local_edges_to_remove;
   for (size_t spds_ordinal = 0; spds_ordinal < spds_list.size(); ++spds_ordinal)
   {
-    if (not spds_list[spds_ordinal]->AreCyclesAllowed() or
+    if (not needs_global_fas[spds_ordinal] or
         opensn::mpi_comm.rank() != GetSweepGraphOwner(spds_ordinal))
       continue;
 
@@ -657,7 +814,8 @@ GatherCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list)
 
 void
 ApplyCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list,
-                 const std::vector<int>& global_edges_to_remove)
+                 const std::vector<int>& global_edges_to_remove,
+                 const std::vector<bool>& needs_global_fas)
 {
   size_t offset = 0;
   while (offset < global_edges_to_remove.size())
@@ -673,17 +831,43 @@ ApplyCBCSweepFAS(const std::vector<std::shared_ptr<CBC_SPDS>>& spds_list,
   }
 
   log.Log0Verbose1() << program_timer.GetTimeString() << " Apply global sweep FAS for CBC SPDS.";
-  for (const auto& spds : spds_list)
-    spds->ApplyGlobalSweepFAS();
+  for (std::size_t i = 0; i < spds_list.size(); ++i)
+    if (needs_global_fas[i])
+      spds_list[i]->ApplyGlobalSweepFAS();
 }
 
 void
-BuildCBCGlobalSweepGraph(SweepRuntime& runtime)
+BuildCBCGlobalSweepGraph(SweepRuntime& runtime, const bool use_gpus)
 {
   const auto spds_list = GetCBCSPDSList(runtime);
-  AccumulateCBCGlobalEdgeWeights(spds_list);
-  BuildOwnedCBCSweepFAS(spds_list);
-  ApplyCBCSweepFAS(spds_list, GatherCBCSweepFAS(spds_list));
+  std::vector<bool> needs_global_fas(spds_list.size(), false);
+  for (std::size_t i = 0; i < spds_list.size(); ++i)
+    needs_global_fas[i] = spds_list[i]->AreCyclesAllowed();
+
+  if (use_gpus)
+  {
+    for (std::size_t i = 0; i < spds_list.size(); ++i)
+      needs_global_fas[i] = needs_global_fas[i] and not IsLocationGraphAcyclic(*spds_list[i]);
+
+    const auto initially_acyclic = FindAcyclicGlobalCellGraphs(spds_list, needs_global_fas);
+    for (std::size_t i = 0; i < spds_list.size(); ++i)
+      needs_global_fas[i] = needs_global_fas[i] and not initially_acyclic[i];
+  }
+
+  if (std::ranges::none_of(needs_global_fas, [](const bool value) { return value; }))
+    return;
+
+  AccumulateCBCGlobalEdgeWeights(spds_list, needs_global_fas);
+  BuildOwnedCBCSweepFAS(spds_list, needs_global_fas);
+  ApplyCBCSweepFAS(spds_list, GatherCBCSweepFAS(spds_list, needs_global_fas), needs_global_fas);
+
+  if (use_gpus)
+  {
+    const auto cut_graph_is_acyclic = FindAcyclicGlobalCellGraphs(spds_list, needs_global_fas);
+    for (std::size_t i = 0; i < spds_list.size(); ++i)
+      OpenSnLogicalErrorIf(needs_global_fas[i] and not cut_graph_is_acyclic[i],
+                           "CBC global feedback arc set did not produce a cell DAG.");
+  }
 }
 
 void
@@ -801,8 +985,7 @@ BuildSweepRuntime(const std::string& problem_name,
   {
     BuildCBCSPDS(
       runtime, groupsets, grid, face_neighbor_info, quadrature_allow_cycles_map, use_gpus);
-    if (not use_gpus)
-      BuildCBCGlobalSweepGraph(runtime);
+    BuildCBCGlobalSweepGraph(runtime, use_gpus);
     BuildCBCLocalFaceSlotPlan(runtime);
   }
   else

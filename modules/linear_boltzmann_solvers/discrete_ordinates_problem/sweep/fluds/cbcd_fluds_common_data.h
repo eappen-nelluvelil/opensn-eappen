@@ -50,6 +50,24 @@ public:
   /// Return the number of outgoing nonlocal faces.
   std::size_t GetNumOutgoingNonlocalFaces() const { return outgoing_nonlocal_faces_.size(); }
 
+  /// Return whether this SPDS contains lagged local or nonlocal faces.
+  bool HasDelayedFluxes() const noexcept
+  {
+    return num_delayed_local_nodes_ != 0 or num_delayed_incoming_nonlocal_nodes_ != 0 or
+           num_delayed_outgoing_nonlocal_nodes_ != 0;
+  }
+
+  /// Return delayed-bank node counts.
+  std::size_t GetNumDelayedLocalNodes() const noexcept { return num_delayed_local_nodes_; }
+  std::size_t GetNumDelayedIncomingNonlocalNodes() const noexcept
+  {
+    return num_delayed_incoming_nonlocal_nodes_;
+  }
+  std::size_t GetNumDelayedOutgoingNonlocalNodes() const noexcept
+  {
+    return num_delayed_outgoing_nonlocal_nodes_;
+  }
+
   /// Return grouped incoming-boundary copy plans.
   const std::vector<IncomingBoundaryFacePlan>& GetIncomingBoundaryFaces() const
   {
@@ -95,6 +113,40 @@ public:
     return incoming_source_partitions_;
   }
 
+  /// Return delayed communication peers in compact metadata order.
+  const std::vector<int>& GetDelayedDestinationRanks() const { return delayed_destination_ranks_; }
+  const std::vector<int>& GetDelayedSourcePartitions() const { return delayed_source_partitions_; }
+
+  /// Return delayed face metadata in the wire order for one peer.
+  std::span<const std::uint32_t> GetDelayedOutgoingFaceIndices(std::size_t destination_index) const
+  {
+    const auto begin = delayed_destination_face_offsets_[destination_index];
+    const auto end = delayed_destination_face_offsets_[destination_index + 1];
+    return {delayed_outgoing_face_indices_.data() + begin, end - begin};
+  }
+  std::span<const std::uint32_t> GetDelayedIncomingFaceIndices(std::size_t source_index) const
+  {
+    const auto begin = delayed_source_face_offsets_[source_index];
+    const auto end = delayed_source_face_offsets_[source_index + 1];
+    return {delayed_incoming_face_indices_.data() + begin, end - begin};
+  }
+  const OutgoingNonlocalFace& GetDelayedOutgoingFace(std::size_t face_index) const
+  {
+    return delayed_outgoing_nonlocal_faces_[face_index];
+  }
+  const IncomingNonlocalFace& GetDelayedIncomingFace(std::size_t face_index) const
+  {
+    return delayed_incoming_nonlocal_faces_[face_index];
+  }
+
+  /// Return source-to-destination node copies for a delayed outgoing face.
+  std::span<const OutgoingFaceNodeCopy>
+  GetDelayedOutgoingFaceNodeCopies(const OutgoingNonlocalFace& face) const
+  {
+    return {delayed_outgoing_nonlocal_face_node_copies_.data() + face.node_copy_begin,
+            face.num_node_copies};
+  }
+
   /// Return an incoming face by source-partition index and source-local face index.
   const IncomingNonlocalFace& GetIncomingNonlocalFace(std::uint32_t source_partition_index,
                                                       std::uint32_t incoming_face_index) const;
@@ -117,6 +169,10 @@ private:
   /// Nonlocal-node counts used to size mapped psi storage.
   std::size_t num_incoming_nonlocal_nodes_ = 0;
   std::size_t num_outgoing_nonlocal_nodes_ = 0;
+  /// Lagged-bank node counts.
+  std::size_t num_delayed_local_nodes_ = 0;
+  std::size_t num_delayed_incoming_nonlocal_nodes_ = 0;
+  std::size_t num_delayed_outgoing_nonlocal_nodes_ = 0;
   /// Device copy of the flattened cell-face-node index map.
   std::uint64_t* device_cell_face_node_map_ = nullptr;
   /// Incoming boundary copies grouped into contiguous face-node ranges.
@@ -132,12 +188,23 @@ private:
   std::vector<OutgoingNonlocalFace> outgoing_nonlocal_faces_;
   /// Flattened node permutations for outgoing nonlocal faces.
   std::vector<OutgoingFaceNodeCopy> outgoing_nonlocal_face_node_copies_;
+  /// Delayed face metadata and outgoing node permutations.
+  std::vector<IncomingNonlocalFace> delayed_incoming_nonlocal_faces_;
+  std::vector<OutgoingNonlocalFace> delayed_outgoing_nonlocal_faces_;
+  std::vector<OutgoingFaceNodeCopy> delayed_outgoing_nonlocal_face_node_copies_;
   /// Peer arrays referenced by compact indices in face metadata.
   std::vector<int> destination_ranks_;
   std::vector<int> incoming_source_partitions_;
+  std::vector<int> delayed_destination_ranks_;
+  std::vector<int> delayed_source_partitions_;
   /// CSR lookup from source-partition index and face index to incoming face metadata.
   std::vector<std::uint32_t> source_to_incoming_face_offsets_;
   std::vector<std::uint32_t> incoming_face_indices_by_source_;
+  /// Peer-major delayed wire ordering into the cell-major metadata arrays.
+  std::vector<std::uint32_t> delayed_destination_face_offsets_;
+  std::vector<std::uint32_t> delayed_outgoing_face_indices_;
+  std::vector<std::uint32_t> delayed_source_face_offsets_;
+  std::vector<std::uint32_t> delayed_incoming_face_indices_;
 
   /// Build host metadata and copy the flattened node index to device storage.
   void BuildMetadataAndCopyNodeIndex(const SpatialDiscretization& sdm);

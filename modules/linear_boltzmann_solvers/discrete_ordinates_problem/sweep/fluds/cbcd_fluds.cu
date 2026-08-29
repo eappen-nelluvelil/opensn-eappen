@@ -43,6 +43,12 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
     outgoing_boundary_psi_(common_data_.GetNumOutgoingBoundaryNodes() * num_groups_and_angles_),
     incoming_nonlocal_psi_(common_data_.GetNumIncomingNonlocalNodes() * num_groups_and_angles_),
     outgoing_nonlocal_psi_(common_data_.GetNumOutgoingNonlocalNodes() * num_groups_and_angles_),
+    delayed_nonlocal_incoming_psi_old_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
+                                       num_groups_and_angles_),
+    delayed_nonlocal_incoming_psi_new_(common_data_.GetNumDelayedIncomingNonlocalNodes() *
+                                       num_groups_and_angles_),
+    delayed_nonlocal_outgoing_psi_(common_data_.GetNumDelayedOutgoingNonlocalNodes() *
+                                   num_groups_and_angles_),
     save_angular_flux_(save_angular_flux)
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
@@ -71,6 +77,7 @@ void
 CBCD_FLUDS::AllocateLocalAndSavedPsi()
 {
   local_psi_ = crb::DeviceMemory<double>(num_local_psi_values_);
+  AllocateDelayedPsi();
   if (save_angular_flux_ and host_saved_psi_.empty())
   {
     host_saved_psi_ = crb::HostVector<double>(num_saved_psi_values_);
@@ -139,7 +146,91 @@ CBCD_FLUDS::CreatePointerSet()
   pointer_set_.outgoing_boundary_psi = outgoing_boundary_psi_.data();
   pointer_set_.nonlocal_incoming_psi = incoming_nonlocal_psi_.data();
   pointer_set_.nonlocal_outgoing_psi = outgoing_nonlocal_psi_.data();
+  pointer_set_.delayed_local_psi_old = delayed_local_psi_old_.get();
+  pointer_set_.delayed_local_psi_new = delayed_local_psi_new_.get();
+  pointer_set_.delayed_nonlocal_incoming_psi_old = delayed_nonlocal_incoming_psi_old_.data();
+  pointer_set_.delayed_nonlocal_outgoing_psi = delayed_nonlocal_outgoing_psi_.data();
   pointer_set_.stride_size = num_groups_and_angles_;
+}
+
+void
+CBCD_FLUDS::AllocateDelayedPsi()
+{
+  const auto local_size = common_data_.GetNumDelayedLocalNodes() * num_groups_and_angles_;
+  if (local_size != 0)
+  {
+    delayed_local_psi_old_ = crb::DeviceMemory<double>(local_size);
+    delayed_local_psi_new_ = crb::DeviceMemory<double>(local_size);
+    delayed_local_psi_old_.zero_fill();
+    delayed_local_psi_new_.zero_fill();
+    host_delayed_local_psi_old_ = crb::HostVector<double>(local_size);
+    host_delayed_local_psi_new_ = crb::HostVector<double>(local_size);
+    std::ranges::fill(host_delayed_local_psi_old_, 0.0);
+    std::ranges::fill(host_delayed_local_psi_new_, 0.0);
+    delayed_local_psi_old_view_ = std::span<double>(host_delayed_local_psi_old_);
+    delayed_local_psi_view_ = std::span<double>(host_delayed_local_psi_new_);
+  }
+
+  std::ranges::fill(delayed_nonlocal_incoming_psi_old_, 0.0);
+  std::ranges::fill(delayed_nonlocal_incoming_psi_new_, 0.0);
+  std::ranges::fill(delayed_nonlocal_outgoing_psi_, 0.0);
+  if (not delayed_nonlocal_incoming_psi_old_.empty())
+  {
+    delayed_prelocI_outgoing_psi_old_view_ = {
+      std::span<double>(delayed_nonlocal_incoming_psi_old_)};
+    delayed_prelocI_outgoing_psi_view_ = {std::span<double>(delayed_nonlocal_incoming_psi_new_)};
+  }
+}
+
+void
+CBCD_FLUDS::PrepareDelayedPsiForSweep()
+{
+  if (not host_delayed_local_psi_old_.empty())
+    crb::copy(delayed_local_psi_old_,
+              host_delayed_local_psi_old_,
+              host_delayed_local_psi_old_.size(),
+              0,
+              0,
+              stream_);
+}
+
+void
+CBCD_FLUDS::FinishDelayedPsiSweep()
+{
+  if (not host_delayed_local_psi_new_.empty())
+  {
+    crb::copy(host_delayed_local_psi_new_,
+              delayed_local_psi_new_,
+              host_delayed_local_psi_new_.size(),
+              0,
+              0,
+              stream_);
+    stream_.synchronize();
+  }
+}
+
+void
+CBCD_FLUDS::SetDelayedLocalPsiOldToNew()
+{
+  std::ranges::copy(host_delayed_local_psi_old_, host_delayed_local_psi_new_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedLocalPsiNewToOld()
+{
+  std::ranges::copy(host_delayed_local_psi_new_, host_delayed_local_psi_old_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedOutgoingPsiOldToNew()
+{
+  std::ranges::copy(delayed_nonlocal_incoming_psi_old_, delayed_nonlocal_incoming_psi_new_.begin());
+}
+
+void
+CBCD_FLUDS::SetDelayedOutgoingPsiNewToOld()
+{
+  std::ranges::copy(delayed_nonlocal_incoming_psi_new_, delayed_nonlocal_incoming_psi_old_.begin());
 }
 
 void
@@ -310,6 +401,70 @@ CBCD_FLUDS::StoreIncomingFace(const std::uint32_t source_partition_index,
     static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
   std::memcpy(dst, psi_values, face_values * sizeof(double));
   return face_info.cell_local_id;
+}
+
+std::size_t
+CBCD_FLUDS::GetDelayedOutgoingValueCount(const std::size_t destination_index) const
+{
+  std::size_t count = 0;
+  for (const auto face_index : common_data_.GetDelayedOutgoingFaceIndices(destination_index))
+    count +=
+      static_cast<std::size_t>(common_data_.GetDelayedOutgoingFace(face_index).num_face_nodes) *
+      num_groups_and_angles_;
+  return count;
+}
+
+std::size_t
+CBCD_FLUDS::GetDelayedIncomingValueCount(const std::size_t source_index) const
+{
+  std::size_t count = 0;
+  for (const auto face_index : common_data_.GetDelayedIncomingFaceIndices(source_index))
+    count +=
+      static_cast<std::size_t>(common_data_.GetDelayedIncomingFace(face_index).num_face_nodes) *
+      num_groups_and_angles_;
+  return count;
+}
+
+void
+CBCD_FLUDS::PackDelayedOutgoingPsi(const std::size_t destination_index,
+                                   const std::span<double> destination) const
+{
+  std::size_t payload_offset = 0;
+  const auto stride_bytes = num_groups_and_angles_ * sizeof(double);
+  for (const auto face_index : common_data_.GetDelayedOutgoingFaceIndices(destination_index))
+  {
+    const auto& face = common_data_.GetDelayedOutgoingFace(face_index);
+    for (const auto& node : common_data_.GetDelayedOutgoingFaceNodeCopies(face))
+    {
+      const auto source_offset =
+        static_cast<std::size_t>(node.storage_offset) * num_groups_and_angles_;
+      const auto destination_offset =
+        payload_offset +
+        static_cast<std::size_t>(node.destination_face_node_index) * num_groups_and_angles_;
+      std::memcpy(destination.data() + destination_offset,
+                  delayed_nonlocal_outgoing_psi_.data() + source_offset,
+                  stride_bytes);
+    }
+    payload_offset += static_cast<std::size_t>(face.num_face_nodes) * num_groups_and_angles_;
+  }
+}
+
+void
+CBCD_FLUDS::UnpackDelayedIncomingPsi(const std::size_t source_index,
+                                     const std::span<const double> source)
+{
+  std::size_t payload_offset = 0;
+  for (const auto face_index : common_data_.GetDelayedIncomingFaceIndices(source_index))
+  {
+    const auto& face = common_data_.GetDelayedIncomingFace(face_index);
+    const auto face_values = static_cast<std::size_t>(face.num_face_nodes) * num_groups_and_angles_;
+    const auto destination_offset =
+      static_cast<std::size_t>(face.storage_offset) * num_groups_and_angles_;
+    std::ranges::copy(source.subspan(payload_offset, face_values),
+                      delayed_nonlocal_incoming_psi_new_.begin() +
+                        static_cast<std::ptrdiff_t>(destination_offset));
+    payload_offset += face_values;
+  }
 }
 
 } // namespace opensn

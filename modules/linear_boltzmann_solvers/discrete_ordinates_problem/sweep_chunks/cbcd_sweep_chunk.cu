@@ -6,9 +6,13 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/device_vector_mirror.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
+#include "framework/mpi/mpi_comm_set.h"
+#include "framework/runtime.h"
+#include "framework/utils/error.h"
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <unordered_map>
 
@@ -48,15 +52,88 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     const auto block_size_x = std::min(stride_size, gpu_kernel::threshold);
     const auto block_size_y = gpu_kernel::threshold / block_size_x;
     const auto grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
+    has_delayed_fluxes_ = has_delayed_fluxes_ or fluds->HasDelayedFluxes();
     kernel_launches_.push_back({args,
                                 crb::Dim3(block_size_x, block_size_y),
                                 grid_size_x,
                                 fluds,
-                                fluds->GetSavedPsiDevicePointer()});
+                                fluds->GetSavedPsiDevicePointer(),
+                                fluds->HasDelayedFluxes()});
   }
 
   if (not angle_sets_.empty())
   {
+    delayed_mpi_tag_ = static_cast<int>(angle_sets_.size()) + 1;
+    const auto& comm_set = angle_sets_.front()->GetCommunicatorSet();
+    const auto my_rank = opensn::mpi_comm.rank();
+    std::set<int> delayed_sources;
+    std::set<int> delayed_destinations;
+    for (const auto* fluds : fluds_list)
+    {
+      const auto& common_data = fluds->GetCommonData();
+      delayed_sources.insert(common_data.GetDelayedSourcePartitions().begin(),
+                             common_data.GetDelayedSourcePartitions().end());
+      delayed_destinations.insert(common_data.GetDelayedDestinationRanks().begin(),
+                                  common_data.GetDelayedDestinationRanks().end());
+    }
+
+    const auto make_peer_buffer =
+      [&fluds_list](const int partition, const int communicator_rank, const bool outgoing)
+    {
+      DelayedPeerBuffer peer;
+      peer.partition = partition;
+      peer.communicator_rank = communicator_rank;
+      peer.slices.reserve(fluds_list.size());
+      std::size_t payload_size = 0;
+      for (auto* fluds : fluds_list)
+      {
+        const auto& ranks = outgoing ? fluds->GetCommonData().GetDelayedDestinationRanks()
+                                     : fluds->GetCommonData().GetDelayedSourcePartitions();
+        const auto rank_it = std::ranges::find(ranks, partition);
+        if (rank_it == ranks.end())
+          continue;
+        const auto metadata_peer_index =
+          static_cast<std::size_t>(std::distance(ranks.begin(), rank_it));
+        const auto count = outgoing ? fluds->GetDelayedOutgoingValueCount(metadata_peer_index)
+                                    : fluds->GetDelayedIncomingValueCount(metadata_peer_index);
+        OpenSnLogicalErrorIf(count > std::numeric_limits<std::size_t>::max() - payload_size,
+                             "CBCD delayed payload size overflow.");
+        peer.slices.push_back({fluds, metadata_peer_index, payload_size, count});
+        payload_size += count;
+      }
+      OpenSnLogicalErrorIf(payload_size > static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                           "One CBCD delayed payload exceeds the MPI count limit.");
+      peer.values.resize(payload_size);
+      return peer;
+    };
+
+    delayed_receive_peers_.reserve(delayed_sources.size());
+    for (const int source : delayed_sources)
+      delayed_receive_peers_.push_back(
+        make_peer_buffer(source, comm_set.MapIonJ(source, my_rank), false));
+
+    delayed_send_peers_.reserve(delayed_destinations.size());
+    for (const int destination : delayed_destinations)
+      delayed_send_peers_.push_back(
+        make_peer_buffer(destination, comm_set.MapIonJ(destination, destination), true));
+
+    std::vector<std::uint64_t> outgoing_counts(opensn::mpi_comm.size(), 0);
+    std::vector<std::uint64_t> incoming_counts(opensn::mpi_comm.size(), 0);
+    for (const auto& peer : delayed_send_peers_)
+      outgoing_counts[peer.partition] = peer.values.size();
+    opensn::mpi_comm.all_to_all(outgoing_counts, incoming_counts);
+
+    std::vector<std::uint64_t> local_incoming_counts(opensn::mpi_comm.size(), 0);
+    for (const auto& peer : delayed_receive_peers_)
+      local_incoming_counts[peer.partition] = peer.values.size();
+    for (int rank = 0; rank < opensn::mpi_comm.size(); ++rank)
+      OpenSnLogicalErrorIf(incoming_counts[rank] != local_incoming_counts[rank],
+                           "CBCD delayed send/receive metadata disagree for ranks " +
+                             std::to_string(rank) + " and " + std::to_string(my_rank) + ".");
+
+    delayed_receive_requests_.resize(delayed_receive_peers_.size());
+    delayed_send_requests_.resize(delayed_send_peers_.size());
+
     profiler_ = CBCDProfiler::Create(angle_sets_.size());
     std::vector<std::vector<int>> incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
@@ -164,6 +241,48 @@ CBCDSweepChunk::StopCommunicator()
 }
 
 void
+CBCDSweepChunk::ExchangeDelayedPsi()
+{
+  CALI_CXX_MARK_SCOPE("CBCDSweepChunk::ExchangeDelayedPsi");
+
+  if (not has_delayed_fluxes_)
+    return;
+
+  for (auto& launch : kernel_launches_)
+    launch.fluds->FinishDelayedPsiSweep();
+
+  if (delayed_receive_peers_.empty() and delayed_send_peers_.empty())
+    return;
+
+  const auto& comm_set = angle_sets_.front()->GetCommunicatorSet();
+  const auto& receive_comm = comm_set.LocICommunicator(opensn::mpi_comm.rank());
+  for (std::size_t i = 0; i < delayed_receive_peers_.size(); ++i)
+  {
+    auto& peer = delayed_receive_peers_[i];
+    delayed_receive_requests_[i] = receive_comm.irecv(
+      peer.communicator_rank, delayed_mpi_tag_, peer.values.data(), peer.values.size());
+  }
+
+  for (std::size_t peer_index = 0; peer_index < delayed_send_peers_.size(); ++peer_index)
+  {
+    auto& peer = delayed_send_peers_[peer_index];
+    for (const auto& slice : peer.slices)
+      slice.fluds->PackDelayedOutgoingPsi(slice.peer_index,
+                                          std::span(peer.values).subspan(slice.offset, slice.size));
+    const auto& send_comm = comm_set.LocICommunicator(peer.partition);
+    delayed_send_requests_[peer_index] = send_comm.isend(
+      peer.communicator_rank, delayed_mpi_tag_, peer.values.data(), peer.values.size());
+  }
+
+  mpi::wait_all(delayed_receive_requests_);
+  for (const auto& peer : delayed_receive_peers_)
+    for (const auto& slice : peer.slices)
+      slice.fluds->UnpackDelayedIncomingPsi(
+        slice.peer_index, std::span(peer.values).subspan(slice.offset, slice.size));
+  mpi::wait_all(delayed_send_requests_);
+}
+
+void
 CBCDSweepChunk::RefreshKernelArguments()
 {
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::RefreshKernelArguments");
@@ -198,17 +317,32 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
   {
     CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::KernelLaunch");
 #if defined(__NVCC__) || defined(__HIPCC__)
-    gpu_kernel::SweepKernel<SweepKind::CBC><<<grid_size, launch.threads_per_block, 0, stream>>>(
-      launch.arguments, local_cell_ids, num_ready_cells, launch.device_saved_psi);
+    if (launch.has_delayed_fluxes)
+      gpu_kernel::SweepKernel<SweepKind::CBC, true>
+        <<<grid_size, launch.threads_per_block, 0, stream>>>(
+          launch.arguments, local_cell_ids, num_ready_cells, launch.device_saved_psi);
+    else
+      gpu_kernel::SweepKernel<SweepKind::CBC, false>
+        <<<grid_size, launch.threads_per_block, 0, stream>>>(
+          launch.arguments, local_cell_ids, num_ready_cells, launch.device_saved_psi);
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
     stream.synchronize();
-    stream.parallel_for(
-      sycl::nd_range<3>(grid_size * launch.threads_per_block, launch.threads_per_block),
-      [=](sycl::nd_item<3> work_index)
-      {
-        gpu_kernel::SweepKernel<SweepKind::CBC>(
-          launch.arguments, local_cell_ids, num_ready_cells, launch.device_saved_psi);
-      });
+    if (launch.has_delayed_fluxes)
+      stream.parallel_for(
+        sycl::nd_range<3>(grid_size * launch.threads_per_block, launch.threads_per_block),
+        [=](sycl::nd_item<3> work_index)
+        {
+          gpu_kernel::SweepKernel<SweepKind::CBC, true>(
+            launch.arguments, local_cell_ids, num_ready_cells, launch.device_saved_psi);
+        });
+    else
+      stream.parallel_for(
+        sycl::nd_range<3>(grid_size * launch.threads_per_block, launch.threads_per_block),
+        [=](sycl::nd_item<3> work_index)
+        {
+          gpu_kernel::SweepKernel<SweepKind::CBC, false>(
+            launch.arguments, local_cell_ids, num_ready_cells, launch.device_saved_psi);
+        });
 #endif
   }
 }

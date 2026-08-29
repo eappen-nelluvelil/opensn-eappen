@@ -31,7 +31,7 @@ ForDOFs1ToMax(F& f)
   ForDOFs1ToN(std::make_integer_sequence<std::uint32_t, LBSProblem::max_dofs_gpu>{}, f);
 }
 
-template <SweepKind k, class... Args>
+template <SweepKind k, bool has_delayed_fluxes = false, class... Args>
 __CRB_DEVICE_FUNC__ void
 SweepDispatch(std::uint32_t n, Args&... args)
 {
@@ -41,14 +41,14 @@ SweepDispatch(std::uint32_t n, Args&... args)
     constexpr std::uint32_t dof = decltype(dof_c)::value;
     if (!done && n == dof)
     {
-      gpu_kernel::Sweep<dof, k>(args...);
+      gpu_kernel::Sweep<dof, k, has_delayed_fluxes>(args...);
       done = true;
     }
   };
   ForDOFs1ToMax(dispatch);
 }
 
-template <SweepKind k>
+template <SweepKind k, bool has_delayed_fluxes = false>
 __CRB_GLOBAL_FUNC__ void
 SweepKernel(Arguments<k> args,
             const std::uint32_t* cells_to_sweep,
@@ -81,15 +81,15 @@ SweepKernel(Arguments<k> args,
     num_moments = quadrature.num_moments;
     quadrature.GetDirectionView(direction, direction_num);
   }
-  opensn::gpu_kernel::SweepDispatch<k>(cell.num_nodes,
-                                       args,
-                                       cell,
-                                       direction,
-                                       cell_edge_data,
-                                       angle_group_idx,
-                                       group_idx,
-                                       num_moments,
-                                       saved_psi);
+  opensn::gpu_kernel::SweepDispatch<k, has_delayed_fluxes>(cell.num_nodes,
+                                                           args,
+                                                           cell,
+                                                           direction,
+                                                           cell_edge_data,
+                                                           angle_group_idx,
+                                                           group_idx,
+                                                           num_moments,
+                                                           saved_psi);
 }
 
 } // namespace opensn::gpu_kernel

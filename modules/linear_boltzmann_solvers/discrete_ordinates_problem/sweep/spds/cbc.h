@@ -111,6 +111,12 @@ public:
   bool IsDelayedLocalDependency(std::uint32_t upwind_local_id,
                                 std::uint32_t downwind_local_id) const noexcept;
 
+  /// Return the rank-level dependency graph replicated during sweep setup.
+  const std::vector<std::vector<int>>& GetGlobalDependencies() const noexcept
+  {
+    return global_dependencies_;
+  }
+
   /// Build the minimum chain cover of the non-delayed local-face reuse poset.
   void BuildLocalFaceSlotPlan();
 

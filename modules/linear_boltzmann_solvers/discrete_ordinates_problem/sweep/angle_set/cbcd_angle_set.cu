@@ -245,6 +245,7 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
 
+  cbcd_fluds_.PrepareDelayedPsiForSweep();
   cbcd_fluds_.LoadIncomingBoundaryPsi(sweep_chunk, *this);
   InitializeSweepState();
   sweep_initialized_ = true;
