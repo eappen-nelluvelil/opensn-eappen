@@ -196,7 +196,7 @@ class PreparationTests(unittest.TestCase):
         self.assertIn("OPENSN_TUO_PROFILE_KINDS=strong", text)
         self.assertIn("OPENSN_TUO_CYCLE_ITERATIONS:-10", text)
         self.assertIn(
-            "OPENSN_TUO_CYCLE_PROFILES:-cbcd-metrics,baseline,pmpi,caliper,rocprof",
+            "OPENSN_TUO_CYCLE_PROFILES:-cbcd-metrics,baseline,pmpi,caliper",
             text,
         )
         self.assertIn("unset OPENSN_CBCD_NUM_WORKERS", text)

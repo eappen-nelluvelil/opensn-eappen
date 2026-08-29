@@ -194,14 +194,25 @@ RUN_CYCLES=$SOURCE/tools/scaling/tuo/run_cycle_cbcd_profile.zsh
 zsh "$RUN_CYCLES" run
 ```
 
-The default order is `cbcd-metrics`, `baseline`, `pmpi`, `caliper`, and
-`rocprof`. Each profiler obtains its own four-node `pdebug` allocation and runs
-the 1-, 2-, and 4-node cases inside it. To obtain the most useful internal
-measurements first, or to avoid waiting for every profiler, select one profile:
+The default order is `cbcd-metrics`, `baseline`, `pmpi`, and `caliper`. Each
+profiler obtains its own four-node `pdebug` allocation and runs the 1-, 2-, and
+4-node cases inside it. To obtain the most useful internal measurements first,
+or to avoid waiting for every profiler, select one profile:
 
 ```zsh
 zsh "$RUN_CYCLES" run cbcd-metrics
 zsh "$RUN_CYCLES" run baseline
+```
+
+`rocprof` is opt-in because high-volume CBCD traces can make ROCm 7.2 fail in
+profiler finalization after OpenSn has completed successfully. Use a distinct
+label so that this diagnostic attempt cannot make the core campaign incomplete:
+
+```zsh
+SHORT=$(git -C "$SOURCE" rev-parse --short=9 HEAD)
+export OPENSN_TUO_CYCLE_LABEL=cbcd-v2-cycles-$SHORT-rocprof-1
+export OPENSN_TUO_CYCLE_PROFILES=rocprof
+zsh "$RUN_CYCLES" run rocprof
 ```
 
 After an allocation interruption, resume all incomplete cases without repeating

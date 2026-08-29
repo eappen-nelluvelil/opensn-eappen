@@ -16,7 +16,7 @@ Actions:
   paths      print the resolved checkout, build, and result paths
 
 PROFILE is optional for run and resume. Without it, the runner processes
-cbcd-metrics, baseline, pmpi, caliper, and rocprof in that order. Set
+cbcd-metrics, baseline, pmpi, and caliper in that order. Set
 OPENSN_TUO_BANK before running. OPENSN_TUO_CYCLE_LABEL may select a new
 campaign; its default includes the exact source revision.
 EOF
@@ -53,7 +53,7 @@ export OPENSN_TUO_PROFILE_ITERATIONS=${OPENSN_TUO_CYCLE_ITERATIONS:-10}
 export OPENSN_TUO_PROFILE_TIME_LIMIT=${OPENSN_TUO_CYCLE_TIME_LIMIT:-60m}
 export OPENSN_TUO_TIME_LIMIT=$OPENSN_TUO_PROFILE_TIME_LIMIT
 export OPENSN_TUO_PROGRESS_INTERVAL=${OPENSN_TUO_CYCLE_PROGRESS_INTERVAL:-60}
-export OPENSN_TUO_PROFILES=${OPENSN_TUO_CYCLE_PROFILES:-cbcd-metrics,baseline,pmpi,caliper,rocprof}
+export OPENSN_TUO_PROFILES=${OPENSN_TUO_CYCLE_PROFILES:-cbcd-metrics,baseline,pmpi,caliper}
 unset OPENSN_CBCD_NUM_WORKERS
 
 helper=$source_dir/tools/scaling/tuo/interactive_cbcd.zsh
