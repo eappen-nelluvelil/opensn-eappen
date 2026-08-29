@@ -146,14 +146,12 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
   num_workers_ = num_workers;
   std::vector<std::unordered_map<int, DestinationQueueBounds>> worker_queue_bounds(num_workers);
 
-  // Match the scheduler's static angle-set partitioning.
-  const auto chunk_size = (num_angle_sets_ + num_workers - 1) / num_workers;
+  // Match the scheduler's cyclic angle-set partitioning.
   for (std::size_t worker_id = 0; worker_id < num_workers; ++worker_id)
   {
-    const auto begin = std::min(worker_id * chunk_size, num_angle_sets_);
-    const auto end = std::min(begin + chunk_size, num_angle_sets_);
     auto& queue_bounds = worker_queue_bounds[worker_id];
-    for (std::size_t angle_set_id = begin; angle_set_id < end; ++angle_set_id)
+    for (std::size_t angle_set_id = worker_id; angle_set_id < num_angle_sets_;
+         angle_set_id += num_workers)
     {
       const auto& bounds = communication_bounds_[angle_set_id];
       for (const auto& destination : bounds.outgoing_queue_bounds)
