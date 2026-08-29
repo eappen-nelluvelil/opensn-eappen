@@ -176,6 +176,56 @@ failed attempts for diagnosis.
 The lower-level helper commands remain available for targeted reruns and custom
 study configurations.
 
+## Cycle-capable CBCD interactive profiling
+
+The cycle-capable CBCD runner fixes the profile study to the exact checkout,
+enables cycle handling explicitly in the generated input, disables saved
+angular flux, and runs strong-scaling diagnostics at 1, 2, and 4 nodes. The d39
+unstructured problem uses 448 directions and 64 groups; the collected inventory
+records its lagged-unknown count at each decomposition.
+
+After creating a detached worktree for the desired revision and setting the LC
+bank, run the core profile suite with one command:
+
+```zsh
+export OPENSN_TUO_BANK=YOUR_LC_BANK
+RUN_CYCLES=$SOURCE/tools/scaling/tuo/run_cycle_cbcd_profile.zsh
+
+zsh "$RUN_CYCLES" run
+```
+
+The default order is `cbcd-metrics`, `baseline`, `pmpi`, `caliper`, and
+`rocprof`. Each profiler obtains its own four-node `pdebug` allocation and runs
+the 1-, 2-, and 4-node cases inside it. To obtain the most useful internal
+measurements first, or to avoid waiting for every profiler, select one profile:
+
+```zsh
+zsh "$RUN_CYCLES" run cbcd-metrics
+zsh "$RUN_CYCLES" run baseline
+```
+
+After an allocation interruption, resume all incomplete cases without repeating
+successful ones, then collect the final inventory:
+
+```zsh
+zsh "$RUN_CYCLES" resume
+zsh "$RUN_CYCLES" collect
+```
+
+`status` writes an incomplete-safe summary and shows current Flux jobs. `paths`
+prints the exact source SHA, executable, mesh cache, and result directory:
+
+```zsh
+zsh "$RUN_CYCLES" status
+zsh "$RUN_CYCLES" paths
+```
+
+The runner intentionally ignores generic build, label, node, and profile
+variables that may remain from another campaign. Optional cycle-specific
+overrides are `OPENSN_TUO_CYCLE_BUILD`, `OPENSN_TUO_CYCLE_LABEL`,
+`OPENSN_TUO_CYCLE_ITERATIONS`, `OPENSN_TUO_CYCLE_TIME_LIMIT`,
+`OPENSN_TUO_CYCLE_PROGRESS_INTERVAL`, and `OPENSN_TUO_CYCLE_PROFILES`.
+
 ## 3. Interactive 1/2/4-node policy comparison
 
 Do not set a fixed worker count for this comparison:

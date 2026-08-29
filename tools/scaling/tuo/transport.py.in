@@ -32,6 +32,7 @@ problem = DiscreteOrdinatesProblem(
             "groups_from_to": (0, n_g - 1),
             "angular_quadrature": quadrature,
             "angle_aggregation_type": "single",
+            "allow_cycles": True,
             "inner_linear_method": "petsc_richardson",
             "l_abs_tol": 1.0e-12,
             "l_max_its": @MAX_ITERATIONS@,

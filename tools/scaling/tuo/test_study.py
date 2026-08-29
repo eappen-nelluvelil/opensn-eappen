@@ -168,6 +168,10 @@ class PreparationTests(unittest.TestCase):
                 "strong-2.py",
                 "exec",
             )
+            self.assertIn(
+                '"allow_cycles": True',
+                (args.output / "inputs/strong-2.py").read_text(),
+            )
             syntax = subprocess.run(
                 ["zsh", "-n", str(args.output / "jobs/strong-2.zsh")],
                 check=False,
@@ -175,6 +179,27 @@ class PreparationTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+    def test_cycle_profile_runner_has_safe_reproducible_defaults(self):
+        runner = MODULE_PATH.with_name("run_cycle_cbcd_profile.zsh")
+        syntax = subprocess.run(
+            ["zsh", "-n", str(runner)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        text = runner.read_text()
+        self.assertIn("build-opensn-cbcd-v2-cycles-$short", text)
+        self.assertIn("OPENSN_TUO_PROFILE_NODES=1,2,4", text)
+        self.assertIn("OPENSN_TUO_PROFILE_KINDS=strong", text)
+        self.assertIn("OPENSN_TUO_CYCLE_ITERATIONS:-10", text)
+        self.assertIn(
+            "OPENSN_TUO_CYCLE_PROFILES:-cbcd-metrics,baseline,pmpi,caliper,rocprof",
+            text,
+        )
+        self.assertIn("unset OPENSN_CBCD_NUM_WORKERS", text)
 
     def test_resource_aware_fixed_worker_count_is_exported(self):
         with tempfile.TemporaryDirectory() as directory:
