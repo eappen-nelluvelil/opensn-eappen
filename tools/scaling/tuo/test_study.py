@@ -976,6 +976,8 @@ class SimplicityTests(unittest.TestCase):
         self.assertIn("run-profile-interactive", helper)
         self.assertIn("resume-profile-interactive", helper)
         self.assertIn("profile_case_complete", helper)
+        self.assertIn("check_profile_nodes", helper)
+        self.assertIn("1|2|4|8", helper)
         self.assertIn('run-profile-interactive-here "$profile" "$selected_nodes"', helper)
         self.assertIn("monitor_generated_job", helper)
         self.assertIn("rebuild-here", helper)
