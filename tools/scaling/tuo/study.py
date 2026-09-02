@@ -214,7 +214,17 @@ def runtime_environment(args):
 export MPICH_GPU_SUPPORT_ENABLED=1
 export MPICH_SMP_SINGLE_COPY_MODE=XPMEM
 export OPENSN_CBCD_WORKER_POLICY={quote(args.worker_policy)}
-{workers}unset OPENSN_NUM_THREADS OMP_NUM_THREADS
+{workers}export OPENSN_NUM_THREADS={args.opensn_num_threads}
+export OMP_NUM_THREADS={args.opensn_num_threads}
+"""
+
+
+def native_build_check(args):
+    cache = args.binary.resolve().parents[1] / "CMakeCache.txt"
+    return f"""grep -qx 'CMAKE_BUILD_TYPE:STRING=Native' {quote(cache)} || {{
+  print -u2 -- 'ERROR: the selected OpenSn binary is not a Native build.'
+  exit 1
+}}
 """
 
 
@@ -275,7 +285,7 @@ def scaling_job(args, study, kind, nodes, input_path):
             f"requested_cbcd_workers={args.cbcd_workers or 'policy-derived'}",
         ),
     )
-    return header + runtime_environment(args) + f"""
+    return header + runtime_environment(args) + native_build_check(args) + f"""
 binary={quote(args.binary)}
 input={quote(input_path)}
 {setup}
@@ -422,7 +432,7 @@ def profile_job(args, study, profile, kind, nodes, input_path):
         artifact = 'find "$result/measurements" -type f -print -quit | grep -q .'
     elif profile == "omniperf":
         artifact = 'find "$result/workloads/cbcd" -type f -print -quit | grep -q .'
-    return header + runtime_environment(args) + f"""
+    return header + runtime_environment(args) + native_build_check(args) + f"""
 binary={quote(args.binary)}
 input={quote(input_path)}
 {run_setup}
@@ -548,6 +558,7 @@ def prepare(args):
         "repetitions": args.repetitions,
         "worker_policy": args.worker_policy,
         "cbcd_workers": args.cbcd_workers,
+        "opensn_num_threads": args.opensn_num_threads,
         "strong_divisor": args.strong_divisor,
         "weak_divisors": {
             str(node): WEAK_DIVISORS[node]
@@ -630,6 +641,7 @@ def prepare_profile(args):
         "gpu_mode": "SPX",
         "worker_policy": args.worker_policy,
         "cbcd_workers": args.cbcd_workers,
+        "opensn_num_threads": args.opensn_num_threads,
         "profile_divisor": args.profile_divisor,
         "profile_nodes": args.profile_nodes,
         "profile_kinds": args.profile_kinds,
@@ -1181,6 +1193,60 @@ def compare(args):
     print(f"Comparison written to {output}")
 
 
+def plot_cbcd_message_size_histograms(study, histogram_rows, plt):
+    send_rows = [row for row in histogram_rows if row["metric"] == "mpi_send_bytes"]
+    for kind in ("strong", "weak"):
+        kind_rows = [row for row in send_rows if row["kind"] == kind]
+        if not kind_rows:
+            continue
+
+        bins = sorted(
+            {
+                (int(row["bin"]), int(row["lower_bound"]), int(row["upper_bound"]))
+                for row in kind_rows
+            }
+        )
+        nodes_values = sorted({int(row["nodes"]) for row in kind_rows})
+        figure, axis = plt.subplots(figsize=(8.0, 5.0))
+        for nodes in nodes_values:
+            counts = {}
+            for row in kind_rows:
+                if int(row["nodes"]) != nodes:
+                    continue
+                key = (
+                    int(row["bin"]),
+                    int(row["lower_bound"]),
+                    int(row["upper_bound"]),
+                )
+                counts[key] = counts.get(key, 0) + int(row["count"])
+            total = sum(counts.values())
+            if total == 0:
+                continue
+            x_values = [max(1, lower) for _, lower, _ in bins]
+            percentages = [100.0 * counts.get(bin_spec, 0) / total for bin_spec in bins]
+            axis.step(
+                x_values,
+                percentages,
+                where="mid",
+                marker="o",
+                markersize=3.5,
+                linewidth=1.25,
+                label=f"{nodes} node{'s' if nodes != 1 else ''}",
+            )
+
+        axis.set_xscale("log", base=2)
+        axis.set_xlabel("Serialized MPI message size (bytes; power-of-two bins)")
+        axis.set_ylabel("Share of sent messages (%)")
+        axis.set_title(f"CBCD MPI send-message distribution: {kind} scaling")
+        axis.grid(True, which="both", alpha=0.25)
+        axis.legend(ncol=2, fontsize="small")
+        figure.tight_layout()
+        stem = study / f"cbcd-mpi-message-size-histogram-{kind}"
+        figure.savefig(stem.with_suffix(".png"), dpi=180)
+        figure.savefig(stem.with_suffix(".pdf"))
+        plt.close(figure)
+
+
 def collect_cbcd_metrics(study, record):
     summaries = []
     histogram_rows = []
@@ -1339,6 +1405,7 @@ def collect_cbcd_metrics(study, record):
         import matplotlib.pyplot as plt
     except ImportError:
         return
+    plot_cbcd_message_size_histograms(study, histogram_rows, plt)
     plots = (
         ("mean_cells_per_launch", "Mean cells per kernel launch", "kernel-batch-cells"),
         ("worker_idle_fraction", "Worker idle fraction", "worker-idle-fraction"),
@@ -1507,6 +1574,15 @@ def add_common_prepare_arguments(command, profile=False):
         default="hardware",
     )
     command.add_argument("--cbcd-workers", type=positive_integer)
+    command.add_argument(
+        "--opensn-num-threads",
+        type=positive_integer,
+        default=21,
+        help=(
+            "total OpenSn threads per rank; CBCD reserves one for communication "
+            "and uses the remainder as sweep workers"
+        ),
+    )
     command.add_argument(
         "--save-angular-flux",
         action=argparse.BooleanOptionalAction,

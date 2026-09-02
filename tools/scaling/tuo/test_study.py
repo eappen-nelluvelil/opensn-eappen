@@ -19,13 +19,15 @@ SPEC.loader.exec_module(STUDY)
 
 
 def make_executable(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\nexit 0\n")
     path.chmod(0o700)
     return path
 
 
 def prepare_args(root, **updates):
-    binary = make_executable(root / "opensn")
+    binary = make_executable(root / "build/python/opensn")
+    (root / "build/CMakeCache.txt").write_text("CMAKE_BUILD_TYPE:STRING=Native\n")
     environment = root / "env.zsh"
     environment.write_text("export TEST_ENV=1\n")
     values = {
@@ -42,6 +44,7 @@ def prepare_args(root, **updates):
         "time_limit": "60m",
         "worker_policy": "hardware",
         "cbcd_workers": None,
+        "opensn_num_threads": 21,
         "strong_divisor": 39,
         "profile_nodes": (1, 2, 4),
         "profile_divisor": 39,
@@ -155,6 +158,9 @@ class PreparationTests(unittest.TestCase):
             self.assertIn("flux run -N 2 -n 8 --exclusive -o exit-on-error", job)
             self.assertIn("export OPENSN_CBCD_WORKER_POLICY=hardware", job)
             self.assertIn("unset OPENSN_CBCD_NUM_WORKERS", job)
+            self.assertIn("export OPENSN_NUM_THREADS=21", job)
+            self.assertIn("export OMP_NUM_THREADS=21", job)
+            self.assertIn("CMAKE_BUILD_TYPE:STRING=Native", job)
             self.assertIn('result="$result_root/run-$job_tag-$started-$$"', job)
             self.assertIn("job_tag=${FLUX_JOB_ID:-allocation}", job)
             self.assertIn('flux_job_id=${FLUX_JOB_ID:-unset}', job)
@@ -263,6 +269,7 @@ class PreparationTests(unittest.TestCase):
             binary=Path("/build/python/opensn"),
             worker_policy="resource-aware",
             cbcd_workers=None,
+            opensn_num_threads=21,
         )
         for profile in STUDY.PROFILE_NAMES:
             with self.subTest(profile=profile):
@@ -422,6 +429,37 @@ class PreparationTests(unittest.TestCase):
 
 
 class ResultTests(unittest.TestCase):
+    def test_message_size_histograms_are_plotted_by_scaling_kind_and_node(self):
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            self.skipTest("matplotlib is unavailable")
+
+        rows = []
+        for nodes, counts in ((1, (8, 2)), (2, (3, 7))):
+            for bin_id, count in zip((7, 8), counts):
+                rows.append(
+                    {
+                        "kind": "strong",
+                        "nodes": nodes,
+                        "run": "run-1",
+                        "metric": "mpi_send_bytes",
+                        "bin": bin_id,
+                        "lower_bound": 2 ** (bin_id - 1),
+                        "upper_bound": 2**bin_id - 1,
+                        "count": count,
+                    }
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            STUDY.plot_cbcd_message_size_histograms(root, rows, plt)
+            stem = root / "cbcd-mpi-message-size-histogram-strong"
+            self.assertGreater(stem.with_suffix(".png").stat().st_size, 0)
+            self.assertGreater(stem.with_suffix(".pdf").stat().st_size, 0)
+
     def test_internal_metric_collection_aggregates_rank_sweeps(self):
         with tempfile.TemporaryDirectory() as directory:
             study = Path(directory)

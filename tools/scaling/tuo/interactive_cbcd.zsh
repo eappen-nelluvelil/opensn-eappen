@@ -35,6 +35,7 @@ profile_time=${OPENSN_TUO_PROFILE_TIME_LIMIT:-6h}
 progress_interval=${OPENSN_TUO_PROGRESS_INTERVAL:-60}
 bank=${OPENSN_TUO_BANK:-}
 worker_count=${OPENSN_CBCD_NUM_WORKERS:-}
+num_threads=${OPENSN_TUO_NUM_THREADS:-21}
 
 usage()
 {
@@ -116,6 +117,10 @@ check_settings()
   }
   [[ -z $worker_count || $worker_count == <1-> ]] || {
     print -u2 'OPENSN_CBCD_NUM_WORKERS must be positive when set.'
+    exit 2
+  }
+  [[ $num_threads == <2-> ]] || {
+    print -u2 'OPENSN_TUO_NUM_THREADS must be at least 2 for CBCD.'
     exit 2
   }
   [[ $queue == pdebug ]] || {
@@ -338,6 +343,7 @@ prepare_one()
     --time-limit "$time_limit" \
     --refresh \
     --worker-policy "$policy" \
+    --opensn-num-threads "$num_threads" \
     --no-save-angular-flux \
     "${optional_args[@]}"
 }
@@ -504,6 +510,7 @@ prepare_profile_for()
     --profiles "$profile_names" \
     --max-iterations "$profile_iterations" \
     --worker-policy resource-aware \
+    --opensn-num-threads "$num_threads" \
     --queue "$study_queue" \
     --time-limit "$time_limit" \
     --refresh \
@@ -691,6 +698,7 @@ paths()
   print -- "profile_time_limit=$profile_time"
   print -- "progress_interval_seconds=$progress_interval"
   print -- "fixed_workers=${worker_count:-unset}"
+  print -- "opensn_num_threads=$num_threads"
 }
 
 check_settings
