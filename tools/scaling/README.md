@@ -3,6 +3,11 @@
 This is a node-to-node scaling study for OpenSn. For now, tets-only unstructured meshes with AAH sweep
 are supported.
 
+The dedicated [Dane host-CBC workflow](dane/README.md) bootstraps an isolated
+dependency environment and prepares, submits, and collects strong- and
+weak-scaling campaigns for the exact current revision using a native CPU build
+and 64 MPI ranks per node.
+
 ## 1. Generate inputs
 
 ``generate_scaling_study.py`` generates the meshes and launch scripts necessary for strong an weak scaling studies.

@@ -23,6 +23,9 @@ Commands:
   submit-campaign
                  rebuild OpenSn, then prepare and submit the complete
                  resource-aware strong/weak and full-node profile campaign
+  submit-scaling-metrics
+                 rebuild, then submit Native strong/weak scaling and CBCD
+                 message-metric jobs at every selected node count
   status         write partial scaling/profile summaries and show queued jobs
   collect        collect the resource-aware results present for LABEL
 
@@ -203,6 +206,49 @@ submit_campaign()
   print -- "Collect final results with: $script collect $OPENSN_TUO_LABEL"
 }
 
+submit_scaling_metrics()
+{
+  unset OPENSN_CBCD_NUM_WORKERS
+  export OPENSN_TUO_NUM_THREADS=${OPENSN_TUO_NUM_THREADS:-21}
+  export OPENSN_TUO_NODES=${OPENSN_TUO_NODES:-1,2,4,8,16,32,64,128,256}
+  export OPENSN_TUO_REPETITIONS=${OPENSN_TUO_REPETITIONS:-3}
+  export OPENSN_TUO_MAX_ITERATIONS=${OPENSN_TUO_MAX_ITERATIONS:-10}
+  export OPENSN_TUO_PROFILE_NODES=$OPENSN_TUO_NODES
+  export OPENSN_TUO_PROFILE_KINDS=strong,weak
+  export OPENSN_TUO_PROFILE_DIVISOR=39
+  export OPENSN_TUO_PROFILE_ITERATIONS=$OPENSN_TUO_MAX_ITERATIONS
+  export OPENSN_TUO_PROFILES=cbcd-metrics
+  export OPENSN_TUO_BATCH_TIME_LIMIT=${OPENSN_TUO_BATCH_TIME_LIMIT:-1h}
+  export OPENSN_TUO_PROFILE_TIME_LIMIT=${OPENSN_TUO_PROFILE_TIME_LIMIT:-1h}
+  export OPENSN_TUO_BATCH_ROOT=$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-batch
+  export OPENSN_TUO_PROFILE_ROOT=$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-profile/resource-aware
+
+  require_fresh_campaign_label
+
+  stage 'Rebuilding the exact source revision as a Native HIP executable'
+  zsh "$helper" rebuild
+
+  stage 'Preparing strong/weak production and message-metric studies'
+  zsh "$helper" prepare-batch resource-aware
+  zsh "$helper" prepare-profile
+
+  stage 'Submitting uninstrumented strong/weak scaling jobs'
+  zsh "$campaign_batch_root/submit.zsh"
+
+  stage 'Submitting CBCD message-metric strong/weak jobs'
+  zsh "$campaign_profile_root/submit.zsh" \
+    --nodes "$OPENSN_TUO_PROFILE_NODES" \
+    --kinds "$OPENSN_TUO_PROFILE_KINDS" \
+    --profiles cbcd-metrics
+
+  stage 'Native scaling and message-metric campaign submitted'
+  print -- "thread_budget_per_rank=$OPENSN_TUO_NUM_THREADS (20 workers + 1 communicator by default)"
+  print -- "batch_results=$campaign_batch_root"
+  print -- "profile_results=$campaign_profile_root"
+  print -- 'Monitor with: flux jobs -u $USER'
+  print -- "Collect with: $script collect $OPENSN_TUO_LABEL"
+}
+
 campaign_status()
 {
   campaign_paths
@@ -285,6 +331,7 @@ case $command in
   submit-scaling) submit_scaling ;;
   submit-profiling) submit_profiling ;;
   submit-campaign) submit_campaign ;;
+  submit-scaling-metrics) submit_scaling_metrics ;;
   status) campaign_status ;;
   collect) collect_results ;;
   *) usage ;;

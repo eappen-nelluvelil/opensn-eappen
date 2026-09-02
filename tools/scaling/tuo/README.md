@@ -3,8 +3,10 @@
 This directory provides a short path from a clean Tuo checkout to interactive
 and batch CBCD V2 studies. It uses four MPI ranks per node, one MI300A per rank,
 the default native SPX mode, and Flux/mpibind placement. CBCD uses its
-resource-aware worker allocation and reserves one assigned CPU thread for the
-aggregated communicator when inter-rank communication is present.
+resource-aware worker allocation. `OPENSN_NUM_THREADS` is the total per-rank
+thread budget: CBCD always reserves one thread for communication progress and
+uses the remainder as sweep workers. The default is 21 threads per rank on
+Tuo, giving 20 workers plus one communicator without oversubscription.
 
 ## 1. Select the checkout and paths
 
@@ -15,19 +17,22 @@ then set the paths once in the shell used for the study:
 STUDY_ROOT=/usr/workspace/$USER/opensn-gpu/cbcd-v2-studies
 BASE_SOURCE=$STUDY_ROOT/source-update-3
 
-git -C "$BASE_SOURCE" fetch origin cbcd-v2-profiling
-SHA=$(git -C "$BASE_SOURCE" rev-parse origin/cbcd-v2-profiling)
+BRANCH=cbc-and-cbcd-with-minimally-sized-fluds-profiling
+git -C "$BASE_SOURCE" fetch origin \
+  "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+SHA=$(git -C "$BASE_SOURCE" rev-parse "refs/remotes/origin/$BRANCH")
 SHORT=${SHA[1,9]}
-SOURCE=$STUDY_ROOT/source-cbcd-v2-profiling-$SHORT
+SOURCE=$STUDY_ROOT/source-cbc-cbcd-minfluds-profiling-$SHORT
 [[ -e $SOURCE ]] || git -C "$BASE_SOURCE" worktree add --detach "$SOURCE" "$SHA"
 
 export OPENSN_SOURCE=$SOURCE
 export OPENSN_TUO_ROOT=$STUDY_ROOT/builds/gfx942-update-3
-export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-opensn-cbcd-v2-profiling-$SHORT
+export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-opensn-cbc-cbcd-minfluds-profiling-$SHORT
 export OPENSN_TUO_MESH_DIR=$STUDY_ROOT/builds/gfx942/mesh-cache
 export OPENSN_TUO_RESULTS=/p/lustre5/$USER/opensn-results
-export OPENSN_TUO_LABEL=cbcd-v2-profiling-$SHORT
+export OPENSN_TUO_LABEL=cbc-cbcd-minfluds-profiling-$SHORT
 export OPENSN_TUO_BANK=YOUR_LC_BANK
+export OPENSN_TUO_NUM_THREADS=21
 
 HELPER=$OPENSN_SOURCE/tools/scaling/tuo/interactive_cbcd.zsh
 zsh "$HELPER" paths
@@ -125,6 +130,20 @@ export OPENSN_TUO_MAX_ITERATIONS=10
 
 "$RUNNER" submit-campaign update-3-topology-restored-full
 ```
+
+For production strong/weak measurements plus the requested CBCD message-size
+distributions, use the focused command:
+
+```zsh
+"$RUNNER" submit-scaling-metrics cbc-cbcd-minfluds-native-1
+```
+
+This submits 18 uninstrumented jobs and 18 `cbcd-metrics` jobs over 1--256
+nodes. Collect them with `"$RUNNER" collect cbc-cbcd-minfluds-native-1`.
+The profile directory then contains `cbcd-metrics-histograms.csv` and
+`cbcd-mpi-message-size-histogram-{strong,weak}.{png,pdf}`. Every plotted curve
+is normalized independently, so its ordinate is the percentage of all sent
+messages at that node count.
 
 `submit-campaign` rebuilds the selected checkout, validates all nine existing
 meshes, and prepares both studies before submitting any job. It then submits:
@@ -318,7 +337,8 @@ The counters buffer data in memory and write `rank-*/sweeps.csv`,
 `angle_sets.csv`, and `histograms.csv` only during clean teardown, so filesystem
 I/O is not included in a timed sweep. `collect-profile` aggregates them into
 `cbcd-metrics-summary.csv`, `cbcd-metrics-histograms.csv`, a Markdown summary,
-and diagnostic PDF plots.
+diagnostic PDF plots, and PNG/PDF send-message-size distributions for strong
+and weak scaling.
 
 For a complete one-hour pbatch diagnostic campaign, use a fresh label:
 
@@ -393,6 +413,32 @@ message, record, and byte counts are reported by `cbcd-metrics`. The `pmpi`
 report is named `mpi.txt`. Use the uninstrumented baseline
 and scaling studies for performance conclusions; profiler timings are
 diagnostic only.
+
+## BEAVRS quarter-core CBCD run
+
+The BEAVRS run is independent of the cube scaling campaign and requires at
+least 32 Tuo nodes. Copy the benchmark directory to a Tuo-accessible filesystem,
+then submit one job:
+
+```zsh
+export OPENSN_TUO_BEAVRS_SOURCE=/p/lustre5/$USER/beavrs-benchmark
+zsh "$OPENSN_SOURCE/tools/scaling/tuo/run_beavrs_cbcd.zsh" \
+  launch cbc-cbcd-minfluds-beavrs-1
+```
+
+The helper verifies the Native build, converts only the solver configuration
+to non-cycle device CBCD, retains `save_angular_flux=False`, and preserves the
+benchmark's quadrature, scattering, eigensolver, CMFD, and pin-power defaults.
+It uses four ranks per node and the same explicit 21-thread budget as the
+scaling campaign. `OPENSN_TUO_BEAVRS_NODES` and
+`OPENSN_TUO_BEAVRS_TIME_LIMIT` override the 32-node and 24-hour defaults.
+
+```zsh
+zsh "$OPENSN_SOURCE/tools/scaling/tuo/run_beavrs_cbcd.zsh" \
+  status cbc-cbcd-minfluds-beavrs-1
+zsh "$OPENSN_SOURCE/tools/scaling/tuo/run_beavrs_cbcd.zsh" \
+  collect cbc-cbcd-minfluds-beavrs-1
+```
 
 To run the same selected profiles through `pdebug` instead of submitting
 `pbatch` jobs, use:
