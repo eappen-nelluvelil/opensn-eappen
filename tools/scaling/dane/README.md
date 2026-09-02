@@ -99,3 +99,28 @@ NUMA topology. Each rank is single-threaded (`OPENSN_NUM_THREADS=1`).
 Check current queue and bank limits with `joblimits` before launch. The default
 work area is `/usr/workspace/$USER/opensn-dane-cbc-scaling`; change it with
 `OPENSN_DANE_WORK_ROOT` if needed.
+
+## BEAVRS host-CBC run
+
+The companion runner converts the untouched BEAVRS CPU input to cycle-capable
+host CBC and reuses the exact Native build submitted by a scaling campaign. Its
+job depends on that campaign's build job, so it cannot race the executable.
+The default is 32 exclusive nodes, 64 ranks per node, one thread per rank, and
+24 hours:
+
+```bash
+export OPENSN_DANE_BEAVRS_SOURCE=/usr/workspace/$USER/opensn-gpu/beavrs-benchmark
+zsh tools/scaling/dane/run_beavrs_cbc.zsh \
+  launch cbc-minfluds-native-1 beavrs-cbc-minfluds-native-32n-1
+```
+
+The original input is preserved. The derived input uses single-angle
+aggregation, `allow_cycles=True`, `save_angular_flux=False`, and a 256 KiB MPI
+message cap. Monitor and collect with:
+
+```bash
+zsh tools/scaling/dane/run_beavrs_cbc.zsh \
+  status cbc-minfluds-native-1 beavrs-cbc-minfluds-native-32n-1
+zsh tools/scaling/dane/run_beavrs_cbc.zsh \
+  collect cbc-minfluds-native-1 beavrs-cbc-minfluds-native-32n-1
+```
