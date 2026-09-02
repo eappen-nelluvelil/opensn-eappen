@@ -449,9 +449,10 @@ zsh "$HELPER" collect-profile
 ```
 
 One allocation is requested per profile, sized to the largest node count selected
-for that profile. Inside it, the generated 1-, 2-, and 4-node jobs run in order,
-with progress and output paths printed after every case. A single profile can be
-selected, for example `zsh "$HELPER" run-profile-interactive pmpi`.
+for that profile. Profile studies may select 1, 2, 4, and 8 nodes; the generated
+jobs run in ascending node order, with progress and output paths printed after
+every case. A single profile can be selected, for example
+`zsh "$HELPER" run-profile-interactive pmpi`.
 
 If a node or allocation fails partway through the sequence, resume it with:
 

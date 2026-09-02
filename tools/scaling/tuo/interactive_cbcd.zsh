@@ -89,6 +89,14 @@ check_nodes()
   esac
 }
 
+check_profile_nodes()
+{
+  case $1 in
+    1|2|4|8) ;;
+    *) print -u2 'Profile NODES must be 1, 2, 4, or 8.'; exit 2 ;;
+  esac
+}
+
 check_profile()
 {
   case $1 in
@@ -539,7 +547,7 @@ run_profile_interactive_here()
   local kind nodes job
   for kind in ${(s:,:)profile_kinds}; do
     for nodes in ${(s:,:)selected_nodes}; do
-      check_nodes "$nodes"
+      check_profile_nodes "$nodes"
       job=$profile_root/jobs/$profile-$kind-$nodes.zsh
       [[ -x $job ]] || continue
       run_generated_job \
@@ -590,7 +598,7 @@ run_profile_interactive()
     max_nodes=0
     for kind in ${(s:,:)profile_kinds}; do
       for nodes in ${(s:,:)profile_nodes}; do
-        check_nodes "$nodes"
+        check_profile_nodes "$nodes"
         job=$profile_root/jobs/$profile-$kind-$nodes.zsh
         [[ -x $job ]] || continue
         (( nodes > max_nodes )) && max_nodes=$nodes
@@ -632,7 +640,7 @@ resume_profile_interactive()
     incomplete_nodes=()
     max_nodes=0
     for nodes in ${(s:,:)profile_nodes}; do
-      check_nodes "$nodes"
+      check_profile_nodes "$nodes"
       local node_complete=1
       for kind in ${(s:,:)profile_kinds}; do
         [[ -x $profile_root/jobs/$profile-$kind-$nodes.zsh ]] || continue
