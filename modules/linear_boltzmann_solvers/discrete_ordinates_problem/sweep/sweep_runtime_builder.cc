@@ -16,9 +16,9 @@
 #include "framework/utils/error.h"
 #include "framework/utils/timer.h"
 #include <algorithm>
-#include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -551,6 +551,24 @@ BuildAAHGlobalSweepGraph(SweepRuntime& runtime)
   PrintRequestedSweepGraphs(spds_list);
 }
 
+std::uint64_t
+PackDoubleBits(const double value)
+{
+  std::uint64_t bits;
+  static_assert(sizeof(bits) == sizeof(value));
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+double
+UnpackDoubleBits(const std::uint64_t bits)
+{
+  double value;
+  static_assert(sizeof(value) == sizeof(bits));
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
 std::vector<std::uint64_t>
 PackCBCSPDSLocationEdgeWeights(
   const std::vector<CBC_SPDS::LocationEdgeWeight>& location_edge_weights)
@@ -562,7 +580,7 @@ PackCBCSPDSLocationEdgeWeights(
   {
     packed_values.push_back(static_cast<std::uint64_t>(edge_weight.upstream_location));
     packed_values.push_back(static_cast<std::uint64_t>(edge_weight.downstream_location));
-    packed_values.push_back(std::bit_cast<std::uint64_t>(edge_weight.weight));
+    packed_values.push_back(PackDoubleBits(edge_weight.weight));
   }
   return packed_values;
 }
@@ -584,7 +602,7 @@ UnpackCBCSPDSLocationEdgeWeights(const std::vector<std::uint64_t>& packed_values
       "Malformed CBC location-edge-weight rank.");
     edge_weights.push_back({static_cast<int>(packed_values[i]),
                             static_cast<int>(packed_values[i + 1]),
-                            std::bit_cast<double>(packed_values[i + 2])});
+                            UnpackDoubleBits(packed_values[i + 2])});
   }
   return edge_weights;
 }
