@@ -417,7 +417,7 @@ diagnostic only.
 ## BEAVRS quarter-core CBCD run
 
 The BEAVRS run is independent of the cube scaling campaign and requires at
-least 32 Tuo nodes. Copy the benchmark directory to a Tuo-accessible filesystem,
+least 16 Tuo nodes. Copy the benchmark directory to a Tuo-accessible filesystem,
 then submit one job:
 
 ```zsh

@@ -29,7 +29,7 @@ OPENSN_TUO_BEAVRS_SOURCE to the directory containing:
   beavrs_CASMO-70.h5
 
 The selected OpenSn executable must already be built. The job uses at least
-32 pbatch nodes, four MPI ranks per node, one MI300A per rank, and a Native
+16 pbatch nodes, four MPI ranks per node, one MI300A per rank, and a Native
 build. OPENSN_TUO_BEAVRS_NODES and OPENSN_TUO_BEAVRS_TIME_LIMIT override the
 32-node and 24-hour defaults.
 EOF
@@ -53,8 +53,8 @@ set_paths()
 
 check_configuration()
 {
-  [[ $nodes == <32-> ]] || {
-    print -u2 'OPENSN_TUO_BEAVRS_NODES must be an integer of at least 32.'
+  [[ $nodes == <16-> ]] || {
+    print -u2 'OPENSN_TUO_BEAVRS_NODES must be an integer of at least 16.'
     exit 2
   }
   [[ $num_threads == <2-> ]] || {
@@ -100,6 +100,11 @@ prepare_campaign()
     "$campaign_root/beavrs_quarter_core_cbcd.py"
 
   local ranks=$((4 * nodes))
+  local revision=$(git -C "$source_dir" rev-parse HEAD)
+  local n_polar=${BEAVRS_QC_N_POLAR:-4}
+  local n_azimuthal=${BEAVRS_QC_N_AZIMUTHAL:-32}
+  local scattering_order=${BEAVRS_QC_SCATTERING_ORDER:-1}
+  local use_cmfd=${BEAVRS_QC_USE_CMFD:-False}
   cat >| "$job" <<EOF
 #!/bin/zsh
 #flux: --job-name=${campaign_root:t}
@@ -118,38 +123,42 @@ export MPICH_GPU_SUPPORT_ENABLED=1
 export MPICH_SMP_SINGLE_COPY_MODE=XPMEM
 export OPENSN_NUM_THREADS=$num_threads
 export OMP_NUM_THREADS=$num_threads
+export BEAVRS_QC_N_POLAR=$n_polar
+export BEAVRS_QC_N_AZIMUTHAL=$n_azimuthal
+export BEAVRS_QC_SCATTERING_ORDER=$scattering_order
+export BEAVRS_QC_USE_CMFD=$use_cmfd
 
 grep -qx 'CMAKE_BUILD_TYPE:STRING=Native' ${(q)build_dir}/CMakeCache.txt
-run=$campaign_root/results/run-${FLUX_JOB_ID:-allocation}-$(date -u +%Y%m%dT%H%M%SZ)
-mkdir -p -- "$run"
-ln -s ${(q)benchmark_source}/beavrs_quarter_core_partitioned.obj "$run/"
-ln -s ${(q)benchmark_source}/beavrs_CASMO-70.h5 "$run/"
-cp ${(q)campaign_root}/beavrs_quarter_core_cbcd.py "$run/input.py"
+run=$campaign_root/results/run-\${FLUX_JOB_ID:-allocation}-\$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p -- "\$run"
+ln -s ${(q)benchmark_source}/beavrs_quarter_core_partitioned.obj "\$run/"
+ln -s ${(q)benchmark_source}/beavrs_CASMO-70.h5 "\$run/"
+cp ${(q)campaign_root}/beavrs_quarter_core_cbcd.py "\$run/input.py"
 {
-  print -- 'revision=$(git -C "$source_dir" rev-parse HEAD)'
+  print -- 'revision=$revision'
   print -- 'build_type=Native'
   print -- 'nodes=$nodes'
   print -- 'ranks=$ranks'
   print -- 'ranks_per_node=4'
   print -- 'gpus_per_rank=1'
   print -- 'opensn_num_threads=$num_threads'
-  print -- "BEAVRS_QC_N_POLAR=${BEAVRS_QC_N_POLAR:-4}"
-  print -- "BEAVRS_QC_N_AZIMUTHAL=${BEAVRS_QC_N_AZIMUTHAL:-32}"
-  print -- "BEAVRS_QC_SCATTERING_ORDER=${BEAVRS_QC_SCATTERING_ORDER:-1}"
-  print -- "BEAVRS_QC_USE_CMFD=${BEAVRS_QC_USE_CMFD:-False}"
-} >| "$run/metadata.txt"
+  print -- 'BEAVRS_QC_N_POLAR=$n_polar'
+  print -- 'BEAVRS_QC_N_AZIMUTHAL=$n_azimuthal'
+  print -- 'BEAVRS_QC_SCATTERING_ORDER=$scattering_order'
+  print -- 'BEAVRS_QC_USE_CMFD=$use_cmfd'
+} >| "\$run/metadata.txt"
 
-cd "$run"
+cd "\$run"
 set +e
 /usr/bin/time -f 'wall_seconds=%e launcher_max_rss_kb=%M' -o time.txt \
   flux run -N $nodes -n $ranks --exclusive -o exit-on-error \
     ${(q)binary} --verbose 1 -i input.py > stdout.txt 2> stderr.txt
-exit_code=$?
+exit_code=\$?
 set -e
-print -- "$exit_code" >| exit_code.txt
+print -- "\$exit_code" >| exit_code.txt
 if (( exit_code != 0 )) || ! grep -q 'OpenSn finished execution\.' stdout.txt; then
   touch FAILED
-  exit $((exit_code == 0 ? 1 : exit_code))
+  exit \$((exit_code == 0 ? 1 : exit_code))
 fi
 touch SUCCESS
 EOF
