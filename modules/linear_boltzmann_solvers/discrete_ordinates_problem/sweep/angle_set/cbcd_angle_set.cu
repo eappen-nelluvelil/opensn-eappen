@@ -30,7 +30,6 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
     cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_)),
     stream_(),
     device_angle_indices_(angles_.size()),
-    host_queue_state_(1),
     device_queue_state_(1),
     device_completed_count_(1)
 {
@@ -145,9 +144,11 @@ CBCD_AngleSet::BuildCellTaskGraph()
   if (use_device_closure_)
   {
     device_remaining_local_dependencies_ = crb::DeviceMemory<std::uint32_t>(num_cells);
+    device_initial_remote_dependencies_ = crb::DeviceMemory<std::uint32_t>(num_cells);
     device_cell_successor_offsets_ =
       crb::DeviceMemory<std::uint32_t>(cell_successor_offsets_.size());
     device_cell_successors_ = crb::DeviceMemory<std::uint32_t>(cell_successors_.size());
+    crb::copy(device_initial_remote_dependencies_, initial_remote_dependencies_, num_cells);
     crb::copy(
       device_cell_successor_offsets_, cell_successor_offsets_, cell_successor_offsets_.size());
     if (not cell_successors_.empty())
@@ -235,9 +236,7 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
   batch_pipeline_.ready_count = 0;
   if (use_device_closure_)
   {
-    host_queue_state_.front() = {0, launch_count};
     device_completed_count_.front() = 0;
-    crb::copy(device_queue_state_, host_queue_state_, 1, 0, 0, stream_);
   }
   sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data());
   return true;
@@ -406,6 +405,7 @@ CBCD_AngleSet::GetDeviceScheduler()
 {
   return {device_queue_state_.get(),
           device_remaining_local_dependencies_.get(),
+          device_initial_remote_dependencies_.get(),
           device_cell_successor_offsets_.get(),
           device_cell_successors_.get(),
           locally_ready_.data(),

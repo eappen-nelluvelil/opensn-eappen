@@ -125,12 +125,17 @@ template <SweepKind k>
 __CRB_GLOBAL_FUNC__ void
 CBCDClosureKernel(Arguments<k> args,
                   std::uint32_t* cell_queue,
+                  const std::uint32_t initial_queue_size,
                   double* saved_psi,
                   CBCDDeviceScheduler scheduler)
 {
   static_assert(k == SweepKind::CBC);
   extern __shared__ std::uint32_t cell_local_ids[];
   __shared__ std::uint32_t num_cells;
+
+  if (threadIdx.x == 0 and threadIdx.y == 0)
+    *scheduler.queue_state = {0, initial_queue_size};
+  __syncthreads();
 
   while (true)
   {
@@ -170,9 +175,14 @@ CBCDClosureKernel(Arguments<k> args,
           const auto successor = scheduler.successors[successor_index];
           if (--scheduler.remaining_local_dependencies[successor] == 0)
           {
-            scheduler.locally_ready[successor] = 1;
-            if (scheduler.remaining_remote_dependencies[successor] == 0)
+            if (scheduler.initial_remote_dependencies[successor] == 0)
               CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+            else
+            {
+              scheduler.locally_ready[successor] = 1;
+              if (scheduler.remaining_remote_dependencies[successor] == 0)
+                CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+            }
           }
         }
       }

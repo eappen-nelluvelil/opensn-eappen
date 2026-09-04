@@ -172,6 +172,7 @@ struct CBCDDeviceScheduler
 {
   CBCDDeviceQueueState* queue_state = nullptr;
   std::uint32_t* remaining_local_dependencies = nullptr;
+  const std::uint32_t* initial_remote_dependencies = nullptr;
   const std::uint32_t* successor_offsets = nullptr;
   const std::uint32_t* successors = nullptr;
   std::uint32_t* locally_ready = nullptr;

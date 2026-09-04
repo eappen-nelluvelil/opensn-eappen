@@ -198,6 +198,7 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
       <<<1, launch.threads_per_block, shared_bytes, stream>>>(
         launch.arguments,
         local_cell_ids,
+        num_ready_cells,
         launch.device_saved_psi,
         angle_sets_[angle_set_id]->GetDeviceScheduler());
     return;

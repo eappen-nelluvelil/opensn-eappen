@@ -131,16 +131,17 @@ private:
   std::vector<unsigned int> remaining_cell_dependencies_;
   /// Initial number of local predecessors for each cell.
   crb::HostVector<std::uint32_t> initial_local_dependencies_;
+  /// Initial number of remote predecessors for each cell.
+  crb::HostVector<std::uint32_t> initial_remote_dependencies_;
   /// Remote predecessors not yet received during the current sweep.
-  crb::MappedHostVector<std::uint32_t> initial_remote_dependencies_;
   crb::MappedHostVector<std::uint32_t> remaining_remote_dependencies_;
   /// Whether every local predecessor of a cell has completed.
   crb::MappedHostVector<std::uint32_t> locally_ready_;
   /// Device-resident local dependency graph and mutable counts.
   crb::DeviceMemory<std::uint32_t> device_remaining_local_dependencies_;
+  crb::DeviceMemory<std::uint32_t> device_initial_remote_dependencies_;
   crb::DeviceMemory<std::uint32_t> device_cell_successor_offsets_;
   crb::DeviceMemory<std::uint32_t> device_cell_successors_;
-  crb::HostVector<CBCDDeviceQueueState> host_queue_state_;
   crb::DeviceMemory<CBCDDeviceQueueState> device_queue_state_;
   crb::MappedHostVector<std::uint32_t> device_completed_count_;
   /// Local cell tasks ready before any nonlocal messages arrive.
