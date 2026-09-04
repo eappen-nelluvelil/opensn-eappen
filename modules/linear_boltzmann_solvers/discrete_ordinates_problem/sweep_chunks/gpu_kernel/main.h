@@ -8,7 +8,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/solver.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include "caribou/main.hpp"
-#include <limits>
 #include <utility>
 #include <type_traits>
 
@@ -153,111 +152,5 @@ CBCDFusedSweepKernel(const CBCDLaunchData* launches,
     return;
   SweepCell(launch.arguments, batch.cell_ids[cell_index], angle_group_index, launch.saved_psi);
 }
-
-#if defined(__NVCC__) || defined(__HIPCC__)
-
-__CRB_DEVICE_FUNC__ std::uint32_t
-CBCDDequeueCell(CBCDDeviceQueueState& state, const std::uint32_t* cell_queue)
-{
-  if (state.head == state.tail)
-    return std::numeric_limits<std::uint32_t>::max();
-  return cell_queue[state.head++];
-}
-
-__CRB_DEVICE_FUNC__ void
-CBCDEnqueueCell(CBCDDeviceQueueState& state,
-                std::uint32_t* cell_queue,
-                const std::uint32_t cell_local_id)
-{
-  cell_queue[state.tail++] = cell_local_id;
-}
-
-/// Sweep the locally reachable closure of a CBCD cell-task DAG.
-template <SweepKind k>
-__CRB_GLOBAL_FUNC__ void
-CBCDClosureKernel(Arguments<k> args,
-                  std::uint32_t* completed_cell_ids,
-                  const std::uint32_t initial_queue_size,
-                  double* saved_psi,
-                  CBCDDeviceScheduler scheduler)
-{
-  static_assert(k == SweepKind::CBC);
-  extern __shared__ std::uint32_t cell_local_ids[];
-  __shared__ std::uint32_t num_cells;
-  std::uint32_t completed_count = 0;
-  std::uint32_t publication_count = 0;
-
-  if (threadIdx.x == 0 and threadIdx.y == 0)
-    *scheduler.queue_state = {0, initial_queue_size};
-  __syncthreads();
-
-  while (true)
-  {
-    if (threadIdx.x == 0 and threadIdx.y == 0)
-    {
-      num_cells = 0;
-      while (num_cells < blockDim.y)
-      {
-        const auto cell_local_id = CBCDDequeueCell(*scheduler.queue_state, scheduler.cell_queue);
-        if (cell_local_id == std::numeric_limits<std::uint32_t>::max())
-          break;
-        cell_local_ids[num_cells++] = cell_local_id;
-      }
-    }
-    __syncthreads();
-
-    if (num_cells == 0)
-      break;
-
-    if (threadIdx.y < num_cells)
-      for (std::uint32_t angle_group_idx = threadIdx.x;
-           angle_group_idx < args.flud_data.stride_size;
-           angle_group_idx += blockDim.x)
-        SweepCell(args, cell_local_ids[threadIdx.y], angle_group_idx, saved_psi);
-    __syncthreads();
-
-    if (threadIdx.x == 0 and threadIdx.y == 0)
-    {
-      for (std::uint32_t cell = 0; cell < num_cells; ++cell)
-      {
-        const auto cell_local_id = cell_local_ids[cell];
-        ++completed_count;
-        const auto cell_flags =
-          scheduler.cell_flags == nullptr ? 0 : scheduler.cell_flags[cell_local_id];
-        if ((cell_flags & CBCD_CELL_REQUIRES_PUBLICATION) != 0)
-          completed_cell_ids[publication_count++] = cell_local_id;
-        const auto successor_begin = scheduler.successor_offsets[cell_local_id];
-        const auto successor_end = scheduler.successor_offsets[cell_local_id + 1];
-        for (auto successor_index = successor_begin; successor_index < successor_end;
-             ++successor_index)
-        {
-          const auto successor = scheduler.successors[successor_index];
-          if (--scheduler.remaining_local_dependencies[successor] == 0)
-          {
-            const auto successor_flags =
-              scheduler.cell_flags == nullptr ? 0 : scheduler.cell_flags[successor];
-            if ((successor_flags & CBCD_CELL_HAS_REMOTE_PREDECESSOR) == 0)
-              CBCDEnqueueCell(*scheduler.queue_state, scheduler.cell_queue, successor);
-            else
-            {
-              scheduler.locally_ready[successor] = 1;
-              if (scheduler.remaining_remote_dependencies[successor] == 0)
-                CBCDEnqueueCell(*scheduler.queue_state, scheduler.cell_queue, successor);
-            }
-          }
-        }
-      }
-    }
-    __syncthreads();
-  }
-
-  if (threadIdx.x == 0 and threadIdx.y == 0)
-  {
-    *scheduler.completed_count = completed_count;
-    *scheduler.publication_count = publication_count;
-  }
-}
-
-#endif
 
 } // namespace opensn::gpu_kernel

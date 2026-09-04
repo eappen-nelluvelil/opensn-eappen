@@ -12,7 +12,6 @@
 #include "framework/utils/error.h"
 #include "caliper/cali.h"
 #include <algorithm>
-#include <cstring>
 
 namespace opensn
 {
@@ -29,14 +28,8 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
     comm_set_(comm_set),
     cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_)),
     stream_(),
-    device_angle_indices_(angles_.size()),
-    device_queue_state_(1),
-    device_completed_count_(1),
-    device_publication_count_(1)
+    device_angle_indices_(angles_.size())
 {
-#if defined(__NVCC__) || defined(__HIPCC__)
-  use_device_closure_ = true;
-#endif
   cbcd_fluds_.GetStream() = stream_;
   cbcd_fluds_.AllocateLocalAndSavedPsi();
   BuildCellTaskGraph();
@@ -50,7 +43,6 @@ CBCD_AngleSet::RefreshDeviceData()
   stream_.synchronize();
 
   BuildReflectingCellMask();
-  BuildPublicationMask();
   cbcd_fluds_.BuildReflectingBoundaryPlans(boundaries_);
 }
 
@@ -101,25 +93,6 @@ CBCD_AngleSet::BuildReflectingCellMask()
 }
 
 void
-CBCD_AngleSet::BuildPublicationMask()
-{
-  const auto num_cells = cbc_spds_.GetTaskList().size();
-  const auto& common_data = cbcd_fluds_.GetCommonData();
-  for (std::size_t cell_local_id = 0; cell_local_id < num_cells; ++cell_local_id)
-    if (has_outgoing_reflecting_face_[cell_local_id] != 0 or
-        not common_data.GetOutgoingNonlocalFaces(cell_local_id).empty())
-      cell_flags_[cell_local_id] |= CBCD_CELL_REQUIRES_PUBLICATION;
-
-  if (use_device_closure_ and std::any_of(cell_flags_.begin(),
-                                          cell_flags_.end(),
-                                          [](const auto flags) { return flags != 0; }))
-  {
-    device_cell_flags_ = crb::DeviceMemory<std::uint8_t>(num_cells);
-    crb::copy(device_cell_flags_, cell_flags_, num_cells);
-  }
-}
-
-void
 CBCD_AngleSet::BuildCellTaskGraph()
 {
   const auto& task_list = cbc_spds_.GetTaskList();
@@ -127,11 +100,6 @@ CBCD_AngleSet::BuildCellTaskGraph()
 
   initial_cell_dependencies_.resize(num_cells);
   remaining_cell_dependencies_.resize(num_cells);
-  initial_local_dependencies_.assign(num_cells, 0);
-  initial_remote_dependencies_.assign(num_cells, 0);
-  remaining_remote_dependencies_.assign(num_cells, 0);
-  locally_ready_.assign(num_cells, 0);
-  cell_flags_.assign(num_cells, 0);
   cell_successor_offsets_.assign(num_cells + 1, 0);
   initial_ready_cell_ids_.clear();
   initial_ready_cell_ids_.reserve(num_cells);
@@ -155,29 +123,6 @@ CBCD_AngleSet::BuildCellTaskGraph()
     std::copy(task.successors.begin(),
               task.successors.end(),
               cell_successors_.begin() + cell_successor_offsets_[task_idx]);
-    for (const auto successor : task.successors)
-      ++initial_local_dependencies_[successor];
-  }
-
-  for (std::size_t cell_local_id = 0; cell_local_id < num_cells; ++cell_local_id)
-  {
-    initial_remote_dependencies_[cell_local_id] =
-      initial_cell_dependencies_[cell_local_id] - initial_local_dependencies_[cell_local_id];
-    if (initial_remote_dependencies_[cell_local_id] != 0)
-      cell_flags_[cell_local_id] |= CBCD_CELL_HAS_REMOTE_PREDECESSOR;
-  }
-
-  if (use_device_closure_)
-  {
-    device_remaining_local_dependencies_ = crb::DeviceMemory<std::uint32_t>(num_cells);
-    device_cell_successor_offsets_ =
-      crb::DeviceMemory<std::uint32_t>(cell_successor_offsets_.size());
-    device_cell_successors_ = crb::DeviceMemory<std::uint32_t>(cell_successors_.size());
-    device_cell_queue_ = crb::DeviceMemory<std::uint32_t>(num_cells);
-    crb::copy(
-      device_cell_successor_offsets_, cell_successor_offsets_, cell_successor_offsets_.size());
-    if (not cell_successors_.empty())
-      crb::copy(device_cell_successors_, cell_successors_, cell_successors_.size());
   }
 }
 
@@ -187,18 +132,6 @@ CBCD_AngleSet::InitializeSweepState()
   std::copy(initial_cell_dependencies_.begin(),
             initial_cell_dependencies_.end(),
             remaining_cell_dependencies_.begin());
-  std::copy(initial_remote_dependencies_.begin(),
-            initial_remote_dependencies_.end(),
-            remaining_remote_dependencies_.begin());
-  for (std::size_t cell_local_id = 0; cell_local_id < locally_ready_.size(); ++cell_local_id)
-    locally_ready_[cell_local_id] = initial_local_dependencies_[cell_local_id] == 0;
-  if (use_device_closure_)
-    crb::copy(device_remaining_local_dependencies_,
-              initial_local_dependencies_,
-              initial_local_dependencies_.size(),
-              0,
-              0,
-              stream_);
   batch_pipeline_.Reset();
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
   std::copy(initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end(), ready_cell_ids.begin());
@@ -215,22 +148,16 @@ CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk, const bool d
 
   auto& completed_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.launch_buffer);
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  const auto completed_count =
-    use_device_closure_ ? device_completed_count_.front() : batch_pipeline_.launch_count;
-  const auto publication_count =
-    use_device_closure_ ? device_publication_count_.front() : completed_count;
-  for (std::uint32_t i = 0; i < publication_count; ++i)
+  const auto completed_count = batch_pipeline_.launch_count;
+  for (std::uint32_t i = 0; i < completed_count; ++i)
   {
     const auto cell_local_id = completed_cell_ids[i];
-    if (not use_device_closure_)
+    const auto succ_begin = cell_successor_offsets_[cell_local_id];
+    const auto succ_end = cell_successor_offsets_[cell_local_id + 1];
+    for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
     {
-      const auto succ_begin = cell_successor_offsets_[cell_local_id];
-      const auto succ_end = cell_successor_offsets_[cell_local_id + 1];
-      for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
-      {
-        if (--remaining_cell_dependencies_[cell_successors_[succ_i]] == 0)
-          ready_cell_ids[batch_pipeline_.ready_count++] = cell_successors_[succ_i];
-      }
+      if (--remaining_cell_dependencies_[cell_successors_[succ_i]] == 0)
+        ready_cell_ids[batch_pipeline_.ready_count++] = cell_successors_[succ_i];
     }
 
     if ((not following_angle_sets_.empty()) and (not followers_released_) and
@@ -245,7 +172,6 @@ CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk, const bool d
   num_completed_cells_ += completed_count;
   batch_pipeline_.completed_buffer = batch_pipeline_.launch_buffer;
   batch_pipeline_.completed_count = completed_count;
-  batch_pipeline_.publication_count = publication_count;
   batch_pipeline_.launch_count = 0;
   return true;
 }
@@ -265,14 +191,6 @@ CBCD_AngleSet::PrepareReadyBatch()
   batch_pipeline_.launch_count = launch_count;
   batch_pipeline_.ready_buffer = batch_pipeline_.AcquireFreeBuffer();
   batch_pipeline_.ready_count = 0;
-  if (use_device_closure_)
-  {
-    device_completed_count_.front() = 0;
-    device_publication_count_.front() = 0;
-#if defined(__NVCC__) || defined(__HIPCC__)
-    crb::impl::copy_h2d(device_cell_queue_.get(), ready_cell_ids.data(), launch_count, stream_);
-#endif
-  }
   return {ready_cell_ids.data(), launch_count};
 }
 
@@ -289,10 +207,9 @@ CBCD_AngleSet::PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::siz
     worker_id,
     GetID(),
     GetAngleIndices(),
-    {completed_cell_ids.data(), static_cast<std::size_t>(batch_pipeline_.publication_count)});
+    {completed_cell_ids.data(), static_cast<std::size_t>(batch_pipeline_.completed_count)});
   batch_pipeline_.ReleaseBuffer(batch_pipeline_.completed_buffer);
   batch_pipeline_.completed_count = 0;
-  batch_pipeline_.publication_count = 0;
   TryReleaseFollowers();
 }
 
@@ -377,13 +294,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk,
         {
           const auto cell_local_id = cbcd_fluds_.StoreIncomingFace(
             batch.source_partition_index, face.incoming_face_index, psi_base + face.psi_offset);
-          if (use_device_closure_)
-          {
-            if (--remaining_remote_dependencies_[cell_local_id] == 0 and
-                locally_ready_[cell_local_id] != 0)
-              ready_cell_ids[batch_pipeline_.ready_count++] = cell_local_id;
-          }
-          else if (--remaining_cell_dependencies_[cell_local_id] == 0)
+          if (--remaining_cell_dependencies_[cell_local_id] == 0)
             ready_cell_ids[batch_pipeline_.ready_count++] = cell_local_id;
         }
       });
@@ -429,21 +340,6 @@ CBCD_AngleSet::ResetSweepBuffers()
   followers_released_ = false;
   ResetSweepDependencies();
   executed_ = false;
-}
-
-CBCDDeviceScheduler
-CBCD_AngleSet::GetDeviceScheduler()
-{
-  return {device_queue_state_.get(),
-          device_cell_queue_.get(),
-          device_remaining_local_dependencies_.get(),
-          device_cell_successor_offsets_.get(),
-          device_cell_successors_.get(),
-          device_cell_flags_.get(),
-          locally_ready_.data(),
-          remaining_remote_dependencies_.data(),
-          device_completed_count_.data(),
-          device_publication_count_.data()};
 }
 
 } // namespace opensn

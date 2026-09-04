@@ -160,31 +160,6 @@ struct CBCD_FLUDSPointerSet : public FLUDSPointerSet
   }
 };
 
-/// Mutable state for one device-resident CBCD ready queue.
-struct CBCDDeviceQueueState
-{
-  std::uint32_t head = 0;
-  std::uint32_t tail = 0;
-};
-
-inline constexpr std::uint8_t CBCD_CELL_HAS_REMOTE_PREDECESSOR = 1;
-inline constexpr std::uint8_t CBCD_CELL_REQUIRES_PUBLICATION = 2;
-
-/// Device and mapped-host storage used to sweep a locally reachable cell closure.
-struct CBCDDeviceScheduler
-{
-  CBCDDeviceQueueState* queue_state = nullptr;
-  std::uint32_t* cell_queue = nullptr;
-  std::uint32_t* remaining_local_dependencies = nullptr;
-  const std::uint32_t* successor_offsets = nullptr;
-  const std::uint32_t* successors = nullptr;
-  const std::uint8_t* cell_flags = nullptr;
-  std::uint32_t* locally_ready = nullptr;
-  const std::uint32_t* remaining_remote_dependencies = nullptr;
-  std::uint32_t* completed_count = nullptr;
-  std::uint32_t* publication_count = nullptr;
-};
-
 /// Host metadata for one outgoing boundary node.
 struct OutgoingBoundaryNode
 {

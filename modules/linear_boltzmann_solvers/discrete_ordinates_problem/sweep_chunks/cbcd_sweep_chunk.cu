@@ -6,7 +6,6 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/device_vector_mirror.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
-#include "framework/logging/log.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
@@ -16,58 +15,6 @@
 
 namespace opensn
 {
-
-#if defined(__NVCC__) || defined(__HIPCC__)
-namespace
-{
-
-struct CBCDClosureConfiguration
-{
-  crb::Dim3 threads_per_block;
-  std::size_t resident_blocks = 0;
-  bool has_sufficient_parallelism = false;
-};
-
-CBCDClosureConfiguration
-GetClosureBlockGeometry(const unsigned int stride_threads, const std::size_t num_angle_sets)
-{
-  const auto device_id = crb::impl::get_current_device();
-  const auto num_multiprocessors = crb::impl::get_device_attribute(
-    device_id, ::CUDA_OR_HIP(DevAttrMultiProcessorCount, DeviceAttributeMultiprocessorCount));
-  const auto max_threads_per_block = crb::impl::get_device_attribute(
-    device_id, ::CUDA_OR_HIP(DevAttrMaxThreadsPerBlock, DeviceAttributeMaxThreadsPerBlock));
-
-  unsigned int best_cell_lanes = 1;
-  std::size_t best_concurrent_cells = 0;
-  std::size_t best_resident_blocks = 0;
-  const auto max_cell_lanes = static_cast<unsigned int>(max_threads_per_block) / stride_threads;
-  for (unsigned int cell_lanes = 1; cell_lanes <= max_cell_lanes; ++cell_lanes)
-  {
-    const auto block_size = static_cast<int>(stride_threads * cell_lanes);
-    const auto shared_bytes = cell_lanes * sizeof(std::uint32_t);
-    int active_blocks_per_multiprocessor = 0;
-    crb::impl::check_error(::GPU_API(OccupancyMaxActiveBlocksPerMultiprocessor)(
-      &active_blocks_per_multiprocessor,
-      gpu_kernel::CBCDClosureKernel<SweepKind::CBC>,
-      block_size,
-      shared_bytes));
-    const auto resident_blocks = static_cast<std::size_t>(num_multiprocessors) *
-                                 static_cast<std::size_t>(active_blocks_per_multiprocessor);
-    const auto concurrent_cells = std::min(num_angle_sets, resident_blocks) * cell_lanes;
-    if (concurrent_cells > best_concurrent_cells)
-    {
-      best_concurrent_cells = concurrent_cells;
-      best_cell_lanes = cell_lanes;
-      best_resident_blocks = resident_blocks;
-    }
-  }
-  return {crb::Dim3(stride_threads, best_cell_lanes),
-          best_resident_blocks,
-          num_angle_sets >= best_resident_blocks};
-}
-
-} // namespace
-#endif
 
 CBCDSweepChunk::DispatchState::DispatchState(const std::size_t stride,
                                              const crb::Dim3 threads,
@@ -93,9 +40,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     problem_(problem)
 {
   std::vector<CBCD_FLUDS*> fluds_list;
-#if defined(__NVCC__) || defined(__HIPCC__)
-  std::unordered_map<unsigned int, CBCDClosureConfiguration> closure_configurations;
-#endif
   for (auto& as : *(groupset.angle_agg))
   {
     auto* angle_set = dynamic_cast<CBCD_AngleSet*>(as.get());
@@ -112,29 +56,8 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     const auto block_size_x = std::min(stride_size, gpu_kernel::threshold);
     const auto block_size_y = gpu_kernel::threshold / block_size_x;
     const auto grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
-    auto closure_threads_per_block = crb::Dim3(block_size_x, block_size_y);
-#if defined(__NVCC__) || defined(__HIPCC__)
-    auto configuration = closure_configurations.find(block_size_x);
-    if (configuration == closure_configurations.end())
-    {
-      configuration =
-        closure_configurations
-          .emplace(block_size_x,
-                   GetClosureBlockGeometry(block_size_x, groupset.angle_agg->GetNumAngleSets()))
-          .first;
-      log.Log0Verbose1() << "CBCD device closure: "
-                         << (configuration->second.has_sufficient_parallelism ? "enabled"
-                                                                              : "disabled")
-                         << ", angle_sets=" << groupset.angle_agg->GetNumAngleSets()
-                         << ", resident_block_capacity=" << configuration->second.resident_blocks
-                         << ".";
-    }
-    closure_threads_per_block = configuration->second.threads_per_block;
-    angle_set->SetDeviceClosureEnabled(configuration->second.has_sufficient_parallelism);
-#endif
     kernel_launches_.push_back({args,
                                 crb::Dim3(block_size_x, block_size_y),
-                                closure_threads_per_block,
                                 grid_size_x,
                                 fluds,
                                 fluds->GetSavedPsiDevicePointer()});
@@ -447,13 +370,6 @@ CBCDSweepChunk::DispatchReadyAngleSets(const std::size_t worker_id,
     std::uint32_t block_end = 0;
     for (auto* angle_set : ready)
     {
-      if (angle_set->UsesDeviceClosure())
-      {
-        LaunchSingleBatch(worker_id, angle_set->GetID(), angle_set->PrepareReadyBatch());
-        dispatched_any = true;
-        continue;
-      }
-
       const auto cell_ids = angle_set->PrepareReadyBatch();
       const auto num_cell_blocks = static_cast<std::uint32_t>(
         (cell_ids.size() + dispatch->threads_per_block.y - 1) / dispatch->threads_per_block.y);
@@ -502,22 +418,6 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
 
   auto& launch = kernel_launches_[angle_set_id];
   auto& stream = angle_sets_[angle_set_id]->GetStream();
-  if (angle_sets_[angle_set_id]->UsesDeviceClosure())
-  {
-    CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::DeviceClosure");
-#if defined(__NVCC__) || defined(__HIPCC__)
-    const auto shared_bytes = launch.closure_threads_per_block.y * sizeof(std::uint32_t);
-    gpu_kernel::CBCDClosureKernel<SweepKind::CBC>
-      <<<1, launch.closure_threads_per_block, shared_bytes, stream>>>(
-        launch.arguments,
-        local_cell_ids,
-        num_ready_cells,
-        launch.device_saved_psi,
-        angle_sets_[angle_set_id]->GetDeviceScheduler());
-    return;
-#endif
-  }
-
   const auto grid_size_y =
     (num_ready_cells + launch.threads_per_block.y - 1) / launch.threads_per_block.y;
   crb::Dim3 grid_size(launch.num_stride_blocks, grid_size_y);

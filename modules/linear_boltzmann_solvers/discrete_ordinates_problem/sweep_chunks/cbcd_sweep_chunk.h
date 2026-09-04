@@ -79,7 +79,6 @@ private:
     gpu_kernel::Arguments<SweepKind::CBC> arguments;
     /// Fixed block geometry and stride-axis grid extent.
     crb::Dim3 threads_per_block;
-    crb::Dim3 closure_threads_per_block;
     unsigned int num_stride_blocks;
     /// Owning FLUDS and optional saved-psi device storage.
     CBCD_FLUDS* fluds;
