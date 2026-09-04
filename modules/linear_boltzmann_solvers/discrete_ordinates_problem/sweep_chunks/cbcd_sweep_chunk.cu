@@ -15,6 +15,47 @@
 namespace opensn
 {
 
+#if defined(__NVCC__) || defined(__HIPCC__)
+namespace
+{
+
+crb::Dim3
+GetClosureBlockGeometry(const unsigned int stride_threads, const std::size_t num_angle_sets)
+{
+  const auto device_id = crb::impl::get_current_device();
+  const auto num_multiprocessors = crb::impl::get_device_attribute(
+    device_id, ::CUDA_OR_HIP(DevAttrMultiProcessorCount, DeviceAttributeMultiprocessorCount));
+  const auto max_threads_per_block = crb::impl::get_device_attribute(
+    device_id, ::CUDA_OR_HIP(DevAttrMaxThreadsPerBlock, DeviceAttributeMaxThreadsPerBlock));
+
+  unsigned int best_cell_lanes = 1;
+  std::size_t best_concurrent_cells = 0;
+  const auto max_cell_lanes = static_cast<unsigned int>(max_threads_per_block) / stride_threads;
+  for (unsigned int cell_lanes = 1; cell_lanes <= max_cell_lanes; ++cell_lanes)
+  {
+    const auto block_size = static_cast<int>(stride_threads * cell_lanes);
+    const auto shared_bytes = cell_lanes * sizeof(std::uint32_t);
+    int active_blocks_per_multiprocessor = 0;
+    crb::impl::check_error(::GPU_API(OccupancyMaxActiveBlocksPerMultiprocessor)(
+      &active_blocks_per_multiprocessor,
+      gpu_kernel::CBCDClosureKernel<SweepKind::CBC>,
+      block_size,
+      shared_bytes));
+    const auto resident_blocks = static_cast<std::size_t>(num_multiprocessors) *
+                                 static_cast<std::size_t>(active_blocks_per_multiprocessor);
+    const auto concurrent_cells = std::min(num_angle_sets, resident_blocks) * cell_lanes;
+    if (concurrent_cells > best_concurrent_cells)
+    {
+      best_concurrent_cells = concurrent_cells;
+      best_cell_lanes = cell_lanes;
+    }
+  }
+  return crb::Dim3(stride_threads, best_cell_lanes);
+}
+
+} // namespace
+#endif
+
 CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset)
   : SweepChunk(problem.GetPhiNewLocal(),
                problem.GetPsiNewLocal()[groupset.id],
@@ -32,6 +73,9 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     problem_(problem)
 {
   std::vector<CBCD_FLUDS*> fluds_list;
+#if defined(__NVCC__) || defined(__HIPCC__)
+  std::unordered_map<unsigned int, crb::Dim3> closure_block_geometries;
+#endif
   for (auto& as : *(groupset.angle_agg))
   {
     auto* angle_set = dynamic_cast<CBCD_AngleSet*>(as.get());
@@ -48,8 +92,21 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     const auto block_size_x = std::min(stride_size, gpu_kernel::threshold);
     const auto block_size_y = gpu_kernel::threshold / block_size_x;
     const auto grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
+    auto closure_threads_per_block = crb::Dim3(block_size_x, block_size_y);
+#if defined(__NVCC__) || defined(__HIPCC__)
+    const auto geometry = closure_block_geometries.find(block_size_x);
+    if (geometry == closure_block_geometries.end())
+      closure_threads_per_block =
+        closure_block_geometries
+          .emplace(block_size_x,
+                   GetClosureBlockGeometry(block_size_x, groupset.angle_agg->GetNumAngleSets()))
+          .first->second;
+    else
+      closure_threads_per_block = geometry->second;
+#endif
     kernel_launches_.push_back({args,
                                 crb::Dim3(block_size_x, block_size_y),
+                                closure_threads_per_block,
                                 grid_size_x,
                                 fluds,
                                 fluds->GetSavedPsiDevicePointer()});
@@ -193,9 +250,9 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
   {
     CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::DeviceClosure");
 #if defined(__NVCC__) || defined(__HIPCC__)
-    const auto shared_bytes = launch.threads_per_block.y * sizeof(std::uint32_t);
+    const auto shared_bytes = launch.closure_threads_per_block.y * sizeof(std::uint32_t);
     gpu_kernel::CBCDClosureKernel<SweepKind::CBC>
-      <<<1, launch.threads_per_block, shared_bytes, stream>>>(
+      <<<1, launch.closure_threads_per_block, shared_bytes, stream>>>(
         launch.arguments,
         local_cell_ids,
         num_ready_cells,
