@@ -73,6 +73,9 @@ public:
   /// Return whether local dependency traversal is performed on the device.
   bool UsesDeviceClosure() const { return use_device_closure_; }
 
+  /// Select device closure when the groupset provides sufficient device parallelism.
+  void SetDeviceClosureEnabled(bool enabled) { use_device_closure_ = enabled; }
+
   /// Return the storage used by the device-resident local-DAG scheduler.
   CBCDDeviceScheduler GetDeviceScheduler();
 

@@ -6,6 +6,8 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/device_vector_mirror.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
+#include "framework/logging/log.h"
+#include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cstdint>
@@ -19,7 +21,14 @@ namespace opensn
 namespace
 {
 
-crb::Dim3
+struct CBCDClosureConfiguration
+{
+  crb::Dim3 threads_per_block;
+  std::size_t resident_blocks = 0;
+  bool has_sufficient_parallelism = false;
+};
+
+CBCDClosureConfiguration
 GetClosureBlockGeometry(const unsigned int stride_threads, const std::size_t num_angle_sets)
 {
   const auto device_id = crb::impl::get_current_device();
@@ -30,6 +39,7 @@ GetClosureBlockGeometry(const unsigned int stride_threads, const std::size_t num
 
   unsigned int best_cell_lanes = 1;
   std::size_t best_concurrent_cells = 0;
+  std::size_t best_resident_blocks = 0;
   const auto max_cell_lanes = static_cast<unsigned int>(max_threads_per_block) / stride_threads;
   for (unsigned int cell_lanes = 1; cell_lanes <= max_cell_lanes; ++cell_lanes)
   {
@@ -48,9 +58,12 @@ GetClosureBlockGeometry(const unsigned int stride_threads, const std::size_t num
     {
       best_concurrent_cells = concurrent_cells;
       best_cell_lanes = cell_lanes;
+      best_resident_blocks = resident_blocks;
     }
   }
-  return crb::Dim3(stride_threads, best_cell_lanes);
+  return {crb::Dim3(stride_threads, best_cell_lanes),
+          best_resident_blocks,
+          num_angle_sets >= best_resident_blocks};
 }
 
 } // namespace
@@ -74,7 +87,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
 {
   std::vector<CBCD_FLUDS*> fluds_list;
 #if defined(__NVCC__) || defined(__HIPCC__)
-  std::unordered_map<unsigned int, crb::Dim3> closure_block_geometries;
+  std::unordered_map<unsigned int, CBCDClosureConfiguration> closure_configurations;
 #endif
   for (auto& as : *(groupset.angle_agg))
   {
@@ -94,15 +107,23 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     const auto grid_size_x = (stride_size + gpu_kernel::threshold - 1) / gpu_kernel::threshold;
     auto closure_threads_per_block = crb::Dim3(block_size_x, block_size_y);
 #if defined(__NVCC__) || defined(__HIPCC__)
-    const auto geometry = closure_block_geometries.find(block_size_x);
-    if (geometry == closure_block_geometries.end())
-      closure_threads_per_block =
-        closure_block_geometries
+    auto configuration = closure_configurations.find(block_size_x);
+    if (configuration == closure_configurations.end())
+    {
+      configuration =
+        closure_configurations
           .emplace(block_size_x,
                    GetClosureBlockGeometry(block_size_x, groupset.angle_agg->GetNumAngleSets()))
-          .first->second;
-    else
-      closure_threads_per_block = geometry->second;
+          .first;
+      log.Log0Verbose1() << "CBCD device closure: "
+                         << (configuration->second.has_sufficient_parallelism ? "enabled"
+                                                                              : "disabled")
+                         << ", angle_sets=" << groupset.angle_agg->GetNumAngleSets()
+                         << ", resident_block_capacity=" << configuration->second.resident_blocks
+                         << ".";
+    }
+    closure_threads_per_block = configuration->second.threads_per_block;
+    angle_set->SetDeviceClosureEnabled(configuration->second.has_sufficient_parallelism);
 #endif
     kernel_launches_.push_back({args,
                                 crb::Dim3(block_size_x, block_size_y),
