@@ -129,42 +129,58 @@ CBCDClosureKernel(Arguments<k> args,
                   CBCDDeviceScheduler scheduler)
 {
   static_assert(k == SweepKind::CBC);
-  __shared__ std::uint32_t cell_local_id;
+  extern __shared__ std::uint32_t cell_local_ids[];
+  __shared__ std::uint32_t num_cells;
 
   while (true)
   {
-    if (threadIdx.x == 0)
-      cell_local_id = CBCDDequeueCell(*scheduler.queue_state, cell_queue);
+    if (threadIdx.x == 0 and threadIdx.y == 0)
+    {
+      num_cells = 0;
+      while (num_cells < blockDim.y)
+      {
+        const auto cell_local_id = CBCDDequeueCell(*scheduler.queue_state, cell_queue);
+        if (cell_local_id == std::numeric_limits<std::uint32_t>::max())
+          break;
+        cell_local_ids[num_cells++] = cell_local_id;
+      }
+    }
     __syncthreads();
 
-    if (cell_local_id == std::numeric_limits<std::uint32_t>::max())
+    if (num_cells == 0)
       break;
 
-    for (std::uint32_t angle_group_idx = threadIdx.x; angle_group_idx < args.flud_data.stride_size;
-         angle_group_idx += blockDim.x)
-      SweepCell(args, cell_local_id, angle_group_idx, saved_psi);
+    if (threadIdx.y < num_cells)
+      for (std::uint32_t angle_group_idx = threadIdx.x;
+           angle_group_idx < args.flud_data.stride_size;
+           angle_group_idx += blockDim.x)
+        SweepCell(args, cell_local_ids[threadIdx.y], angle_group_idx, saved_psi);
     __syncthreads();
 
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0 and threadIdx.y == 0)
     {
-      const auto successor_begin = scheduler.successor_offsets[cell_local_id];
-      const auto successor_end = scheduler.successor_offsets[cell_local_id + 1];
-      for (auto successor_index = successor_begin; successor_index < successor_end;
-           ++successor_index)
+      for (std::uint32_t cell = 0; cell < num_cells; ++cell)
       {
-        const auto successor = scheduler.successors[successor_index];
-        if (--scheduler.remaining_local_dependencies[successor] == 0)
+        const auto cell_local_id = cell_local_ids[cell];
+        const auto successor_begin = scheduler.successor_offsets[cell_local_id];
+        const auto successor_end = scheduler.successor_offsets[cell_local_id + 1];
+        for (auto successor_index = successor_begin; successor_index < successor_end;
+             ++successor_index)
         {
-          scheduler.locally_ready[successor] = 1;
-          if (scheduler.remaining_remote_dependencies[successor] == 0)
-            CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+          const auto successor = scheduler.successors[successor_index];
+          if (--scheduler.remaining_local_dependencies[successor] == 0)
+          {
+            scheduler.locally_ready[successor] = 1;
+            if (scheduler.remaining_remote_dependencies[successor] == 0)
+              CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+          }
         }
       }
     }
     __syncthreads();
   }
 
-  if (threadIdx.x == 0)
+  if (threadIdx.x == 0 and threadIdx.y == 0)
     *scheduler.completed_count = scheduler.queue_state->tail;
 }
 
