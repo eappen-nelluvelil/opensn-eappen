@@ -171,13 +171,16 @@ struct CBCDDeviceQueueState
 struct CBCDDeviceScheduler
 {
   CBCDDeviceQueueState* queue_state = nullptr;
+  std::uint32_t* cell_queue = nullptr;
   std::uint32_t* remaining_local_dependencies = nullptr;
   const std::uint32_t* initial_remote_dependencies = nullptr;
   const std::uint32_t* successor_offsets = nullptr;
   const std::uint32_t* successors = nullptr;
+  const std::uint8_t* requires_publication = nullptr;
   std::uint32_t* locally_ready = nullptr;
   const std::uint32_t* remaining_remote_dependencies = nullptr;
   std::uint32_t* completed_count = nullptr;
+  std::uint32_t* publication_count = nullptr;
 };
 
 /// Host metadata for one outgoing boundary node.

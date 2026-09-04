@@ -31,7 +31,8 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
     stream_(),
     device_angle_indices_(angles_.size()),
     device_queue_state_(1),
-    device_completed_count_(1)
+    device_completed_count_(1),
+    device_publication_count_(1)
 {
 #if defined(__NVCC__) || defined(__HIPCC__)
   use_device_closure_ = true;
@@ -49,6 +50,7 @@ CBCD_AngleSet::RefreshDeviceData()
   stream_.synchronize();
 
   BuildReflectingCellMask();
+  BuildPublicationMask();
   cbcd_fluds_.BuildReflectingBoundaryPlans(boundaries_);
 }
 
@@ -95,6 +97,24 @@ CBCD_AngleSet::BuildReflectingCellMask()
       has_outgoing_reflecting_face_[task_idx] = 1;
       ++num_reflecting_cells_;
     }
+  }
+}
+
+void
+CBCD_AngleSet::BuildPublicationMask()
+{
+  const auto num_cells = cbc_spds_.GetTaskList().size();
+  const auto& common_data = cbcd_fluds_.GetCommonData();
+  requires_publication_.assign(num_cells, 0);
+  for (std::size_t cell_local_id = 0; cell_local_id < num_cells; ++cell_local_id)
+    requires_publication_[cell_local_id] =
+      has_outgoing_reflecting_face_[cell_local_id] != 0 or
+      not common_data.GetOutgoingNonlocalFaces(cell_local_id).empty();
+
+  if (use_device_closure_)
+  {
+    device_requires_publication_ = crb::DeviceMemory<std::uint8_t>(num_cells);
+    crb::copy(device_requires_publication_, requires_publication_, num_cells);
   }
 }
 
@@ -148,6 +168,7 @@ CBCD_AngleSet::BuildCellTaskGraph()
     device_cell_successor_offsets_ =
       crb::DeviceMemory<std::uint32_t>(cell_successor_offsets_.size());
     device_cell_successors_ = crb::DeviceMemory<std::uint32_t>(cell_successors_.size());
+    device_cell_queue_ = crb::DeviceMemory<std::uint32_t>(num_cells);
     crb::copy(device_initial_remote_dependencies_, initial_remote_dependencies_, num_cells);
     crb::copy(
       device_cell_successor_offsets_, cell_successor_offsets_, cell_successor_offsets_.size());
@@ -192,7 +213,9 @@ CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk)
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
   const auto completed_count =
     use_device_closure_ ? device_completed_count_.front() : batch_pipeline_.launch_count;
-  for (std::uint32_t i = 0; i < completed_count; ++i)
+  const auto publication_count =
+    use_device_closure_ ? device_publication_count_.front() : completed_count;
+  for (std::uint32_t i = 0; i < publication_count; ++i)
   {
     const auto cell_local_id = completed_cell_ids[i];
     if (not use_device_closure_)
@@ -218,6 +241,7 @@ CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk)
   num_completed_cells_ += completed_count;
   batch_pipeline_.completed_buffer = batch_pipeline_.launch_buffer;
   batch_pipeline_.completed_count = completed_count;
+  batch_pipeline_.publication_count = publication_count;
   batch_pipeline_.launch_count = 0;
   return true;
 }
@@ -237,6 +261,10 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
   if (use_device_closure_)
   {
     device_completed_count_.front() = 0;
+    device_publication_count_.front() = 0;
+#if defined(__NVCC__) || defined(__HIPCC__)
+    crb::impl::copy_h2d(device_cell_queue_.get(), ready_cell_ids.data(), launch_count, stream_);
+#endif
   }
   sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data());
   return true;
@@ -255,9 +283,10 @@ CBCD_AngleSet::PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::siz
     worker_id,
     GetID(),
     GetAngleIndices(),
-    {completed_cell_ids.data(), static_cast<std::size_t>(batch_pipeline_.completed_count)});
+    {completed_cell_ids.data(), static_cast<std::size_t>(batch_pipeline_.publication_count)});
   batch_pipeline_.ReleaseBuffer(batch_pipeline_.completed_buffer);
   batch_pipeline_.completed_count = 0;
+  batch_pipeline_.publication_count = 0;
   TryReleaseFollowers();
 }
 
@@ -404,13 +433,16 @@ CBCDDeviceScheduler
 CBCD_AngleSet::GetDeviceScheduler()
 {
   return {device_queue_state_.get(),
+          device_cell_queue_.get(),
           device_remaining_local_dependencies_.get(),
           device_initial_remote_dependencies_.get(),
           device_cell_successor_offsets_.get(),
           device_cell_successors_.get(),
+          device_requires_publication_.get(),
           locally_ready_.data(),
           remaining_remote_dependencies_.data(),
-          device_completed_count_.data()};
+          device_completed_count_.data(),
+          device_publication_count_.data()};
 }
 
 } // namespace opensn

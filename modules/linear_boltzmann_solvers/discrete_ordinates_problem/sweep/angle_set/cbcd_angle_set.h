@@ -91,6 +91,7 @@ private:
     std::uint32_t ready_count = 0;
     std::uint32_t launch_count = 0;
     std::uint32_t completed_count = 0;
+    std::uint32_t publication_count = 0;
 
     void Reset()
     {
@@ -102,6 +103,7 @@ private:
       ready_count = 0;
       launch_count = 0;
       completed_count = 0;
+      publication_count = 0;
     }
 
     bool HasKernelInFlight() const { return launch_count != 0; }
@@ -142,8 +144,12 @@ private:
   crb::DeviceMemory<std::uint32_t> device_initial_remote_dependencies_;
   crb::DeviceMemory<std::uint32_t> device_cell_successor_offsets_;
   crb::DeviceMemory<std::uint32_t> device_cell_successors_;
+  crb::HostVector<std::uint8_t> requires_publication_;
+  crb::DeviceMemory<std::uint8_t> device_requires_publication_;
   crb::DeviceMemory<CBCDDeviceQueueState> device_queue_state_;
+  crb::DeviceMemory<std::uint32_t> device_cell_queue_;
   crb::MappedHostVector<std::uint32_t> device_completed_count_;
+  crb::MappedHostVector<std::uint32_t> device_publication_count_;
   /// Local cell tasks ready before any nonlocal messages arrive.
   std::vector<std::uint32_t> initial_ready_cell_ids_;
   /// Atomic counterpart of the base dependency counter for concurrent follower release.
@@ -166,6 +172,8 @@ private:
 
   /// Mark local cells with outgoing reflecting faces.
   void BuildReflectingCellMask();
+  /// Mark cells whose completed angular flux must be published by the host.
+  void BuildPublicationMask();
   /// Flatten the local cell-task DAG into persistent CSR storage.
   void BuildCellTaskGraph();
   /// Return whether a cell face writes a reflecting boundary.

@@ -124,7 +124,7 @@ CBCDEnqueueCell(CBCDDeviceQueueState& state,
 template <SweepKind k>
 __CRB_GLOBAL_FUNC__ void
 CBCDClosureKernel(Arguments<k> args,
-                  std::uint32_t* cell_queue,
+                  std::uint32_t* completed_cell_ids,
                   const std::uint32_t initial_queue_size,
                   double* saved_psi,
                   CBCDDeviceScheduler scheduler)
@@ -132,6 +132,8 @@ CBCDClosureKernel(Arguments<k> args,
   static_assert(k == SweepKind::CBC);
   extern __shared__ std::uint32_t cell_local_ids[];
   __shared__ std::uint32_t num_cells;
+  std::uint32_t completed_count = 0;
+  std::uint32_t publication_count = 0;
 
   if (threadIdx.x == 0 and threadIdx.y == 0)
     *scheduler.queue_state = {0, initial_queue_size};
@@ -144,7 +146,7 @@ CBCDClosureKernel(Arguments<k> args,
       num_cells = 0;
       while (num_cells < blockDim.y)
       {
-        const auto cell_local_id = CBCDDequeueCell(*scheduler.queue_state, cell_queue);
+        const auto cell_local_id = CBCDDequeueCell(*scheduler.queue_state, scheduler.cell_queue);
         if (cell_local_id == std::numeric_limits<std::uint32_t>::max())
           break;
         cell_local_ids[num_cells++] = cell_local_id;
@@ -167,6 +169,9 @@ CBCDClosureKernel(Arguments<k> args,
       for (std::uint32_t cell = 0; cell < num_cells; ++cell)
       {
         const auto cell_local_id = cell_local_ids[cell];
+        ++completed_count;
+        if (scheduler.requires_publication[cell_local_id] != 0)
+          completed_cell_ids[publication_count++] = cell_local_id;
         const auto successor_begin = scheduler.successor_offsets[cell_local_id];
         const auto successor_end = scheduler.successor_offsets[cell_local_id + 1];
         for (auto successor_index = successor_begin; successor_index < successor_end;
@@ -176,12 +181,12 @@ CBCDClosureKernel(Arguments<k> args,
           if (--scheduler.remaining_local_dependencies[successor] == 0)
           {
             if (scheduler.initial_remote_dependencies[successor] == 0)
-              CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+              CBCDEnqueueCell(*scheduler.queue_state, scheduler.cell_queue, successor);
             else
             {
               scheduler.locally_ready[successor] = 1;
               if (scheduler.remaining_remote_dependencies[successor] == 0)
-                CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+                CBCDEnqueueCell(*scheduler.queue_state, scheduler.cell_queue, successor);
             }
           }
         }
@@ -191,7 +196,10 @@ CBCDClosureKernel(Arguments<k> args,
   }
 
   if (threadIdx.x == 0 and threadIdx.y == 0)
-    *scheduler.completed_count = scheduler.queue_state->tail;
+  {
+    *scheduler.completed_count = completed_count;
+    *scheduler.publication_count = publication_count;
+  }
 }
 
 #endif
