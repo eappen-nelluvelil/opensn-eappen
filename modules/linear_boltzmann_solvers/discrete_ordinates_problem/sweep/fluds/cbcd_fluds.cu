@@ -275,7 +275,7 @@ CBCD_FLUDS::StoreSavedPsi(CBCDSweepChunk& sweep_chunk, const CBCD_AngleSet& angl
 std::uint32_t
 CBCD_FLUDS::StoreIncomingFace(const std::uint32_t source_partition_index,
                               const std::uint32_t incoming_face_index,
-                              const double* psi_values)
+                              const void* psi_values)
 {
   const auto& face_info =
     common_data_.GetIncomingNonlocalFace(source_partition_index, incoming_face_index);

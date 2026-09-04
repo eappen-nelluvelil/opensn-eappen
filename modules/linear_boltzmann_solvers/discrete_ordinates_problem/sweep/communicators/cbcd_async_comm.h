@@ -21,27 +21,15 @@ namespace opensn
 {
 
 class AngleSet;
+class CBCD_FLUDS;
 class CBCDProfiler;
 class MPICommunicatorSet;
-
-/// Metadata for one received face within an incoming batch.
-struct IncomingFaceRecord
-{
-  /// Face index assigned by this rank for the source partition.
-  std::uint32_t incoming_face_index = 0;
-  /// Offset into `IncomingFaceBatch::psi_values`.
-  std::size_t psi_offset = 0;
-};
 
 /// One received angle-set section from a source partition.
 struct IncomingFaceBatch
 {
-  /// Index into the angle set's source-partition array.
-  std::uint32_t source_partition_index = 0;
-  /// Face records in the section.
-  std::vector<IncomingFaceRecord> faces;
-  /// Contiguous psi payload referenced by `faces`.
-  std::vector<double> psi_values;
+  /// Downwind cells whose face data are now visible in mapped FLUDS storage.
+  std::vector<std::uint32_t> cell_local_ids;
 };
 
 /// One outgoing nonlocal face published by a sweep worker.
@@ -73,8 +61,6 @@ struct AngleSetCommunicationBounds
   std::size_t incoming_mailbox_capacity = 0;
   /// Maximum face count of one received angle-set section.
   std::size_t max_incoming_faces_per_batch = 0;
-  /// Maximum psi-value count of one received angle-set section.
-  std::size_t max_incoming_values_per_batch = 0;
   /// Exact queue bounds for each destination reached by this angle set.
   std::vector<DestinationQueueBounds> outgoing_queue_bounds;
 };
@@ -87,12 +73,14 @@ public:
    * Construct preallocated mailboxes and deterministic peer mappings.
    *
    * \param angle_sets Angle sets served by this communicator.
+   * \param fluds Incoming angular-flux storage for each angle set.
    * \param comm_set Partition communicator mapping.
    * \param incoming_source_partitions Source partitions for each angle set.
    * \param max_message_bytes Exact maximum aggregate message size.
    * \param bounds Per-angle-set storage bounds and outgoing queue counts.
    */
   CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
+                                const std::vector<CBCD_FLUDS*>& fluds,
                                 const MPICommunicatorSet& comm_set,
                                 const std::vector<std::vector<int>>& incoming_source_partitions,
                                 std::size_t max_message_bytes,
@@ -170,6 +158,7 @@ private:
   /// Immutable communicator topology and per-angle-set bounds.
   const MPICommunicatorSet& comm_set_;
   std::size_t num_angle_sets_;
+  std::vector<CBCD_FLUDS*> fluds_;
   CBCDProfiler* profiler_ = nullptr;
   std::vector<AngleSetCommunicationBounds> communication_bounds_;
   /// Worker count and MPI message parameters.
