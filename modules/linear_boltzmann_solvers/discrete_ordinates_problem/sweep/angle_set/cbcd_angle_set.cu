@@ -105,16 +105,17 @@ CBCD_AngleSet::BuildPublicationMask()
 {
   const auto num_cells = cbc_spds_.GetTaskList().size();
   const auto& common_data = cbcd_fluds_.GetCommonData();
-  requires_publication_.assign(num_cells, 0);
   for (std::size_t cell_local_id = 0; cell_local_id < num_cells; ++cell_local_id)
-    requires_publication_[cell_local_id] =
-      has_outgoing_reflecting_face_[cell_local_id] != 0 or
-      not common_data.GetOutgoingNonlocalFaces(cell_local_id).empty();
+    if (has_outgoing_reflecting_face_[cell_local_id] != 0 or
+        not common_data.GetOutgoingNonlocalFaces(cell_local_id).empty())
+      cell_flags_[cell_local_id] |= CBCD_CELL_REQUIRES_PUBLICATION;
 
-  if (use_device_closure_)
+  if (use_device_closure_ and std::any_of(cell_flags_.begin(),
+                                          cell_flags_.end(),
+                                          [](const auto flags) { return flags != 0; }))
   {
-    device_requires_publication_ = crb::DeviceMemory<std::uint8_t>(num_cells);
-    crb::copy(device_requires_publication_, requires_publication_, num_cells);
+    device_cell_flags_ = crb::DeviceMemory<std::uint8_t>(num_cells);
+    crb::copy(device_cell_flags_, cell_flags_, num_cells);
   }
 }
 
@@ -130,6 +131,7 @@ CBCD_AngleSet::BuildCellTaskGraph()
   initial_remote_dependencies_.assign(num_cells, 0);
   remaining_remote_dependencies_.assign(num_cells, 0);
   locally_ready_.assign(num_cells, 0);
+  cell_flags_.assign(num_cells, 0);
   cell_successor_offsets_.assign(num_cells + 1, 0);
   initial_ready_cell_ids_.clear();
   initial_ready_cell_ids_.reserve(num_cells);
@@ -158,18 +160,20 @@ CBCD_AngleSet::BuildCellTaskGraph()
   }
 
   for (std::size_t cell_local_id = 0; cell_local_id < num_cells; ++cell_local_id)
+  {
     initial_remote_dependencies_[cell_local_id] =
       initial_cell_dependencies_[cell_local_id] - initial_local_dependencies_[cell_local_id];
+    if (initial_remote_dependencies_[cell_local_id] != 0)
+      cell_flags_[cell_local_id] |= CBCD_CELL_HAS_REMOTE_PREDECESSOR;
+  }
 
   if (use_device_closure_)
   {
     device_remaining_local_dependencies_ = crb::DeviceMemory<std::uint32_t>(num_cells);
-    device_initial_remote_dependencies_ = crb::DeviceMemory<std::uint32_t>(num_cells);
     device_cell_successor_offsets_ =
       crb::DeviceMemory<std::uint32_t>(cell_successor_offsets_.size());
     device_cell_successors_ = crb::DeviceMemory<std::uint32_t>(cell_successors_.size());
     device_cell_queue_ = crb::DeviceMemory<std::uint32_t>(num_cells);
-    crb::copy(device_initial_remote_dependencies_, initial_remote_dependencies_, num_cells);
     crb::copy(
       device_cell_successor_offsets_, cell_successor_offsets_, cell_successor_offsets_.size());
     if (not cell_successors_.empty())
@@ -435,10 +439,9 @@ CBCD_AngleSet::GetDeviceScheduler()
   return {device_queue_state_.get(),
           device_cell_queue_.get(),
           device_remaining_local_dependencies_.get(),
-          device_initial_remote_dependencies_.get(),
           device_cell_successor_offsets_.get(),
           device_cell_successors_.get(),
-          device_requires_publication_.get(),
+          device_cell_flags_.get(),
           locally_ready_.data(),
           remaining_remote_dependencies_.data(),
           device_completed_count_.data(),

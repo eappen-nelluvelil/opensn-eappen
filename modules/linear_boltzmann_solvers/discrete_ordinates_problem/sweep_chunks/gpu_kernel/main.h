@@ -170,7 +170,9 @@ CBCDClosureKernel(Arguments<k> args,
       {
         const auto cell_local_id = cell_local_ids[cell];
         ++completed_count;
-        if (scheduler.requires_publication[cell_local_id] != 0)
+        const auto cell_flags =
+          scheduler.cell_flags == nullptr ? 0 : scheduler.cell_flags[cell_local_id];
+        if ((cell_flags & CBCD_CELL_REQUIRES_PUBLICATION) != 0)
           completed_cell_ids[publication_count++] = cell_local_id;
         const auto successor_begin = scheduler.successor_offsets[cell_local_id];
         const auto successor_end = scheduler.successor_offsets[cell_local_id + 1];
@@ -180,7 +182,9 @@ CBCDClosureKernel(Arguments<k> args,
           const auto successor = scheduler.successors[successor_index];
           if (--scheduler.remaining_local_dependencies[successor] == 0)
           {
-            if (scheduler.initial_remote_dependencies[successor] == 0)
+            const auto successor_flags =
+              scheduler.cell_flags == nullptr ? 0 : scheduler.cell_flags[successor];
+            if ((successor_flags & CBCD_CELL_HAS_REMOTE_PREDECESSOR) == 0)
               CBCDEnqueueCell(*scheduler.queue_state, scheduler.cell_queue, successor);
             else
             {

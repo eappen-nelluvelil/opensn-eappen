@@ -141,11 +141,10 @@ private:
   crb::MappedHostVector<std::uint32_t> locally_ready_;
   /// Device-resident local dependency graph and mutable counts.
   crb::DeviceMemory<std::uint32_t> device_remaining_local_dependencies_;
-  crb::DeviceMemory<std::uint32_t> device_initial_remote_dependencies_;
   crb::DeviceMemory<std::uint32_t> device_cell_successor_offsets_;
   crb::DeviceMemory<std::uint32_t> device_cell_successors_;
-  crb::HostVector<std::uint8_t> requires_publication_;
-  crb::DeviceMemory<std::uint8_t> device_requires_publication_;
+  crb::HostVector<std::uint8_t> cell_flags_;
+  crb::DeviceMemory<std::uint8_t> device_cell_flags_;
   crb::DeviceMemory<CBCDDeviceQueueState> device_queue_state_;
   crb::DeviceMemory<std::uint32_t> device_cell_queue_;
   crb::MappedHostVector<std::uint32_t> device_completed_count_;
