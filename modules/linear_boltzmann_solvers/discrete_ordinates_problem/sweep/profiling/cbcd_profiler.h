@@ -43,6 +43,8 @@ public:
   void FinishSweep();
 
   void RecordKernelLaunch(std::size_t angle_set_id, std::uint64_t num_cells);
+  void
+  RecordDeviceDispatch(std::size_t worker_id, std::uint64_t num_batches, std::uint64_t num_cells);
   void RecordWorkerStart(std::size_t worker_id, TimePoint time);
   void RecordWorkerIdleStart(std::size_t worker_id, TimePoint time);
   void RecordWorkerIdleEnd(std::size_t worker_id, TimePoint time);
@@ -90,6 +92,9 @@ private:
     std::uint64_t wall_ns = 0;
     std::uint64_t idle_ns = 0;
     std::uint64_t yields = 0;
+    std::uint64_t device_dispatches = 0;
+    std::uint64_t dispatched_batches = 0;
+    std::uint64_t dispatched_cells = 0;
     bool idle = false;
   };
 

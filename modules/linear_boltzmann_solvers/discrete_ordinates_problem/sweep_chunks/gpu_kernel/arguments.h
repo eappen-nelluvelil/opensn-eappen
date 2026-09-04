@@ -99,4 +99,23 @@ struct Arguments
   bool is_surface_source_active = false;
 };
 
+/// Device arguments and saved-angular-flux storage for one CBCD angle set.
+struct CBCDLaunchData
+{
+  Arguments<SweepKind::CBC> arguments;
+  double* saved_psi = nullptr;
+};
+
+/// One CBCD ready batch in a fused device dispatch.
+struct CBCDBatchDescriptor
+{
+  std::uint32_t* cell_ids = nullptr;
+  std::uint32_t angle_set_id = 0;
+  std::uint32_t num_cells = 0;
+  std::uint32_t block_end = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<CBCDLaunchData>);
+static_assert(std::is_trivially_copyable_v<CBCDBatchDescriptor>);
+
 } // namespace opensn::gpu_kernel

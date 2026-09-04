@@ -208,9 +208,9 @@ CBCD_AngleSet::InitializeSweepState()
 }
 
 bool
-CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk)
+CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk, const bool dispatch_completed)
 {
-  if ((not batch_pipeline_.HasKernelInFlight()) or (not stream_.is_completed()))
+  if ((not batch_pipeline_.HasKernelInFlight()) or (not dispatch_completed))
     return false;
 
   auto& completed_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.launch_buffer);
@@ -251,12 +251,15 @@ CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk)
 }
 
 bool
-CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
+CBCD_AngleSet::HasReadyBatch() const
+{
+  return (not batch_pipeline_.HasKernelInFlight()) and batch_pipeline_.ready_count != 0;
+}
+
+std::span<std::uint32_t>
+CBCD_AngleSet::PrepareReadyBatch()
 {
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  if (batch_pipeline_.HasKernelInFlight() or batch_pipeline_.ready_count == 0)
-    return false;
-
   const auto launch_count = batch_pipeline_.ready_count;
   batch_pipeline_.launch_buffer = batch_pipeline_.ready_buffer;
   batch_pipeline_.launch_count = launch_count;
@@ -270,8 +273,7 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
     crb::impl::copy_h2d(device_cell_queue_.get(), ready_cell_ids.data(), launch_count, stream_);
 #endif
   }
-  sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data());
-  return true;
+  return {ready_cell_ids.data(), launch_count};
 }
 
 void
@@ -335,7 +337,9 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 }
 
 bool
-CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::size_t worker_id)
+CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk,
+                                 const std::size_t worker_id,
+                                 const bool dispatch_completed)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
@@ -343,7 +347,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
     return false;
 
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  const bool kernel_completed = batch_pipeline_.HasKernelInFlight() and stream_.is_completed();
+  const bool kernel_completed = batch_pipeline_.HasKernelInFlight() and dispatch_completed;
   const bool has_incoming = async_comm_->HasIncoming(GetID());
   const bool can_finalize = (num_completed_cells_ == initial_cell_dependencies_.size()) and
                             (not batch_pipeline_.HasKernelInFlight()) and
@@ -358,7 +362,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   if (kernel_completed)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
-    work_done |= TryRetireCompletedBatch(cbcd_sweep_chunk);
+    work_done |= TryRetireCompletedBatch(cbcd_sweep_chunk, dispatch_completed);
   }
 
   if (has_incoming and (not batch_pipeline_.HasKernelInFlight()))
@@ -385,13 +389,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
       });
   }
 
-  if ((not batch_pipeline_.HasKernelInFlight()) and batch_pipeline_.ready_count != 0)
-  {
-    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::LaunchBatch");
-    work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
-  }
-
-  // Pack after launching to overlap host work with the next kernel.
+  // Pack after retirement while the scheduler assembles the next dispatch.
   if (batch_pipeline_.HasCompletedBatch())
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");

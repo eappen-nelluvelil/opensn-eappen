@@ -69,6 +69,13 @@ GetClosureBlockGeometry(const unsigned int stride_threads, const std::size_t num
 } // namespace
 #endif
 
+CBCDSweepChunk::DispatchState::DispatchState(const std::size_t stride,
+                                             const crb::Dim3 threads,
+                                             const unsigned int stride_blocks)
+  : stride_size(stride), threads_per_block(threads), num_stride_blocks(stride_blocks)
+{
+}
+
 CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& groupset)
   : SweepChunk(problem.GetPhiNewLocal(),
                problem.GetPsiNewLocal()[groupset.id],
@@ -131,6 +138,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                                 grid_size_x,
                                 fluds,
                                 fluds->GetSavedPsiDevicePointer()});
+    host_launch_data_.push_back({args, fluds->GetSavedPsiDevicePointer()});
+  }
+
+  if (not host_launch_data_.empty())
+  {
+    device_launch_data_ = crb::DeviceMemory<gpu_kernel::CBCDLaunchData>(host_launch_data_.size());
+    crb::copy(device_launch_data_, host_launch_data_, host_launch_data_.size());
   }
 
   if (not angle_sets_.empty())
@@ -230,6 +244,7 @@ CBCDSweepChunk::~CBCDSweepChunk()
 void
 CBCDSweepChunk::StartCommunicator(const std::size_t num_workers)
 {
+  ConfigureWorkerDispatches(num_workers);
   if (async_comm_)
     async_comm_->Start(num_workers);
 }
@@ -254,8 +269,228 @@ CBCDSweepChunk::RefreshKernelArguments()
       launch.arguments = gpu_kernel::Arguments<SweepKind::CBC>(
         problem_, groupset_, *angle_sets_[angle_set_id], *launch.fluds, IsSurfaceSourceActive());
       launch.device_saved_psi = launch.fluds->GetSavedPsiDevicePointer();
+      host_launch_data_[angle_set_id] = {launch.arguments, launch.device_saved_psi};
     }
   }
+  if (not host_launch_data_.empty())
+    crb::copy(device_launch_data_, host_launch_data_, host_launch_data_.size());
+}
+
+void
+CBCDSweepChunk::ConfigureWorkerDispatches(const std::size_t num_workers)
+{
+  if (configured_workers_ == num_workers and angle_set_dispatches_.size() == angle_sets_.size())
+    return;
+
+  configured_workers_ = num_workers;
+  dispatch_storage_.clear();
+  worker_dispatches_.assign(num_workers, {});
+  worker_angle_set_ids_.assign(num_workers, {});
+  angle_set_dispatches_.assign(angle_sets_.size(), nullptr);
+  angle_set_dispatch_status_.assign(angle_sets_.size(), {});
+
+  for (std::size_t worker_id = 0; worker_id < num_workers; ++worker_id)
+  {
+    auto& dispatches = worker_dispatches_[worker_id];
+    auto& angle_set_ids = worker_angle_set_ids_[worker_id];
+    angle_set_ids.reserve((angle_sets_.size() + num_workers - 1) / num_workers);
+    for (std::size_t angle_set_id = worker_id; angle_set_id < angle_sets_.size();
+         angle_set_id += num_workers)
+    {
+      const auto& launch = kernel_launches_[angle_set_id];
+      auto dispatch_it =
+        std::find_if(dispatches.begin(),
+                     dispatches.end(),
+                     [&launch](const DispatchState* dispatch)
+                     {
+                       return dispatch->stride_size == launch.fluds->GetStrideSize() and
+                              dispatch->threads_per_block.x == launch.threads_per_block.x and
+                              dispatch->threads_per_block.y == launch.threads_per_block.y and
+                              dispatch->num_stride_blocks == launch.num_stride_blocks;
+                     });
+      if (dispatch_it == dispatches.end())
+      {
+        auto dispatch = std::make_unique<DispatchState>(
+          launch.fluds->GetStrideSize(), launch.threads_per_block, launch.num_stride_blocks);
+        dispatches.push_back(dispatch.get());
+        dispatch_storage_.push_back(std::move(dispatch));
+        dispatch_it = std::prev(dispatches.end());
+      }
+
+      auto* dispatch = *dispatch_it;
+      ++dispatch->angle_set_capacity;
+      angle_set_dispatches_[angle_set_id] = dispatch;
+      angle_set_ids.push_back(angle_set_id);
+    }
+  }
+
+  for (auto& dispatch : dispatch_storage_)
+  {
+    dispatch->host_batches.reserve(dispatch->angle_set_capacity);
+    dispatch->device_batches =
+      crb::DeviceMemory<gpu_kernel::CBCDBatchDescriptor>(dispatch->angle_set_capacity);
+    dispatch->ready_angle_sets.reserve(dispatch->angle_set_capacity);
+    dispatch->active_angle_set_ids.reserve(dispatch->angle_set_capacity);
+  }
+}
+
+bool
+CBCDSweepChunk::PollWorkerDispatches(const std::size_t worker_id)
+{
+  bool completed_any = false;
+  for (auto* dispatch : worker_dispatches_[worker_id])
+  {
+    if (dispatch->active and dispatch->stream.is_completed())
+    {
+      for (const auto angle_set_id : dispatch->active_angle_set_ids)
+        angle_set_dispatch_status_[angle_set_id].complete = true;
+      dispatch->active_angle_set_ids.clear();
+      dispatch->active = false;
+      completed_any = true;
+    }
+  }
+  for (const auto angle_set_id : worker_angle_set_ids_[worker_id])
+  {
+    auto& status = angle_set_dispatch_status_[angle_set_id];
+    if (status.kind == DispatchKind::SINGLE and (not status.complete) and
+        angle_sets_[angle_set_id]->GetStream().is_completed())
+    {
+      status.complete = true;
+      completed_any = true;
+    }
+  }
+  return completed_any;
+}
+
+bool
+CBCDSweepChunk::IsDispatchComplete(const std::size_t angle_set_id) const
+{
+  return angle_set_dispatch_status_[angle_set_id].complete;
+}
+
+void
+CBCDSweepChunk::LaunchSingleBatch(const std::size_t worker_id,
+                                  const std::size_t angle_set_id,
+                                  const std::span<std::uint32_t> local_cell_ids)
+{
+  auto& status = angle_set_dispatch_status_[angle_set_id];
+  status.kind = DispatchKind::SINGLE;
+  status.complete = false;
+  if (profiler_)
+    profiler_->RecordDeviceDispatch(worker_id, 1, local_cell_ids.size());
+  Sweep(static_cast<std::uint32_t>(local_cell_ids.size()), angle_set_id, local_cell_ids.data());
+}
+
+void
+CBCDSweepChunk::LaunchFusedBatch(const std::size_t worker_id, DispatchState& dispatch)
+{
+  crb::copy(dispatch.device_batches,
+            dispatch.host_batches,
+            dispatch.host_batches.size(),
+            0,
+            0,
+            dispatch.stream);
+  crb::Dim3 grid_size(dispatch.num_stride_blocks, dispatch.host_batches.back().block_end);
+#if defined(__NVCC__) || defined(__HIPCC__)
+  gpu_kernel::CBCDFusedSweepKernel<SweepKind::CBC>
+    <<<grid_size, dispatch.threads_per_block, 0, dispatch.stream>>>(
+      device_launch_data_.get(),
+      dispatch.device_batches.get(),
+      static_cast<std::uint32_t>(dispatch.host_batches.size()));
+#elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
+  auto* launch_data = device_launch_data_.get();
+  auto* batches = dispatch.device_batches.get();
+  const auto num_batches = static_cast<std::uint32_t>(dispatch.host_batches.size());
+  dispatch.stream.parallel_for(
+    sycl::nd_range<3>(grid_size * dispatch.threads_per_block, dispatch.threads_per_block),
+    [=](sycl::nd_item<3>)
+    { gpu_kernel::CBCDFusedSweepKernel<SweepKind::CBC>(launch_data, batches, num_batches); });
+#endif
+  if (profiler_)
+  {
+    std::uint64_t num_cells = 0;
+    for (const auto& batch : dispatch.host_batches)
+      num_cells += batch.num_cells;
+    profiler_->RecordDeviceDispatch(worker_id, dispatch.host_batches.size(), num_cells);
+  }
+  dispatch.active = true;
+}
+
+bool
+CBCDSweepChunk::DispatchReadyAngleSets(const std::size_t worker_id,
+                                       const std::span<CBCD_AngleSet*> ready_angle_sets)
+{
+  if (ready_angle_sets.empty())
+    return false;
+
+  for (auto* dispatch : worker_dispatches_[worker_id])
+    dispatch->ready_angle_sets.clear();
+  for (auto* angle_set : ready_angle_sets)
+    angle_set_dispatches_[angle_set->GetID()]->ready_angle_sets.push_back(angle_set);
+
+  bool dispatched_any = false;
+  for (auto* dispatch : worker_dispatches_[worker_id])
+  {
+    auto& ready = dispatch->ready_angle_sets;
+    if (ready.empty())
+      continue;
+
+    if (dispatch->active or ready.size() == 1)
+    {
+      for (auto* angle_set : ready)
+        LaunchSingleBatch(worker_id, angle_set->GetID(), angle_set->PrepareReadyBatch());
+      dispatched_any = true;
+      continue;
+    }
+
+    dispatch->host_batches.clear();
+    std::uint32_t block_end = 0;
+    for (auto* angle_set : ready)
+    {
+      if (angle_set->UsesDeviceClosure())
+      {
+        LaunchSingleBatch(worker_id, angle_set->GetID(), angle_set->PrepareReadyBatch());
+        dispatched_any = true;
+        continue;
+      }
+
+      const auto cell_ids = angle_set->PrepareReadyBatch();
+      const auto num_cell_blocks = static_cast<std::uint32_t>(
+        (cell_ids.size() + dispatch->threads_per_block.y - 1) / dispatch->threads_per_block.y);
+      block_end += num_cell_blocks;
+      dispatch->host_batches.push_back({cell_ids.data(),
+                                        static_cast<std::uint32_t>(angle_set->GetID()),
+                                        static_cast<std::uint32_t>(cell_ids.size()),
+                                        block_end});
+      dispatch->active_angle_set_ids.push_back(angle_set->GetID());
+    }
+
+    if (dispatch->host_batches.size() == 1)
+    {
+      const auto angle_set_id = dispatch->host_batches.front().angle_set_id;
+      auto& status = angle_set_dispatch_status_[angle_set_id];
+      status.kind = DispatchKind::SINGLE;
+      status.complete = false;
+      Sweep(dispatch->host_batches.front().num_cells,
+            angle_set_id,
+            dispatch->host_batches.front().cell_ids);
+      if (profiler_)
+        profiler_->RecordDeviceDispatch(worker_id, 1, dispatch->host_batches.front().num_cells);
+      dispatch->active_angle_set_ids.clear();
+    }
+    else if (not dispatch->host_batches.empty())
+    {
+      for (const auto angle_set_id : dispatch->active_angle_set_ids)
+      {
+        auto& status = angle_set_dispatch_status_[angle_set_id];
+        status.kind = DispatchKind::FUSED;
+        status.complete = false;
+      }
+      LaunchFusedBatch(worker_id, *dispatch);
+    }
+    dispatched_any = true;
+  }
+  return dispatched_any;
 }
 
 void

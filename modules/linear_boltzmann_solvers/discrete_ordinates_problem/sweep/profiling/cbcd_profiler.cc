@@ -111,6 +111,17 @@ CBCDProfiler::RecordKernelLaunch(const std::size_t angle_set_id, const std::uint
 }
 
 void
+CBCDProfiler::RecordDeviceDispatch(const std::size_t worker_id,
+                                   const std::uint64_t num_batches,
+                                   const std::uint64_t num_cells)
+{
+  auto& worker = active_sweep_->workers[worker_id];
+  ++worker.device_dispatches;
+  worker.dispatched_batches += num_batches;
+  worker.dispatched_cells += num_cells;
+}
+
+void
 CBCDProfiler::RecordWorkerStart(const std::size_t worker_id, const TimePoint time)
 {
   active_sweep_->workers[worker_id].start_time = time;
@@ -222,7 +233,9 @@ CBCDProfiler::WriteResults() const
   sweeps.exceptions(std::ios::badbit | std::ios::failbit);
   sweeps.open(rank_directory / "sweeps.csv");
   sweeps << "sweep,rank,workers,angle_sets,kernel_launches,kernel_cells,"
-            "kernel_batch_min,kernel_batch_mean,kernel_batch_max,worker_wall_ns,worker_idle_ns,"
+            "kernel_batch_min,kernel_batch_mean,kernel_batch_max,device_dispatches,"
+            "device_dispatch_batches,device_dispatch_cells,device_batches_per_dispatch,"
+            "worker_wall_ns,worker_idle_ns,"
             "worker_idle_fraction,worker_yields,comm_iterations,comm_idle_iterations,"
             "comm_idle_fraction,flush_outgoing_ns,probe_and_receive_ns,poll_sends_ns,"
             "send_messages,send_bytes,send_faces,send_bytes_min,send_bytes_mean,send_bytes_max,"
@@ -249,6 +262,9 @@ CBCDProfiler::WriteResults() const
     std::uint64_t worker_wall_ns = 0;
     std::uint64_t worker_idle_ns = 0;
     std::uint64_t worker_yields = 0;
+    std::uint64_t device_dispatches = 0;
+    std::uint64_t dispatched_batches = 0;
+    std::uint64_t dispatched_cells = 0;
     for (std::size_t angle_set_id = 0; angle_set_id < sweep.angle_sets.size(); ++angle_set_id)
     {
       const auto& batches = sweep.angle_sets[angle_set_id].cells_per_launch;
@@ -271,6 +287,9 @@ CBCDProfiler::WriteResults() const
       worker_wall_ns += worker.wall_ns;
       worker_idle_ns += worker.idle_ns;
       worker_yields += worker.yields;
+      device_dispatches += worker.device_dispatches;
+      dispatched_batches += worker.dispatched_batches;
+      dispatched_cells += worker.dispatched_cells;
     }
 
     const auto& comm = sweep.communication;
@@ -280,7 +299,11 @@ CBCDProfiler::WriteResults() const
            << (kernel_batches.count == 0
                  ? 0.0
                  : static_cast<double>(kernel_batches.sum) / kernel_batches.count)
-           << ',' << kernel_batches.maximum << ',' << worker_wall_ns << ',' << worker_idle_ns << ','
+           << ',' << kernel_batches.maximum << ',' << device_dispatches << ',' << dispatched_batches
+           << ',' << dispatched_cells << ','
+           << (device_dispatches == 0 ? 0.0
+                                      : static_cast<double>(dispatched_batches) / device_dispatches)
+           << ',' << worker_wall_ns << ',' << worker_idle_ns << ','
            << (worker_wall_ns == 0 ? 0.0 : static_cast<double>(worker_idle_ns) / worker_wall_ns)
            << ',' << worker_yields << ',' << comm.iterations << ',' << comm.idle_iterations << ','
            << (comm.iterations == 0 ? 0.0

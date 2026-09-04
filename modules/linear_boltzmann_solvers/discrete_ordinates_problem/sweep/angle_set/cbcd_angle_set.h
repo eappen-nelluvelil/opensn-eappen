@@ -9,6 +9,7 @@
 #include "caribou/main.hpp"
 #include <array>
 #include <atomic>
+#include <span>
 
 namespace crb = caribou;
 
@@ -54,7 +55,14 @@ public:
   bool TryInitialize(CBCDSweepChunk& sweep_chunk);
 
   /// Advance the angle set by one scheduler step.
-  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
+  bool
+  TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, std::size_t worker_id, bool dispatch_completed);
+
+  /// Return whether cells are ready for a new device dispatch.
+  bool HasReadyBatch() const;
+
+  /// Move the current ready cells into the in-flight pipeline stage.
+  std::span<std::uint32_t> PrepareReadyBatch();
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
@@ -185,9 +193,7 @@ private:
   /// Reset cell-task and batch state for a new sweep.
   void InitializeSweepState();
   /// Retire a completed kernel and release its cell successors.
-  bool TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk);
-  /// Launch all cells currently ready in the active batch buffer.
-  bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
+  bool TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk, bool dispatch_completed);
   /// Publish reflecting and nonlocal psi from the completed batch.
   void PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
   /// Release follower angle sets after all reflecting writes are visible.
