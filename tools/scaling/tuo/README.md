@@ -197,6 +197,23 @@ study configurations.
 
 ## 3. Interactive 1/2/4-node policy comparison
 
+For the device-closure profiling branch, the dedicated wrapper runs the
+resource-aware 1/2/4/8-node strong and weak cases with one command per action:
+
+```zsh
+export OPENSN_TUO_BANK=YOUR_LC_BANK
+export OPENSN_TUO_CLOSURE_LABEL=cbcd-closure-$(git rev-parse --short=9 HEAD)-pdebug-1
+RUN_CLOSURE=tools/scaling/tuo/run_cbcd_closure_profile.zsh
+
+zsh "$RUN_CLOSURE" build
+zsh "$RUN_CLOSURE" run
+zsh "$RUN_CLOSURE" collect
+```
+
+Use `resume` instead of `run` after an interrupted allocation. The default
+profiles are `cbcd-metrics`, `baseline`, `pmpi`, and `caliper`; override
+`OPENSN_TUO_CLOSURE_PROFILES` to select a subset.
+
 Do not set a fixed worker count for this comparison:
 
 ```zsh
