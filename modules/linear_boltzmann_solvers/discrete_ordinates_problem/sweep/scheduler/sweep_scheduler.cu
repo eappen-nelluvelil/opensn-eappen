@@ -135,7 +135,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           }
 
           any_work_done |= angle_set->TryAdvanceOneStep(
-            cbcd_sweep_chunk, worker_id, cbcd_sweep_chunk.IsDispatchComplete(angle_set->GetID()));
+            cbcd_sweep_chunk, cbcd_sweep_chunk.IsDispatchComplete(angle_set->GetID()));
 
           if (angle_set->IsSweepComplete())
           {
@@ -150,6 +150,12 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
           ++i;
         }
         any_work_done |= cbcd_sweep_chunk.DispatchReadyAngleSets(worker_id, ready_angle_sets);
+        for (const auto angle_set_id : active_angle_set_ids)
+        {
+          CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
+          any_work_done |=
+            angle_sets[angle_set_id]->PublishCompletedBatch(cbcd_sweep_chunk, worker_id);
+        }
         if (any_work_done)
         {
           if (profiler)

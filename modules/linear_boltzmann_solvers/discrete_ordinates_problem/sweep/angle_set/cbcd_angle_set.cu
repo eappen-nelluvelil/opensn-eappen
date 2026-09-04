@@ -194,11 +194,11 @@ CBCD_AngleSet::PrepareReadyBatch()
   return {ready_cell_ids.data(), launch_count};
 }
 
-void
+bool
 CBCD_AngleSet::PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::size_t worker_id)
 {
   if (not batch_pipeline_.HasCompletedBatch())
-    return;
+    return false;
 
   auto& completed_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.completed_buffer);
   cbcd_fluds_.PublishOutgoingPsi(
@@ -211,6 +211,7 @@ CBCD_AngleSet::PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::siz
   batch_pipeline_.ReleaseBuffer(batch_pipeline_.completed_buffer);
   batch_pipeline_.completed_count = 0;
   TryReleaseFollowers();
+  return true;
 }
 
 void
@@ -254,9 +255,7 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 }
 
 bool
-CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk,
-                                 const std::size_t worker_id,
-                                 const bool dispatch_completed)
+CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const bool dispatch_completed)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
@@ -282,7 +281,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk,
     work_done |= TryRetireCompletedBatch(cbcd_sweep_chunk, dispatch_completed);
   }
 
-  if (has_incoming and (not batch_pipeline_.HasKernelInFlight()))
+  if (has_incoming)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
     work_done |= async_comm_->ProcessIncoming(
@@ -298,14 +297,6 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk,
             ready_cell_ids[batch_pipeline_.ready_count++] = cell_local_id;
         }
       });
-  }
-
-  // Pack after retirement while the scheduler assembles the next dispatch.
-  if (batch_pipeline_.HasCompletedBatch())
-  {
-    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
-    PublishCompletedBatch(cbcd_sweep_chunk, worker_id);
-    work_done = true;
   }
 
   if (num_completed_cells_ == initial_cell_dependencies_.size() and

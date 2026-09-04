@@ -54,14 +54,16 @@ public:
   bool TryInitialize(CBCDSweepChunk& sweep_chunk);
 
   /// Advance the angle set by one scheduler step.
-  bool
-  TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, std::size_t worker_id, bool dispatch_completed);
+  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, bool dispatch_completed);
 
   /// Return whether cells are ready for a new device dispatch.
   bool HasReadyBatch() const;
 
   /// Move the current ready cells into the in-flight pipeline stage.
   std::span<std::uint32_t> PrepareReadyBatch();
+
+  /// Publish the most recently completed cell batch.
+  bool PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
@@ -161,8 +163,6 @@ private:
   void InitializeSweepState();
   /// Retire a completed kernel and release its cell successors.
   bool TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk, bool dispatch_completed);
-  /// Publish reflecting and nonlocal psi from the completed batch.
-  void PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
   /// Release follower angle sets after all reflecting writes are visible.
   void TryReleaseFollowers();
 };
