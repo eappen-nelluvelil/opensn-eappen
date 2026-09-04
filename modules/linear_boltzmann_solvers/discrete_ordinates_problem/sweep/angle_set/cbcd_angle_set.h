@@ -59,6 +59,9 @@ public:
   /// Return whether cells are ready for a new device dispatch.
   bool HasReadyBatch() const;
 
+  /// Return whether a retired cell batch is ready for publication.
+  bool HasCompletedBatch() const { return batch_pipeline_.HasCompletedBatch(); }
+
   /// Move the current ready cells into the in-flight pipeline stage.
   std::span<std::uint32_t> PrepareReadyBatch();
 

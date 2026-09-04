@@ -107,6 +107,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       active_angle_set_ids.reserve((num_angle_sets + num_workers - 1) / num_workers);
       std::vector<CBCD_AngleSet*> ready_angle_sets;
       ready_angle_sets.reserve((num_angle_sets + num_workers - 1) / num_workers);
+      std::vector<CBCD_AngleSet*> completed_angle_sets;
+      completed_angle_sets.reserve((num_angle_sets + num_workers - 1) / num_workers);
       for (std::size_t i = worker_id; i < num_angle_sets; i += num_workers)
         active_angle_set_ids.push_back(i);
 
@@ -114,6 +116,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       {
         bool any_work_done = cbcd_sweep_chunk.PollWorkerDispatches(worker_id);
         ready_angle_sets.clear();
+        completed_angle_sets.clear();
         for (std::size_t i = 0; i < active_angle_set_ids.size();)
         {
           auto* angle_set = angle_sets[active_angle_set_ids[i]];
@@ -146,15 +149,16 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
           if (angle_set->HasReadyBatch())
             ready_angle_sets.push_back(angle_set);
+          if (angle_set->HasCompletedBatch())
+            completed_angle_sets.push_back(angle_set);
 
           ++i;
         }
         any_work_done |= cbcd_sweep_chunk.DispatchReadyAngleSets(worker_id, ready_angle_sets);
-        for (const auto angle_set_id : active_angle_set_ids)
+        for (auto* angle_set : completed_angle_sets)
         {
           CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
-          any_work_done |=
-            angle_sets[angle_set_id]->PublishCompletedBatch(cbcd_sweep_chunk, worker_id);
+          any_work_done |= angle_set->PublishCompletedBatch(cbcd_sweep_chunk, worker_id);
         }
         if (any_work_done)
         {
