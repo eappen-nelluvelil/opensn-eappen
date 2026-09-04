@@ -205,15 +205,15 @@ CBCDSweepChunk::ConfigureWorkerDispatches(const std::size_t num_workers)
   configured_workers_ = num_workers;
   dispatch_storage_.clear();
   worker_dispatches_.assign(num_workers, {});
-  worker_angle_set_ids_.assign(num_workers, {});
+  worker_single_dispatches_.assign(num_workers, {});
   angle_set_dispatches_.assign(angle_sets_.size(), nullptr);
   angle_set_dispatch_status_.assign(angle_sets_.size(), {});
 
   for (std::size_t worker_id = 0; worker_id < num_workers; ++worker_id)
   {
     auto& dispatches = worker_dispatches_[worker_id];
-    auto& angle_set_ids = worker_angle_set_ids_[worker_id];
-    angle_set_ids.reserve((angle_sets_.size() + num_workers - 1) / num_workers);
+    worker_single_dispatches_[worker_id].reserve((angle_sets_.size() + num_workers - 1) /
+                                                 num_workers);
     for (std::size_t angle_set_id = worker_id; angle_set_id < angle_sets_.size();
          angle_set_id += num_workers)
     {
@@ -240,7 +240,6 @@ CBCDSweepChunk::ConfigureWorkerDispatches(const std::size_t num_workers)
       auto* dispatch = *dispatch_it;
       ++dispatch->angle_set_capacity;
       angle_set_dispatches_[angle_set_id] = dispatch;
-      angle_set_ids.push_back(angle_set_id);
     }
   }
 
@@ -269,15 +268,20 @@ CBCDSweepChunk::PollWorkerDispatches(const std::size_t worker_id)
       completed_any = true;
     }
   }
-  for (const auto angle_set_id : worker_angle_set_ids_[worker_id])
+  auto& single_dispatches = worker_single_dispatches_[worker_id];
+  for (std::size_t i = 0; i < single_dispatches.size();)
   {
+    const auto angle_set_id = single_dispatches[i];
     auto& status = angle_set_dispatch_status_[angle_set_id];
-    if (status.kind == DispatchKind::SINGLE and (not status.complete) and
-        angle_sets_[angle_set_id]->GetStream().is_completed())
+    if (angle_sets_[angle_set_id]->GetStream().is_completed())
     {
       status.complete = true;
       completed_any = true;
+      single_dispatches[i] = single_dispatches.back();
+      single_dispatches.pop_back();
+      continue;
     }
+    ++i;
   }
   return completed_any;
 }
@@ -294,8 +298,8 @@ CBCDSweepChunk::LaunchSingleBatch(const std::size_t worker_id,
                                   const std::span<std::uint32_t> local_cell_ids)
 {
   auto& status = angle_set_dispatch_status_[angle_set_id];
-  status.kind = DispatchKind::SINGLE;
   status.complete = false;
+  worker_single_dispatches_[worker_id].push_back(angle_set_id);
   if (profiler_)
     profiler_->RecordDeviceDispatch(worker_id, 1, local_cell_ids.size());
   Sweep(static_cast<std::uint32_t>(local_cell_ids.size()), angle_set_id, local_cell_ids.data());
@@ -379,15 +383,9 @@ CBCDSweepChunk::DispatchReadyAngleSets(const std::size_t worker_id,
 
     if (dispatch->host_batches.size() == 1)
     {
-      const auto angle_set_id = dispatch->host_batches.front().angle_set_id;
-      auto& status = angle_set_dispatch_status_[angle_set_id];
-      status.kind = DispatchKind::SINGLE;
-      status.complete = false;
-      Sweep(dispatch->host_batches.front().num_cells,
-            angle_set_id,
-            dispatch->host_batches.front().cell_ids);
-      if (profiler_)
-        profiler_->RecordDeviceDispatch(worker_id, 1, dispatch->host_batches.front().num_cells);
+      const auto& batch = dispatch->host_batches.front();
+      LaunchSingleBatch(
+        worker_id, batch.angle_set_id, {batch.cell_ids, static_cast<std::size_t>(batch.num_cells)});
       dispatch->active_angle_set_ids.clear();
     }
     else if (not dispatch->host_batches.empty())
@@ -395,7 +393,6 @@ CBCDSweepChunk::DispatchReadyAngleSets(const std::size_t worker_id,
       for (const auto angle_set_id : dispatch->active_angle_set_ids)
       {
         auto& status = angle_set_dispatch_status_[angle_set_id];
-        status.kind = DispatchKind::FUSED;
         status.complete = false;
       }
       LaunchFusedBatch(worker_id, *dispatch);

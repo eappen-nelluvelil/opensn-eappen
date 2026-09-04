@@ -101,16 +101,8 @@ private:
     bool active = false;
   };
 
-  enum class DispatchKind : std::uint8_t
-  {
-    NONE,
-    SINGLE,
-    FUSED
-  };
-
   struct AngleSetDispatchStatus
   {
-    DispatchKind kind = DispatchKind::NONE;
     bool complete = true;
   };
 
@@ -130,7 +122,7 @@ private:
   crb::DeviceMemory<gpu_kernel::CBCDLaunchData> device_launch_data_;
   std::vector<std::unique_ptr<DispatchState>> dispatch_storage_;
   std::vector<std::vector<DispatchState*>> worker_dispatches_;
-  std::vector<std::vector<std::size_t>> worker_angle_set_ids_;
+  std::vector<std::vector<std::size_t>> worker_single_dispatches_;
   std::vector<DispatchState*> angle_set_dispatches_;
   std::vector<AngleSetDispatchStatus> angle_set_dispatch_status_;
   std::size_t configured_workers_ = 0;
