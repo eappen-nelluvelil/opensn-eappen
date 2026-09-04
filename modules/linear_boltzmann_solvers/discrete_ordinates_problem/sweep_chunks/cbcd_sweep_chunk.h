@@ -59,9 +59,8 @@ public:
 
   using SweepChunk::Sweep;
   /// Launch one ready-cell batch.
-  void Sweep(std::uint32_t num_ready_cells,
-             std::size_t angle_set_id,
-             const std::uint32_t* local_cell_ids);
+  void
+  Sweep(std::uint32_t num_ready_cells, std::size_t angle_set_id, std::uint32_t* local_cell_ids);
 
 private:
   struct KernelLaunch

@@ -47,7 +47,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
 {
   grid_ptr_ = GetSPDS().GetGrid().get();
   for (auto& cell_batch : cell_batch_buffers_)
-    cell_batch.reserve(num_local_cells);
+    cell_batch.resize(num_local_cells);
 
   outgoing_psi_copy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
   for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();

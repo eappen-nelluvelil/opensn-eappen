@@ -8,6 +8,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/solver.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include "caribou/main.hpp"
+#include <limits>
 #include <utility>
 #include <type_traits>
 
@@ -49,25 +50,14 @@ SweepDispatch(std::uint32_t n, Args&... args)
 }
 
 template <SweepKind k>
-__CRB_GLOBAL_FUNC__ void
-SweepKernel(Arguments<k> args,
-            const std::uint32_t* cells_to_sweep,
-            unsigned int num_cells,
-            double* saved_psi)
+__CRB_DEVICE_FUNC__ void
+SweepCell(const Arguments<k>& args,
+          const std::uint32_t cell_local_idx,
+          const unsigned int angle_group_idx,
+          double* saved_psi)
 {
-#if defined(__NVCC__) || defined(__HIPCC__)
-  unsigned int cell_idx = threadIdx.y + blockDim.y * blockIdx.y;
-  unsigned int angle_group_idx = threadIdx.x + blockDim.x * blockIdx.x;
-#elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
-  auto work_index = ::sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-  unsigned int cell_idx = work_index.get_global_id(1);
-  unsigned int angle_group_idx = work_index.get_global_id(2);
-#endif
-  if (cell_idx >= num_cells || angle_group_idx >= args.flud_data.stride_size)
-    return;
   unsigned int angle_idx = angle_group_idx / args.groupset_size;
   unsigned int group_idx = angle_group_idx - angle_idx * args.groupset_size;
-  const std::uint32_t cell_local_idx = cells_to_sweep[cell_idx];
   CellView cell;
   MeshView(args.mesh_data).GetCellView(cell, cell_local_idx);
   if (cell.num_nodes == 0)
@@ -91,5 +81,93 @@ SweepKernel(Arguments<k> args,
                                        num_moments,
                                        saved_psi);
 }
+
+template <SweepKind k>
+__CRB_GLOBAL_FUNC__ void
+SweepKernel(Arguments<k> args,
+            const std::uint32_t* cells_to_sweep,
+            unsigned int num_cells,
+            double* saved_psi)
+{
+#if defined(__NVCC__) || defined(__HIPCC__)
+  unsigned int cell_idx = threadIdx.y + blockDim.y * blockIdx.y;
+  unsigned int angle_group_idx = threadIdx.x + blockDim.x * blockIdx.x;
+#elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
+  auto work_index = ::sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+  unsigned int cell_idx = work_index.get_global_id(1);
+  unsigned int angle_group_idx = work_index.get_global_id(2);
+#endif
+  if (cell_idx >= num_cells || angle_group_idx >= args.flud_data.stride_size)
+    return;
+  SweepCell(args, cells_to_sweep[cell_idx], angle_group_idx, saved_psi);
+}
+
+#if defined(__NVCC__) || defined(__HIPCC__)
+
+__CRB_DEVICE_FUNC__ std::uint32_t
+CBCDDequeueCell(CBCDDeviceQueueState& state, const std::uint32_t* cell_queue)
+{
+  if (state.head == state.tail)
+    return std::numeric_limits<std::uint32_t>::max();
+  return cell_queue[state.head++];
+}
+
+__CRB_DEVICE_FUNC__ void
+CBCDEnqueueCell(CBCDDeviceQueueState& state,
+                std::uint32_t* cell_queue,
+                const std::uint32_t cell_local_id)
+{
+  cell_queue[state.tail++] = cell_local_id;
+}
+
+/// Sweep the locally reachable closure of a CBCD cell-task DAG.
+template <SweepKind k>
+__CRB_GLOBAL_FUNC__ void
+CBCDClosureKernel(Arguments<k> args,
+                  std::uint32_t* cell_queue,
+                  double* saved_psi,
+                  CBCDDeviceScheduler scheduler)
+{
+  static_assert(k == SweepKind::CBC);
+  __shared__ std::uint32_t cell_local_id;
+
+  while (true)
+  {
+    if (threadIdx.x == 0)
+      cell_local_id = CBCDDequeueCell(*scheduler.queue_state, cell_queue);
+    __syncthreads();
+
+    if (cell_local_id == std::numeric_limits<std::uint32_t>::max())
+      break;
+
+    for (std::uint32_t angle_group_idx = threadIdx.x; angle_group_idx < args.flud_data.stride_size;
+         angle_group_idx += blockDim.x)
+      SweepCell(args, cell_local_id, angle_group_idx, saved_psi);
+    __syncthreads();
+
+    if (threadIdx.x == 0)
+    {
+      const auto successor_begin = scheduler.successor_offsets[cell_local_id];
+      const auto successor_end = scheduler.successor_offsets[cell_local_id + 1];
+      for (auto successor_index = successor_begin; successor_index < successor_end;
+           ++successor_index)
+      {
+        const auto successor = scheduler.successors[successor_index];
+        if (--scheduler.remaining_local_dependencies[successor] == 0)
+        {
+          scheduler.locally_ready[successor] = 1;
+          if (scheduler.remaining_remote_dependencies[successor] == 0)
+            CBCDEnqueueCell(*scheduler.queue_state, cell_queue, successor);
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0)
+    *scheduler.completed_count = scheduler.queue_state->tail;
+}
+
+#endif
 
 } // namespace opensn::gpu_kernel

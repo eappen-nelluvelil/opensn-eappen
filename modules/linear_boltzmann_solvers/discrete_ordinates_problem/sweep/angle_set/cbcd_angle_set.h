@@ -5,6 +5,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_structs.h"
 #include "caribou/main.hpp"
 #include <array>
 #include <atomic>
@@ -69,6 +70,12 @@ public:
   /// Return whether this angle set is ready to advance the current sweep.
   bool IsSweepInitialized() const { return sweep_initialized_; }
 
+  /// Return whether local dependency traversal is performed on the device.
+  bool UsesDeviceClosure() const { return use_device_closure_; }
+
+  /// Return the storage used by the device-resident local-DAG scheduler.
+  CBCDDeviceScheduler GetDeviceScheduler();
+
 private:
   /// Triple-buffer state for ready, executing, and completed cell batches.
   struct BatchPipeline
@@ -81,6 +88,7 @@ private:
     std::array<std::uint8_t, 3> free_buffers = {1, 2, 0};
     std::uint8_t num_free_buffers = 2;
     /// Cell counts also encode whether launch/completed stages are occupied.
+    std::uint32_t ready_count = 0;
     std::uint32_t launch_count = 0;
     std::uint32_t completed_count = 0;
 
@@ -91,6 +99,7 @@ private:
       completed_buffer = 0;
       free_buffers = {1, 2, 0};
       num_free_buffers = 2;
+      ready_count = 0;
       launch_count = 0;
       completed_count = 0;
     }
@@ -120,6 +129,20 @@ private:
   std::vector<unsigned int> initial_cell_dependencies_;
   /// Mutable incoming dependency count for the current sweep.
   std::vector<unsigned int> remaining_cell_dependencies_;
+  /// Initial number of local predecessors for each cell.
+  crb::HostVector<std::uint32_t> initial_local_dependencies_;
+  /// Remote predecessors not yet received during the current sweep.
+  crb::MappedHostVector<std::uint32_t> initial_remote_dependencies_;
+  crb::MappedHostVector<std::uint32_t> remaining_remote_dependencies_;
+  /// Whether every local predecessor of a cell has completed.
+  crb::MappedHostVector<std::uint32_t> locally_ready_;
+  /// Device-resident local dependency graph and mutable counts.
+  crb::DeviceMemory<std::uint32_t> device_remaining_local_dependencies_;
+  crb::DeviceMemory<std::uint32_t> device_cell_successor_offsets_;
+  crb::DeviceMemory<std::uint32_t> device_cell_successors_;
+  crb::HostVector<CBCDDeviceQueueState> host_queue_state_;
+  crb::DeviceMemory<CBCDDeviceQueueState> device_queue_state_;
+  crb::MappedHostVector<std::uint32_t> device_completed_count_;
   /// Local cell tasks ready before any nonlocal messages arrive.
   std::vector<std::uint32_t> initial_ready_cell_ids_;
   /// Atomic counterpart of the base dependency counter for concurrent follower release.
@@ -138,6 +161,7 @@ private:
   bool sweep_initialized_ = false;
   /// Whether follower angle sets have been released.
   bool followers_released_ = false;
+  bool use_device_closure_ = false;
 
   /// Mark local cells with outgoing reflecting faces.
   void BuildReflectingCellMask();
@@ -150,7 +174,7 @@ private:
   /// Reset cell-task and batch state for a new sweep.
   void InitializeSweepState();
   /// Retire a completed kernel and release its cell successors.
-  bool TryRetireCompletedBatch();
+  bool TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk);
   /// Launch all cells currently ready in the active batch buffer.
   bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
   /// Publish reflecting and nonlocal psi from the completed batch.

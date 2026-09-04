@@ -183,15 +183,25 @@ CBCDSweepChunk::RefreshKernelArguments()
 void
 CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
                       std::size_t angle_set_id,
-                      const std::uint32_t* local_cell_ids)
+                      std::uint32_t* local_cell_ids)
 {
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
-  if (profiler_)
-    profiler_->RecordKernelLaunch(angle_set_id, num_ready_cells);
-
   auto& launch = kernel_launches_[angle_set_id];
   auto& stream = angle_sets_[angle_set_id]->GetStream();
+  if (angle_sets_[angle_set_id]->UsesDeviceClosure())
+  {
+    CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep::DeviceClosure");
+#if defined(__NVCC__) || defined(__HIPCC__)
+    gpu_kernel::CBCDClosureKernel<SweepKind::CBC><<<1, launch.threads_per_block.x, 0, stream>>>(
+      launch.arguments,
+      local_cell_ids,
+      launch.device_saved_psi,
+      angle_sets_[angle_set_id]->GetDeviceScheduler());
+    return;
+#endif
+  }
+
   const auto grid_size_y =
     (num_ready_cells + launch.threads_per_block.y - 1) / launch.threads_per_block.y;
   crb::Dim3 grid_size(launch.num_stride_blocks, grid_size_y);

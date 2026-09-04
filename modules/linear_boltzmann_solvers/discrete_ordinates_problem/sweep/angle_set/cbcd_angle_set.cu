@@ -29,8 +29,14 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
     comm_set_(comm_set),
     cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_)),
     stream_(),
-    device_angle_indices_(angles_.size())
+    device_angle_indices_(angles_.size()),
+    host_queue_state_(1),
+    device_queue_state_(1),
+    device_completed_count_(1)
 {
+#if defined(__NVCC__) || defined(__HIPCC__)
+  use_device_closure_ = true;
+#endif
   cbcd_fluds_.GetStream() = stream_;
   cbcd_fluds_.AllocateLocalAndSavedPsi();
   BuildCellTaskGraph();
@@ -101,6 +107,10 @@ CBCD_AngleSet::BuildCellTaskGraph()
 
   initial_cell_dependencies_.resize(num_cells);
   remaining_cell_dependencies_.resize(num_cells);
+  initial_local_dependencies_.assign(num_cells, 0);
+  initial_remote_dependencies_.assign(num_cells, 0);
+  remaining_remote_dependencies_.assign(num_cells, 0);
+  locally_ready_.assign(num_cells, 0);
   cell_successor_offsets_.assign(num_cells + 1, 0);
   initial_ready_cell_ids_.clear();
   initial_ready_cell_ids_.reserve(num_cells);
@@ -124,6 +134,24 @@ CBCD_AngleSet::BuildCellTaskGraph()
     std::copy(task.successors.begin(),
               task.successors.end(),
               cell_successors_.begin() + cell_successor_offsets_[task_idx]);
+    for (const auto successor : task.successors)
+      ++initial_local_dependencies_[successor];
+  }
+
+  for (std::size_t cell_local_id = 0; cell_local_id < num_cells; ++cell_local_id)
+    initial_remote_dependencies_[cell_local_id] =
+      initial_cell_dependencies_[cell_local_id] - initial_local_dependencies_[cell_local_id];
+
+  if (use_device_closure_)
+  {
+    device_remaining_local_dependencies_ = crb::DeviceMemory<std::uint32_t>(num_cells);
+    device_cell_successor_offsets_ =
+      crb::DeviceMemory<std::uint32_t>(cell_successor_offsets_.size());
+    device_cell_successors_ = crb::DeviceMemory<std::uint32_t>(cell_successors_.size());
+    crb::copy(
+      device_cell_successor_offsets_, cell_successor_offsets_, cell_successor_offsets_.size());
+    if (not cell_successors_.empty())
+      crb::copy(device_cell_successors_, cell_successors_, cell_successors_.size());
   }
 }
 
@@ -133,32 +161,48 @@ CBCD_AngleSet::InitializeSweepState()
   std::copy(initial_cell_dependencies_.begin(),
             initial_cell_dependencies_.end(),
             remaining_cell_dependencies_.begin());
+  std::copy(initial_remote_dependencies_.begin(),
+            initial_remote_dependencies_.end(),
+            remaining_remote_dependencies_.begin());
+  for (std::size_t cell_local_id = 0; cell_local_id < locally_ready_.size(); ++cell_local_id)
+    locally_ready_[cell_local_id] = initial_local_dependencies_[cell_local_id] == 0;
+  if (use_device_closure_)
+    crb::copy(device_remaining_local_dependencies_,
+              initial_local_dependencies_,
+              initial_local_dependencies_.size(),
+              0,
+              0,
+              stream_);
   batch_pipeline_.Reset();
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  ready_cell_ids.clear();
-  ready_cell_ids.insert(
-    ready_cell_ids.end(), initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end());
+  std::copy(initial_ready_cell_ids_.begin(), initial_ready_cell_ids_.end(), ready_cell_ids.begin());
+  batch_pipeline_.ready_count = static_cast<std::uint32_t>(initial_ready_cell_ids_.size());
   num_completed_cells_ = 0;
   pending_reflecting_cells_ = following_angle_sets_.empty() ? 0 : num_reflecting_cells_;
 }
 
 bool
-CBCD_AngleSet::TryRetireCompletedBatch()
+CBCD_AngleSet::TryRetireCompletedBatch(CBCDSweepChunk& sweep_chunk)
 {
   if ((not batch_pipeline_.HasKernelInFlight()) or (not stream_.is_completed()))
     return false;
 
   auto& completed_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.launch_buffer);
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  for (std::uint32_t i = 0; i < batch_pipeline_.launch_count; ++i)
+  const auto completed_count =
+    use_device_closure_ ? device_completed_count_.front() : batch_pipeline_.launch_count;
+  for (std::uint32_t i = 0; i < completed_count; ++i)
   {
     const auto cell_local_id = completed_cell_ids[i];
-    const auto succ_begin = cell_successor_offsets_[cell_local_id];
-    const auto succ_end = cell_successor_offsets_[cell_local_id + 1];
-    for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
+    if (not use_device_closure_)
     {
-      if (--remaining_cell_dependencies_[cell_successors_[succ_i]] == 0)
-        ready_cell_ids.push_back(cell_successors_[succ_i]);
+      const auto succ_begin = cell_successor_offsets_[cell_local_id];
+      const auto succ_end = cell_successor_offsets_[cell_local_id + 1];
+      for (auto succ_i = succ_begin; succ_i < succ_end; ++succ_i)
+      {
+        if (--remaining_cell_dependencies_[cell_successors_[succ_i]] == 0)
+          ready_cell_ids[batch_pipeline_.ready_count++] = cell_successors_[succ_i];
+      }
     }
 
     if ((not following_angle_sets_.empty()) and (not followers_released_) and
@@ -168,9 +212,11 @@ CBCD_AngleSet::TryRetireCompletedBatch()
     }
   }
 
-  num_completed_cells_ += batch_pipeline_.launch_count;
+  if (auto* profiler = sweep_chunk.GetProfiler())
+    profiler->RecordKernelLaunch(GetID(), completed_count);
+  num_completed_cells_ += completed_count;
   batch_pipeline_.completed_buffer = batch_pipeline_.launch_buffer;
-  batch_pipeline_.completed_count = batch_pipeline_.launch_count;
+  batch_pipeline_.completed_count = completed_count;
   batch_pipeline_.launch_count = 0;
   return true;
 }
@@ -179,14 +225,20 @@ bool
 CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
 {
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  if (batch_pipeline_.HasKernelInFlight() or ready_cell_ids.empty())
+  if (batch_pipeline_.HasKernelInFlight() or batch_pipeline_.ready_count == 0)
     return false;
 
-  const auto launch_count = static_cast<std::uint32_t>(ready_cell_ids.size());
+  const auto launch_count = batch_pipeline_.ready_count;
   batch_pipeline_.launch_buffer = batch_pipeline_.ready_buffer;
   batch_pipeline_.launch_count = launch_count;
   batch_pipeline_.ready_buffer = batch_pipeline_.AcquireFreeBuffer();
-  cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer).clear();
+  batch_pipeline_.ready_count = 0;
+  if (use_device_closure_)
+  {
+    host_queue_state_.front() = {0, launch_count};
+    device_completed_count_.front() = 0;
+    crb::copy(device_queue_state_, host_queue_state_, 1, 0, 0, stream_);
+  }
   sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data());
   return true;
 }
@@ -205,7 +257,6 @@ CBCD_AngleSet::PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, const std::siz
     GetID(),
     GetAngleIndices(),
     {completed_cell_ids.data(), static_cast<std::size_t>(batch_pipeline_.completed_count)});
-  completed_cell_ids.clear();
   batch_pipeline_.ReleaseBuffer(batch_pipeline_.completed_buffer);
   batch_pipeline_.completed_count = 0;
   TryReleaseFollowers();
@@ -267,7 +318,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
                             (not batch_pipeline_.HasCompletedBatch());
 
   if ((not kernel_completed) and (not batch_pipeline_.HasCompletedBatch()) and
-      ready_cell_ids.empty() and (not has_incoming) and (not can_finalize))
+      batch_pipeline_.ready_count == 0 and (not has_incoming) and (not can_finalize))
     return false;
 
   bool work_done = false;
@@ -275,10 +326,10 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   if (kernel_completed)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
-    work_done |= TryRetireCompletedBatch();
+    work_done |= TryRetireCompletedBatch(cbcd_sweep_chunk);
   }
 
-  if (has_incoming)
+  if (has_incoming and (not batch_pipeline_.HasKernelInFlight()))
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
     work_done |= async_comm_->ProcessIncoming(
@@ -290,13 +341,19 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
         {
           const auto cell_local_id = cbcd_fluds_.StoreIncomingFace(
             batch.source_partition_index, face.incoming_face_index, psi_base + face.psi_offset);
-          if (--remaining_cell_dependencies_[cell_local_id] == 0)
-            ready_cell_ids.push_back(static_cast<std::uint32_t>(cell_local_id));
+          if (use_device_closure_)
+          {
+            if (--remaining_remote_dependencies_[cell_local_id] == 0 and
+                locally_ready_[cell_local_id] != 0)
+              ready_cell_ids[batch_pipeline_.ready_count++] = cell_local_id;
+          }
+          else if (--remaining_cell_dependencies_[cell_local_id] == 0)
+            ready_cell_ids[batch_pipeline_.ready_count++] = cell_local_id;
         }
       });
   }
 
-  if ((not batch_pipeline_.HasKernelInFlight()) and (not ready_cell_ids.empty()))
+  if ((not batch_pipeline_.HasKernelInFlight()) and batch_pipeline_.ready_count != 0)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::LaunchBatch");
     work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
@@ -335,8 +392,6 @@ void
 CBCD_AngleSet::ResetSweepBuffers()
 {
   batch_pipeline_.Reset();
-  for (std::size_t i = 0; i < 3; ++i)
-    cbcd_fluds_.GetCellBatchBuffer(i).clear();
   cbcd_fluds_.ClearLocalAndReceivePsi();
   num_completed_cells_ = 0;
   pending_reflecting_cells_ = 0;
@@ -344,6 +399,18 @@ CBCD_AngleSet::ResetSweepBuffers()
   followers_released_ = false;
   ResetSweepDependencies();
   executed_ = false;
+}
+
+CBCDDeviceScheduler
+CBCD_AngleSet::GetDeviceScheduler()
+{
+  return {device_queue_state_.get(),
+          device_remaining_local_dependencies_.get(),
+          device_cell_successor_offsets_.get(),
+          device_cell_successors_.get(),
+          locally_ready_.data(),
+          remaining_remote_dependencies_.data(),
+          device_completed_count_.data()};
 }
 
 } // namespace opensn

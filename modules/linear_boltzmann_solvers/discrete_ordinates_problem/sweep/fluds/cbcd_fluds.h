@@ -127,7 +127,7 @@ private:
   crb::MappedHostVector<double> outgoing_nonlocal_psi_;
   /// Stream associated with this angle set.
   crb::Stream stream_;
-  /// Triple-buffered ready, launched, and completed cell batches.
+  /// Triple-buffered cell queues shared by the host and device.
   std::array<crb::MappedHostVector<std::uint32_t>, 3> cell_batch_buffers_;
   bool save_angular_flux_;
   /// Device storage for local angular fluxes.
