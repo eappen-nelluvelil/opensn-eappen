@@ -51,8 +51,10 @@ struct OutgoingFaceRecord
   std::size_t angle_set_id = 0;
   /// Face index assigned by the destination for this source rank.
   std::uint32_t destination_face_index = 0;
-  /// Serialized face psi.
-  std::vector<double> psi_values;
+  /// Immutable face psi in serialized destination-node order.
+  const double* psi_values = nullptr;
+  /// Number of values referenced by `psi_values`.
+  std::size_t num_psi_values = 0;
 };
 
 /// Exact outgoing queue bounds contributed by one angle set to one destination.
@@ -62,8 +64,6 @@ struct DestinationQueueBounds
   int destination_rank = -1;
   /// Number of outgoing face records.
   std::size_t num_faces = 0;
-  /// Maximum psi-value count of one face record.
-  std::size_t max_face_values = 0;
 };
 
 /// Precomputed storage bounds and exact outgoing queue counts for one angle set.
@@ -102,21 +102,20 @@ public:
   ~CBCD_AsynchronousCommunicator();
 
   /** Publish one outgoing face through the calling worker's SPSC queue. */
-  template <typename FillCallback>
   void EnqueueOutgoing(int destination_rank,
                        std::size_t worker_id,
                        std::size_t angle_set_id,
                        std::uint32_t destination_face_index,
-                       std::size_t num_psi_values,
-                       FillCallback&& fill)
+                       const double* psi_values,
+                       std::size_t num_psi_values)
   {
     const auto channel = destination_to_channel_.find(destination_rank)->second;
     auto& queue = *destination_channels_[channel].worker_queues[worker_id];
     auto& record = queue.ReserveSlot();
     record.angle_set_id = angle_set_id;
     record.destination_face_index = destination_face_index;
-    record.psi_values.resize(num_psi_values);
-    fill(record.psi_values.data());
+    record.psi_values = psi_values;
+    record.num_psi_values = num_psi_values;
     queue.PublishSlot();
   }
 

@@ -205,15 +205,6 @@ struct IncomingNonlocalFace
   std::uint16_t num_face_nodes = 0;
 };
 
-/// Source-to-destination node mapping for an outgoing nonlocal face.
-struct OutgoingFaceNodeCopy
-{
-  /// Node offset in outgoing nonlocal storage.
-  std::uint32_t storage_offset = 0;
-  /// Node identifier on the destination face.
-  std::uint16_t destination_face_node_index = 0;
-};
-
 /// Send metadata for one outgoing nonlocal face.
 struct OutgoingNonlocalFace
 {
@@ -221,12 +212,10 @@ struct OutgoingNonlocalFace
   std::uint32_t destination_index = 0;
   /// Face index assigned by the destination for this source rank.
   std::uint32_t destination_face_index = 0;
-  /// First entry in the outgoing node-copy array.
-  std::uint32_t node_copy_begin = 0;
+  /// Node offset in outgoing nonlocal storage, in destination-face order.
+  std::uint32_t storage_offset = 0;
   /// Number of nodes in the serialized destination face.
   std::uint16_t num_face_nodes = 0;
-  /// Number of source-to-destination node copies.
-  std::uint16_t num_node_copies = 0;
 };
 
 /// Reflecting-boundary face copy plan.
@@ -244,15 +233,6 @@ struct ReflectingBoundaryFacePlan
   std::size_t source_offset = 0;
   /// Number of face nodes in the group.
   std::uint16_t num_face_nodes = 0;
-};
-
-/// Contiguous psi copy for one outgoing face node.
-struct OutgoingPsiCopy
-{
-  /// Value offset in outgoing nonlocal storage.
-  std::size_t source_offset = 0;
-  /// Value offset in the serialized destination face.
-  std::size_t destination_offset = 0;
 };
 
 } // namespace opensn

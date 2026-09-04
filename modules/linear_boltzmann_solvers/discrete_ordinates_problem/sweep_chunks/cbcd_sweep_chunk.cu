@@ -95,9 +95,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           auto& destination = outgoing_bounds_by_destination[destination_rank];
           destination.destination_rank = destination_rank;
           ++destination.num_faces;
-          destination.max_face_values =
-            std::max(destination.max_face_values,
-                     static_cast<std::size_t>(face_info.num_face_nodes) * stride);
         }
       }
       bounds.outgoing_queue_bounds.reserve(outgoing_bounds_by_destination.size());

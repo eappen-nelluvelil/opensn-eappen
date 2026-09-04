@@ -48,7 +48,6 @@ CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization&
   destination_ranks_.reserve(num_local_cells);
   incoming_source_partitions_.reserve(num_local_cells);
   outgoing_boundary_nodes_.reserve(total_face_nodes);
-  outgoing_nonlocal_face_node_copies_.reserve(total_face_nodes);
   struct OrderedNonlocalFace
   {
     std::uint32_t peer_index = 0;
@@ -119,9 +118,10 @@ CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization&
 
         outgoing_nonlocal_face = &outgoing_nonlocal_faces_.emplace_back();
         outgoing_nonlocal_face->destination_index = destination_it->second;
+        outgoing_nonlocal_face->storage_offset =
+          static_cast<std::uint32_t>(num_outgoing_nonlocal_nodes_);
         outgoing_nonlocal_face->num_face_nodes = static_cast<std::uint16_t>(num_face_nodes);
-        outgoing_nonlocal_face->node_copy_begin =
-          static_cast<std::uint32_t>(outgoing_nonlocal_face_node_copies_.size());
+        num_outgoing_nonlocal_nodes_ += num_face_nodes;
         outgoing_face_order.push_back(
           {destination_it->second,
            face.neighbor_id,
@@ -185,13 +185,12 @@ CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization&
           }
           else if (not is_boundary_face)
           {
+            const auto destination_face_node =
+              static_cast<std::uint64_t>(face_nodal_mapping.face_node_mapping_[fn]);
             node_index =
-              CBCD_NodeIndex(num_outgoing_nonlocal_nodes_, is_outgoing_face, is_local_face);
-            outgoing_nonlocal_face_node_copies_.push_back(
-              {static_cast<std::uint32_t>(num_outgoing_nonlocal_nodes_),
-               static_cast<std::uint16_t>(face_nodal_mapping.face_node_mapping_[fn])});
-            ++outgoing_nonlocal_face->num_node_copies;
-            ++num_outgoing_nonlocal_nodes_;
+              CBCD_NodeIndex(outgoing_nonlocal_face->storage_offset + destination_face_node,
+                             is_outgoing_face,
+                             is_local_face);
           }
           else
           {

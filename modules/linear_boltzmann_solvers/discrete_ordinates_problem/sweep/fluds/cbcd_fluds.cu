@@ -48,21 +48,6 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
   grid_ptr_ = GetSPDS().GetGrid().get();
   for (auto& cell_batch : cell_batch_buffers_)
     cell_batch.resize(num_local_cells);
-
-  outgoing_psi_copy_plan_.reserve(common_data_.GetNumOutgoingNonlocalNodes());
-  for (std::size_t cell_local_id = 0; cell_local_id < common_data_.GetNumLocalCells();
-       ++cell_local_id)
-  {
-    for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
-    {
-      for (const auto& node : common_data_.GetOutgoingFaceNodeCopies(face_info))
-      {
-        outgoing_psi_copy_plan_.push_back(
-          {static_cast<std::size_t>(node.storage_offset) * num_groups_and_angles_,
-           static_cast<std::size_t>(node.destination_face_node_index) * num_groups_and_angles_});
-      }
-    }
-  }
 }
 
 CBCD_FLUDS::~CBCD_FLUDS() = default;
@@ -196,7 +181,6 @@ CBCD_FLUDS::PublishOutgoingPsi(CBCDSweepChunk& sweep_chunk,
   const auto num_angles = angle_indices.size();
   const auto& grid = *(GetSPDS().GetGrid());
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
-  const std::size_t stride_bytes = num_groups_and_angles_ * sizeof(double);
   const int groupset_id = sweep_chunk.GetGroupset().id;
   for (const auto& cell_local_id : cell_local_ids)
   {
@@ -226,23 +210,14 @@ CBCD_FLUDS::PublishOutgoingPsi(CBCDSweepChunk& sweep_chunk,
       const std::size_t face_data_size =
         static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       const int destination_rank = common_data_.GetDestinationRanks()[face_info.destination_index];
-      async_comm.EnqueueOutgoing(
-        destination_rank,
-        worker_id,
-        angle_set_id,
-        face_info.destination_face_index,
-        face_data_size,
-        [this, &face_info, stride_bytes](double* dst_base)
-        {
-          const auto* node_plan = outgoing_psi_copy_plan_.data() + face_info.node_copy_begin;
-          const auto* node_plan_end = node_plan + face_info.num_node_copies;
-          for (; node_plan != node_plan_end; ++node_plan)
-          {
-            auto* dst = dst_base + node_plan->destination_offset;
-            const double* src = outgoing_nonlocal_psi_.data() + node_plan->source_offset;
-            std::memcpy(dst, src, stride_bytes);
-          }
-        });
+      async_comm.EnqueueOutgoing(destination_rank,
+                                 worker_id,
+                                 angle_set_id,
+                                 face_info.destination_face_index,
+                                 outgoing_nonlocal_psi_.data() +
+                                   static_cast<std::size_t>(face_info.storage_offset) *
+                                     num_groups_and_angles_,
+                                 face_data_size);
     }
   }
 }

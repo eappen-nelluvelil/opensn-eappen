@@ -159,8 +159,6 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
         auto& worker_destination = queue_bounds[destination.destination_rank];
         worker_destination.destination_rank = destination.destination_rank;
         worker_destination.num_faces += destination.num_faces;
-        worker_destination.max_face_values =
-          std::max(worker_destination.max_face_values, destination.max_face_values);
       }
     }
   }
@@ -185,14 +183,6 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
         ++realized_queues;
         channel.active_workers.push_back(worker_id);
         queue->Preallocate(bounds_it->second.num_faces);
-        queue->InitializeSlots(
-          [reserve = bounds_it->second.max_face_values](OutgoingFaceRecord& record)
-          {
-            record.angle_set_id = 0;
-            record.destination_face_index = 0;
-            record.psi_values.clear();
-            record.psi_values.reserve(reserve);
-          });
       }
       channel.worker_queues[worker_id] = std::move(queue);
     }
@@ -326,9 +316,9 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
       for (const auto* entry : entries)
       {
         write_bytes(&entry->destination_face_index, sizeof(std::uint32_t));
-        const auto data_size = entry->psi_values.size();
+        const auto data_size = entry->num_psi_values;
         write_bytes(&data_size, sizeof(std::size_t));
-        write_bytes(entry->psi_values.data(), data_size * sizeof(double));
+        write_bytes(entry->psi_values, data_size * sizeof(double));
       }
       entries.clear();
     }
@@ -358,11 +348,11 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
     {
       constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
       OpenSnLogicalErrorIf(
-        record->psi_values.size() > (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
-                                     section_header_bytes - record_header_bytes) /
-                                      sizeof(double),
+        record->num_psi_values > (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
+                                  section_header_bytes - record_header_bytes) /
+                                   sizeof(double),
         "One CBCD face record exceeds the MPI int byte-count limit and cannot be serialized.");
-      const auto record_bytes = record_header_bytes + record->psi_values.size() * sizeof(double);
+      const auto record_bytes = record_header_bytes + record->num_psi_values * sizeof(double);
       auto& records = pending_records_by_angle_set_[record->angle_set_id];
       const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
 
