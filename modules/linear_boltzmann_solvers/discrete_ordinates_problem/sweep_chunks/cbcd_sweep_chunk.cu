@@ -313,21 +313,25 @@ CBCDSweepChunk::LaunchFusedBatch(const std::size_t worker_id, DispatchState& dis
             0,
             0,
             dispatch.stream);
-  crb::Dim3 grid_size(dispatch.num_stride_blocks, dispatch.host_batches.back().block_end);
+  std::uint32_t num_cell_blocks = 0;
+  for (const auto& batch : dispatch.host_batches)
+    num_cell_blocks =
+      std::max(num_cell_blocks,
+               (batch.num_cells + dispatch.threads_per_block.y - 1) / dispatch.threads_per_block.y);
+  crb::Dim3 grid_size(dispatch.num_stride_blocks,
+                      num_cell_blocks,
+                      static_cast<std::uint32_t>(dispatch.host_batches.size()));
 #if defined(__NVCC__) || defined(__HIPCC__)
   gpu_kernel::CBCDFusedSweepKernel<SweepKind::CBC>
-    <<<grid_size, dispatch.threads_per_block, 0, dispatch.stream>>>(
-      device_launch_data_.get(),
-      dispatch.device_batches.get(),
-      static_cast<std::uint32_t>(dispatch.host_batches.size()));
+    <<<grid_size, dispatch.threads_per_block, 0, dispatch.stream>>>(device_launch_data_.get(),
+                                                                    dispatch.device_batches.get());
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
   auto* launch_data = device_launch_data_.get();
   auto* batches = dispatch.device_batches.get();
-  const auto num_batches = static_cast<std::uint32_t>(dispatch.host_batches.size());
   dispatch.stream.parallel_for(
     sycl::nd_range<3>(grid_size * dispatch.threads_per_block, dispatch.threads_per_block),
     [=](sycl::nd_item<3>)
-    { gpu_kernel::CBCDFusedSweepKernel<SweepKind::CBC>(launch_data, batches, num_batches); });
+    { gpu_kernel::CBCDFusedSweepKernel<SweepKind::CBC>(launch_data, batches); });
 #endif
   if (profiler_)
   {
@@ -367,17 +371,12 @@ CBCDSweepChunk::DispatchReadyAngleSets(const std::size_t worker_id,
     }
 
     dispatch->host_batches.clear();
-    std::uint32_t block_end = 0;
     for (auto* angle_set : ready)
     {
       const auto cell_ids = angle_set->PrepareReadyBatch();
-      const auto num_cell_blocks = static_cast<std::uint32_t>(
-        (cell_ids.size() + dispatch->threads_per_block.y - 1) / dispatch->threads_per_block.y);
-      block_end += num_cell_blocks;
       dispatch->host_batches.push_back({cell_ids.data(),
                                         static_cast<std::uint32_t>(angle_set->GetID()),
-                                        static_cast<std::uint32_t>(cell_ids.size()),
-                                        block_end});
+                                        static_cast<std::uint32_t>(cell_ids.size())});
       dispatch->active_angle_set_ids.push_back(angle_set->GetID());
     }
 

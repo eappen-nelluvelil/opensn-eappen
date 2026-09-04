@@ -104,45 +104,18 @@ SweepKernel(Arguments<k> args,
 /// Sweep compatible CBCD ready batches in one device dispatch.
 template <SweepKind k>
 __CRB_GLOBAL_FUNC__ void
-CBCDFusedSweepKernel(const CBCDLaunchData* launches,
-                     const CBCDBatchDescriptor* batches,
-                     const std::uint32_t num_batches)
+CBCDFusedSweepKernel(const CBCDLaunchData* launches, const CBCDBatchDescriptor* batches)
 {
   static_assert(k == SweepKind::CBC);
 #if defined(__NVCC__) || defined(__HIPCC__)
-  const auto block_index = static_cast<std::uint32_t>(blockIdx.y);
-  std::uint32_t begin = 0;
-  std::uint32_t end = num_batches;
-  while (begin < end)
-  {
-    const auto middle = begin + (end - begin) / 2;
-    if (block_index < batches[middle].block_end)
-      end = middle;
-    else
-      begin = middle + 1;
-  }
-  const auto batch_index = begin;
-  const auto first_block = batch_index == 0 ? 0 : batches[batch_index - 1].block_end;
-  const auto cell_index =
-    (block_index - first_block) * static_cast<std::uint32_t>(blockDim.y) + threadIdx.y;
+  const auto batch_index = static_cast<std::uint32_t>(blockIdx.z);
+  const auto cell_index = static_cast<std::uint32_t>(blockIdx.y * blockDim.y + threadIdx.y);
   const auto angle_group_index = threadIdx.x + blockDim.x * blockIdx.x;
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
   auto work_index = ::sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-  const auto block_index = static_cast<std::uint32_t>(work_index.get_group(1));
-  std::uint32_t begin = 0;
-  std::uint32_t end = num_batches;
-  while (begin < end)
-  {
-    const auto middle = begin + (end - begin) / 2;
-    if (block_index < batches[middle].block_end)
-      end = middle;
-    else
-      begin = middle + 1;
-  }
-  const auto batch_index = begin;
-  const auto first_block = batch_index == 0 ? 0 : batches[batch_index - 1].block_end;
-  const auto cell_index =
-    (block_index - first_block) * work_index.get_local_range(1) + work_index.get_local_id(1);
+  const auto batch_index = static_cast<std::uint32_t>(work_index.get_group(0));
+  const auto cell_index = static_cast<std::uint32_t>(
+    work_index.get_group(1) * work_index.get_local_range(1) + work_index.get_local_id(1));
   const auto angle_group_index = work_index.get_global_id(2);
 #endif
 

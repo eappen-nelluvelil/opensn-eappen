@@ -112,7 +112,6 @@ struct CBCDBatchDescriptor
   std::uint32_t* cell_ids = nullptr;
   std::uint32_t angle_set_id = 0;
   std::uint32_t num_cells = 0;
-  std::uint32_t block_end = 0;
 };
 
 static_assert(std::is_trivially_copyable_v<CBCDLaunchData>);
