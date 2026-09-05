@@ -284,15 +284,19 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const bool di
   if (has_incoming)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
-    work_done |=
-      async_comm_->ProcessIncoming(GetID(),
-                                   [this, &ready_cell_ids](const IncomingFaceBatch& batch)
-                                   {
-                                     for (const auto cell_local_id : batch.cell_local_ids)
-                                       if (--remaining_cell_dependencies_[cell_local_id] == 0)
-                                         ready_cell_ids[batch_pipeline_.ready_count++] =
-                                           cell_local_id;
-                                   });
+    work_done |= async_comm_->ProcessIncoming(
+      GetID(),
+      [this, &ready_cell_ids](const IncomingFaceBatch& batch)
+      {
+        const auto* const packet_data = batch.packet->Data().data();
+        for (const auto& face : batch.faces)
+        {
+          const auto cell_local_id = cbcd_fluds_.StoreIncomingFace(
+            batch.source_partition_index, face.incoming_face_index, packet_data + face.psi_offset);
+          if (--remaining_cell_dependencies_[cell_local_id] == 0)
+            ready_cell_ids[batch_pipeline_.ready_count++] = cell_local_id;
+        }
+      });
   }
 
   if (num_completed_cells_ == initial_cell_dependencies_.size() and

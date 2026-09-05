@@ -140,7 +140,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
     async_comm_ =
       std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
-                                                      fluds_list,
                                                       angle_sets_.front()->GetCommunicatorSet(),
                                                       incoming_source_partitions_by_angle_set,
                                                       max_message_bytes,

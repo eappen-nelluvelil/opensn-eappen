@@ -3,7 +3,6 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/profiling/cbcd_profiler.h"
 #include "framework/mpi/mpi_comm_set.h"
@@ -55,7 +54,6 @@ struct BufferReader
 
 CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
-  const std::vector<CBCD_FLUDS*>& fluds,
   const MPICommunicatorSet& comm_set,
   const std::vector<std::vector<int>>& incoming_source_partitions,
   const std::size_t max_message_bytes,
@@ -63,7 +61,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   CBCDProfiler* profiler)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
-    fluds_(fluds),
     profiler_(profiler),
     communication_bounds_(bounds),
     mpi_tag_(static_cast<int>(angle_sets.size())),
@@ -84,8 +81,10 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
       mailbox->InitializeSlots(
         [&](IncomingFaceBatch& batch)
         {
-          batch.cell_local_ids.reserve(bounds[i].max_incoming_faces_per_batch);
-          batch.cell_local_ids.clear();
+          batch.faces.reserve(bounds[i].max_incoming_faces_per_batch);
+          batch.faces.clear();
+          batch.source_partition_index = 0;
+          batch.packet.reset();
         });
       incoming_mailboxes_.push_back(std::move(mailbox));
     }
@@ -125,8 +124,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   message_limit_ = max_message_bytes == 0
                      ? detail::MPI_BYTE_COUNT_LIMIT
                      : std::min(max_message_bytes, detail::MPI_BYTE_COUNT_LIMIT);
-  if (max_message_bytes > 0)
-    recv_buffer_.Data().reserve(message_limit_);
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -410,10 +407,11 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
     {
       received_any = true;
       const auto num_bytes = status.count<std::byte>();
-      recv_buffer_.Data().resize(static_cast<std::size_t>(num_bytes));
-      recv_comm.recv(source_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
+      auto packet = std::make_shared<ByteArray>(static_cast<std::size_t>(num_bytes));
+      recv_comm.recv(source_rank, status.tag(), packet->Data().data(), num_bytes);
 
-      detail::BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data())};
+      const auto* const packet_data = packet->Data().data();
+      detail::BufferReader reader{packet_data};
       const auto num_sections = reader.LoadSize();
       std::size_t num_face_records = 0;
       for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
@@ -426,13 +424,15 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
           source_indices_by_angle_set_[angle_set_id][source_index];
 
         auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-        batch.cell_local_ids.resize(num_entries);
+        batch.source_partition_index = source_partition_index;
+        batch.faces.resize(num_entries);
+        batch.packet = packet;
         for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
         {
-          const auto incoming_face_index = reader.LoadFaceIndex();
+          auto& face = batch.faces[entry_index];
+          face.incoming_face_index = reader.LoadFaceIndex();
           const auto num_psi_values = reader.LoadSize();
-          batch.cell_local_ids[entry_index] = fluds_[angle_set_id]->StoreIncomingFace(
-            source_partition_index, incoming_face_index, reader.Data());
+          face.psi_offset = static_cast<std::size_t>(reader.Data() - packet_data);
           reader.SkipBytes(num_psi_values * sizeof(double));
         }
         incoming_mailboxes_[angle_set_id]->PublishSlot();

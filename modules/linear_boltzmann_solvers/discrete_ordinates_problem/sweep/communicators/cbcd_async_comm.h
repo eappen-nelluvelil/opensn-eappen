@@ -20,15 +20,27 @@ namespace opensn
 {
 
 class AngleSet;
-class CBCD_FLUDS;
 class CBCDProfiler;
 class MPICommunicatorSet;
+
+/// Metadata for one received face within an incoming packet.
+struct IncomingFaceRecord
+{
+  /// Face index assigned by this rank for the source partition.
+  std::uint32_t incoming_face_index = 0;
+  /// Byte offset of the face values within the owning packet.
+  std::size_t psi_offset = 0;
+};
 
 /// One received angle-set section from a source partition.
 struct IncomingFaceBatch
 {
-  /// Downwind cells whose face data are now visible in mapped FLUDS storage.
-  std::vector<std::uint32_t> cell_local_ids;
+  /// Index into the angle set's source-partition array.
+  std::uint32_t source_partition_index = 0;
+  /// Face records in the section.
+  std::vector<IncomingFaceRecord> faces;
+  /// Immutable MPI packet shared by all of its angle-set sections.
+  std::shared_ptr<const ByteArray> packet;
 };
 
 /// One outgoing nonlocal face published by a sweep worker.
@@ -72,14 +84,12 @@ public:
    * Construct preallocated mailboxes and deterministic peer mappings.
    *
    * \param angle_sets Angle sets served by this communicator.
-   * \param fluds Incoming angular-flux storage for each angle set.
    * \param comm_set Partition communicator mapping.
    * \param incoming_source_partitions Source partitions for each angle set.
    * \param max_message_bytes Exact maximum aggregate message size.
    * \param bounds Per-angle-set storage bounds and outgoing queue counts.
    */
   CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
-                                const std::vector<CBCD_FLUDS*>& fluds,
                                 const MPICommunicatorSet& comm_set,
                                 const std::vector<std::vector<int>>& incoming_source_partitions,
                                 std::size_t max_message_bytes,
@@ -110,7 +120,12 @@ public:
   template <typename Callback>
   bool ProcessIncoming(std::size_t angle_set_id, Callback&& callback)
   {
-    return incoming_mailboxes_[angle_set_id]->ProcessReady(std::forward<Callback>(callback)) > 0;
+    return incoming_mailboxes_[angle_set_id]->ProcessReady(
+             [&callback](IncomingFaceBatch& batch)
+             {
+               callback(batch);
+               batch.packet.reset();
+             }) > 0;
   }
 
   /// Return whether one angle set has at least one received batch.
@@ -157,7 +172,6 @@ private:
   /// Immutable communicator topology and per-angle-set bounds.
   const MPICommunicatorSet& comm_set_;
   std::size_t num_angle_sets_;
-  std::vector<CBCD_FLUDS*> fluds_;
   CBCDProfiler* profiler_ = nullptr;
   std::vector<AngleSetCommunicationBounds> communication_bounds_;
   /// Worker count and MPI message parameters.
@@ -179,8 +193,7 @@ private:
   /// Serialization scratch grouped by angle-set section.
   std::vector<std::vector<const OutgoingFaceRecord*>> pending_records_by_angle_set_;
   std::vector<std::size_t> active_angle_set_ids_;
-  /// Reusable receive storage and sends whose buffers remain MPI-owned.
-  ByteArray recv_buffer_;
+  /// Sends whose buffers remain MPI-owned.
   std::vector<InFlightSend> in_flight_sends_;
   /// Progress-thread lifecycle and per-angle-set completion state.
   std::atomic<bool> stop_requested_{false};
