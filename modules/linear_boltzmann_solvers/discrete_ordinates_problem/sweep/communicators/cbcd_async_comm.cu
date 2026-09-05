@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -98,21 +99,24 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (const int source_partition : source_partitions_)
     source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
 
-  source_partition_to_index_by_angle_set_.resize(angle_sets.size());
+  source_indices_by_angle_set_.assign(angle_sets.size(),
+                                      std::vector<std::uint32_t>(source_partitions_.size()));
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
   {
-    auto& source_to_index = source_partition_to_index_by_angle_set_[angle_set_id];
     const auto& source_partitions = incoming_source_partitions[angle_set_id];
-    source_to_index.reserve(source_partitions.size());
     for (std::size_t source_index = 0; source_index < source_partitions.size(); ++source_index)
-      source_to_index.emplace(source_partitions[source_index],
-                              static_cast<std::uint32_t>(source_index));
+    {
+      const auto global_source = std::lower_bound(
+        source_partitions_.begin(), source_partitions_.end(), source_partitions[source_index]);
+      source_indices_by_angle_set_[angle_set_id][global_source - source_partitions_.begin()] =
+        static_cast<std::uint32_t>(source_index);
+    }
   }
 
   destination_ranks_.assign(destinations.begin(), destinations.end());
-  destination_to_channel_.reserve(destination_ranks_.size());
+  destination_to_channel_.resize(static_cast<std::size_t>(opensn::mpi_comm.size()));
   for (std::size_t queue_index = 0; queue_index < destination_ranks_.size(); ++queue_index)
-    destination_to_channel_.emplace(destination_ranks_[queue_index], queue_index);
+    destination_to_channel_[destination_ranks_[queue_index]] = queue_index;
 
   pending_records_by_angle_set_.resize(num_angle_sets_);
   for (auto& complete : angle_set_complete_)
@@ -399,7 +403,6 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
   for (std::size_t source_index = 0; source_index < source_ranks_.size(); ++source_index)
   {
-    const int source_partition = source_partitions_[source_index];
     const int source_rank = source_ranks_[source_index];
     mpi::Status status;
 
@@ -419,8 +422,8 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto num_entries = reader.LoadSize();
         num_face_records += num_entries;
 
-        const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
-        const auto source_partition_index = source_indices.find(source_partition)->second;
+        const auto source_partition_index =
+          source_indices_by_angle_set_[angle_set_id][source_index];
 
         auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
         batch.cell_local_ids.resize(num_entries);

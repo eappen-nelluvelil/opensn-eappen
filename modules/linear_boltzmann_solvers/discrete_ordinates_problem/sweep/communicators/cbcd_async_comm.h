@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <memory>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -97,7 +96,7 @@ public:
                        const double* psi_values,
                        std::size_t num_psi_values)
   {
-    const auto channel = destination_to_channel_.find(destination_rank)->second;
+    const auto channel = destination_to_channel_[static_cast<std::size_t>(destination_rank)];
     auto& queue = *destination_channels_[channel].worker_queues[worker_id];
     auto& record = queue.ReserveSlot();
     record.angle_set_id = angle_set_id;
@@ -169,12 +168,12 @@ private:
   /// Unique receive peers in partition and communicator-rank coordinates.
   std::vector<int> source_partitions_;
   std::vector<int> source_ranks_;
-  /// Per-angle-set map from source partition to compact source index.
-  std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_index_by_angle_set_;
+  /// Per-angle-set source slots indexed by communicator source.
+  std::vector<std::vector<std::uint32_t>> source_indices_by_angle_set_;
   /// Unique destinations and their compact communication channels.
   std::vector<int> destination_ranks_;
   std::vector<DestinationChannel> destination_channels_;
-  std::unordered_map<int, std::size_t> destination_to_channel_;
+  std::vector<std::size_t> destination_to_channel_;
   /// Progress-thread-to-worker SPSC mailboxes indexed by angle-set ID.
   std::vector<std::unique_ptr<LockFreeSPSCSlotQueue<IncomingFaceBatch>>> incoming_mailboxes_;
   /// Serialization scratch grouped by angle-set section.
