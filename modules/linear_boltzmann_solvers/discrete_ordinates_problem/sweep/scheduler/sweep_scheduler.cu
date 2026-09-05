@@ -154,12 +154,12 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
           ++i;
         }
+        any_work_done |= cbcd_sweep_chunk.DispatchReadyAngleSets(worker_id, ready_angle_sets);
         for (auto* angle_set : completed_angle_sets)
         {
           CALI_CXX_MARK_SCOPE("CBCD_AngleSet::FlushBatch");
           any_work_done |= angle_set->PublishCompletedBatch(cbcd_sweep_chunk, worker_id);
         }
-        any_work_done |= cbcd_sweep_chunk.DispatchReadyAngleSets(worker_id, ready_angle_sets);
         if (any_work_done)
         {
           if (profiler)
