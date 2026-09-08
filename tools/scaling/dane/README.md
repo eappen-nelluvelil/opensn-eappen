@@ -13,6 +13,11 @@ MPI installations that omit optional datatype symbols and avoids reusing a
 cached mpi4py wheel built against a different MPI installation.
 Setup retains `mpi4py-build.log` and `mpi4py-linkage.txt` in the toolchain root;
 it still stops if importing MPI fails. No missing-symbol failure is ignored.
+The mpi4py linker command places the selected MPI library directories before
+Python's extension-link flags. This prevents an Anaconda `-L` directory from
+selecting its bundled MPI with the vendor MPI headers. Setup verifies the
+resolved MPI library against the compiler wrapper's directories before importing
+the extension; runtime search-path changes alone cannot fix the wrong MPI SONAME.
 
 ## Launch
 

@@ -202,23 +202,45 @@ setup_here()
   python -m pip install \
     pybind11 numpy scipy matplotlib jinja2 pyyaml nbconvert gmsh
   local mpi_build_log=$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-build.log
+  local -a mpi_link_command
+  mpi_link_command=("$mpi_cc")
+  local mpi_directory
+  for mpi_directory in "${mpi_library_dirs[@]}"; do
+    mpi_link_command+=("-L$mpi_directory" "-Wl,-rpath,$mpi_directory")
+  done
+  local mpi_linker=${(j: :)${(q)mpi_link_command}}
+  print -- "mpi4py linker: $mpi_linker"
   print -- "Building mpi4py with exhaustive MPI checks; log=$mpi_build_log"
   unset MPI4PY_BUILD_MPICFG MPICFG
-  if ! env MPI4PY_BUILD_MPICC="$mpi_cc" MPI4PY_BUILD_MPILD="$mpi_cc" \
+  if ! env MPI4PY_BUILD_MPICC="$mpi_cc" MPI4PY_BUILD_MPILD="$mpi_linker" \
       MPI4PY_BUILD_BACKEND=setuptools MPI4PY_BUILD_CONFIGURE=1 \
       python -m pip install --verbose --no-cache-dir --no-binary=mpi4py \
         --force-reinstall --no-deps mpi4py==4.1.2 > "$mpi_build_log" 2>&1; then
     tail -n 80 "$mpi_build_log"
     return 1
   fi
-  python - <<'PY' > "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
+  if ! python - "${mpi_library_dirs[@]}" <<'PY' > "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
 import importlib.util
+from pathlib import Path
+import re
 import subprocess
+import sys
 
 extension = importlib.util.find_spec("mpi4py.MPI").origin
 print(f"mpi4py_extension={extension}", flush=True)
-subprocess.run(["ldd", extension], check=True)
+linkage = subprocess.check_output(["ldd", extension], text=True)
+print(linkage, flush=True)
+expected = {Path(directory, "libmpi.so").resolve() for directory in sys.argv[1:]
+            if Path(directory, "libmpi.so").is_file()}
+resolved = re.findall(r"\blibmpi\.so(?:\.\d+)*\s+=>\s+(\S+)", linkage)
+if len(resolved) != 1 or Path(resolved[0]).resolve() not in expected:
+    raise SystemExit("mpi4py did not link to the selected compiler wrapper's MPI library.")
+print("MPI linkage matches the selected compiler wrapper.")
 PY
+  then
+    sed -n '1,60p' "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
+    return 1
+  fi
   sed -n '1,60p' "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
   python - <<'PY'
 import gmsh
