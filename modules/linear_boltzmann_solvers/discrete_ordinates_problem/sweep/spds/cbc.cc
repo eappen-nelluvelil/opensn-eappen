@@ -77,7 +77,7 @@ CBC_SPDS::CBC_SPDS(int id,
   location_dependencies_ = std::move(location_dependencies);
 
   // Build local cell graph
-  Graph local_DG(num_loc_cells);
+  Graph local_cell_graph(num_loc_cells);
 
   /*
    * One lagged local edge stores one face's angular flux. Weighting by face-node count makes the
@@ -94,10 +94,10 @@ CBC_SPDS::CBC_SPDS(int id,
           boost::add_edge(cell.local_id,
                           face.GetNeighborLocalID(grid.get()),
                           static_cast<double>(face.vertex_ids.size()),
-                          local_DG);
+                          local_cell_graph);
       }
 
-    auto edges_to_remove = RemoveCyclicDependencies(local_DG);
+    auto edges_to_remove = RemoveCyclicDependencies(local_cell_graph);
     for (const auto& edge_to_remove : edges_to_remove)
     {
       const auto upwind = static_cast<std::uint32_t>(edge_to_remove.first);
@@ -109,11 +109,11 @@ CBC_SPDS::CBC_SPDS(int id,
   else
     for (std::size_t cell_id = 0; cell_id < cell_successors.size(); ++cell_id)
       for (const auto& [successor_id, weight] : cell_successors[cell_id])
-        boost::add_edge(cell_id, successor_id, weight, local_DG);
+        boost::add_edge(cell_id, successor_id, weight, local_cell_graph);
 
   // Generate topological sorting
   spls_.clear();
-  boost::topological_sort(local_DG, std::back_inserter(spls_)); // NOLINT
+  boost::topological_sort(local_cell_graph, std::back_inserter(spls_)); // NOLINT
   std::reverse(spls_.begin(), spls_.end());
 
   if (allow_cycles_)
@@ -132,17 +132,17 @@ CBC_SPDS::FindApproxMinimumFAS(const Graph& graph, const std::vector<Vertex>& co
     active[vertex] = true;
 
   const auto edge_weights = boost::get(boost::edge_weight, graph);
-  const auto has_active_successor = [&](const Vertex vertex)
+  const auto HasOutgoingInComponent = [&](const Vertex vertex)
   {
     return std::ranges::any_of(make_iterator_range(boost::out_edges(vertex, graph)),
                                [&](const auto edge) { return active[boost::target(edge, graph)]; });
   };
-  const auto has_active_predecessor = [&](const Vertex vertex)
+  const auto HasIncomingInComponent = [&](const Vertex vertex)
   {
     return std::ranges::any_of(make_iterator_range(boost::in_edges(vertex, graph)),
                                [&](const auto edge) { return active[boost::source(edge, graph)]; });
   };
-  const auto weighted_degree_difference = [&](const Vertex vertex)
+  const auto GetVertexDelta = [&](const Vertex vertex)
   {
     double difference = 0.0;
     for (const auto edge : make_iterator_range(boost::out_edges(vertex, graph)))
@@ -167,7 +167,7 @@ CBC_SPDS::FindApproxMinimumFAS(const Graph& graph, const std::vector<Vertex>& co
     {
       removed_vertex = false;
       for (const auto vertex : component)
-        if (active[vertex] and not has_active_successor(vertex))
+        if (active[vertex] and not HasOutgoingInComponent(vertex))
         {
           active[vertex] = false;
           suffix.push_back(vertex);
@@ -181,7 +181,7 @@ CBC_SPDS::FindApproxMinimumFAS(const Graph& graph, const std::vector<Vertex>& co
     {
       removed_vertex = false;
       for (const auto vertex : component)
-        if (active[vertex] and not has_active_predecessor(vertex))
+        if (active[vertex] and not HasIncomingInComponent(vertex))
         {
           active[vertex] = false;
           prefix.push_back(vertex);
@@ -195,7 +195,7 @@ CBC_SPDS::FindApproxMinimumFAS(const Graph& graph, const std::vector<Vertex>& co
     for (const auto vertex : component)
       if (active[vertex])
       {
-        const double difference = weighted_degree_difference(vertex);
+        const double difference = GetVertexDelta(vertex);
         if (difference > maximum_difference)
         {
           maximum_difference = difference;

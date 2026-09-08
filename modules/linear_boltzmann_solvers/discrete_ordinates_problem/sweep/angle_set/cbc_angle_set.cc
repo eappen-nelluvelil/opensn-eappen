@@ -81,7 +81,8 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   }
 
   const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
-  const bool all_messages_sent = async_comm_.SendData();
+  const bool all_messages_sent =
+    not async_comm_.HasPendingCommunication() or async_comm_.SendData();
 
   if (all_tasks_completed and all_messages_sent)
   {

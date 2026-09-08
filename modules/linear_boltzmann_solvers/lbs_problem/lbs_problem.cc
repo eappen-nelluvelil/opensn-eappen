@@ -538,9 +538,8 @@ LBSProblem::GetOptionsBlock()
   InputParameters params;
 
   params.SetGeneralDescription("Set options from a large list of parameters");
-  params.AddOptionalParameter("max_mpi_message_size",
-                              32768,
-                              "The maximum MPI message size used during sweep initialization.");
+  params.AddOptionalParameter(
+    "max_mpi_message_size", 32768, "The maximum sweep MPI message size in bytes.");
   params.AddOptionalParameter(
     "restart_writes_enabled", false, "Flag that controls writing of restart dumps");
   params.AddOptionalParameter("write_delayed_psi_to_restart",

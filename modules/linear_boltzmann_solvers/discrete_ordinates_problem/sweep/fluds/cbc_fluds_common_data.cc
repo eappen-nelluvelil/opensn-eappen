@@ -226,11 +226,12 @@ CBC_FLUDSCommonData::FinalizeBeta()
       const auto neighbor_location = face.GetNeighborPartitionID(&grid);
       outgoing_face_slots_[face_index] = remote_slot.slot;
       if (remote_slot.delayed)
+      {
         delayed_face_flags_[face_index] |= NONLOCAL_OUTGOING;
-      if (not remote_slot.delayed)
-        outgoing_peer_indices_[face_index] = outgoing_peer_index_by_location.at(neighbor_location);
-      else
         outgoing_face_locations_[face_index] = neighbor_location;
+      }
+      else
+        outgoing_peer_indices_[face_index] = outgoing_peer_index_by_location.at(neighbor_location);
     }
   }
   finalized_ = true;

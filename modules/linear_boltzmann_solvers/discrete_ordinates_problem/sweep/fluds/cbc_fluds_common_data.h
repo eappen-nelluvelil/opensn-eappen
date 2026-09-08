@@ -40,7 +40,6 @@ public:
   };
 
   /// Construct alpha phase only (local work, no MPI). Call FinalizeBeta() afterwards.
-  /// MakeAlpha() prevents us from holding an unfinalized object.
   static std::unique_ptr<CBC_FLUDSCommonData>
   MakeAlpha(const SPDS& spds, const std::vector<CellFaceNodalMapping>& grid_nodal_mappings);
 
