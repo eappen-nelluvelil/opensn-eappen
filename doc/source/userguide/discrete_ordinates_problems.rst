@@ -801,8 +801,8 @@ curvilinear companion to the Cartesian problem class.
 It uses the same general construction pattern, but currently requires:
 
 * a suitable curvilinear mesh,
-* ``coord_system=2`` for cylindrical coordinates,
-* a compatible quadrature and solver setup.
+* a mesh configured with ``coord_sys="cylindrical"``,
+* a compatible curvilinear quadrature, such as ``GLCProductQuadrature2DRZ``.
 
 Important current limitations:
 
@@ -817,7 +817,6 @@ Example:
 
    phys = DiscreteOrdinatesCurvilinearProblem(
        mesh=mesh,
-       coord_system=2,
        num_groups=num_groups,
        groupsets=groupsets,
        xs_map=xs_map,

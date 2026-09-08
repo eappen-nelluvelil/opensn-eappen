@@ -178,6 +178,15 @@ Problem options available in Python include:
 * ``field_function_prefix_option``
 * ``field_function_prefix``
 
+``max_mpi_message_size`` is a sweep-message size in bytes (default 32768,
+minimum 1024). For host CBC, it bounds each serialized message, including
+face-record headers. Oversized faces are split into fragments; an ordinary
+incoming face releases its cell dependency only after all fragments arrive.
+The limit applies to both ordinary and delayed face data. CBC progresses
+ordinary sends while sweeping ready cells; it does not wait for a message to
+fill. This parameter is not a bound on total outstanding communication memory
+and does not select the MPI implementation's eager/rendezvous threshold.
+
 ``use_precursors`` controls whether delayed-neutron precursor treatment is kept
 active for the problem. The default is ``True``. This should usually stay
 enabled for transient and k-eigen workflows unless you explicitly want a

@@ -510,7 +510,8 @@ Example 8: Curvilinear Problem
 ==============================
 
 Curvilinear problems follow the same general pattern, but use the curvilinear
-problem type and a compatible quadrature.
+problem type and a compatible quadrature. The mesh must be generated with
+``coord_sys="cylindrical"``; the coordinate system is not a solver argument.
 
 .. code-block:: python
 
@@ -528,7 +529,6 @@ problem type and a compatible quadrature.
 
    phys = DiscreteOrdinatesCurvilinearProblem(
        mesh=mesh,
-       coord_system=2,
        num_groups=2,
        groupsets=[
            {
