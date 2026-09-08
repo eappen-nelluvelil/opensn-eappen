@@ -1,5 +1,30 @@
 [
   {
+    "file": "transport_3d_cbc_message_sizes.py",
+    "comment": "CBC ordinary and delayed face fragmentation preserves all flux moments",
+    "num_procs": 4,
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Nonzero reference=",
+        "goldvalue": 1,
+        "abs_tol": 0
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Message-size error 1024=",
+        "goldvalue": 0,
+        "abs_tol": 1e-8
+      },
+      {
+        "type": "KeyValuePair",
+        "key": "Message-size error 2048=",
+        "goldvalue": 0,
+        "abs_tol": 1e-8
+      }
+    ]
+  },
+  {
     "file": "1g_infinite_pure_absorber_balance_gmres.py",
     "comment": "Infinite, 1g, pure absorber, with balance using GMRES",
     "num_procs": 3,
