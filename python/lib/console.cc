@@ -5,6 +5,7 @@
 #include "framework/utils/utils.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include <pybind11/stl.h>
 #include <iostream>
 #include <functional>
 #include <regex>
@@ -96,7 +97,7 @@ Console::BindAllReduce(const mpi::Communicator& comm)
       else throw std::invalid_argument("MPIAllReduce: unknown op '" + op + "'");
       return out;
     },
-    py::arg("value"), py::arg("op") = "sum",
+    py::prepend(), py::arg("value"), py::arg("op") = "sum",
     "MPI all-reduce for a scalar integer."
   );
   // clang-format on
