@@ -149,6 +149,8 @@ class StudyTest(unittest.TestCase):
         build = study.make_build_job(manifest)
         job = study.make_study_job(manifest, "branch", "strong", 4)
         self.assertIn("-DCMAKE_BUILD_TYPE=Native", build)
+        self.assertIn("mpicxx --showme:version", build)
+        self.assertNotIn("mpirun", build)
         self.assertIn("-DOPENSN_WITH_CUDA=OFF", build)
         self.assertIn("#SBATCH --ntasks-per-node=64", job)
         self.assertIn("--ntasks=256", job)
@@ -185,6 +187,8 @@ class StudyTest(unittest.TestCase):
         self.assertIn("export OMPI_CC=clang OMPI_CXX=clang++", text)
         self.assertIn("export CC=$mpi_cc", text)
         self.assertIn("export CXX=$mpi_cxx", text)
+        self.assertIn("mpicxx --showme:version", text)
+        self.assertNotIn("mpirun", text)
 
         dependency_recipe = SCRIPT_DIR.parents[1] / "dependencies" / "CMakeLists.txt"
         self.assertNotIn("--download-cmake=yes", dependency_recipe.read_text())

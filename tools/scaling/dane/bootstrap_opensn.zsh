@@ -162,12 +162,17 @@ setup_here()
 
   print -- "Compiler: $(command -v clang++)"
   mpicxx --showme:command
-  mpirun --version
+  local mpi_version
+  mpi_version=$(mpicxx --showme:version) || return 1
+  print -- "$mpi_version"
   [[ $(clang -dumpversion) == 19.1.3 ]] || {
     print -u2 'Expected Clang 19.1.3.'
     return 1
   }
-  mpirun --version | grep -q '4.1.2' || return 1
+  print -r -- "$mpi_version" | grep -Eq '(^|[^0-9.])4\.1\.2([^0-9.]|$)' || {
+    print -u2 'Expected OpenMPI 4.1.2 from mpicxx --showme:version.'
+    return 1
+  }
   print -- "MPI C wrapper: $mpi_cc"
   print -- "MPI C++ wrapper: $mpi_cxx"
   print -- "CMake: $(command -v cmake)"

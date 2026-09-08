@@ -4,6 +4,8 @@ Run from a clean checkout of `cbc-cycles-4-optimization-profiling-2`.
 The scripts default to Clang **19.1.3** and OpenMPI **4.1.2**, with the
 `python/3.14.6` and `cmake/4.4.3` modules. They explicitly reload these modules
 in jobs; an interactive `.zshrc` is not sufficient for batch environments.
+MPI version checks use `mpicxx --showme:version`; the scripts launch with
+`srun` and do not require `mpirun` to be on `PATH`.
 
 ## Launch
 

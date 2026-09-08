@@ -180,7 +180,7 @@ set -euo pipefail
 {source_environment}
 module list
 mpicxx --showme
-mpirun --version
+mpicxx --showme:version
 {''.join(sections)}
 '''
 
