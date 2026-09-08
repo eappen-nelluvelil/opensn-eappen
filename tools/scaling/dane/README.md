@@ -2,10 +2,13 @@
 
 Run from a clean checkout of `cbc-cycles-4-optimization-profiling-2`.
 The scripts default to Clang **19.1.3** and OpenMPI **4.1.2**, with the
-`python/3.14.6` and `cmake/4.4.3` modules. They explicitly reload these modules
+`python/3.14.6` and `cmake/3.30.5` modules. They explicitly reload these modules
 in jobs; an interactive `.zshrc` is not sufficient for batch environments.
 MPI version checks use `mpicxx --showme:version`; the scripts launch with
 `srun` and do not require `mpirun` to be on `PATH`.
+CMake 3.30.5 satisfies OpenSn's minimum version while supporting the older
+CMake policies used by PETSc's METIS dependency. PETSc receives the selected
+executable through `--with-cmake-exec`, not its Boolean `--with-cmake` option.
 The private mpi4py is rebuilt from source with exhaustive MPI feature checks,
 using the selected MPI wrapper for compilation and linking. Setup and the saved
 environment prioritize the wrapper's library directories. This accommodates

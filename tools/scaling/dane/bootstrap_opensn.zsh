@@ -7,7 +7,7 @@ PROGRAM=$0
 SCRIPT_DIR=${0:A:h}
 SOURCE_ROOT=${OPENSN_DANE_SOURCE:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)}
 TOOLS_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
-DEFAULT_MODULES='StdEnv python/3.14.6 git/2.46.2 cmake/4.4.3 clang/19.1.3-magic openmpi/4.1.2'
+DEFAULT_MODULES='StdEnv python/3.14.6 git/2.46.2 cmake/3.30.5 clang/19.1.3-magic openmpi/4.1.2'
 
 usage()
 {
@@ -84,6 +84,8 @@ import sys
 version = tuple(int(item) for item in sys.argv[1].split(".")[:2])
 if version < (3, 29):
     raise SystemExit(f"OpenSn requires CMake 3.29 or newer; found {sys.argv[1]}")
+if version >= (4, 0):
+    raise SystemExit("These dependency versions require CMake 3.x; load cmake/3.30.5.")
 PY
 }
 

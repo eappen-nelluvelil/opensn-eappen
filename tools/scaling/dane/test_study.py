@@ -182,7 +182,7 @@ class StudyTest(unittest.TestCase):
         self.assertIn("-DCMAKE_BUILD_TYPE=Native", text)
         self.assertIn("--partition=pdebug", text)
         self.assertIn("--exclusive", text)
-        self.assertIn("cmake/4.4.3", text)
+        self.assertIn("cmake/3.30.5", text)
         self.assertIn("clang/19.1.3-magic openmpi/4.1.2", text)
         self.assertIn("export OMPI_CC=clang OMPI_CXX=clang++", text)
         self.assertIn("export CC=$mpi_cc", text)
@@ -200,6 +200,21 @@ class StudyTest(unittest.TestCase):
 
         dependency_recipe = SCRIPT_DIR.parents[1] / "dependencies" / "CMakeLists.txt"
         self.assertNotIn("--download-cmake=yes", dependency_recipe.read_text())
+        self.assertIn("--with-cmake-exec=${CMAKE_COMMAND}", dependency_recipe.read_text())
+        self.assertNotIn("--with-cmake=${CMAKE_COMMAND}", dependency_recipe.read_text())
+
+    def test_cmake_version_guard(self):
+        bootstrap = (SCRIPT_DIR / "bootstrap_opensn.zsh").read_text()
+        function = "check_cmake_version()\n" + bootstrap.split(
+            "check_cmake_version()\n", 1
+        )[1].split("\nwrite_environment()", 1)[0]
+        script = 'cmake() { print -- "cmake version $TEST_CMAKE_VERSION"; }\n'
+        script += function + '\ncheck_cmake_version\n'
+        for version, succeeds in (("3.28.6", False), ("3.30.5", True), ("4.4.3", False)):
+            environment = dict(os.environ, TEST_CMAKE_VERSION=version)
+            result = run(["zsh"], input=script, text=True, capture_output=True,
+                         env=environment)
+            self.assertEqual(result.returncode == 0, succeeds, result.stderr)
 
     def test_saved_environment_preserves_mpi_library_selection(self):
         bootstrap = (SCRIPT_DIR / "bootstrap_opensn.zsh").read_text()
