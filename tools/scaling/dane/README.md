@@ -6,6 +6,13 @@ The scripts default to Clang **19.1.3** and OpenMPI **4.1.2**, with the
 in jobs; an interactive `.zshrc` is not sufficient for batch environments.
 MPI version checks use `mpicxx --showme:version`; the scripts launch with
 `srun` and do not require `mpirun` to be on `PATH`.
+The private mpi4py is rebuilt from source with exhaustive MPI feature checks,
+using the selected MPI wrapper for compilation and linking. Setup and the saved
+environment prioritize the wrapper's library directories. This accommodates
+MPI installations that omit optional datatype symbols and avoids reusing a
+cached mpi4py wheel built against a different MPI installation.
+Setup retains `mpi4py-build.log` and `mpi4py-linkage.txt` in the toolchain root;
+it still stops if importing MPI fails. No missing-symbol failure is ignored.
 
 ## Launch
 

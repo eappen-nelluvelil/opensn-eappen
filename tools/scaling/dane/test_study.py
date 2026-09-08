@@ -189,9 +189,40 @@ class StudyTest(unittest.TestCase):
         self.assertIn("export CXX=$mpi_cxx", text)
         self.assertIn("mpicxx --showme:version", text)
         self.assertNotIn("mpirun", text)
+        self.assertIn('mpi_libdirs_text=$("$mpi_cc" --showme:libdirs)', text)
+        self.assertIn('MPI4PY_BUILD_MPICC="$mpi_cc" MPI4PY_BUILD_MPILD="$mpi_cc"', text)
+        self.assertIn("MPI4PY_BUILD_BACKEND=setuptools MPI4PY_BUILD_CONFIGURE=1", text)
+        self.assertIn("--no-cache-dir --no-binary=mpi4py", text)
+        self.assertIn("--force-reinstall --no-deps mpi4py==4.1.2", text)
+        self.assertIn("mpi4py-linkage.txt", text)
 
         dependency_recipe = SCRIPT_DIR.parents[1] / "dependencies" / "CMakeLists.txt"
         self.assertNotIn("--download-cmake=yes", dependency_recipe.read_text())
+
+    def test_saved_environment_preserves_mpi_library_selection(self):
+        bootstrap = (SCRIPT_DIR / "bootstrap_opensn.zsh").read_text()
+        function = "write_environment()\n" + bootstrap.split(
+            "write_environment()\n", 1
+        )[1].split("\nsetup_here()", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "env.sh"
+            environment = os.environ.copy()
+            environment.update({
+                "OPENSN_DANE_ENVIRONMENT": str(target),
+                "OPENSN_DANE_VENV": "/tmp/test venv",
+                "OPENSN_DANE_DEPS_PREFIX": "/tmp/test deps",
+            })
+            script = function + (
+                '\nwrite_environment "clang:openmpi" /mpi/bin/mpicc '
+                '/mpi/bin/mpicxx "/mpi/lib:/mpi/lib64"\n'
+            )
+            result = run(["zsh"], input=script, text=True, capture_output=True,
+                         env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = target.read_text()
+            self.assertIn('/mpi/lib:/mpi/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}', text)
+            for shell in ("bash", "zsh"):
+                self.assertEqual(run([shell, "-n", str(target)]).returncode, 0)
 
     def test_runner_default_environment_path_has_no_whitespace(self):
         environment = os.environ.copy()

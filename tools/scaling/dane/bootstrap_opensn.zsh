@@ -92,6 +92,7 @@ write_environment()
   local loaded_modules=$1
   local mpi_cc=$2
   local mpi_cxx=$3
+  local mpi_library_path=$4
   local module_commands=""
   local module_name
   for module_name in ${(s.:.)loaded_modules}; do
@@ -124,7 +125,7 @@ write_environment()
     print -- "export GTest_ROOT=${(q)OPENSN_DANE_DEPS_PREFIX}"
     print -- "export PATH=${(q)OPENSN_DANE_DEPS_PREFIX}/bin:${(q)OPENSN_DANE_VENV}/bin:\$PATH"
     print -n -- "export LD_LIBRARY_PATH=${(q)OPENSN_DANE_DEPS_PREFIX}/lib:"
-    print -- "${(q)OPENSN_DANE_DEPS_PREFIX}/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+    print -- "${(q)OPENSN_DANE_DEPS_PREFIX}/lib64:${(q)mpi_library_path}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
     print -n -- \
       "export PKG_CONFIG_PATH=${(q)OPENSN_DANE_DEPS_PREFIX}/lib/pkgconfig:"
     print -- "${(q)OPENSN_DANE_DEPS_PREFIX}/lib64/pkgconfig"
@@ -179,6 +180,20 @@ setup_here()
   print -- "Python: $(command -v python3)"
   print -- "Modules: $loaded_modules"
 
+  local mpi_libdirs_text
+  mpi_libdirs_text=$("$mpi_cc" --showme:libdirs) || return 1
+  local -a mpi_library_dirs
+  mpi_library_dirs=(${=mpi_libdirs_text})
+  local mpi_library_path=${(j.:.)mpi_library_dirs}
+  [[ -n $mpi_library_path ]] || {
+    print -u2 'The MPI compiler wrapper did not report its library directories.'
+    return 1
+  }
+  export LD_LIBRARY_PATH="$mpi_library_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  unset PYTHONPATH
+  export PYTHONNOUSERSITE=1
+  print -- "MPI library directories: $mpi_library_path"
+
   if [[ ! -x $OPENSN_DANE_VENV/bin/python ]]; then
     python3 -m venv "$OPENSN_DANE_VENV"
   fi
@@ -186,7 +201,25 @@ setup_here()
   python -m pip install --upgrade pip setuptools wheel
   python -m pip install \
     pybind11 numpy scipy matplotlib jinja2 pyyaml nbconvert gmsh
-  MPICC="$mpi_cc" python -m pip install --no-binary=mpi4py mpi4py
+  local mpi_build_log=$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-build.log
+  print -- "Building mpi4py with exhaustive MPI checks; log=$mpi_build_log"
+  unset MPI4PY_BUILD_MPICFG MPICFG
+  if ! env MPI4PY_BUILD_MPICC="$mpi_cc" MPI4PY_BUILD_MPILD="$mpi_cc" \
+      MPI4PY_BUILD_BACKEND=setuptools MPI4PY_BUILD_CONFIGURE=1 \
+      python -m pip install --verbose --no-cache-dir --no-binary=mpi4py \
+        --force-reinstall --no-deps mpi4py==4.1.2 > "$mpi_build_log" 2>&1; then
+    tail -n 80 "$mpi_build_log"
+    return 1
+  fi
+  python - <<'PY' > "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
+import importlib.util
+import subprocess
+
+extension = importlib.util.find_spec("mpi4py.MPI").origin
+print(f"mpi4py_extension={extension}", flush=True)
+subprocess.run(["ldd", extension], check=True)
+PY
+  sed -n '1,60p' "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
   python - <<'PY'
 import gmsh
 import jinja2
@@ -255,7 +288,7 @@ PY
   cmake --build "$gtest_build" --parallel "$build_jobs"
   cmake --install "$gtest_build"
 
-  write_environment "$loaded_modules" "$mpi_cc" "$mpi_cxx"
+  write_environment "$loaded_modules" "$mpi_cc" "$mpi_cxx" "$mpi_library_path"
   source "$OPENSN_DANE_ENVIRONMENT"
 
   local sha=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
