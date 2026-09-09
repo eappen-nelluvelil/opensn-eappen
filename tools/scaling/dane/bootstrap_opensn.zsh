@@ -5,8 +5,9 @@ setopt pipe_fail
 
 PROGRAM=$0
 SCRIPT_DIR=${0:A:h}
-SOURCE_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
-DEFAULT_MODULES='gcc/10.3.1-magic mvapich2/2.3.7 cmake/3.30.5 python/3.13.2 git/2.46.2'
+SOURCE_ROOT=${OPENSN_DANE_SOURCE:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)}
+TOOLS_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
+DEFAULT_MODULES='StdEnv python/3.14.6 git/2.46.2 cmake/3.30.5 clang/19.1.3-magic openmpi/4.1.2'
 
 usage()
 {
@@ -17,8 +18,8 @@ usage()
   print -u2 -- ""
   print -u2 -- "Optional overrides:"
   print -u2 -- "  OPENSN_DANE_WORK_ROOT    Default: /usr/workspace/\$USER/opensn-dane-cbc-scaling"
-  print -u2 -- "  OPENSN_DANE_TOOLCHAIN    Toolchain tag (default: isolated-1)"
-  print -u2 -- "  OPENSN_DANE_MODULES      Modules loaded after module reset"
+  print -u2 -- "  OPENSN_DANE_TOOLCHAIN    Toolchain tag (default: clang19-openmpi412-python314-1)"
+  print -u2 -- "  OPENSN_DANE_MODULES      Modules loaded after module purge"
   print -u2 -- "  OPENSN_DANE_BUILD_JOBS   Package/build parallelism (default: 16)"
   print -u2 -- "  OPENSN_DANE_SETUP_TIME   pdebug allocation limit (default: 01:00:00)"
 }
@@ -34,7 +35,7 @@ require_command()
 set_paths()
 {
   export OPENSN_DANE_WORK_ROOT=${OPENSN_DANE_WORK_ROOT:-/usr/workspace/$USER/opensn-dane-cbc-scaling}
-  export OPENSN_DANE_TOOLCHAIN=${OPENSN_DANE_TOOLCHAIN:-isolated-1}
+  export OPENSN_DANE_TOOLCHAIN=${OPENSN_DANE_TOOLCHAIN:-clang19-openmpi412-python314-1}
   export OPENSN_DANE_TOOLCHAIN_ROOT=$OPENSN_DANE_WORK_ROOT/toolchains/$OPENSN_DANE_TOOLCHAIN
   export OPENSN_DANE_DEPS_BUILD=$OPENSN_DANE_TOOLCHAIN_ROOT/dependencies-build
   export OPENSN_DANE_DEPS_PREFIX=$OPENSN_DANE_TOOLCHAIN_ROOT/dependencies
@@ -62,11 +63,13 @@ load_modules()
     source /usr/share/lmod/lmod/init/zsh
   fi
   require_command module
-  module reset
+  module --force purge
   local module_name
   for module_name in ${(z)${OPENSN_DANE_MODULES:-$DEFAULT_MODULES}}; do
     module load "$module_name"
   done
+  export OMPI_CC=clang OMPI_CXX=clang++
+  unset MPICH_GPU_SUPPORT_ENABLED MPICH_SMP_SINGLE_COPY_MODE
   if ! command -v flex >/dev/null 2>&1; then
     module load flex
   fi
@@ -81,6 +84,8 @@ import sys
 version = tuple(int(item) for item in sys.argv[1].split(".")[:2])
 if version < (3, 29):
     raise SystemExit(f"OpenSn requires CMake 3.29 or newer; found {sys.argv[1]}")
+if version >= (4, 0):
+    raise SystemExit("These dependency versions require CMake 3.x; load cmake/3.30.5.")
 PY
 }
 
@@ -89,6 +94,7 @@ write_environment()
   local loaded_modules=$1
   local mpi_cc=$2
   local mpi_cxx=$3
+  local mpi_library_path=$4
   local module_commands=""
   local module_name
   for module_name in ${(s.:.)loaded_modules}; do
@@ -108,6 +114,8 @@ write_environment()
     print -- "source ${(q)OPENSN_DANE_VENV}/bin/activate"
     print -- 'unset PYTHONPATH PETSC_ARCH'
     print -- 'export PYTHONNOUSERSITE=1'
+    print -- 'export OMPI_CC=clang OMPI_CXX=clang++'
+    print -- 'unset MPICH_GPU_SUPPORT_ENABLED MPICH_SMP_SINGLE_COPY_MODE'
     print -- "export CC=${(q)mpi_cc}"
     print -- "export CXX=${(q)mpi_cxx}"
     print -- "export CMAKE_PREFIX_PATH=${(q)OPENSN_DANE_DEPS_PREFIX}"
@@ -119,7 +127,7 @@ write_environment()
     print -- "export GTest_ROOT=${(q)OPENSN_DANE_DEPS_PREFIX}"
     print -- "export PATH=${(q)OPENSN_DANE_DEPS_PREFIX}/bin:${(q)OPENSN_DANE_VENV}/bin:\$PATH"
     print -n -- "export LD_LIBRARY_PATH=${(q)OPENSN_DANE_DEPS_PREFIX}/lib:"
-    print -- "${(q)OPENSN_DANE_DEPS_PREFIX}/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+    print -- "${(q)OPENSN_DANE_DEPS_PREFIX}/lib64:${(q)mpi_library_path}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
     print -n -- \
       "export PKG_CONFIG_PATH=${(q)OPENSN_DANE_DEPS_PREFIX}/lib/pkgconfig:"
     print -- "${(q)OPENSN_DANE_DEPS_PREFIX}/lib64/pkgconfig"
@@ -134,7 +142,7 @@ setup_here()
   load_modules
 
   local command_name
-  for command_name in gcc g++ mpicc mpicxx cmake python3 git make flex; do
+  for command_name in clang clang++ mpicc mpicxx cmake python3 git make flex; do
     require_command "$command_name"
   done
   check_cmake_version
@@ -155,12 +163,38 @@ setup_here()
     "$OPENSN_DANE_DEPS_BUILD" \
     "$OPENSN_DANE_DEPS_PREFIX"
 
-  print -- "Compiler: $(command -v g++)"
+  print -- "Compiler: $(command -v clang++)"
+  mpicxx --showme:command
+  local mpi_version
+  mpi_version=$(mpicxx --showme:version) || return 1
+  print -- "$mpi_version"
+  [[ $(clang -dumpversion) == 19.1.3 ]] || {
+    print -u2 'Expected Clang 19.1.3.'
+    return 1
+  }
+  print -r -- "$mpi_version" | grep -Eq '(^|[^0-9.])4\.1\.2([^0-9.]|$)' || {
+    print -u2 'Expected OpenMPI 4.1.2 from mpicxx --showme:version.'
+    return 1
+  }
   print -- "MPI C wrapper: $mpi_cc"
   print -- "MPI C++ wrapper: $mpi_cxx"
   print -- "CMake: $(command -v cmake)"
   print -- "Python: $(command -v python3)"
   print -- "Modules: $loaded_modules"
+
+  local mpi_libdirs_text
+  mpi_libdirs_text=$("$mpi_cc" --showme:libdirs) || return 1
+  local -a mpi_library_dirs
+  mpi_library_dirs=(${=mpi_libdirs_text})
+  local mpi_library_path=${(j.:.)mpi_library_dirs}
+  [[ -n $mpi_library_path ]] || {
+    print -u2 'The MPI compiler wrapper did not report its library directories.'
+    return 1
+  }
+  export LD_LIBRARY_PATH="$mpi_library_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  unset PYTHONPATH
+  export PYTHONNOUSERSITE=1
+  print -- "MPI library directories: $mpi_library_path"
 
   if [[ ! -x $OPENSN_DANE_VENV/bin/python ]]; then
     python3 -m venv "$OPENSN_DANE_VENV"
@@ -169,7 +203,47 @@ setup_here()
   python -m pip install --upgrade pip setuptools wheel
   python -m pip install \
     pybind11 numpy scipy matplotlib jinja2 pyyaml nbconvert gmsh
-  MPICC="$mpi_cc" python -m pip install --no-binary=mpi4py mpi4py
+  local mpi_build_log=$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-build.log
+  local -a mpi_link_command
+  mpi_link_command=("$mpi_cc")
+  local mpi_directory
+  for mpi_directory in "${mpi_library_dirs[@]}"; do
+    mpi_link_command+=("-L$mpi_directory" "-Wl,-rpath,$mpi_directory")
+  done
+  local mpi_linker=${(j: :)${(q)mpi_link_command}}
+  print -- "mpi4py linker: $mpi_linker"
+  print -- "Building mpi4py with exhaustive MPI checks; log=$mpi_build_log"
+  unset MPI4PY_BUILD_MPICFG MPICFG
+  if ! env MPI4PY_BUILD_MPICC="$mpi_cc" MPI4PY_BUILD_MPILD="$mpi_linker" \
+      MPI4PY_BUILD_BACKEND=setuptools MPI4PY_BUILD_CONFIGURE=1 \
+      python -m pip install --verbose --no-cache-dir --no-binary=mpi4py \
+        --force-reinstall --no-deps mpi4py==4.1.2 > "$mpi_build_log" 2>&1; then
+    tail -n 80 "$mpi_build_log"
+    return 1
+  fi
+  if ! python - "${mpi_library_dirs[@]}" <<'PY' > "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
+import importlib.util
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+extension = importlib.util.find_spec("mpi4py.MPI").origin
+print(f"mpi4py_extension={extension}", flush=True)
+linkage = subprocess.check_output(["ldd", extension], text=True)
+print(linkage, flush=True)
+expected = {Path(directory, "libmpi.so").resolve() for directory in sys.argv[1:]
+            if Path(directory, "libmpi.so").is_file()}
+resolved = re.findall(r"\blibmpi\.so(?:\.\d+)*\s+=>\s+(\S+)", linkage)
+if len(resolved) != 1 or Path(resolved[0]).resolve() not in expected:
+    raise SystemExit("mpi4py did not link to the selected compiler wrapper's MPI library.")
+print("MPI linkage matches the selected compiler wrapper.")
+PY
+  then
+    sed -n '1,60p' "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
+    return 1
+  fi
+  sed -n '1,60p' "$OPENSN_DANE_TOOLCHAIN_ROOT/mpi4py-linkage.txt"
   python - <<'PY'
 import gmsh
 import jinja2
@@ -190,7 +264,7 @@ PY
   export CMAKE_PREFIX_PATH=$OPENSN_DANE_DEPS_PREFIX
 
   cmake \
-    -S "$SOURCE_ROOT/tools/dependencies" \
+    -S "$TOOLS_ROOT/tools/dependencies" \
     -B "$OPENSN_DANE_DEPS_BUILD" \
     -DCMAKE_INSTALL_PREFIX="$OPENSN_DANE_DEPS_PREFIX" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -232,13 +306,13 @@ PY
     -B "$gtest_build" \
     -DCMAKE_INSTALL_PREFIX="$OPENSN_DANE_DEPS_PREFIX" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_COMPILER="$(command -v g++)" \
+    -DCMAKE_CXX_COMPILER="$(command -v clang++)" \
     -DBUILD_GMOCK=ON \
     -DINSTALL_GTEST=ON
   cmake --build "$gtest_build" --parallel "$build_jobs"
   cmake --install "$gtest_build"
 
-  write_environment "$loaded_modules" "$mpi_cc" "$mpi_cxx"
+  write_environment "$loaded_modules" "$mpi_cc" "$mpi_cxx" "$mpi_library_path"
   source "$OPENSN_DANE_ENVIRONMENT"
 
   local sha=$(git -C "$SOURCE_ROOT" rev-parse HEAD)

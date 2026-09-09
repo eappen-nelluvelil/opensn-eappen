@@ -1,126 +1,104 @@
-# Dane host-CBC scaling studies
+# Dane scaling and profiling
 
-This workflow measures host CBC from the current, clean source revision. The
-campaign covers strong and weak scaling on 1, 2, 4, 8, 16, 32, 64, 128, and
-256 Dane nodes, with 64 MPI ranks per node and three trials per allocation.
+Run from a clean checkout of `cbc-and-cbcd-with-minimally-sized-fluds-profiling-2`.
+The scripts default to Clang **19.1.3** and OpenMPI **4.1.2**, with the
+`python/3.14.6` and `cmake/3.30.5` modules. They explicitly reload these modules
+in jobs; an interactive `.zshrc` is not sufficient for batch environments.
+MPI version checks use `mpicxx --showme:version`; the scripts launch with
+`srun` and do not require `mpirun` to be on `PATH`.
+CMake 3.30.5 satisfies OpenSn's minimum version while supporting the older
+CMake policies used by PETSc's METIS dependency. PETSc receives the selected
+executable through `--with-cmake-exec`, not its Boolean `--with-cmake` option.
+The private mpi4py is rebuilt from source with exhaustive MPI feature checks,
+using the selected MPI wrapper for compilation and linking. Setup and the saved
+environment prioritize the wrapper's library directories. This accommodates
+MPI installations that omit optional datatype symbols and avoids reusing a
+cached mpi4py wheel built against a different MPI installation.
+Setup retains `mpi4py-build.log` and `mpi4py-linkage.txt` in the toolchain root;
+it still stops if importing MPI fails. No missing-symbol failure is ignored.
+The mpi4py linker command places the selected MPI library directories before
+Python's extension-link flags. This prevents an Anaconda `-L` directory from
+selecting its bundled MPI with the vendor MPI headers. Setup verifies the
+resolved MPI library against the compiler wrapper's directories before importing
+the extension; runtime search-path changes alone cannot fix the wrong MPI SONAME.
 
-Both OpenSn binaries are configured from fresh, campaign-specific build
-directories with `CMAKE_BUILD_TYPE=Native` in a build job on a Dane compute
-node. Scaling jobs depend on that build job and verify the build type before
-launching. GPU backends and angular-flux storage are disabled.
+## Launch
 
-## One-command setup and launch
+For the existing private toolchain, use the wrapper described in
+[`MINFLUDS_CAMPAIGNS.md`](../MINFLUDS_CAMPAIGNS.md):
 
-Use a clean checkout on a Dane login node. The setup command requests one
-exclusive `pdebug` node, builds an isolated OpenSn dependency prefix and Python
-environment, performs a native preflight build, and then submits the campaign.
-Only Dane's compiler, MPI, CMake, Python, Git, Flex, and build tools are loaded
-from modules. OpenSn's package dependencies are built under
-`/usr/workspace/$USER/opensn-dane-cbc-scaling/toolchains/isolated-1`.
-
-```bash
-cd /path/to/opensn
-git switch cbc-and-cbcd-with-minimally-sized-fluds-profiling
-git pull --ff-only origin cbc-and-cbcd-with-minimally-sized-fluds-profiling
-
-export OPENSN_DANE_BANK=YOUR_BANK
-export OPENSN_DANE_RESULTS=/p/lustre1/$USER/opensn-results          # or lustre2
-
-zsh tools/scaling/dane/run_cbc_scaling.zsh setup-launch cbc-minfluds-native-1
+```zsh
+LABEL=minfluds2-$(git rev-parse --short=9 HEAD)-dane-$(date -u +%Y%m%dT%H%M%SZ)
+zsh tools/scaling/run_minfluds.zsh dane scaling "$LABEL"
 ```
 
-The bootstrap is resumable. If its one-hour `pdebug` allocation expires, run
-the same `setup-launch` command again. Completed dependency stages are retained,
-and no scaling jobs are submitted until setup succeeds. Once setup is complete,
-`setup-launch` creates a detached worktree at the exact current revision,
-generates the mesh suite, prepares 18 scaling jobs, submits the native build
-job, and submits every scaling job with an `afterok` dependency.
+Keep the printed label. Results default to
+`/p/lustre1/$USER/opensn-results/$LABEL`. Existing campaigns are never overwritten.
 
-The isolated build includes mpicpp-lite, Boost, PETSc and its configured solver
-dependencies, HDF5, VTK, Caliper, GoogleTest, and an MPI-compatible Python venv.
-The outer dependency superbuild is kept serial while each package uses bounded
-parallelism, avoiding nested unbounded `make -j` invocations.
-All compiled dependencies use the selected MPI compiler wrappers. PETSc uses
-the loaded CMake rather than downloading and building a second CMake release.
+If a fresh toolchain is needed, `bootstrap_opensn.zsh setup` requests one pdebug
+allocation, builds private dependencies and a venv,
+and compiles a Native preflight executable on a compute node. PETSc, Boost,
+HDF5, VTK, Caliper, and mpicpp-lite are not taken from system package prefixes.
+The outer dependency build is serial, with bounded package parallelism (16).
+If setup expires, rerun the same command: completed dependency stages remain.
+Use `OPENSN_DANE_SETUP_TIME` to change the allocation limit when queue policy permits.
 
-Setup and launch may also be performed separately:
+Mesh preparation requests a second one-node pdebug allocation; it does not run
+Gmsh on the login node. The campaign generates the existing tetrahedral mesh
+family and submits:
 
-```bash
-zsh tools/scaling/dane/run_cbc_scaling.zsh setup
-zsh tools/scaling/dane/run_cbc_scaling.zsh launch cbc-minfluds-native-1
-```
+- one Native build job on pdebug;
+- 18 baseline jobs: strong and weak scaling at 1, 2, 4, 8, 16, 32, 64, 128, 256 nodes;
+- 18 separate Caliper jobs at the same sizes, with annotated-region and MPI time.
 
-The defaults are one hour per build/scaling job and three trials per allocation.
-Override them before `launch` if necessary:
+All study jobs use 64 ranks per node, one OpenSn thread per rank, exclusive
+nodes, all allocatable host memory, and one hour. Baselines run three trials;
+Caliper runs one. Study jobs run on pbatch and depend on successful completion of the pdebug build job.
+Do not cancel that build job while its dependent jobs are pending.
+The build job also verifies a one-rank MPI/Caliper report before releasing the
+study jobs. Each profiling job must produce a nonempty report containing MPI
+entries before it is marked complete.
 
-```bash
-export OPENSN_DANE_TIME_LIMIT=01:00:00
-export OPENSN_DANE_BUILD_TIME_LIMIT=01:00:00
-export OPENSN_DANE_REPETITIONS=3
-export OPENSN_DANE_BUILD_JOBS=16
-export OPENSN_DANE_TOOLCHAIN=isolated-1
-export OPENSN_DANE_MODULES='gcc/10.3.1-magic mvapich2/2.3.7 cmake/3.30.5 python/3.13.2 git/2.46.2'
-```
+Strong problems use divisor 39, 64 groups, 448 directions, single-angle
+aggregation, ten maximum WGS iterations, and the existing source/tolerance.
+Weak problems retain the prior divisor table. Mesh cell counts are only
+approximately proportional to nodes. Saved angular flux is disabled.
 
-These are also the defaults. In particular, the CMake version is explicit
-because Dane's unversioned `cmake` module currently resolves to 3.23.1, which
-is older than OpenSn's required CMake 3.29.
-
-Do not reuse a campaign label. The workflow refuses to overwrite an existing
-result directory.
+MPI is launched with `srun --mpi=pmix --mpibind=on --kill-on-bad-exit=1`.
+Check `srun --mpi=list` on Dane if its PMIx plugin configuration changes.
 
 ## Monitor and collect
 
-```bash
-zsh tools/scaling/dane/run_cbc_scaling.zsh status cbc-minfluds-native-1
-zsh tools/scaling/dane/run_cbc_scaling.zsh collect cbc-minfluds-native-1
+```zsh
+zsh tools/scaling/dane/run_cbc_scaling.zsh status "$LABEL"
+zsh tools/scaling/dane/run_cbc_scaling.zsh collect "$LABEL"
 ```
 
-Collection is incremental and may be run while jobs are active. It writes:
+Collection writes baseline `raw-results.csv`, `summary.csv`, and `summary.md`.
+It also writes `profile-index.md`, linking the per-case `caliper.txt` reports
+under `profiles/caliper`. Instrumented timing is never pooled with baseline timing.
+Only trials with the normal OpenSn completion marker are accepted.
 
-- `raw-results.csv`: every completed trial;
-- `summary.csv`: medians, median absolute deviations, interquartile ranges, and
-  scaling efficiencies;
-- `summary.md`: readable host-CBC strong- and weak-scaling tables.
+The reference is **4 nodes**, not an inferred 1-node measurement:
+`Estrong(N) = 4*T(4)/(N*T(N))`; `Eweak(N) = T(4)/T(N)`.
+If the reference case has not completed, efficiency remains unavailable.
+Native flags, compiler/MPI versions, source SHA, and build cache are retained
+in the build logs/build directory and campaign manifest.
 
-Strong-scaling efficiency is computed from the sweep time per unknown as
-`g(1)/(N*g(N))`; this is equivalent to `T(1)/(N*T(N))` when the global strong
-problem size is fixed. Weak-scaling efficiency is `T(1)/T(N)`. The collector
-also reports average sweep time, the global unknown count, and lagged unknowns
-when OpenSn prints that field.
+To cancel only this campaign, first inspect its exact IDs:
 
-## Dane-specific choices
-
-Dane has 112 physical CPU cores per node, but this study deliberately launches
-the requested 64 ranks per node. Slurm allocates whole `pbatch` nodes, and the
-launch uses LLNL's `mpibind` plugin to distribute those ranks across the node's
-NUMA topology. Each rank is single-threaded (`OPENSN_NUM_THREADS=1`).
-
-Check current queue and bank limits with `joblimits` before launch. The default
-work area is `/usr/workspace/$USER/opensn-dane-cbc-scaling`; change it with
-`OPENSN_DANE_WORK_ROOT` if needed.
-
-## BEAVRS host-CBC run
-
-The companion runner converts the untouched BEAVRS CPU input to cycle-capable
-host CBC and reuses the exact Native build submitted by a scaling campaign. Its
-job depends on that campaign's build job, so it cannot race the executable.
-The default is 32 exclusive nodes, 64 ranks per node, one thread per rank, and
-24 hours:
-
-```bash
-export OPENSN_DANE_BEAVRS_SOURCE=/usr/workspace/$USER/opensn-gpu/beavrs-benchmark
-zsh tools/scaling/dane/run_beavrs_cbc.zsh \
-  launch cbc-minfluds-native-1 beavrs-cbc-minfluds-native-32n-1
+```zsh
+column -t "/p/lustre1/$USER/opensn-results/$LABEL/job-ids.tsv"
+awk '{print $2}' "/p/lustre1/$USER/opensn-results/$LABEL/job-ids.tsv" | xargs -r scancel
 ```
 
-The original input is preserved. The derived input uses single-angle
-aggregation, `allow_cycles=True`, `save_angular_flux=False`, and a 256 KiB MPI
-message cap. Monitor and collect with:
+## Separate source build (BEAVRS)
 
-```bash
-zsh tools/scaling/dane/run_beavrs_cbc.zsh \
-  status cbc-minfluds-native-1 beavrs-cbc-minfluds-native-32n-1
-zsh tools/scaling/dane/run_beavrs_cbc.zsh \
-  collect cbc-minfluds-native-1 beavrs-cbc-minfluds-native-32n-1
-```
+`OPENSN_DANE_SOURCE=/absolute/detached/source` makes `bootstrap_opensn.zsh setup`
+compile that source using the same private toolchain. Dependency recipes still
+come from this tools checkout. The resulting executable is printed and resides
+at `toolchains/clang19-openmpi412-python314-1/build-opensn-SHA9-native/python/opensn`
+under `/usr/workspace/$USER/opensn-dane-cbc-scaling`.
+Unset `OPENSN_DANE_SOURCE` before preparing a cycles scaling campaign.
+Never point a build directory at a different source worktree or reuse a toolchain
+tag with a different compiler/MPI installation.

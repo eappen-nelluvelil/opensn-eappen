@@ -53,7 +53,7 @@ class StudyTest(unittest.TestCase):
                 args.action(args)
 
             jobs = sorted((root / "jobs").glob("*.sbatch"))
-            self.assertEqual(len(jobs), 5)
+            self.assertEqual(len(jobs), 9)
             self.assertTrue((root / "inputs" / "strong-1.py").is_file())
             self.assertTrue((root / "inputs" / "weak-2.py").is_file())
             for job in jobs:
@@ -116,6 +116,15 @@ class StudyTest(unittest.TestCase):
         self.assertIn('"l_abs_tol": 1.0e-12', text)
         self.assertIn('"l_max_its": 10', text)
 
+    def test_four_node_reference(self):
+        measurements = [
+            study.Measurement("branch", "strong", n, n * 64, 1, t, t, 100, 0,
+                              Path("stdout.txt"))
+            for n, t in ((4, 8.0), (8, 4.0))
+        ]
+        self.assertEqual(study.summarize(measurements, 4)[1]["efficiency_percent"], 100.0)
+        self.assertEqual(study.summarize(measurements[1:], 4)[0]["efficiency_percent"], "")
+
     def test_generated_jobs_are_native_and_use_64_ranks_per_node(self):
         manifest = {
             "root": "/tmp/campaign",
@@ -140,6 +149,11 @@ class StudyTest(unittest.TestCase):
         build = study.make_build_job(manifest)
         job = study.make_study_job(manifest, "branch", "strong", 4)
         self.assertIn("-DCMAKE_BUILD_TYPE=Native", build)
+        self.assertIn("#SBATCH --partition=pdebug", build)
+        self.assertIn("#SBATCH --partition=pbatch", job)
+        self.assertIn("source-revision.txt", build)
+        self.assertIn("mpicxx --showme:version", build)
+        self.assertNotIn("mpirun", build)
         self.assertIn("-DOPENSN_WITH_CUDA=OFF", build)
         self.assertIn("#SBATCH --ntasks-per-node=64", job)
         self.assertIn("--ntasks=256", job)
@@ -147,6 +161,11 @@ class StudyTest(unittest.TestCase):
         self.assertIn("export OPENSN_NUM_THREADS=1", job)
         self.assertEqual(run(["bash", "-n"], input=build, text=True).returncode, 0)
         self.assertEqual(run(["bash", "-n"], input=job, text=True).returncode, 0)
+        profile_job = study.make_study_job(manifest, "branch", "strong", 4, "caliper")
+        self.assertIn('--caliper=runtime-report(profile.mpi,output=', profile_job)
+        self.assertIn('test -s "$trial_dir/caliper.txt"', profile_job)
+        self.assertIn("grep -q 'MPI_'", profile_job)
+        self.assertNotIn('--caliper "', profile_job)
 
     def test_dane_shell_entrypoints_are_valid(self):
         for script in ("bootstrap_opensn.zsh", "run_cbc_scaling.zsh"):
@@ -167,11 +186,63 @@ class StudyTest(unittest.TestCase):
         self.assertIn("--partition=pdebug", text)
         self.assertIn("--exclusive", text)
         self.assertIn("cmake/3.30.5", text)
+        self.assertIn("clang/19.1.3-magic openmpi/4.1.2", text)
+        self.assertIn("export OMPI_CC=clang OMPI_CXX=clang++", text)
         self.assertIn("export CC=$mpi_cc", text)
         self.assertIn("export CXX=$mpi_cxx", text)
+        self.assertIn("mpicxx --showme:version", text)
+        self.assertNotIn("mpirun", text)
+        self.assertIn('mpi_libdirs_text=$("$mpi_cc" --showme:libdirs)', text)
+        self.assertIn('MPI4PY_BUILD_MPICC="$mpi_cc" MPI4PY_BUILD_MPILD="$mpi_linker"', text)
+        self.assertIn('mpi_link_command+=("-L$mpi_directory" "-Wl,-rpath,$mpi_directory")', text)
+        self.assertIn("MPI linkage matches the selected compiler wrapper.", text)
+        self.assertIn("MPI4PY_BUILD_BACKEND=setuptools MPI4PY_BUILD_CONFIGURE=1", text)
+        self.assertIn("--no-cache-dir --no-binary=mpi4py", text)
+        self.assertIn("--force-reinstall --no-deps mpi4py==4.1.2", text)
+        self.assertIn("mpi4py-linkage.txt", text)
 
         dependency_recipe = SCRIPT_DIR.parents[1] / "dependencies" / "CMakeLists.txt"
         self.assertNotIn("--download-cmake=yes", dependency_recipe.read_text())
+        self.assertIn("--with-cmake-exec=${CMAKE_COMMAND}", dependency_recipe.read_text())
+        self.assertNotIn("--with-cmake=${CMAKE_COMMAND}", dependency_recipe.read_text())
+
+    def test_cmake_version_guard(self):
+        bootstrap = (SCRIPT_DIR / "bootstrap_opensn.zsh").read_text()
+        function = "check_cmake_version()\n" + bootstrap.split(
+            "check_cmake_version()\n", 1
+        )[1].split("\nwrite_environment()", 1)[0]
+        script = 'cmake() { print -- "cmake version $TEST_CMAKE_VERSION"; }\n'
+        script += function + '\ncheck_cmake_version\n'
+        for version, succeeds in (("3.28.6", False), ("3.30.5", True), ("4.4.3", False)):
+            environment = dict(os.environ, TEST_CMAKE_VERSION=version)
+            result = run(["zsh"], input=script, text=True, capture_output=True,
+                         env=environment)
+            self.assertEqual(result.returncode == 0, succeeds, result.stderr)
+
+    def test_saved_environment_preserves_mpi_library_selection(self):
+        bootstrap = (SCRIPT_DIR / "bootstrap_opensn.zsh").read_text()
+        function = "write_environment()\n" + bootstrap.split(
+            "write_environment()\n", 1
+        )[1].split("\nsetup_here()", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "env.sh"
+            environment = os.environ.copy()
+            environment.update({
+                "OPENSN_DANE_ENVIRONMENT": str(target),
+                "OPENSN_DANE_VENV": "/tmp/test venv",
+                "OPENSN_DANE_DEPS_PREFIX": "/tmp/test deps",
+            })
+            script = function + (
+                '\nwrite_environment "clang:openmpi" /mpi/bin/mpicc '
+                '/mpi/bin/mpicxx "/mpi/lib:/mpi/lib64"\n'
+            )
+            result = run(["zsh"], input=script, text=True, capture_output=True,
+                         env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = target.read_text()
+            self.assertIn('/mpi/lib:/mpi/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}', text)
+            for shell in ("bash", "zsh"):
+                self.assertEqual(run([shell, "-n", str(target)]).returncode, 0)
 
     def test_runner_default_environment_path_has_no_whitespace(self):
         environment = os.environ.copy()
@@ -190,7 +261,8 @@ class StudyTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
-            "environment=/tmp/dane-work/toolchains/isolated-1/opensn-dane-env.sh",
+            "environment=/tmp/dane-work/toolchains/"
+            "clang19-openmpi412-python314-1/opensn-dane-env.sh",
             result.stdout,
         )
 

@@ -30,6 +30,7 @@ WEAK_DIVISORS = {
 }
 IMPLEMENTATIONS = ("branch",)
 KINDS = ("strong", "weak")
+PROFILES = ("baseline", "caliper")
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 AVG_SWEEP_RE = re.compile(r"avg_sweep_time\s*=\s*([0-9.eE+-]+)\s*s")
 GRIND_RE = re.compile(r"sweep_time_per_unknown\s*=\s*([0-9.eE+-]+)\s*ns")
@@ -139,18 +140,29 @@ def make_build_job(manifest: dict) -> str:
         f"source {shell_quote(environment)}\n" if environment else ""
     )
     configure = (
-        "-DCMAKE_BUILD_TYPE=Native "
+        "-DCMAKE_BUILD_TYPE=Native -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "
         "-DOPENSN_WITH_CUDA=OFF -DOPENSN_WITH_HIP=OFF -DOPENSN_WITH_SYCL=OFF"
     )
     sections = []
     for implementation in IMPLEMENTATIONS:
         data = manifest["implementations"][implementation]
+        smoke_report = shell_quote(Path(manifest["root"]) / "slurm" / "build-caliper.txt")
+        smoke_input = shell_quote(Path(manifest["root"]) / "inputs" / "profile-smoke.py")
         sections.append(
             f'''echo "Configuring {data["label"]} at {data["sha"]}"
 cmake -S {shell_quote(data["source"])} -B {shell_quote(data["build"])} {configure}
 cmake --build {shell_quote(data["build"])} --parallel "$SLURM_CPUS_PER_TASK"
 grep -qx 'CMAKE_BUILD_TYPE:STRING=Native' {shell_quote(Path(data["build"]) / "CMakeCache.txt")}
 test -x {shell_quote(data["binary"])}
+export OPENSN_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+unset CALI_CONFIG CALI_SERVICES_ENABLE CALI_CONFIG_PROFILE
+smoke_report={smoke_report}
+srun --mpi=pmix --nodes=1 --ntasks=1 --cpus-per-task=1 --kill-on-bad-exit=1 \\
+  {shell_quote(data["binary"])} "--caliper=runtime-report(profile.mpi,output=$smoke_report)" \\
+  -i {smoke_input}
+test -s "$smoke_report"
+grep -q 'MPI_' "$smoke_report"
+echo '{data["sha"]}' > {shell_quote(Path(data["build"]) / "source-revision.txt")}
 '''
         )
     return f'''#!/bin/bash -l
@@ -158,7 +170,7 @@ test -x {shell_quote(data["binary"])}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task={manifest["build_jobs"]}
-#SBATCH --partition=pbatch
+#SBATCH --partition=pdebug
 #SBATCH --account={manifest["bank"]}
 #SBATCH --exclusive
 #SBATCH --time={manifest["build_time_limit"]}
@@ -167,16 +179,28 @@ test -x {shell_quote(data["binary"])}
 
 set -euo pipefail
 {source_environment}
+module list
+mpicxx --showme
+mpicxx --showme:version
 {''.join(sections)}
 '''
 
 
 def make_study_job(
-    manifest: dict, implementation: str, kind: str, nodes: int
+    manifest: dict, implementation: str, kind: str, nodes: int,
+    profile: str = "baseline",
 ) -> str:
     data = manifest["implementations"][implementation]
     root = Path(manifest["root"])
     result = root / "results" / implementation / kind / f"nodes-{nodes}"
+    if profile != "baseline":
+        result = root / "profiles" / profile / implementation / kind / f"nodes-{nodes}"
+    prefix = "" if profile == "baseline" else f"{profile}-"
+    repetitions = manifest["repetitions"] if profile == "baseline" else 1
+    caliper = (
+        'profile_args=("--caliper=runtime-report(profile.mpi,output=$trial_dir/caliper.txt)")'
+        if profile == "caliper" else "profile_args=()"
+    )
     input_file = root / "inputs" / f"{kind}-{nodes}.py"
     environment = manifest["environment"]
     source_environment = (
@@ -184,16 +208,17 @@ def make_study_job(
     )
     tasks = nodes * manifest["ranks_per_node"]
     return f'''#!/bin/bash -l
-#SBATCH --job-name=cbc-{implementation}-{kind}-{nodes}
+#SBATCH --job-name=cbc-{prefix}{implementation}-{kind}-{nodes}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node={manifest["ranks_per_node"]}
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=pbatch
 #SBATCH --account={manifest["bank"]}
 #SBATCH --exclusive
+#SBATCH --mem=0
 #SBATCH --time={manifest["time_limit"]}
-#SBATCH --output={shell_quote(root / "slurm" / f"{implementation}-{kind}-{nodes}-%j.out")}
-#SBATCH --error={shell_quote(root / "slurm" / f"{implementation}-{kind}-{nodes}-%j.err")}
+#SBATCH --output={shell_quote(root / "slurm" / f"{prefix}{implementation}-{kind}-{nodes}-%j.out")}
+#SBATCH --error={shell_quote(root / "slurm" / f"{prefix}{implementation}-{kind}-{nodes}-%j.err")}
 
 set -euo pipefail
 {source_environment}
@@ -201,6 +226,9 @@ export OPENSN_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export OMP_PLACES=cores
 export OMP_PROC_BIND=close
+export OPENBLAS_NUM_THREADS=1
+export PYTHONUNBUFFERED=1
+unset CALI_CONFIG CALI_SERVICES_ENABLE CALI_CONFIG_PROFILE
 
 binary={shell_quote(data["binary"])}
 result={shell_quote(result)}
@@ -222,7 +250,7 @@ test "$SLURM_JOB_NUM_NODES" -eq {nodes}
   date --iso-8601=seconds
 }} > "$result/job-metadata.txt"
 
-for trial in $(seq 1 {manifest["repetitions"]}); do
+for trial in $(seq 1 {repetitions}); do
   trial_dir="$result/trial-$trial"
   mkdir -p "$trial_dir"
   if [[ -f "$trial_dir/completed" ]]; then
@@ -231,16 +259,23 @@ for trial in $(seq 1 {manifest["repetitions"]}); do
   fi
 
   echo "Starting {implementation} {kind} nodes={nodes} trial=$trial"
+  {caliper}
   srun \\
+    --mpi=pmix --kill-on-bad-exit=1 \\
     --nodes={nodes} \\
     --ntasks={tasks} \\
     --ntasks-per-node={manifest["ranks_per_node"]} \\
     --cpus-per-task=1 \\
     --distribution=block \\
     --mpibind=on \\
-    "$binary" -i {shell_quote(input_file)} \\
+    "$binary" "${{profile_args[@]}}" -i {shell_quote(input_file)} \\
     > "$trial_dir/stdout.txt" \\
     2> "$trial_dir/stderr.txt"
+  grep -Fq 'OpenSn finished execution.' "$trial_dir/stdout.txt"
+  if [[ {profile} == caliper ]]; then
+    test -s "$trial_dir/caliper.txt"
+    grep -q 'MPI_' "$trial_dir/caliper.txt"
+  fi
   touch "$trial_dir/completed"
 done
 '''
@@ -286,6 +321,7 @@ def prepare(args: argparse.Namespace) -> None:
 
     cross_sections = root / "inputs" / "xs_168g.xs"
     cross_sections.write_bytes(args.cross_sections.read_bytes())
+    (root / "inputs" / "profile-smoke.py").write_text('print("Caliper smoke test")\n')
 
     strong_mesh = root / "meshes" / "strong.msh"
     generate_mesh(args.gmsh, args.geometry, args.strong_divisor, strong_mesh)
@@ -307,7 +343,7 @@ def prepare(args: argparse.Namespace) -> None:
 
     implementations = {
         "branch": {
-            "label": "CBC min-FLUDS profiling branch",
+            "label": "CBC minimum FLUDS",
             "sha": args.sha,
             "source": str(args.source.resolve()),
             "build": str(args.build.resolve()),
@@ -335,14 +371,16 @@ def prepare(args: argparse.Namespace) -> None:
     for implementation in IMPLEMENTATIONS:
         for kind in KINDS:
             for nodes in args.nodes:
-                path = root / "jobs" / f"{implementation}-{kind}-{nodes}.sbatch"
-                write_executable(
-                    path, make_study_job(manifest, implementation, kind, nodes)
-                )
+                for profile in PROFILES:
+                    prefix = "" if profile == "baseline" else f"{profile}-"
+                    path = root / "jobs" / f"{prefix}{implementation}-{kind}-{nodes}.sbatch"
+                    write_executable(
+                        path, make_study_job(manifest, implementation, kind, nodes, profile)
+                    )
 
     print(
-        f"Prepared {len(IMPLEMENTATIONS) * len(KINDS) * len(args.nodes)} "
-        f"scaling jobs in {root}"
+        f"Prepared {len(PROFILES) * len(IMPLEMENTATIONS) * len(KINDS) * len(args.nodes)} "
+        f"scaling/profiling jobs in {root}"
     )
 
 
@@ -362,7 +400,7 @@ def parse_job_id(output: str) -> str:
 
 def submit(args: argparse.Namespace) -> None:
     root = args.root.resolve()
-    manifest = load_manifest(root)
+    load_manifest(root)
     ids_file = root / "job-ids.tsv"
     if ids_file.exists():
         raise RuntimeError(f"jobs were already submitted: {ids_file}")
@@ -374,26 +412,18 @@ def submit(args: argparse.Namespace) -> None:
     ids_file.write_text(f"build\t{build_id}\n")
     print(f"submitted build: {build_id}")
 
-    for implementation in IMPLEMENTATIONS:
-        for kind in KINDS:
-            for nodes in manifest["nodes"]:
-                name = f"{implementation}-{kind}-{nodes}"
-                job = root / "jobs" / f"{name}.sbatch"
-                job_id = parse_job_id(
-                    run(
-                        [
-                            "sbatch",
-                            "--parsable",
-                            f"--dependency=afterok:{build_id}",
-                            str(job),
-                        ],
-                        capture=True,
-                    )
-                )
-                rows.append((name, job_id))
-                with ids_file.open("a") as stream:
-                    stream.write(f"{name}\t{job_id}\n")
-                print(f"submitted {name}: {job_id}")
+    for job in sorted((root / "jobs").glob("*-*.sbatch")):
+        name = job.stem
+        job_id = parse_job_id(
+            run(
+                ["sbatch", "--parsable", f"--dependency=afterok:{build_id}",
+                 str(job)], capture=True,
+            )
+        )
+        rows.append((name, job_id))
+        with ids_file.open("a") as stream:
+            stream.write(f"{name}\t{job_id}\n")
+        print(f"submitted {name}: {job_id}")
 
     print(f"Submitted {len(rows)} job(s); IDs are in {ids_file}")
 
@@ -475,7 +505,9 @@ def interquartile_range(values: list[float]) -> float:
     return quartiles[2] - quartiles[0]
 
 
-def summarize(measurements: list[Measurement]) -> list[dict]:
+def summarize(measurements: list[Measurement], reference_nodes: int | None = None) -> list[dict]:
+    if reference_nodes is None and measurements:
+        reference_nodes = min(item.nodes for item in measurements)
     grouped: dict[tuple[str, str, int], list[Measurement]] = {}
     for measurement in measurements:
         key = (measurement.implementation, measurement.kind, measurement.nodes)
@@ -495,7 +527,7 @@ def summarize(measurements: list[Measurement]) -> list[dict]:
         values = grouped[key]
         times = [item.average_sweep_seconds for item in values]
         grinds = [item.sweep_nanoseconds_per_unknown for item in values]
-        baseline_key = (implementation, kind, 1)
+        baseline_key = (implementation, kind, reference_nodes)
         baseline = (
             grind_medians.get(baseline_key)
             if kind == "strong"
@@ -504,7 +536,7 @@ def summarize(measurements: list[Measurement]) -> list[dict]:
         efficiency = None
         if baseline is not None:
             metric = statistics.median(grinds) if kind == "strong" else statistics.median(times)
-            denominator = metric * (nodes if kind == "strong" else 1)
+            denominator = metric * (nodes / reference_nodes if kind == "strong" else 1)
             efficiency = 100.0 * baseline / denominator
         lagged = [item.lagged_unknowns for item in values if item.lagged_unknowns is not None]
         rows.append(
@@ -512,6 +544,7 @@ def summarize(measurements: list[Measurement]) -> list[dict]:
                 "implementation": implementation,
                 "kind": kind,
                 "nodes": nodes,
+                "reference_nodes": reference_nodes,
                 "ranks": values[0].ranks,
                 "trials": len(values),
                 "average_sweep_seconds": statistics.median(times),
@@ -559,6 +592,7 @@ def write_summary_markdown(path: Path, manifest: dict, rows: list[dict]) -> None
         f"{manifest['ranks_per_node']} MPI ranks per node.",
         "",
         f"- Revision: `{manifest['implementations']['branch']['sha']}`",
+        f"- Efficiency reference: {min(manifest['nodes'])} nodes.",
         "",
     ]
     for kind in KINDS:
@@ -592,6 +626,12 @@ def write_summary_markdown(path: Path, manifest: dict, rows: list[dict]) -> None
 def collect(args: argparse.Namespace) -> None:
     root = args.root.resolve()
     manifest = load_manifest(root)
+    reports = sorted((root / "profiles").glob("caliper/*/*/nodes-*/trial-*/caliper.txt"))
+    (root / "profile-index.md").write_text(
+        "# Caliper reports\n\nInstrumented times are not baseline scaling times.\n\n"
+        + "\n".join(f"- [{path.relative_to(root)}]({path.relative_to(root)})" for path in reports)
+        + "\n"
+    )
     measurements = []
     expected = 0
     for implementation in IMPLEMENTATIONS:
@@ -622,12 +662,13 @@ def collect(args: argparse.Namespace) -> None:
     if not measurements:
         print(f"Collected 0 of {expected} expected measurements.")
         return
-    rows = summarize(measurements)
+    rows = summarize(measurements, min(manifest["nodes"]))
     write_raw_csv(root / "raw-results.csv", measurements)
     write_summary_csv(root / "summary.csv", rows)
     write_summary_markdown(root / "summary.md", manifest, rows)
     print(f"Collected {len(measurements)} of {expected} expected measurements.")
     print(root / "summary.md")
+    print(f"Found {len(reports)} Caliper reports; see {root / 'profile-index.md'}")
 
 
 def make_parser() -> argparse.ArgumentParser:

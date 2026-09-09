@@ -5,7 +5,8 @@ setopt pipe_fail
 
 PROGRAM=$0
 SCRIPT_DIR=${0:A:h}
-SOURCE_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
+SOURCE_ROOT=${OPENSN_DANE_SOURCE:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)}
+TOOLS_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 STUDY=$SCRIPT_DIR/study.py
 BOOTSTRAP=$SCRIPT_DIR/bootstrap_opensn.zsh
 
@@ -25,7 +26,7 @@ usage()
   print -u2 -- "  OPENSN_DANE_REPETITIONS Trials per allocation (default: 3)"
   print -u2 -- "  OPENSN_DANE_TIME_LIMIT  Scaling-job limit (default: 01:00:00)"
   print -u2 -- "  OPENSN_DANE_BUILD_JOBS  Parallel build jobs (default: 16)"
-  print -u2 -- "  OPENSN_DANE_TOOLCHAIN    Isolated toolchain tag (default: isolated-1)"
+  print -u2 -- "  OPENSN_DANE_TOOLCHAIN    Toolchain tag (default: clang19-openmpi412-python314-1)"
 }
 
 require_command()
@@ -49,7 +50,7 @@ set_paths()
   local label=$1
   export OPENSN_DANE_RESULTS=${OPENSN_DANE_RESULTS:-/p/lustre1/$USER/opensn-results}
   export OPENSN_DANE_WORK_ROOT=${OPENSN_DANE_WORK_ROOT:-/usr/workspace/$USER/opensn-dane-cbc-scaling}
-  export OPENSN_DANE_TOOLCHAIN=${OPENSN_DANE_TOOLCHAIN:-isolated-1}
+  export OPENSN_DANE_TOOLCHAIN=${OPENSN_DANE_TOOLCHAIN:-clang19-openmpi412-python314-1}
   local default_environment=$OPENSN_DANE_WORK_ROOT/toolchains/$OPENSN_DANE_TOOLCHAIN/opensn-dane-env.sh
   export OPENSN_DANE_ENVIRONMENT=${OPENSN_DANE_ENVIRONMENT:-$default_environment}
   export OPENSN_DANE_ROOT=$OPENSN_DANE_RESULTS/$label
@@ -76,6 +77,14 @@ prepare_campaign()
   set_paths "$label"
   : ${OPENSN_DANE_BANK:?Set OPENSN_DANE_BANK to the Slurm account/bank}
 
+  if [[ -z ${SLURM_JOB_ID:-} ]]; then
+    salloc --nodes=1 --ntasks=1 --cpus-per-task=16 --partition=pdebug \
+      --account="$OPENSN_DANE_BANK" --exclusive --mem=0 --time=01:00:00 \
+      srun --nodes=1 --ntasks=1 --cpus-per-task=16 \
+        zsh "$PROGRAM" prepare-here "$label"
+    return
+  fi
+
   require_command git
   require_command python3
 
@@ -85,6 +94,7 @@ prepare_campaign()
     return 1
   fi
   source "$OPENSN_DANE_ENVIRONMENT"
+  export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
   require_command "${OPENSN_DANE_GMSH:-gmsh}"
 
   if [[ -n $(git -C "$SOURCE_ROOT" status --porcelain) ]]; then
@@ -94,9 +104,9 @@ prepare_campaign()
 
   local branch_sha=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
   local branch_short=${branch_sha[1,9]}
-  local branch_source=$OPENSN_DANE_WORK_ROOT/sources/cbc-minfluds-$branch_short
+  local branch_source=$OPENSN_DANE_WORK_ROOT/sources/cbc-$branch_short
   local build_root=$OPENSN_DANE_WORK_ROOT/builds/$label
-  local branch_build=$build_root/cbc-minfluds-$branch_short-native
+  local branch_build=$build_root/cbc-$branch_short-native
 
   mkdir -p "$OPENSN_DANE_WORK_ROOT/sources" "$OPENSN_DANE_WORK_ROOT/builds"
   if [[ -e $branch_source ]]; then
@@ -115,8 +125,8 @@ prepare_campaign()
     --source "$branch_source" \
     --sha "$branch_sha" \
     --build "$branch_build" \
-    --geometry "$SOURCE_ROOT/tools/scaling/lib/cube.geo" \
-    --cross-sections "$SOURCE_ROOT/tools/scaling/lib/xs_168g.xs" \
+    --geometry "$TOOLS_ROOT/tools/scaling/lib/cube.geo" \
+    --cross-sections "$TOOLS_ROOT/tools/scaling/lib/xs_168g.xs" \
     --gmsh "${OPENSN_DANE_GMSH:-gmsh}" \
     --nodes 1,2,4,8,16,32,64,128,256 \
     --ranks-per-node 64 \
@@ -160,7 +170,7 @@ case $command_name in
     prepare_campaign "$label"
     python3 "$STUDY" submit --root "$OPENSN_DANE_ROOT"
     ;;
-  prepare)
+  prepare|prepare-here)
     prepare_campaign "$label"
     ;;
   submit)
