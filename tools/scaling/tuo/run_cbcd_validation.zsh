@@ -217,7 +217,7 @@ submit_scaling_metrics()
   export OPENSN_TUO_PROFILE_KINDS=strong,weak
   export OPENSN_TUO_PROFILE_DIVISOR=39
   export OPENSN_TUO_PROFILE_ITERATIONS=$OPENSN_TUO_MAX_ITERATIONS
-  export OPENSN_TUO_PROFILES=cbcd-metrics
+  export OPENSN_TUO_PROFILES=${OPENSN_TUO_PROFILES:-cbcd-metrics}
   export OPENSN_TUO_BATCH_TIME_LIMIT=${OPENSN_TUO_BATCH_TIME_LIMIT:-1h}
   export OPENSN_TUO_PROFILE_TIME_LIMIT=${OPENSN_TUO_PROFILE_TIME_LIMIT:-1h}
   export OPENSN_TUO_BATCH_ROOT=$OPENSN_TUO_RESULTS/$OPENSN_TUO_LABEL-batch
@@ -239,7 +239,7 @@ submit_scaling_metrics()
   zsh "$campaign_profile_root/submit.zsh" \
     --nodes "$OPENSN_TUO_PROFILE_NODES" \
     --kinds "$OPENSN_TUO_PROFILE_KINDS" \
-    --profiles cbcd-metrics
+    --profiles "$OPENSN_TUO_PROFILES"
 
   stage 'Native scaling and message-metric campaign submitted'
   print -- "thread_budget_per_rank=$OPENSN_TUO_NUM_THREADS (20 workers + 1 communicator by default)"

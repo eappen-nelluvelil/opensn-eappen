@@ -168,7 +168,7 @@ class PreparationTests(unittest.TestCase):
             self.assertNotRegex(job, r"(?m)^(?:\s*local\s+)?status=")
             self.assertNotIn("amd-gpumode", job)
             self.assertNotIn("setattr=gpumode", job)
-            self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
+            self.assertIn("-c 21 -g 1", job)
             compile(
                 (args.output / "inputs/strong-2.py").read_text(),
                 "strong-2.py",
@@ -259,7 +259,7 @@ class PreparationTests(unittest.TestCase):
                 self.assertIn("#flux: -n 1024", job)
                 self.assertIn("#flux: -t 1h", job)
 
-    def test_profile_jobs_are_valid_zsh_and_keep_default_launch_unmodified(self):
+    def test_profile_jobs_are_valid_zsh_and_request_devices(self):
         args = SimpleNamespace(
             label="profile",
             queue="pbatch",
@@ -291,7 +291,9 @@ class PreparationTests(unittest.TestCase):
                 self.assertEqual(syntax.returncode, 0, syntax.stderr)
                 self.assertNotIn("amd-gpumode", job)
                 self.assertNotRegex(job, r"(?m)^(?:\s*local\s+)?status=")
-                self.assertNotRegex(job, r"(?:^|\s)-[cg](?:\s|=|[0-9])")
+                self.assertIn("#flux: -g 1", job)
+                if profile != "omniperf":
+                    self.assertIn("-c 21 -g 1", job)
                 if profile == "caliper-mpi":
                     self.assertIn("profile.mpi", job)
                     self.assertNotIn("mpi.message.count", job)
@@ -1002,7 +1004,8 @@ set -euo pipefail
 print -- "$*" >> "$CALL_LOG"
 if [[ $1 == prepare-profile ]]; then
   mkdir -p -- "$OPENSN_TUO_PROFILE_ROOT"
-  print -r -l -- '#!/bin/zsh' 'print -- "submit $*" >> "$CALL_LOG"' >| "$OPENSN_TUO_PROFILE_ROOT/submit.zsh"
+  print -r -l -- '#!/bin/zsh' 'print -- "submit $*" >> "$CALL_LOG"' \\
+    >| "$OPENSN_TUO_PROFILE_ROOT/submit.zsh"
   chmod +x "$OPENSN_TUO_PROFILE_ROOT/submit.zsh"
 fi
 """
@@ -1048,21 +1051,25 @@ fi
             helper.write_text(
                 """#!/bin/zsh
 set -euo pipefail
-print -- "$* batch_time=$OPENSN_TUO_BATCH_TIME_LIMIT profile_time=$OPENSN_TUO_PROFILE_TIME_LIMIT profile_nodes=$OPENSN_TUO_PROFILE_NODES" >> "$CALL_LOG"
+print -- "$* batch_time=$OPENSN_TUO_BATCH_TIME_LIMIT" \\
+  "profile_time=$OPENSN_TUO_PROFILE_TIME_LIMIT" \\
+  "profile_nodes=$OPENSN_TUO_PROFILE_NODES" >> "$CALL_LOG"
 case $1 in
   paths|rebuild) ;;
   prepare-batch)
     root=$OPENSN_TUO_BATCH_ROOT/resource-aware
     mkdir -p -- "$root"
     print -- '{}' >| "$root/manifest.json"
-    print -r -l -- '#!/bin/zsh' 'print -- generated-batch-submit >> "$CALL_LOG"' >| "$root/submit.zsh"
+    print -r -l -- '#!/bin/zsh' 'print -- generated-batch-submit >> "$CALL_LOG"' \\
+      >| "$root/submit.zsh"
     chmod +x "$root/submit.zsh"
     ;;
   prepare-profile)
     root=$OPENSN_TUO_PROFILE_ROOT
     mkdir -p -- "$root"
     print -- '{}' >| "$root/manifest.json"
-    print -r -l -- '#!/bin/zsh' 'print -- generated-profile-submit >> "$CALL_LOG"' >| "$root/submit.zsh"
+    print -r -l -- '#!/bin/zsh' 'print -- generated-profile-submit >> "$CALL_LOG"' \\
+      >| "$root/submit.zsh"
     chmod +x "$root/submit.zsh"
     ;;
 esac

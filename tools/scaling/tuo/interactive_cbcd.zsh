@@ -250,6 +250,11 @@ run_generated_job()
 
 build_here()
 {
+  if [[ -n ${OPENSN_TUO_REUSE_ROOT:-} ]]; then
+    zsh "$source_dir/tools/scaling/tuo/build_reuse.zsh" \
+      "$source_dir" "$OPENSN_TUO_REUSE_ROOT" "$work_root"
+    return
+  fi
   if [[ -r $environment && -x $binary ]]; then
     print -- "Reusing completed build: $binary"
     return
@@ -276,6 +281,11 @@ build()
 
 rebuild_here()
 {
+  if [[ -n ${OPENSN_TUO_REUSE_ROOT:-} ]]; then
+    zsh "$source_dir/tools/scaling/tuo/build_reuse.zsh" \
+      "$source_dir" "$OPENSN_TUO_REUSE_ROOT" "$work_root"
+    return
+  fi
   [[ -r $environment ]] || {
     print -u2 "The dependency environment is not ready under $work_root"
     print -u2 "Run '$script build' first."

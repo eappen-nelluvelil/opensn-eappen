@@ -196,6 +196,7 @@ def flux_header(label, nodes, tasks, queue, bank, time_limit, stdout, stderr):
 #flux: --job-name={label[:48]}
 #flux: -N {nodes}
 #flux: -n {tasks}
+#flux: -g 1
 #flux: -q {queue}
 {bank_line}#flux: --exclusive
 #flux: -t {time_limit}
@@ -296,7 +297,7 @@ for trial_number in {{1..{args.repetitions}}}; do
   /usr/bin/time \\
     -f 'wall_seconds=%e launcher_max_rss_kb=%M' \\
     -o "$trial/time.txt" \\
-    flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error \\
+    flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error -c {args.opensn_num_threads} -g 1 \\
       "$binary" --verbose 1 -i "$input" \\
       > "$trial/stdout.txt" 2> "$trial/stderr.txt"
   exit_code=$?
@@ -320,8 +321,8 @@ trap - EXIT INT TERM
 """
 
 
-def profile_command(profile, nodes, ranks):
-    launch = f"flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error"
+def profile_command(profile, nodes, ranks, threads=21):
+    launch = f"flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error -c {threads} -g 1"
     if profile == "baseline":
         return "", f'{launch} "$binary" --verbose 1 -i "$input"'
     if profile == "cbcd-metrics":
@@ -408,7 +409,7 @@ def profile_job(args, study, profile, kind, nodes, input_path):
             f"worker_policy={args.worker_policy}",
         ),
     )
-    profiler_setup, command = profile_command(profile, nodes, ranks)
+    profiler_setup, command = profile_command(profile, nodes, ranks, args.opensn_num_threads)
     artifact = ":"
     if profile == "caliper":
         artifact = '[[ -s "$result/profile.txt" ]]'
