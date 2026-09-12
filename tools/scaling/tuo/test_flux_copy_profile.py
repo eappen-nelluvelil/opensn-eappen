@@ -1,4 +1,4 @@
-"""Test the outgoing-copy campaign driver without a cluster allocation."""
+"""Test the flux-copy campaign driver without a cluster allocation."""
 
 import os
 from pathlib import Path
@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 
-DRIVER = Path(__file__).with_name("run_outgoing_copy_profile.zsh")
+DRIVER = Path(__file__).with_name("run_flux_copy_profile.zsh")
 
 
 class CampaignTest(unittest.TestCase):

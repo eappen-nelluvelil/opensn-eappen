@@ -5,7 +5,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 (( $# >= 2 && $# <= 3 )) || {
-  print -u2 'usage: run_outgoing_copy_profile.zsh {run|resume|collect|status|paths} LABEL [PROFILE]'
+  print -u2 'usage: run_flux_copy_profile.zsh {run|resume|collect|status|paths} LABEL [PROFILE]'
   exit 2
 }
 action=$1
@@ -19,7 +19,7 @@ study_root=${OPENSN_TUO_STUDY_ROOT:-/usr/workspace/$USER/opensn-gpu/cbcd-v2-stud
 
 export OPENSN_SOURCE=$source_dir
 export OPENSN_TUO_REUSE_ROOT=${OPENSN_TUO_REUSE_ROOT:-$study_root/builds/gfx942-minfluds-profiling-6386bec5e}
-export OPENSN_TUO_ROOT=$study_root/builds/outgoing-copy-$short
+export OPENSN_TUO_ROOT=$study_root/builds/flux-copy-$short
 export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-opensn
 export OPENSN_TUO_RESULTS=${OPENSN_TUO_RESULTS:-/p/lustre5/$USER/opensn-results}
 export OPENSN_TUO_MESH_DIR=${OPENSN_TUO_MESH_DIR:-$study_root/builds/gfx942/mesh-cache}

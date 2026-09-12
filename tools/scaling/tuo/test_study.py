@@ -301,6 +301,10 @@ class PreparationTests(unittest.TestCase):
                     self.assertNotIn("comm.stats", job)
                 if profile == "rocprof":
                     self.assertIn('*/rank-*/*.csv', job)
+                    self.assertIn("-o exit-timeout=none", job)
+                    self.assertIn("-o exit-on-error", job)
+                else:
+                    self.assertNotIn("exit-timeout=none", job)
                 if profile == "cbcd-metrics":
                     self.assertIn("OPENSN_CBCD_PROFILE_DIR", job)
                     self.assertIn("rank-*/sweeps.csv", job)

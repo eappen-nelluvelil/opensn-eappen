@@ -358,6 +358,9 @@ def profile_command(profile, nodes, ranks, threads=21):
         )
         return "", command
     if profile == "rocprof":
+        # Untraced ranks can exit while rocprofv3 is still writing trace files.
+        # The allocation walltime remains the bound on profiler finalization.
+        launch += " -o exit-timeout=none"
         setup = (
             "export OPENSN_PROFILE_MODE=rocprof\n"
             'export OPENSN_PROFILE_BINARY="$binary"\n'

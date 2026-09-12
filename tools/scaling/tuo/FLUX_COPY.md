@@ -1,15 +1,16 @@
-# Outgoing-copy comparison on Tuo
+# Flux-copy comparisons on Tuo
 
-Use `run_outgoing_copy_profile.zsh` from a clean, revision-specific worktree of
+Use `run_flux_copy_profile.zsh` from a clean, revision-specific worktree of
 `cbc-and-cbcd-with-minimally-sized-fluds-profiling-2`. The comparison baseline is
-`6bffcd8b43421fb8813a8748f18afa69e8e48f61`. The driver does not fetch or push Git
+`6bffcd8b43421fb8813a8748f18afa69e8e48f61`. The outgoing-copy-only comparison is
+`1e69af813dd979dca68fd2ad5450fa11362d5303`. The driver does not fetch or push Git
 branches and does not modify existing source worktrees or builds.
 
 ```zsh
 export OPENSN_TUO_BANK=cbronze
-OUTGOING_RUNNER=$SOURCE/tools/scaling/tuo/run_outgoing_copy_profile.zsh
-OUTGOING_LABEL=cbcd-outgoing-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
-zsh "$OUTGOING_RUNNER" run "$OUTGOING_LABEL"
+COPY_RUNNER=$SOURCE/tools/scaling/tuo/run_flux_copy_profile.zsh
+COPY_LABEL=cbcd-incoming-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
+zsh "$COPY_RUNNER" run "$COPY_LABEL"
 ```
 
 The driver first requests one pdebug node for a Native HIP build. It reuses the
@@ -20,7 +21,7 @@ That directory must contain the dependency `env.zsh` and `deps` directory, not
 only an OpenSn build that itself reused another dependency installation.
 
 The new executable, Python environment, and MPI header overlay are separate,
-under `builds/outgoing-copy-<revision>`. Existing dependency libraries are not
+under `builds/flux-copy-<revision>`. Existing dependency libraries are not
 rebuilt or overwritten. A source-revision marker is checked before launching.
 
 Each profile requests an eight-node pdebug allocation for 60 minutes. Inside
@@ -44,6 +45,11 @@ This does not require the optional Caliper ROCm service. rocprofv3 must be
 available in the compute-node environment. A missing profiler is reported as
 a failure, not replaced by an uninstrumented run.
 
+Only rocprof jobs disable Flux's first-task-exit timeout. This allows the traced
+rank to finish writing its files after untraced ranks exit. The allocation
+walltime and `exit-on-error` remain enabled. Earlier outgoing-copy results
+remain unchanged and do not need to be rerun.
+
 Run failures are retained, the other profiles are attempted, and collection
 runs afterward. The driver exits nonzero if any profile or collection failed.
 An interrupt terminates the driver instead of advancing to the next profile.
@@ -51,9 +57,9 @@ The allocation time limit covers the entire sequence for one profile, not each
 individual problem.
 
 ```zsh
-zsh "$OUTGOING_RUNNER" status "$OUTGOING_LABEL"
-zsh "$OUTGOING_RUNNER" resume "$OUTGOING_LABEL"
-zsh "$OUTGOING_RUNNER" collect "$OUTGOING_LABEL"
+zsh "$COPY_RUNNER" status "$COPY_LABEL"
+zsh "$COPY_RUNNER" resume "$COPY_LABEL"
+zsh "$COPY_RUNNER" collect "$COPY_LABEL"
 ```
 
 `status` lists the user's Flux jobs and the campaign result path. `resume`
@@ -62,7 +68,7 @@ if either strong or weak is incomplete at a node count, it reruns that pair
 into new run directories. To resume only one profile:
 
 ```zsh
-zsh "$OUTGOING_RUNNER" resume "$OUTGOING_LABEL" rocprof
+zsh "$COPY_RUNNER" resume "$COPY_LABEL" rocprof
 ```
 
 Results are under
@@ -75,5 +81,5 @@ establish a speedup on Tuo or guarantee monotonic scaling.
 The driver can be checked locally without a scheduler:
 
 ```sh
-python3 tools/scaling/tuo/test_outgoing_copy_profile.py
+python3 tools/scaling/tuo/test_flux_copy_profile.py
 ```
