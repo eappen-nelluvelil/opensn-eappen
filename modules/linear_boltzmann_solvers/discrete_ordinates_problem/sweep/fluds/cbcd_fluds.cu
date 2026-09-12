@@ -209,10 +209,9 @@ CBCD_FLUDS::PublishOutgoingPsi(CBCDSweepChunk& sweep_chunk,
     {
       const std::size_t face_data_size =
         static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
-      const int destination_rank = common_data_.GetDestinationRanks()[face_info.destination_index];
       // Nonlocal face storage is not recycled within a sweep. StopCommunicator drains all
       // descriptors before another sweep can overwrite it.
-      async_comm.EnqueueOutgoing(destination_rank,
+      async_comm.EnqueueOutgoing(face_info.destination_index,
                                  worker_id,
                                  angle_set_id,
                                  face_info.destination_face_index,
