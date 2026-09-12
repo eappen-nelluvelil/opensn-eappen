@@ -9,7 +9,7 @@ branches and does not modify existing source worktrees or builds.
 ```zsh
 export OPENSN_TUO_BANK=cbronze
 COPY_RUNNER=$SOURCE/tools/scaling/tuo/run_flux_copy_profile.zsh
-COPY_LABEL=cbcd-peer-reuse-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
+COPY_LABEL=cbcd-batched-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
 zsh "$COPY_RUNNER" run "$COPY_LABEL"
 ```
 
@@ -26,6 +26,8 @@ The new executable and MPI header overlay are separate, under
 `OPENSN_TUO_REUSE_VENV` if that environment was moved. A missing environment,
 incompatible Python ABI, or failed package check stops the build rather than
 silently installing packages. Keep the shared venv unchanged while jobs use it.
+The peer-reuse campaign at `6fa8bee92` used this same venv. Its baseline
+triplets are the immediate comparison for the batched-publication experiment.
 Existing dependency libraries are not rebuilt or overwritten. A source-revision
 marker is checked before launching.
 

@@ -101,7 +101,7 @@ public:
 
   ~CBCD_AsynchronousCommunicator();
 
-  /** Publish one outgoing face through the calling worker's SPSC queue. */
+  /** Stage one completed outgoing face in the calling worker's SPSC queue. */
   void EnqueueOutgoing(std::size_t destination_index,
                        std::size_t worker_id,
                        std::size_t angle_set_id,
@@ -116,7 +116,14 @@ public:
     record.destination_face_index = destination_face_index;
     record.psi_values = psi_values;
     record.num_psi_values = num_psi_values;
-    queue.PublishSlot();
+    queue.StageSlot();
+  }
+
+  /** Publish the outgoing faces of an already completed cell batch. */
+  void PublishOutgoingBatch(std::size_t worker_id, std::size_t angle_set_id)
+  {
+    for (const auto channel : destination_channels_by_angle_set_[angle_set_id])
+      destination_channels_[channel].worker_queues[worker_id]->PublishStagedSlots();
   }
 
   /** Process all received batches currently visible for one angle set. */

@@ -182,6 +182,7 @@ CBCD_FLUDS::PublishOutgoingPsi(CBCDSweepChunk& sweep_chunk,
   const auto& grid = *(GetSPDS().GetGrid());
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
   const int groupset_id = sweep_chunk.GetGroupset().id;
+  bool has_outgoing_faces = false;
   for (const auto& cell_local_id : cell_local_ids)
   {
     const auto reflecting_faces = GetReflectingOutgoingBoundaryFaces(cell_local_id);
@@ -207,6 +208,7 @@ CBCD_FLUDS::PublishOutgoingPsi(CBCDSweepChunk& sweep_chunk,
 
     for (const auto& face_info : common_data_.GetOutgoingNonlocalFaces(cell_local_id))
     {
+      has_outgoing_faces = true;
       const std::size_t face_data_size =
         static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
       // Nonlocal face storage is not recycled within a sweep. StopCommunicator drains all
@@ -221,6 +223,8 @@ CBCD_FLUDS::PublishOutgoingPsi(CBCDSweepChunk& sweep_chunk,
                                  face_data_size);
     }
   }
+  if (has_outgoing_faces)
+    async_comm.PublishOutgoingBatch(worker_id, angle_set_id);
 }
 
 void

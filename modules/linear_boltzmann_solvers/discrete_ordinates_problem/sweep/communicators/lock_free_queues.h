@@ -24,6 +24,7 @@ public:
   {
     buffer_ = std::vector<T>(capacity);
     producer_head_ = 0;
+    producer_published_head_ = 0;
     consumer_tail_ = 0;
     producer_tail_cache_ = 0;
     consumer_head_cache_ = 0;
@@ -45,6 +46,8 @@ public:
     const auto capacity = buffer_.size();
     while ((producer_head_ - producer_tail_cache_) >= capacity)
     {
+      // Let the consumer release staged elements before waiting for space.
+      PublishStagedSlots();
       producer_tail_cache_ = consumed_tail_.load(std::memory_order_acquire);
       if ((producer_head_ - producer_tail_cache_) < capacity)
         break;
@@ -56,8 +59,20 @@ public:
   /** Makes the most recently reserved element visible to the consumer. */
   void PublishSlot()
   {
-    ++producer_head_;
+    StageSlot();
+    PublishStagedSlots();
+  }
+
+  /** Finishes the reserved element without publishing it yet. Producer only. */
+  void StageSlot() { ++producer_head_; }
+
+  /** Publishes all finished elements. Call before the producer waits for more work. */
+  void PublishStagedSlots()
+  {
+    if (producer_head_ == producer_published_head_)
+      return;
     published_head_.store(producer_head_, std::memory_order_release);
+    producer_published_head_ = producer_head_;
   }
 
   /** Returns pointers to the current contiguous logical prefix of ready elements. */
@@ -113,6 +128,7 @@ public:
 private:
   std::vector<T> buffer_;
   alignas(std::hardware_destructive_interference_size) std::size_t producer_head_ = 0;
+  std::size_t producer_published_head_ = 0;
   alignas(std::hardware_destructive_interference_size) std::size_t consumer_tail_ = 0;
   std::size_t producer_tail_cache_ = 0;
   std::size_t consumer_head_cache_ = 0;
