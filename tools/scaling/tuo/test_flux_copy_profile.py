@@ -41,6 +41,8 @@ print -r -- "$*" >> "$TEST_LOG"
 [[ $OPENSN_TUO_PROFILE_NODES == 1,2,4,8 ]]
 [[ $OPENSN_TUO_PROFILE_KINDS == strong,weak ]]
 [[ $OPENSN_TUO_NUM_THREADS == 21 ]]
+[[ $OPENSN_TUO_PROFILE_REPETITIONS == 3 ]]
+[[ $OPENSN_TUO_REUSE_VENV == */flux-copy-f60e0ecbd/venv ]]
 [[ $OPENSN_TUO_TIME_LIMIT == 60m ]]
 if [[ $1 == build ]]; then
   mkdir -p "$OPENSN_TUO_BUILD"

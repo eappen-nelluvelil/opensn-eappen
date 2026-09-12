@@ -31,6 +31,7 @@ profile_names=${OPENSN_TUO_PROFILES:-baseline,caliper,caliper-mpi,pmpi}
 profile_kinds=${OPENSN_TUO_PROFILE_KINDS:-strong}
 profile_divisor=${OPENSN_TUO_PROFILE_DIVISOR:-39}
 profile_iterations=${OPENSN_TUO_PROFILE_ITERATIONS:-10}
+profile_repetitions=${OPENSN_TUO_PROFILE_REPETITIONS:-3}
 profile_time=${OPENSN_TUO_PROFILE_TIME_LIMIT:-6h}
 progress_interval=${OPENSN_TUO_PROGRESS_INTERVAL:-60}
 bank=${OPENSN_TUO_BANK:-}
@@ -115,8 +116,8 @@ check_settings()
     print -u2 'Batch repetitions and iterations must be positive.'
     exit 2
   }
-  [[ $profile_divisor == <1-> && $profile_iterations == <1-> ]] || {
-    print -u2 'Profile divisor and iteration count must be positive.'
+  [[ $profile_divisor == <1-> && $profile_iterations == <1-> && $profile_repetitions == <1-> ]] || {
+    print -u2 'Profile divisor, iteration count, and repetitions must be positive.'
     exit 2
   }
   [[ $progress_interval == <0-> ]] || {
@@ -509,7 +510,9 @@ prepare_profile_for()
 {
   local study_queue=$1
   local time_limit=$profile_time
+  local repetitions=1
   [[ $study_queue == pdebug ]] && time_limit=$interactive_time
+  [[ $study_queue == pdebug ]] && repetitions=$profile_repetitions
   require_build
   local -a optional_args=()
   [[ -z $bank ]] || optional_args+=(--bank "$bank")
@@ -526,6 +529,7 @@ prepare_profile_for()
     --profile-nodes "$profile_nodes" \
     --profile-kinds "$profile_kinds" \
     --profiles "$profile_names" \
+    --interactive-repetitions "$repetitions" \
     --max-iterations "$profile_iterations" \
     --worker-policy resource-aware \
     --opensn-num-threads "$num_threads" \
@@ -554,16 +558,21 @@ run_profile_interactive_here()
   local selected_nodes=${2:-$profile_nodes}
   check_profile "$profile"
   local ran=0
-  local kind nodes job
+  local kind nodes job trial
+  export OPENSN_TUO_PIN_PROFILE_NODES=1
+  export OPENSN_TUO_PROFILE_TRIAL_GROUP="$(flux getattr jobid)-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   for kind in ${(s:,:)profile_kinds}; do
     for nodes in ${(s:,:)selected_nodes}; do
       check_profile_nodes "$nodes"
       job=$profile_root/jobs/$profile-$kind-$nodes.zsh
       [[ -x $job ]] || continue
-      run_generated_job \
-        "profile=$profile kind=$kind nodes=$nodes" \
-        "$job" \
-        "$profile_root/results/$profile/$kind/nodes-$nodes"
+      for (( trial=1; trial<=profile_repetitions; ++trial )); do
+        export OPENSN_TUO_PROFILE_TRIAL=$trial
+        run_generated_job \
+          "profile=$profile kind=$kind nodes=$nodes trial=$trial/$profile_repetitions" \
+          "$job" \
+          "$profile_root/results/$profile/$kind/nodes-$nodes"
+      done
       ran=1
     done
   done
@@ -579,10 +588,16 @@ profile_case_complete()
   local kind=$2
   local nodes=$3
   local root=$profile_root/results/$profile/$kind/nodes-$nodes
-  local run
+  local run group
+  local -A completed_groups
   for run in "$root"/run-*(N/); do
     if [[ -f $run/SUCCESS && -r $run/exit_code.txt && $(<"$run/exit_code.txt") == 0 ]]; then
-      return 0
+      (( profile_repetitions == 1 )) && return 0
+      [[ -r $run/metadata.txt ]] || continue
+      group=$(sed -n 's/^trial_group=//p' "$run/metadata.txt")
+      [[ -n $group && $group != single ]] || continue
+      completed_groups[$group]=$(( ${completed_groups[$group]:-0} + 1 ))
+      (( completed_groups[$group] >= profile_repetitions )) && return 0
     fi
   done
   return 1
@@ -713,6 +728,7 @@ paths()
   print -- "profiles=$profile_names"
   print -- "profile_divisor=$profile_divisor"
   print -- "profile_iterations=$profile_iterations"
+  print -- "profile_repetitions=$profile_repetitions"
   print -- "profile_time_limit=$profile_time"
   print -- "progress_interval_seconds=$progress_interval"
   print -- "fixed_workers=${worker_count:-unset}"

@@ -19,6 +19,7 @@ study_root=${OPENSN_TUO_STUDY_ROOT:-/usr/workspace/$USER/opensn-gpu/cbcd-v2-stud
 
 export OPENSN_SOURCE=$source_dir
 export OPENSN_TUO_REUSE_ROOT=${OPENSN_TUO_REUSE_ROOT:-$study_root/builds/gfx942-minfluds-profiling-6386bec5e}
+export OPENSN_TUO_REUSE_VENV=${OPENSN_TUO_REUSE_VENV:-$study_root/builds/flux-copy-f60e0ecbd/venv}
 export OPENSN_TUO_ROOT=$study_root/builds/flux-copy-$short
 export OPENSN_TUO_BUILD=$OPENSN_TUO_ROOT/build-opensn
 export OPENSN_TUO_RESULTS=${OPENSN_TUO_RESULTS:-/p/lustre5/$USER/opensn-results}
@@ -30,6 +31,7 @@ export OPENSN_TUO_PROFILE_NODES=1,2,4,8
 export OPENSN_TUO_PROFILE_KINDS=strong,weak
 export OPENSN_TUO_PROFILE_DIVISOR=39
 export OPENSN_TUO_PROFILE_ITERATIONS=10
+export OPENSN_TUO_PROFILE_REPETITIONS=3
 export OPENSN_TUO_NUM_THREADS=21
 export OPENSN_TUO_TIME_LIMIT=60m
 export OPENSN_TUO_PROFILE_TIME_LIMIT=60m

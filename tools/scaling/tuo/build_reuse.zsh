@@ -21,19 +21,37 @@ unset PYTHONPATH PYTHONHOME
 export PYTHONNOUSERSITE=1
 deps=$reuse_root/deps
 overlay=$build_root/headers
-venv=$build_root/venv
+venv=${OPENSN_TUO_REUSE_VENV:-$build_root/venv}
+venv=${venv:A}
 build=$build_root/build-opensn
 mkdir -p "$build_root"
-if [[ ! -x $venv/bin/python ]]; then
-  python -m venv "$venv"
-fi
-source "$venv/bin/activate"
-if [[ ! -f $build_root/python-ready ]]; then
-  python -m pip install pybind11 numpy scipy matplotlib jinja2 ninja gmsh==4.15.2
-  MPI4PY_BUILD_CONFIGURE=1 MPI4PY_BUILD_MPICC=$(command -v mpicc) \
-    python -m pip install --no-cache-dir --no-binary=mpi4py mpi4py==4.1.2
+if [[ -n ${OPENSN_TUO_REUSE_VENV:-} ]]; then
+  [[ -x $venv/bin/python && -r $venv/bin/activate ]] || {
+    print -u2 "Reusable Python environment is missing: $venv"
+    exit 2
+  }
+  python_abi=$(python -c 'import sysconfig; print(sysconfig.get_config_var("SOABI"))')
+  reuse_abi=$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_config_var("SOABI"))')
+  [[ $python_abi == $reuse_abi ]] || {
+    print -u2 'Reusable Python environment does not match the dependency Python ABI.'
+    exit 2
+  }
+  source "$venv/bin/activate"
+  python -c 'import numpy, scipy, pybind11, matplotlib, jinja2, ninja, gmsh'
   python -m pip check
-  touch "$build_root/python-ready"
+  print -- "Reusing Python environment without installing packages: $venv"
+else
+  if [[ ! -x $venv/bin/python ]]; then
+    python -m venv "$venv"
+  fi
+  source "$venv/bin/activate"
+  if [[ ! -f $build_root/python-ready ]]; then
+    python -m pip install pybind11 numpy scipy matplotlib jinja2 ninja gmsh==4.15.2
+    MPI4PY_BUILD_CONFIGURE=1 MPI4PY_BUILD_MPICC=$(command -v mpicc) \
+      python -m pip install --no-cache-dir --no-binary=mpi4py mpi4py==4.1.2
+    python -m pip check
+    touch "$build_root/python-ready"
+  fi
 fi
 python -c 'import numpy, scipy, pybind11; import mpi4py; mpi4py.rc.initialize=False; from mpi4py import MPI; print(MPI.Get_library_version())'
 

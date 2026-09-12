@@ -255,6 +255,8 @@ trap finish_run EXIT INT TERM
   print -- "started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {metadata_lines}
   print -- "flux_job_id=${{FLUX_JOB_ID:-unset}}"
+  print -- "trial_group=${{OPENSN_TUO_PROFILE_TRIAL_GROUP:-single}}"
+  print -- "trial_number=${{OPENSN_TUO_PROFILE_TRIAL:-1}}"
 }} >| "$result/metadata.txt"
 """
 
@@ -322,7 +324,7 @@ trap - EXIT INT TERM
 
 
 def profile_command(profile, nodes, ranks, threads=21):
-    launch = f"flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error -c {threads} -g 1"
+    launch = f'flux run -N {nodes} -n {ranks} --exclusive -o exit-on-error -c {threads} -g 1 "${{placement[@]}}"'
     if profile == "baseline":
         return "", f'{launch} "$binary" --verbose 1 -i "$input"'
     if profile == "cbcd-metrics":
@@ -436,10 +438,16 @@ def profile_job(args, study, profile, kind, nodes, input_path):
         artifact = 'find "$result/measurements" -type f -print -quit | grep -q .'
     elif profile == "omniperf":
         artifact = 'find "$result/workloads/cbcd" -type f -print -quit | grep -q .'
+    broker_ranks = "0" if nodes == 1 else f"0-{nodes - 1}"
     return header + runtime_environment(args) + native_build_check(args) + f"""
 binary={quote(args.binary)}
 input={quote(input_path)}
 {run_setup}
+placement=()
+if [[ ${{OPENSN_TUO_PIN_PROFILE_NODES:-0}} == 1 ]]; then
+  placement=(--requires=ranks:{broker_ranks})
+  flux exec -r {broker_ranks} hostname > "$result/nodes.txt"
+fi
 {profiler_setup}
 set +e
 /usr/bin/time \\
@@ -649,6 +657,7 @@ def prepare_profile(args):
         "profile_divisor": args.profile_divisor,
         "profile_nodes": args.profile_nodes,
         "profile_kinds": args.profile_kinds,
+        "interactive_repetitions": getattr(args, "interactive_repetitions", 1),
         "profiles": args.profiles,
         "max_iterations": args.max_iterations,
         "save_angular_flux": args.save_angular_flux,
@@ -1459,7 +1468,7 @@ def collect_profile(args):
     for case in record["cases"]:
         kind = case.get("kind", "strong")
         root = study / "results" / case["profile"] / kind / f"nodes-{case['nodes']}"
-        case_completed = False
+        completed_groups = {}
         case_has_run = False
         for run in sorted(root.glob("run-*")):
             if not run.is_dir():
@@ -1474,7 +1483,15 @@ def collect_profile(args):
                 )
             except (OSError, RuntimeError, ValueError):
                 values = None
-            case_completed = case_completed or values is not None
+            metadata = {}
+            if (run / "metadata.txt").is_file():
+                for line in (run / "metadata.txt").read_text().splitlines():
+                    key, separator, value = line.partition("=")
+                    if separator:
+                        metadata[key] = value
+            group = metadata.get("trial_group", "single")
+            if values is not None:
+                completed_groups[group] = completed_groups.get(group, 0) + 1
             rows.append(
                 {
                     "profile": case["profile"],
@@ -1482,6 +1499,8 @@ def collect_profile(args):
                     "nodes": case["nodes"],
                     "ranks": case["ranks"],
                     "run": run.name,
+                    "trial_group": group,
+                    "trial_number": metadata.get("trial_number", "1"),
                     "completed": values is not None,
                     "avg_sweep_time_s": values["avg_sweep_time_s"] if values else None,
                     "unknowns": values["unknowns"] if values else None,
@@ -1505,6 +1524,8 @@ def collect_profile(args):
                     "nodes": case["nodes"],
                     "ranks": case["ranks"],
                     "run": "not-started",
+                    "trial_group": "",
+                    "trial_number": "",
                     "completed": False,
                     "avg_sweep_time_s": None,
                     "unknowns": None,
@@ -1516,7 +1537,9 @@ def collect_profile(args):
                     "result_directory": str(root),
                 }
             )
-        if not case_completed:
+        required = record.get("interactive_repetitions", 1)
+        if not any(count >= required and (required == 1 or group != "single")
+                   for group, count in completed_groups.items()):
             incomplete_cases.append(case["id"])
     write_rows(study / "profile-summary.csv", rows)
     lines = [
@@ -1553,7 +1576,7 @@ def collect_profile(args):
     collect_cbcd_metrics(study, record)
     if incomplete_cases and not getattr(args, "allow_incomplete", False):
         raise RuntimeError(
-            "profile cases have no successful run: " + ", ".join(incomplete_cases)
+            "profile cases lack a complete trial group: " + ", ".join(incomplete_cases)
         )
     print(f"Profile inventory written to {study}")
 
@@ -1623,6 +1646,7 @@ def parser():
         "--profiles", type=parse_profiles, default=DEFAULT_PROFILES
     )
     profile_prepare.add_argument("--max-iterations", type=positive_integer, default=2)
+    profile_prepare.add_argument("--interactive-repetitions", type=positive_integer, default=1)
     profile_prepare.set_defaults(function=prepare_profile)
 
     submit_command = commands.add_parser("submit", help="submit selected jobs")

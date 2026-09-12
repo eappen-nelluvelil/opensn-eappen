@@ -9,7 +9,7 @@ branches and does not modify existing source worktrees or builds.
 ```zsh
 export OPENSN_TUO_BANK=cbronze
 COPY_RUNNER=$SOURCE/tools/scaling/tuo/run_flux_copy_profile.zsh
-COPY_LABEL=cbcd-incoming-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
+COPY_LABEL=cbcd-peer-reuse-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
 zsh "$COPY_RUNNER" run "$COPY_LABEL"
 ```
 
@@ -20,15 +20,28 @@ Set `OPENSN_TUO_REUSE_ROOT` before running if these dependencies are elsewhere.
 That directory must contain the dependency `env.zsh` and `deps` directory, not
 only an OpenSn build that itself reused another dependency installation.
 
-The new executable, Python environment, and MPI header overlay are separate,
-under `builds/flux-copy-<revision>`. Existing dependency libraries are not
-rebuilt or overwritten. A source-revision marker is checked before launching.
+The new executable and MPI header overlay are separate, under
+`builds/flux-copy-<revision>`. Python packages are reused from the latest campaign's
+`builds/flux-copy-f60e0ecbd/venv`, without installation or upgrades. Override
+`OPENSN_TUO_REUSE_VENV` if that environment was moved. A missing environment,
+incompatible Python ABI, or failed package check stops the build rather than
+silently installing packages. Keep the shared venv unchanged while jobs use it.
+Existing dependency libraries are not rebuilt or overwritten. A source-revision
+marker is checked before launching.
 
 Each profile requests an eight-node pdebug allocation for 60 minutes. Inside
 that allocation, the strong and weak problems run at 1, 2, 4, and 8 nodes, with
 four ranks per node and one GPU per rank. The thread budget is 21 per rank.
 Inputs retain single-angle aggregation, 64 groups, ten solver iterations,
 `save_angular_flux=False`, and the existing divisor-39 strong-scaling problem.
+
+Every case runs three consecutive times within that allocation. Each N-node
+case is constrained to broker ranks 0 through N-1, so all three trials use the
+same physical nodes. Each run records `nodes.txt`, a trial number, and an
+allocation trial-group identifier. There are 144 measured runs across the six
+profiles. The first trial is retained, not discarded as warm-up. Later trials
+can benefit from warmed system caches and devices, but each starts a new OpenSn
+process. Compare trial distributions as well as medians.
 
 Profiles run in this order:
 
@@ -63,9 +76,10 @@ zsh "$COPY_RUNNER" collect "$COPY_LABEL"
 ```
 
 `status` lists the user's Flux jobs and the campaign result path. `resume`
-retains the existing prepared jobs. The underlying helper resumes by node:
-if either strong or weak is incomplete at a node count, it reruns that pair
-into new run directories. To resume only one profile:
+retains the existing prepared jobs. A case is complete only after three
+successes in one trial group. If either strong or weak is incomplete at a node
+count, the helper repeats both three-trial sets in new directories. It does
+not combine partial groups from different allocations. To resume one profile:
 
 ```zsh
 zsh "$COPY_RUNNER" resume "$COPY_LABEL" rocprof

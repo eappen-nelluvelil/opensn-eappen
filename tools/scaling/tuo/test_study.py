@@ -783,6 +783,39 @@ class ResultTests(unittest.TestCase):
                 "not-started", (study / "profile-summary.md").read_text()
             )
 
+    def test_profile_collection_requires_one_complete_repetition_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            study = Path(directory)
+            (study / "manifest.json").write_text(json.dumps({
+                "type": "profile", "label": "repeated", "interactive_repetitions": 3,
+                "cases": [{"id": "baseline-1", "profile": "baseline", "kind": "strong",
+                           "nodes": 1, "ranks": 4}],
+            }))
+            root = study / "results/baseline/strong/nodes-1"
+            for i, group in enumerate(("first", "first", "second")):
+                run = root / f"run-{i}"
+                run.mkdir(parents=True)
+                (run / "metadata.txt").write_text(f"trial_group={group}\ntrial_number={i + 1}\n")
+            with mock.patch.object(STUDY, "read_result", return_value=result_values(1)):
+                with self.assertRaisesRegex(RuntimeError, "complete trial group"):
+                    STUDY.collect_profile(SimpleNamespace(study=study))
+                (root / "run-2/metadata.txt").write_text("trial_group=first\ntrial_number=3\n")
+                STUDY.collect_profile(SimpleNamespace(study=study))
+            with (study / "profile-summary.csv").open() as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual({r["trial_group"] for r in rows}, {"first"})
+            self.assertEqual([r["trial_number"] for r in rows], ["1", "2", "3"])
+
+    def test_profile_node_placement_is_only_enabled_for_interactive_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = prepare_args(Path(directory))
+            for profile in ("baseline", "cbcd-metrics", "caliper", "caliper-mpi", "pmpi", "rocprof"):
+                script = STUDY.profile_job(args, Path(directory), profile, "strong", 4, Path("input.py"))
+                self.assertIn('${OPENSN_TUO_PIN_PROFILE_NODES:-0}', script)
+                self.assertIn('placement=(--requires=ranks:0-3)', script)
+                self.assertIn('"${placement[@]}"', script)
+                self.assertIn('hostname > "$result/nodes.txt"', script)
+
 
 class SubmissionAndPolicyComparisonTests(unittest.TestCase):
     def test_submit_filters_scaling_jobs_without_tracking_scheduler_state(self):
