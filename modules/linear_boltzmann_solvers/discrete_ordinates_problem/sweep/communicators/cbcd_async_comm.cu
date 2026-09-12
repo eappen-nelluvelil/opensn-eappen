@@ -3,7 +3,6 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
-#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/profiling/cbcd_profiler.h"
 #include "framework/mpi/mpi_comm_set.h"
@@ -54,7 +53,6 @@ struct BufferReader
 
 CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
-  const std::vector<CBCD_FLUDS*>& fluds,
   const MPICommunicatorSet& comm_set,
   const std::vector<std::vector<int>>& incoming_source_partitions,
   const std::size_t max_message_bytes,
@@ -62,7 +60,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   CBCDProfiler* profiler)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
-    fluds_(fluds),
     profiler_(profiler),
     communication_bounds_(bounds),
     mpi_tag_(static_cast<int>(angle_sets.size())),
@@ -82,7 +79,13 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
       mailbox->Preallocate(bounds[i].incoming_mailbox_capacity);
       mailbox->InitializeSlots(
         [&](IncomingFaceBatch& batch)
-        { batch.cell_local_ids.reserve(bounds[i].max_incoming_faces_per_batch); });
+        {
+          batch.faces.reserve(bounds[i].max_incoming_faces_per_batch);
+          batch.psi_values.reserve(bounds[i].max_incoming_values_per_batch);
+          batch.faces.clear();
+          batch.psi_values.clear();
+          batch.source_partition_index = 0;
+        });
       incoming_mailboxes_.push_back(std::move(mailbox));
     }
     else
@@ -419,17 +422,33 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
         const auto source_partition_index = source_indices.find(source_partition)->second;
 
-        auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-        batch.cell_local_ids.resize(num_entries);
+        const auto* const section_ptr = reader.Data();
+        std::size_t total_values = 0;
         for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
         {
-          const auto incoming_face_index = reader.LoadFaceIndex();
-          const auto num_psi_values = reader.LoadSize();
-          batch.cell_local_ids[entry_index] = fluds_[angle_set_id]->StoreIncomingFace(
-            source_partition_index, incoming_face_index, reader.Data());
-          reader.SkipBytes(num_psi_values * sizeof(double));
+          reader.LoadFaceIndex();
+          const auto data_size = reader.LoadSize();
+          reader.SkipBytes(data_size * sizeof(double));
+          total_values += data_size;
         }
-        // Publish only after every face in the section has reached its final storage.
+        auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+        batch.source_partition_index = source_partition_index;
+        batch.faces.resize(num_entries);
+        batch.psi_values.resize(total_values);
+        detail::BufferReader section_reader{section_ptr};
+        std::size_t value_offset = 0;
+        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
+        {
+          auto& face = batch.faces[entry_index];
+          face.incoming_face_index = section_reader.LoadFaceIndex();
+          face.psi_offset = value_offset;
+          const auto num_psi_values = section_reader.LoadSize();
+          std::memcpy(batch.psi_values.data() + value_offset,
+                      section_reader.Data(),
+                      num_psi_values * sizeof(double));
+          section_reader.SkipBytes(num_psi_values * sizeof(double));
+          value_offset += num_psi_values;
+        }
         incoming_mailboxes_[angle_set_id]->PublishSlot();
       }
       if (profiler_)

@@ -281,19 +281,19 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   if (has_incoming)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
-    work_done |=
-      async_comm_->ProcessIncoming(GetID(),
-                                   [this, &ready_cell_ids](const IncomingFaceBatch& batch)
-                                   {
-                                     // The communicator stores flux before release-publishing these
-                                     // face notifications. Keep one decrement per face, including
-                                     // repeated cell IDs within a batch.
-                                     for (const auto cell_local_id : batch.cell_local_ids)
-                                     {
-                                       if (--remaining_cell_dependencies_[cell_local_id] == 0)
-                                         ready_cell_ids.push_back(cell_local_id);
-                                     }
-                                   });
+    work_done |= async_comm_->ProcessIncoming(
+      GetID(),
+      [this, &ready_cell_ids](const IncomingFaceBatch& batch)
+      {
+        const auto* psi_base = batch.psi_values.data();
+        for (const auto& face : batch.faces)
+        {
+          const auto cell_local_id = cbcd_fluds_.StoreIncomingFace(
+            batch.source_partition_index, face.incoming_face_index, psi_base + face.psi_offset);
+          if (--remaining_cell_dependencies_[cell_local_id] == 0)
+            ready_cell_ids.push_back(static_cast<std::uint32_t>(cell_local_id));
+        }
+      });
   }
 
   if ((not batch_pipeline_.HasKernelInFlight()) and (not ready_cell_ids.empty()))
