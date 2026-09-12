@@ -98,7 +98,7 @@ public:
   /// Store one received nonlocal face and return its downwind local cell ID.
   std::uint32_t StoreIncomingFace(std::uint32_t source_partition_index,
                                   std::uint32_t incoming_face_index,
-                                  const double* psi_values);
+                                  const void* psi_values);
 
   void ClearLocalAndReceivePsi() override {}
   void ClearSendPsi() override {}
