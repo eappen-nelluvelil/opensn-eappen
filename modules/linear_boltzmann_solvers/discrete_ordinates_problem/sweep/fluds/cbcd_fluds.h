@@ -139,8 +139,6 @@ private:
   /// CSR offsets for reflecting face plans indexed by local cell ID.
   std::vector<std::uint32_t> reflecting_outgoing_boundary_face_offsets_;
   std::vector<ReflectingBoundaryFacePlan> reflecting_boundary_face_plans_;
-  /// Precomputed contiguous copies into serialized outgoing nonlocal faces.
-  std::vector<OutgoingPsiCopy> outgoing_psi_copy_plan_;
 
   /// Refresh the device pointer bundle after storage allocation.
   void CreatePointerSet();

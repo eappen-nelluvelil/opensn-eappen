@@ -99,14 +99,6 @@ public:
   const IncomingNonlocalFace& GetIncomingNonlocalFace(std::uint32_t source_partition_index,
                                                       std::uint32_t incoming_face_index) const;
 
-  /// Return source-to-destination node mappings for an outgoing face.
-  std::span<const OutgoingFaceNodeCopy>
-  GetOutgoingFaceNodeCopies(const OutgoingNonlocalFace& face) const
-  {
-    return {outgoing_nonlocal_face_node_copies_.data() + face.node_copy_begin,
-            face.num_node_copies};
-  }
-
   /// Return the device cell-face-node index map.
   const std::uint64_t* GetDeviceIndex() const { return device_cell_face_node_map_; }
 
@@ -130,8 +122,6 @@ private:
   std::vector<std::uint32_t> cell_to_outgoing_nonlocal_face_offsets_;
   std::vector<IncomingNonlocalFace> incoming_nonlocal_faces_;
   std::vector<OutgoingNonlocalFace> outgoing_nonlocal_faces_;
-  /// Flattened node permutations for outgoing nonlocal faces.
-  std::vector<OutgoingFaceNodeCopy> outgoing_nonlocal_face_node_copies_;
   /// Peer arrays referenced by compact indices in face metadata.
   std::vector<int> destination_ranks_;
   std::vector<int> incoming_source_partitions_;
