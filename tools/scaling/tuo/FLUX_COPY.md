@@ -9,7 +9,7 @@ branches and does not modify existing source worktrees or builds.
 ```zsh
 export OPENSN_TUO_BANK=cbronze
 COPY_RUNNER=$SOURCE/tools/scaling/tuo/run_flux_copy_profile.zsh
-COPY_LABEL=cbcd-shared-recv-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
+COPY_LABEL=cbcd-sections-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
 zsh "$COPY_RUNNER" run "$COPY_LABEL"
 ```
 
@@ -27,8 +27,9 @@ The new executable and MPI header overlay are separate, under
 incompatible Python ABI, or failed package check stops the build rather than
 silently installing packages. Keep the shared venv unchanged while jobs use it.
 The peer-reuse, batched-publication, and completion-query campaigns used this
-same venv. The complete baseline triplets from `67915b3a1` are the immediate
-comparison for the shared-receive experiment.
+same venv. The complete baseline triplets from `1d928df28` are the immediate
+comparison for section indexing and contiguous queue consumption. The shared
+receive-packet implementation is retained.
 Existing dependency libraries are not rebuilt or overwritten. A source-revision
 marker is checked before launching.
 
@@ -104,6 +105,24 @@ It does not perform the final FLUDS writes or wait for a worker to free a packet
 before receiving another. Compare reported peak host memory, worker incoming
 processing, communicator receive processing, and baseline sweep times. Reduced
 allocation and copying do not by themselves guarantee lower sweep times.
+
+The section-indexing experiment adds the serialized payload-byte count to
+each angle-set section. The communicator skips directly to the next section,
+and workers still parse and place the face records. All ranks must use the
+same executable because the packet header changed. Packet-size accounting
+includes the additional header field. The queue experiment replaces temporary
+pointer-vector snapshots with two read-only spans over the ring. Publication
+and release ordering are unchanged. Compare receive and flush phase costs,
+packet counts and sizes, memory, and the uninstrumented sweep times separately.
+The source changes are `01d934418` (section indexing) and `ca4c2ae1a`
+(queue spans). The single MPI progress thread per rank, source-specific
+receive probing, worker assignments, and device kernels are unchanged.
+
+The shared-receive baseline still has a substantial strong-scaling limit:
+from one to eight nodes, ready-cell batches become smaller and launch counts
+per rank do not fall in proportion to volume work. These two changes remove
+repeated host processing but do not remove the sweep graph's critical path.
+Do not infer ideal scaling or a Tuo speedup from isolated local timings.
 
 To keep the campaign driver running through an ordinary SSH disconnect:
 
