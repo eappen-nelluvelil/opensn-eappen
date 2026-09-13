@@ -53,6 +53,7 @@ public:
   void RecordCommunicationPhase(CommunicationPhase phase, std::uint64_t elapsed_ns);
   void RecordSend(std::uint64_t message_bytes, std::uint64_t face_records);
   void RecordReceive(std::uint64_t message_bytes, std::uint64_t face_records);
+  void RecordSkippedReceiveProbe();
   void RecordCommunicatorDrain(std::uint64_t elapsed_ns);
   void RecordEndBarrier(std::uint64_t elapsed_ns);
 
@@ -104,6 +105,7 @@ private:
     SampleSummary receive_bytes;
     std::uint64_t sent_face_records = 0;
     std::uint64_t received_face_records = 0;
+    std::uint64_t skipped_receive_probes = 0;
     Histogram send_byte_histogram;
     Histogram receive_byte_histogram;
   };

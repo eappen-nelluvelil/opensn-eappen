@@ -86,8 +86,11 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
 
   source_indices_by_angle_set_.resize(angle_sets.size());
+  source_face_counts_.resize(source_partitions_.size(), 0);
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
   {
+    const auto& common_data =
+      static_cast<const CBCD_FLUDS&>(angle_sets[angle_set_id]->GetFLUDS()).GetCommonData();
     auto& source_to_index = source_indices_by_angle_set_[angle_set_id];
     const auto& source_partitions = incoming_source_partitions[angle_set_id];
     source_to_index.resize(source_partitions_.size());
@@ -96,6 +99,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
       const auto peer = std::lower_bound(
         source_partitions_.begin(), source_partitions_.end(), source_partitions[source_index]);
       source_to_index[peer - source_partitions_.begin()] = static_cast<std::uint32_t>(source_index);
+      source_face_counts_[peer - source_partitions_.begin()] +=
+        common_data.GetNumIncomingNonlocalFaces(source_index);
     }
   }
 
@@ -192,6 +197,7 @@ void
 CBCD_AsynchronousCommunicator::Start(const std::size_t num_workers)
 {
   ConfigureWorkerQueues(num_workers);
+  remaining_source_faces_ = source_face_counts_;
 
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& complete : angle_set_complete_)
@@ -401,10 +407,19 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
   for (std::size_t source_index = 0; source_index < source_ranks_.size(); ++source_index)
   {
+    auto& remaining_faces = remaining_source_faces_[source_index];
+    if (remaining_faces == 0)
+    {
+      if (profiler_)
+        profiler_->RecordSkippedReceiveProbe();
+      continue;
+    }
     const int source_rank = source_ranks_[source_index];
     mpi::Status status;
 
-    while (recv_comm.iprobe(source_rank, mpi_tag_, status))
+    // Each nonlocal face is sent once per angle set. The end-of-sweep barrier
+    // prevents this peer from sending the next sweep's records before Stop().
+    while (remaining_faces != 0 and recv_comm.iprobe(source_rank, mpi_tag_, status))
     {
       received_any = true;
       const auto num_bytes = status.count<std::byte>();
@@ -436,6 +451,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       if (profiler_)
         profiler_->RecordReceive(static_cast<std::uint64_t>(num_bytes), num_face_records);
       receive_packets_->Release(packet);
+      remaining_faces -= num_face_records;
     }
   }
   return received_any;

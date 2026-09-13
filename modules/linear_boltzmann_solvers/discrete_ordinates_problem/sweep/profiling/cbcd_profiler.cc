@@ -198,6 +198,12 @@ CBCDProfiler::RecordReceive(const std::uint64_t message_bytes, const std::uint64
 }
 
 void
+CBCDProfiler::RecordSkippedReceiveProbe()
+{
+  ++active_sweep_->communication.skipped_receive_probes;
+}
+
+void
 CBCDProfiler::RecordCommunicatorDrain(const std::uint64_t elapsed_ns)
 {
   active_sweep_->communicator_drain_ns = elapsed_ns;
@@ -227,7 +233,7 @@ CBCDProfiler::WriteResults() const
             "comm_idle_fraction,flush_outgoing_ns,probe_and_receive_ns,poll_sends_ns,"
             "send_messages,send_bytes,send_faces,send_bytes_min,send_bytes_mean,send_bytes_max,"
             "receive_messages,receive_bytes,receive_faces,receive_bytes_min,receive_bytes_mean,"
-            "receive_bytes_max,communicator_drain_ns,end_barrier_ns\n";
+            "receive_bytes_max,communicator_drain_ns,end_barrier_ns,skipped_receive_probes\n";
   sweeps << std::setprecision(17);
 
   std::ofstream angle_sets;
@@ -298,7 +304,7 @@ CBCDProfiler::WriteResults() const
                  ? 0.0
                  : static_cast<double>(comm.receive_bytes.sum) / comm.receive_bytes.count)
            << ',' << comm.receive_bytes.maximum << ',' << sweep.communicator_drain_ns << ','
-           << sweep.end_barrier_ns << '\n';
+           << sweep.end_barrier_ns << ',' << comm.skipped_receive_probes << '\n';
 
     const auto write_histogram =
       [&](

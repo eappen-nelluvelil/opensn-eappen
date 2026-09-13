@@ -174,6 +174,10 @@ private:
   /// Unique receive peers in partition and communicator-rank coordinates.
   std::vector<int> source_partitions_;
   std::vector<int> source_ranks_;
+  /// Exact face-record totals per receive peer, restored before each sweep.
+  std::vector<std::size_t> source_face_counts_;
+  /// Remaining records owned exclusively by the progress thread during a sweep.
+  std::vector<std::size_t> remaining_source_faces_;
   /// Per-angle-set source indices, indexed by this communicator's receive peer.
   std::vector<std::vector<std::uint32_t>> source_indices_by_angle_set_;
   /// Unique destinations and their compact communication channels.
