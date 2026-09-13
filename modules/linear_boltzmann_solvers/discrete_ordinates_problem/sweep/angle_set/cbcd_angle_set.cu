@@ -283,14 +283,14 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
       GetID(),
       [this, &ready_cell_ids](const IncomingFaceBatch& batch)
       {
-        const auto* psi_base = batch.psi_values.data();
-        for (const auto& face : batch.faces)
-        {
-          const auto cell_local_id = cbcd_fluds_.StoreIncomingFace(
-            batch.source_partition_index, face.incoming_face_index, psi_base + face.psi_offset);
-          if (--remaining_cell_dependencies_[cell_local_id] == 0)
-            ready_cell_ids.push_back(static_cast<std::uint32_t>(cell_local_id));
-        }
+        batch.ProcessFaces(
+          [this, &batch, &ready_cell_ids](const std::uint32_t face_index, const std::byte* psi)
+          {
+            const auto cell_local_id =
+              cbcd_fluds_.StoreIncomingFace(batch.source_partition_index, face_index, psi);
+            if (--remaining_cell_dependencies_[cell_local_id] == 0)
+              ready_cell_ids.push_back(static_cast<std::uint32_t>(cell_local_id));
+          });
       });
   }
 

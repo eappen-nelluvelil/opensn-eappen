@@ -86,8 +86,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       for (const auto& [_, destination] : outgoing_bounds_by_destination)
         bounds.outgoing_queue_bounds.push_back(destination);
 
-      std::unordered_map<std::uint32_t, std::size_t> incoming_faces_by_source;
-      std::unordered_map<std::uint32_t, std::size_t> incoming_values_by_source;
       for (std::size_t cell_local_id = 0; cell_local_id < common_data.GetNumLocalCells();
            ++cell_local_id)
       {
@@ -95,9 +93,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
         {
           if (face_info.num_face_nodes == 0)
             continue;
-          ++incoming_faces_by_source[face_info.source_partition_index];
-          incoming_values_by_source[face_info.source_partition_index] +=
-            static_cast<std::size_t>(face_info.num_face_nodes) * stride;
           const auto source_partition =
             common_data.GetIncomingSourcePartitions()[face_info.source_partition_index];
           auto& section_bytes_by_angle_set = section_bytes_by_source[source_partition];
@@ -108,11 +103,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             static_cast<std::size_t>(face_info.num_face_nodes) * stride * sizeof(double);
         }
       }
-      for (const auto& [_, count] : incoming_faces_by_source)
-        bounds.max_incoming_faces_per_batch = std::max(bounds.max_incoming_faces_per_batch, count);
-      for (const auto& [_, values] : incoming_values_by_source)
-        bounds.max_incoming_values_per_batch =
-          std::max(bounds.max_incoming_values_per_batch, values);
     }
 
     std::size_t max_message_bytes = 0;

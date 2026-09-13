@@ -9,7 +9,7 @@ branches and does not modify existing source worktrees or builds.
 ```zsh
 export OPENSN_TUO_BANK=cbronze
 COPY_RUNNER=$SOURCE/tools/scaling/tuo/run_flux_copy_profile.zsh
-COPY_LABEL=cbcd-query-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
+COPY_LABEL=cbcd-shared-recv-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
 zsh "$COPY_RUNNER" run "$COPY_LABEL"
 ```
 
@@ -26,9 +26,9 @@ The new executable and MPI header overlay are separate, under
 `OPENSN_TUO_REUSE_VENV` if that environment was moved. A missing environment,
 incompatible Python ABI, or failed package check stops the build rather than
 silently installing packages. Keep the shared venv unchanged while jobs use it.
-The peer-reuse campaign at `6fa8bee92` and the batched-publication campaign at
-`b235155a9` used this same venv. The complete baseline triplets from `b235155a9`
-are the immediate comparison for the completion-query experiment.
+The peer-reuse, batched-publication, and completion-query campaigns used this
+same venv. The complete baseline triplets from `67915b3a1` are the immediate
+comparison for the shared-receive experiment.
 Existing dependency libraries are not rebuilt or overwritten. A source-revision
 marker is checked before launching.
 
@@ -95,13 +95,15 @@ Compare uninstrumented baseline sweep times separately from instrumented runs.
 This campaign measures the optimization on Tuo. Local CUDA tests cannot
 establish a speedup on Tuo or guarantee monotonic scaling.
 
-The completion-query experiment retains the stream completion check in
-`TryAdvanceOneStep` and removes the second query from batch retirement. The
-same worker owns the angle set and submits no stream work between those points.
-No event, polling delay, worker-count change, or receive-placement change is
-introduced. Inspect ROCm query counts alongside kernel counts, not just summed
-API durations from concurrent workers. Keep the uninstrumented timings as the
-performance comparison.
+The shared-receive experiment keeps MPI packet bytes alive until every
+referenced angle-set section has been placed in FLUDS by its worker. Mailboxes
+contain section descriptors instead of copied flux vectors. The communicator
+recycles fully consumed packets and retains at most one idle buffer per source
+and power-of-two size class.
+It does not perform the final FLUDS writes or wait for a worker to free a packet
+before receiving another. Compare reported peak host memory, worker incoming
+processing, communicator receive processing, and baseline sweep times. Reduced
+allocation and copying do not by themselves guarantee lower sweep times.
 
 To keep the campaign driver running through an ordinary SSH disconnect:
 

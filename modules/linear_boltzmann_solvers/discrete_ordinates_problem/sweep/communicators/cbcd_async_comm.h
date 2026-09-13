@@ -4,6 +4,7 @@
 #pragma once
 
 #include "framework/data_types/byte_array.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_receive_packet.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <atomic>
@@ -23,26 +24,6 @@ namespace opensn
 class AngleSet;
 class CBCDProfiler;
 class MPICommunicatorSet;
-
-/// Metadata for one received face within an incoming batch.
-struct IncomingFaceRecord
-{
-  /// Face index assigned by this rank for the source partition.
-  std::uint32_t incoming_face_index = 0;
-  /// Offset into `IncomingFaceBatch::psi_values`.
-  std::size_t psi_offset = 0;
-};
-
-/// One received angle-set section from a source partition.
-struct IncomingFaceBatch
-{
-  /// Index into the angle set's source-partition array.
-  std::uint32_t source_partition_index = 0;
-  /// Face records in the section.
-  std::vector<IncomingFaceRecord> faces;
-  /// Contiguous psi payload referenced by `faces`.
-  std::vector<double> psi_values;
-};
 
 /// One outgoing nonlocal face published by a sweep worker.
 struct OutgoingFaceRecord
@@ -71,10 +52,6 @@ struct AngleSetCommunicationBounds
 {
   /// Safe mailbox capacity: at most one received batch per incoming face.
   std::size_t incoming_mailbox_capacity = 0;
-  /// Maximum face count of one received angle-set section.
-  std::size_t max_incoming_faces_per_batch = 0;
-  /// Maximum psi-value count of one received angle-set section.
-  std::size_t max_incoming_values_per_batch = 0;
   /// Exact queue bounds for each destination reached by this angle set.
   std::vector<DestinationQueueBounds> outgoing_queue_bounds;
 };
@@ -130,7 +107,12 @@ public:
   template <typename Callback>
   bool ProcessIncoming(std::size_t angle_set_id, Callback&& callback)
   {
-    return incoming_mailboxes_[angle_set_id]->ProcessReady(std::forward<Callback>(callback)) > 0;
+    return incoming_mailboxes_[angle_set_id]->ProcessReady(
+             [&](const IncomingFaceBatch& batch)
+             {
+               callback(batch);
+               receive_packets_->Release(batch.packet);
+             }) > 0;
   }
 
   /// Return whether one angle set has at least one received batch.
@@ -204,8 +186,9 @@ private:
   /// Serialization scratch grouped by angle-set section.
   std::vector<std::vector<const OutgoingFaceRecord*>> pending_records_by_angle_set_;
   std::vector<std::size_t> active_angle_set_ids_;
-  /// Reusable receive storage and sends whose buffers remain MPI-owned.
-  ByteArray recv_buffer_;
+  /// Packets shared by receive mailboxes, reclaimed only after worker-side placement.
+  std::unique_ptr<CBCDReceivePacketPool> receive_packets_;
+  /// Sends whose buffers remain MPI-owned.
   std::vector<InFlightSend> in_flight_sends_;
   /// Progress-thread lifecycle and per-angle-set completion state.
   std::atomic<bool> stop_requested_{false};
