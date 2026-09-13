@@ -153,8 +153,9 @@ private:
     while (head < tail)
     {
       const auto node = workspace_.queue[head++];
+      // BFS has processed every level below the sink, including all shortest augmenting paths.
       if (node == sink_)
-        continue;
+        break;
       for (auto arc_index = workspace_.offsets[node]; arc_index < workspace_.offsets[node + 1];
            ++arc_index)
       {
