@@ -341,37 +341,38 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
   for (const auto worker_id : channel.active_workers)
   {
     auto& queue = *channel.worker_queues[worker_id];
-    queue.PeekReadySlots(ready_records_);
-    if (ready_records_.empty())
+    const auto ready = queue.PeekReadySlots();
+    if (ready[0].empty())
       continue;
 
-    for (const auto* record : ready_records_)
-    {
-      constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
-      OpenSnLogicalErrorIf(
-        record->num_psi_values > (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
-                                  section_header_bytes - record_header_bytes) /
-                                   sizeof(double),
-        "One CBCD face record exceeds the MPI int byte-count limit and cannot be serialized.");
-      const auto record_bytes = record_header_bytes + record->num_psi_values * sizeof(double);
-      auto& records = pending_records_by_angle_set_[record->angle_set_id];
-      const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
-
-      if (current_payload_bytes + appended_bytes > message_limit_ and
-          not active_angle_set_ids_.empty())
-        send_batch();
-
-      if (records.empty())
+    for (const auto span : ready)
+      for (const auto& record : span)
       {
-        active_angle_set_ids_.push_back(record->angle_set_id);
-        current_payload_bytes += section_header_bytes;
+        constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
+        OpenSnLogicalErrorIf(
+          record.num_psi_values > (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
+                                   section_header_bytes - record_header_bytes) /
+                                    sizeof(double),
+          "One CBCD face record exceeds the MPI int byte-count limit and cannot be serialized.");
+        const auto record_bytes = record_header_bytes + record.num_psi_values * sizeof(double);
+        auto& records = pending_records_by_angle_set_[record.angle_set_id];
+        const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
+
+        if (current_payload_bytes + appended_bytes > message_limit_ and
+            not active_angle_set_ids_.empty())
+          send_batch();
+
+        if (records.empty())
+        {
+          active_angle_set_ids_.push_back(record.angle_set_id);
+          current_payload_bytes += section_header_bytes;
+        }
+        records.push_back(&record);
+        current_payload_bytes += record_bytes;
       }
-      records.push_back(record);
-      current_payload_bytes += record_bytes;
-    }
 
     // The section vectors still point into these slots. Return them only after serialization.
-    pending_slot_releases_.emplace_back(&queue, ready_records_.size());
+    pending_slot_releases_.emplace_back(&queue, ready[0].size() + ready[1].size());
     work_done = true;
   }
 

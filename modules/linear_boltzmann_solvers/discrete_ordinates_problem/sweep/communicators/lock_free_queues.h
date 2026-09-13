@@ -4,10 +4,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <limits>
 #include <new>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -75,20 +77,23 @@ public:
     producer_published_head_ = producer_head_;
   }
 
-  /** Returns pointers to the current contiguous logical prefix of ready elements. */
-  void PeekReadySlots(std::vector<T*>& out,
-                      const std::size_t max_slots = std::numeric_limits<std::size_t>::max())
+  /** Returns the published prefix as at most two spans, valid until released. */
+  std::array<std::span<const T>, 2>
+  PeekReadySlots(const std::size_t max_slots = std::numeric_limits<std::size_t>::max())
   {
-    out.clear();
     if (buffer_.empty())
-      return;
+      return {};
 
     consumer_head_cache_ = published_head_.load(std::memory_order_acquire);
     const auto ready_count = std::min(consumer_head_cache_ - consumer_tail_, max_slots);
-    out.reserve(ready_count);
+    if (ready_count == 0)
+      return {};
+
     const auto capacity = buffer_.size();
-    for (std::size_t i = 0; i < ready_count; ++i)
-      out.push_back(&buffer_[(consumer_tail_ + i) % capacity]);
+    const auto first_index = consumer_tail_ % capacity;
+    const auto first_count = std::min(ready_count, capacity - first_index);
+    const std::span<const T> buffer(buffer_);
+    return {buffer.subspan(first_index, first_count), buffer.first(ready_count - first_count)};
   }
 
   /** Releases `count` elements previously returned by `PeekReadySlots`. */
@@ -105,14 +110,11 @@ public:
   template <typename Callback>
   std::size_t ProcessReady(Callback&& callback)
   {
-    if (buffer_.empty())
-      return 0;
-
-    consumer_head_cache_ = published_head_.load(std::memory_order_acquire);
-    const auto ready_count = consumer_head_cache_ - consumer_tail_;
-    const auto capacity = buffer_.size();
-    for (std::size_t i = 0; i < ready_count; ++i)
-      callback(buffer_[(consumer_tail_ + i) % capacity]);
+    const auto ready = PeekReadySlots();
+    const auto ready_count = ready[0].size() + ready[1].size();
+    for (const auto span : ready)
+      for (const auto& element : span)
+        callback(element);
     ReleaseReadySlots(ready_count);
     return ready_count;
   }
