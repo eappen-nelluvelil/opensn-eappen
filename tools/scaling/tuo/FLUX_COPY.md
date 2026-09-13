@@ -9,7 +9,7 @@ branches and does not modify existing source worktrees or builds.
 ```zsh
 export OPENSN_TUO_BANK=cbronze
 COPY_RUNNER=$SOURCE/tools/scaling/tuo/run_flux_copy_profile.zsh
-COPY_LABEL=cbcd-batched-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
+COPY_LABEL=cbcd-query-$(git -C "$SOURCE" rev-parse --short=9 HEAD)-pdebug-$(date -u +%Y%m%dT%H%M%SZ)
 zsh "$COPY_RUNNER" run "$COPY_LABEL"
 ```
 
@@ -26,8 +26,9 @@ The new executable and MPI header overlay are separate, under
 `OPENSN_TUO_REUSE_VENV` if that environment was moved. A missing environment,
 incompatible Python ABI, or failed package check stops the build rather than
 silently installing packages. Keep the shared venv unchanged while jobs use it.
-The peer-reuse campaign at `6fa8bee92` used this same venv. Its baseline
-triplets are the immediate comparison for the batched-publication experiment.
+The peer-reuse campaign at `6fa8bee92` and the batched-publication campaign at
+`b235155a9` used this same venv. The complete baseline triplets from `b235155a9`
+are the immediate comparison for the completion-query experiment.
 Existing dependency libraries are not rebuilt or overwritten. A source-revision
 marker is checked before launching.
 
@@ -93,6 +94,28 @@ An existing result root is rejected by `run`. Use `resume` or a new label.
 Compare uninstrumented baseline sweep times separately from instrumented runs.
 This campaign measures the optimization on Tuo. Local CUDA tests cannot
 establish a speedup on Tuo or guarantee monotonic scaling.
+
+The completion-query experiment retains the stream completion check in
+`TryAdvanceOneStep` and removes the second query from batch retirement. The
+same worker owns the angle set and submits no stream work between those points.
+No event, polling delay, worker-count change, or receive-placement change is
+introduced. Inspect ROCm query counts alongside kernel counts, not just summed
+API durations from concurrent workers. Keep the uninstrumented timings as the
+performance comparison.
+
+To keep the campaign driver running through an ordinary SSH disconnect:
+
+```zsh
+COPY_LOG=$OPENSN_TUO_RESULTS/$COPY_LABEL-driver.log
+nohup zsh "$COPY_RUNNER" run "$COPY_LABEL" > "$COPY_LOG" 2>&1 < /dev/null &!
+tail -f "$COPY_LOG"
+```
+
+Define `OPENSN_TUO_RESULTS` first, or use the default result parent shown above.
+The redirection parent must already exist. Run the background command only
+once. Ctrl-C stops `tail`, not the background driver. A login-node reboot or
+site process-cleanup policy can still terminate it. Before using `resume`,
+check that no previous driver or allocation is still running this campaign.
 
 The driver can be checked locally without a scheduler:
 

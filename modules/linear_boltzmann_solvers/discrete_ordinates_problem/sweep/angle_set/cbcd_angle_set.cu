@@ -142,12 +142,9 @@ CBCD_AngleSet::InitializeSweepState()
   pending_reflecting_cells_ = following_angle_sets_.empty() ? 0 : num_reflecting_cells_;
 }
 
-bool
-CBCD_AngleSet::TryRetireCompletedBatch()
+void
+CBCD_AngleSet::RetireCompletedBatch()
 {
-  if ((not batch_pipeline_.HasKernelInFlight()) or (not stream_.is_completed()))
-    return false;
-
   auto& completed_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.launch_buffer);
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
   for (std::uint32_t i = 0; i < batch_pipeline_.launch_count; ++i)
@@ -172,7 +169,6 @@ CBCD_AngleSet::TryRetireCompletedBatch()
   batch_pipeline_.completed_buffer = batch_pipeline_.launch_buffer;
   batch_pipeline_.completed_count = batch_pipeline_.launch_count;
   batch_pipeline_.launch_count = 0;
-  return true;
 }
 
 bool
@@ -275,7 +271,9 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   if (kernel_completed)
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::RetireBatch");
-    work_done |= TryRetireCompletedBatch();
+    // This worker owns the stream and has not submitted work since the completion query.
+    RetireCompletedBatch();
+    work_done = true;
   }
 
   if (has_incoming)
