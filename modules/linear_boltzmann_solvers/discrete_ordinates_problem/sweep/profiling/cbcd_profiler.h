@@ -47,6 +47,7 @@ public:
   void RecordWorkerIdleStart(std::size_t worker_id, TimePoint time);
   void RecordWorkerIdleEnd(std::size_t worker_id, TimePoint time);
   void RecordWorkerYield(std::size_t worker_id);
+  void RecordFusedKernelLaunch(std::size_t worker_id);
   void RecordWorkerStop(std::size_t worker_id, TimePoint time);
 
   void RecordCommunicationIteration(bool work_done);
@@ -91,6 +92,7 @@ private:
     std::uint64_t wall_ns = 0;
     std::uint64_t idle_ns = 0;
     std::uint64_t yields = 0;
+    std::uint64_t fused_kernel_launches = 0;
     bool idle = false;
   };
 

@@ -172,7 +172,7 @@ CBCD_AngleSet::RetireCompletedBatch()
 }
 
 bool
-CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
+CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk, CBCDWorkerLaunch* worker_launch)
 {
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
   if (batch_pipeline_.HasKernelInFlight() or ready_cell_ids.empty())
@@ -183,7 +183,7 @@ CBCD_AngleSet::TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk)
   batch_pipeline_.launch_count = launch_count;
   batch_pipeline_.ready_buffer = batch_pipeline_.AcquireFreeBuffer();
   cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer).clear();
-  sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data());
+  sweep_chunk.Sweep(launch_count, GetID(), ready_cell_ids.data(), worker_launch);
   return true;
 }
 
@@ -248,7 +248,9 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 }
 
 bool
-CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::size_t worker_id)
+CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk,
+                                 const std::size_t worker_id,
+                                 CBCDWorkerLaunch* worker_launch)
 {
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryAdvanceOneStep");
 
@@ -256,7 +258,8 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
     return false;
 
   auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
-  const bool kernel_completed = batch_pipeline_.HasKernelInFlight() and stream_.is_completed();
+  const bool kernel_completed = batch_pipeline_.HasKernelInFlight() and
+                                (worker_launch ? worker_launch->completed : stream_.is_completed());
   const bool has_incoming = async_comm_->HasIncoming(GetID());
   const bool can_finalize = (num_completed_cells_ == initial_cell_dependencies_.size()) and
                             (not batch_pipeline_.HasKernelInFlight()) and
@@ -294,10 +297,11 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
       });
   }
 
-  if ((not batch_pipeline_.HasKernelInFlight()) and (not ready_cell_ids.empty()))
+  if ((not batch_pipeline_.HasKernelInFlight()) and (not ready_cell_ids.empty()) and
+      (not worker_launch or not worker_launch->in_flight))
   {
     CALI_CXX_MARK_SCOPE("CBCD_AngleSet::LaunchBatch");
-    work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk);
+    work_done |= TryLaunchReadyBatch(cbcd_sweep_chunk, worker_launch);
   }
 
   // Pack after launching to overlap host work with the next kernel.

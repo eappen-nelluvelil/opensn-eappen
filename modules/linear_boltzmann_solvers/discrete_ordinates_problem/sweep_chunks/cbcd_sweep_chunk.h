@@ -10,12 +10,37 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/discrete_ordinates_problem.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/arguments.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/cbcd_batch.h"
 #include "caribou/main.hpp"
 
 namespace crb = caribou;
 
 namespace opensn
 {
+
+/// Worker-owned descriptors remain immutable until their stream completes.
+struct CBCDWorkerLaunch
+{
+  CBCDWorkerLaunch() = default;
+  CBCDWorkerLaunch(const CBCDWorkerLaunch&) = delete;
+  CBCDWorkerLaunch& operator=(const CBCDWorkerLaunch&) = delete;
+  ~CBCDWorkerLaunch() { stream.synchronize(); }
+
+  crb::Stream stream;
+  crb::MappedHostVector<gpu_kernel::CBCDBatch> batches;
+  bool in_flight = false;
+  bool completed = false;
+
+  void Poll()
+  {
+    completed = in_flight and stream.is_completed();
+    if (completed)
+    {
+      in_flight = false;
+      batches.clear();
+    }
+  }
+};
 
 /// CBCD sweep chunk.
 class CBCDSweepChunk : public SweepChunk
@@ -54,11 +79,18 @@ public:
   /// Return optional rank-local CBCD instrumentation.
   CBCDProfiler* GetProfiler() const { return profiler_.get(); }
 
+  CBCDWorkerLaunch* GetWorkerLaunch(std::size_t worker_id) const
+  {
+    return worker_launches_.empty() ? nullptr : worker_launches_[worker_id].get();
+  }
+  void LaunchWorkerBatch(std::size_t worker_id);
+
   using SweepChunk::Sweep;
   /// Launch one ready-cell batch.
   void Sweep(std::uint32_t num_ready_cells,
              std::size_t angle_set_id,
-             const std::uint32_t* local_cell_ids);
+             const std::uint32_t* local_cell_ids,
+             CBCDWorkerLaunch* worker_launch = nullptr);
 
 private:
   struct KernelLaunch
@@ -79,6 +111,10 @@ private:
   /// Angle sets and their persistent kernel launches in scheduler order.
   std::vector<CBCD_AngleSet*> angle_sets_;
   std::vector<KernelLaunch> kernel_launches_;
+  bool fuse_worker_launches_ = false;
+  crb::HostVector<gpu_kernel::Arguments<SweepKind::CBC>> batch_arguments_;
+  crb::DeviceMemory<gpu_kernel::Arguments<SweepKind::CBC>> device_batch_arguments_;
+  std::vector<std::unique_ptr<CBCDWorkerLaunch>> worker_launches_;
 };
 
 } // namespace opensn

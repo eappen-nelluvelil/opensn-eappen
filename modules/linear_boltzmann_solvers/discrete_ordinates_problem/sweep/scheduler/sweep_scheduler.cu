@@ -108,8 +108,11 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
       for (std::size_t i = worker_id; i < num_angle_sets; i += num_workers)
         active_angle_set_ids.push_back(i);
 
+      auto* worker_launch = cbcd_sweep_chunk.GetWorkerLaunch(worker_id);
       while (not active_angle_set_ids.empty())
       {
+        if (worker_launch)
+          worker_launch->Poll();
         bool any_work_done = false;
         for (std::size_t i = 0; i < active_angle_set_ids.size();)
         {
@@ -131,7 +134,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
             any_work_done = true;
           }
 
-          any_work_done |= angle_set->TryAdvanceOneStep(cbcd_sweep_chunk, worker_id);
+          any_work_done |= angle_set->TryAdvanceOneStep(cbcd_sweep_chunk, worker_id, worker_launch);
 
           if (angle_set->IsSweepComplete())
           {
@@ -142,6 +145,8 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
 
           ++i;
         }
+        if (worker_launch)
+          cbcd_sweep_chunk.LaunchWorkerBatch(worker_id);
         if (any_work_done)
         {
           if (profiler)

@@ -3,12 +3,15 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/main.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/cbcd_batch_kernel.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/device_vector_mirror.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/carrier/mesh_carrier.h"
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <string_view>
 #include <set>
 #include <unordered_map>
 
@@ -31,6 +34,10 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
                problem.GetMinCellDOFCount()),
     problem_(problem)
 {
+  const char* fuse =
+    std::getenv("OPENSN_CBCD_FUSE_WORKER_LAUNCHES"); // NOLINT(concurrency-mt-unsafe)
+  fuse_worker_launches_ =
+    fuse and std::string_view(fuse) == "1" and not problem.GetOptions().save_angular_flux;
   std::vector<CBCD_FLUDS*> fluds_list;
   for (auto& as : *(groupset.angle_agg))
   {
@@ -139,6 +146,16 @@ CBCDSweepChunk::~CBCDSweepChunk()
 void
 CBCDSweepChunk::StartCommunicator(const std::size_t num_workers)
 {
+  if (fuse_worker_launches_ and worker_launches_.size() != num_workers)
+  {
+    worker_launches_.clear();
+    for (std::size_t worker = 0; worker < num_workers; ++worker)
+    {
+      auto launch = std::make_unique<CBCDWorkerLaunch>();
+      launch->batches.reserve((angle_sets_.size() + num_workers - 1) / num_workers);
+      worker_launches_.push_back(std::move(launch));
+    }
+  }
   if (async_comm_)
     async_comm_->Start(num_workers);
 }
@@ -165,12 +182,24 @@ CBCDSweepChunk::RefreshKernelArguments()
       launch.device_saved_psi = launch.fluds->GetSavedPsiDevicePointer();
     }
   }
+  if (fuse_worker_launches_)
+  {
+    batch_arguments_.clear();
+    batch_arguments_.reserve(kernel_launches_.size());
+    for (const auto& launch : kernel_launches_)
+      batch_arguments_.push_back(launch.arguments);
+    if (device_batch_arguments_.size() != batch_arguments_.size())
+      device_batch_arguments_ =
+        crb::DeviceMemory<gpu_kernel::Arguments<SweepKind::CBC>>(batch_arguments_.size());
+    crb::copy(device_batch_arguments_, batch_arguments_, batch_arguments_.size());
+  }
 }
 
 void
 CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
                       std::size_t angle_set_id,
-                      const std::uint32_t* local_cell_ids)
+                      const std::uint32_t* local_cell_ids,
+                      CBCDWorkerLaunch* worker_launch)
 {
   CALI_CXX_MARK_SCOPE("CBCDSweepChunk::Sweep");
 
@@ -178,6 +207,21 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
     profiler_->RecordKernelLaunch(angle_set_id, num_ready_cells);
 
   auto& launch = kernel_launches_[angle_set_id];
+  if (worker_launch)
+  {
+    const auto num_cell_blocks = (std::uint64_t{num_ready_cells} + launch.threads_per_block.y - 1) /
+                                 launch.threads_per_block.y;
+    const auto block_begin =
+      worker_launch->batches.empty() ? 0 : worker_launch->batches.back().block_end;
+    worker_launch->batches.push_back({device_batch_arguments_.get() + angle_set_id,
+                                      local_cell_ids,
+                                      launch.device_saved_psi,
+                                      block_begin + num_cell_blocks * launch.num_stride_blocks,
+                                      num_ready_cells,
+                                      launch.threads_per_block.x,
+                                      launch.num_stride_blocks});
+    return;
+  }
   auto& stream = angle_sets_[angle_set_id]->GetStream();
   const auto grid_size_y =
     (num_ready_cells + launch.threads_per_block.y - 1) / launch.threads_per_block.y;
@@ -198,6 +242,32 @@ CBCDSweepChunk::Sweep(std::uint32_t num_ready_cells,
       });
 #endif
   }
+}
+
+void
+CBCDSweepChunk::LaunchWorkerBatch(const std::size_t worker_id)
+{
+  auto& launch = *worker_launches_[worker_id];
+  if (launch.in_flight or launch.batches.empty())
+    return;
+  CALI_CXX_MARK_SCOPE("CBCDSweepChunk::LaunchWorkerBatch");
+  const auto num_blocks = launch.batches.back().block_end;
+  const auto num_batches = static_cast<std::uint32_t>(launch.batches.size());
+  const auto* batches = launch.batches.data();
+  crb::Dim3 grid_size(static_cast<unsigned int>(std::min<std::uint64_t>(num_blocks, 65535)));
+  crb::Dim3 block_size(gpu_kernel::threshold);
+  auto& stream = launch.stream;
+#if defined(__NVCC__) || defined(__HIPCC__)
+  gpu_kernel::CBCDBatchKernel<<<grid_size, block_size, 0, stream>>>(
+    batches, num_batches, num_blocks);
+#elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
+  stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
+                      [=](sycl::nd_item<3> work_index)
+                      { gpu_kernel::CBCDBatchKernel(batches, num_batches, num_blocks); });
+#endif
+  launch.in_flight = true;
+  if (profiler_)
+    profiler_->RecordFusedKernelLaunch(worker_id);
 }
 
 } // namespace opensn

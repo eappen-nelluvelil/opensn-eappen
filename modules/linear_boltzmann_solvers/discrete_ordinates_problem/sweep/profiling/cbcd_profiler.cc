@@ -145,6 +145,12 @@ CBCDProfiler::RecordWorkerYield(const std::size_t worker_id)
 }
 
 void
+CBCDProfiler::RecordFusedKernelLaunch(const std::size_t worker_id)
+{
+  ++active_sweep_->workers[worker_id].fused_kernel_launches;
+}
+
+void
 CBCDProfiler::RecordWorkerStop(const std::size_t worker_id, const TimePoint time)
 {
   RecordWorkerIdleEnd(worker_id, time);
@@ -233,7 +239,8 @@ CBCDProfiler::WriteResults() const
             "comm_idle_fraction,flush_outgoing_ns,probe_and_receive_ns,poll_sends_ns,"
             "send_messages,send_bytes,send_faces,send_bytes_min,send_bytes_mean,send_bytes_max,"
             "receive_messages,receive_bytes,receive_faces,receive_bytes_min,receive_bytes_mean,"
-            "receive_bytes_max,communicator_drain_ns,end_barrier_ns,skipped_receive_probes\n";
+            "receive_bytes_max,communicator_drain_ns,end_barrier_ns,skipped_receive_probes,"
+            "fused_kernel_launches\n";
   sweeps << std::setprecision(17);
 
   std::ofstream angle_sets;
@@ -255,6 +262,7 @@ CBCDProfiler::WriteResults() const
     std::uint64_t worker_wall_ns = 0;
     std::uint64_t worker_idle_ns = 0;
     std::uint64_t worker_yields = 0;
+    std::uint64_t fused_kernel_launches = 0;
     for (std::size_t angle_set_id = 0; angle_set_id < sweep.angle_sets.size(); ++angle_set_id)
     {
       const auto& batches = sweep.angle_sets[angle_set_id].cells_per_launch;
@@ -277,6 +285,7 @@ CBCDProfiler::WriteResults() const
       worker_wall_ns += worker.wall_ns;
       worker_idle_ns += worker.idle_ns;
       worker_yields += worker.yields;
+      fused_kernel_launches += worker.fused_kernel_launches;
     }
 
     const auto& comm = sweep.communication;
@@ -304,7 +313,8 @@ CBCDProfiler::WriteResults() const
                  ? 0.0
                  : static_cast<double>(comm.receive_bytes.sum) / comm.receive_bytes.count)
            << ',' << comm.receive_bytes.maximum << ',' << sweep.communicator_drain_ns << ','
-           << sweep.end_barrier_ns << ',' << comm.skipped_receive_probes << '\n';
+           << sweep.end_barrier_ns << ',' << comm.skipped_receive_probes << ','
+           << fused_kernel_launches << '\n';
 
     const auto write_histogram =
       [&](

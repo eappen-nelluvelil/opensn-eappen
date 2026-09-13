@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-3D PWLD transport test with reflecting boundaries and multiple groupsets (CBC)
+3D PWLD transport test with reflecting boundaries and unequal groupsets (CBC)
 Test: Max-difference=0.0
 """
 
@@ -28,19 +28,18 @@ if __name__ == "__main__":
     grid = OrthogonalMeshGenerator(node_sets=[nodes, nodes, nodes]).Execute()
     grid.SetUniformBlockID(0)
     xs = MultiGroupXS()
-    xs.LoadFromOpenSn("../../../../assets/xs/diag_XS_64g_1mom_c0.99.xs")
+    xs.LoadFromOpenSn("../../../../assets/xs/xs_168g.xs")
     quadrature = GLCProductQuadrature3DXYZ(n_polar=4, n_azimuthal=8, scattering_order=0)
     solutions = []
     angular_solutions = []
     for use_gpus, intervals, save_angular_flux in (
-        (False, ((0, 31), (32, 63)), True),
-        (True, ((0, 63),), False),
-        (True, ((0, 31), (32, 63)), False),
-        (True, ((0, 31), (32, 63)), True),
+        (False, ((0, 69), (70, 167)), True),
+        (True, ((0, 69), (70, 167)), False),
+        (True, ((0, 69), (70, 167)), True),
     ):
         problem = DiscreteOrdinatesProblem(
             mesh=grid,
-            num_groups=64,
+            num_groups=168,
             sweep_type="CBC",
             use_gpus=use_gpus,
             groupsets=[{
@@ -53,7 +52,7 @@ if __name__ == "__main__":
             } for interval in intervals],
             xs_map=[{"block_ids": [0], "xs": xs}],
             boundary_conditions=[
-                {"name": "xmin", "type": "isotropic", "group_strength": [1.0] * 64},
+                {"name": "xmin", "type": "isotropic", "group_strength": [1.0] * 168},
                 {"name": "xmax", "type": "reflecting"},
                 {"name": "ymax", "type": "reflecting"},
             ],
