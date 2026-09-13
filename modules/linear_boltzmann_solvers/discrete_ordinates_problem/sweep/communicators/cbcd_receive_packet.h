@@ -17,6 +17,29 @@
 namespace opensn
 {
 
+/// Serialized section metadata. The byte count excludes this header.
+struct CBCDSectionHeader
+{
+  static constexpr std::size_t SERIALIZED_SIZE = 3 * sizeof(std::size_t);
+  std::size_t angle_set_id;
+  std::size_t num_faces;
+  std::size_t num_bytes;
+
+  void Store(std::byte* destination) const
+  {
+    const std::array values{angle_set_id, num_faces, num_bytes};
+    std::memcpy(destination, values.data(), SERIALIZED_SIZE);
+  }
+
+  static CBCDSectionHeader Load(const std::byte*& source)
+  {
+    std::array<std::size_t, 3> values;
+    std::memcpy(values.data(), source, SERIALIZED_SIZE);
+    source += SERIALIZED_SIZE;
+    return {values[0], values[1], values[2]};
+  }
+};
+
 /// Immutable received bytes shared by angle-set sections until every reader finishes.
 struct CBCDReceivePacket
 {

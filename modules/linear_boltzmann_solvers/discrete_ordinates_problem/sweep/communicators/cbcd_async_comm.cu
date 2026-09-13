@@ -39,14 +39,6 @@ struct BufferReader
     return value;
   }
 
-  std::uint32_t LoadFaceIndex()
-  {
-    std::uint32_t value{};
-    std::memcpy(&value, ptr, sizeof(std::uint32_t));
-    ptr += sizeof(std::uint32_t);
-    return value;
-  }
-
   void SkipBytes(const std::size_t num_bytes) { ptr += num_bytes; }
 
   const std::byte* Data() const noexcept { return ptr; }
@@ -294,11 +286,11 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
 
   bool work_done = false;
   std::size_t current_payload_bytes = sizeof(std::size_t);
-  constexpr std::size_t section_header_bytes = 2 * sizeof(std::size_t);
+  constexpr std::size_t section_header_bytes = CBCDSectionHeader::SERIALIZED_SIZE;
 
   const auto send_batch = [&]()
   {
-    // [section count], followed by [angle-set id, record count] sections.
+    // [section count], followed by [angle-set id, record count, payload bytes] sections.
     InFlightSend in_flight;
     in_flight.destination_channel_index = destination_channel_index;
     in_flight.data.Data().swap(channel.reusable_packet.Data());
@@ -317,10 +309,10 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
     for (const auto angle_set_id : active_angle_set_ids_)
     {
       auto& entries = pending_records_by_angle_set_[angle_set_id];
-      WriteValues(std::span{&angle_set_id, 1});
       const auto num_entries = entries.size();
       num_face_records += num_entries;
-      WriteValues(std::span{&num_entries, 1});
+      const auto header_offset = offset;
+      offset += section_header_bytes;
       for (const auto* entry : entries)
       {
         WriteValues(std::span{&entry->destination_face_index, 1});
@@ -328,6 +320,8 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
         WriteValues(std::span{&data_size, 1});
         WriteValues(std::span{entry->psi_values, data_size});
       }
+      CBCDSectionHeader{angle_set_id, num_entries, offset - header_offset - section_header_bytes}
+        .Store(in_flight.data.Data().data() + header_offset);
       entries.clear();
     }
     const auto& comm = comm_set_.LocICommunicator(channel.destination_rank);
@@ -423,26 +417,20 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       std::size_t num_face_records = 0;
       for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
       {
-        const auto angle_set_id = reader.LoadSize();
-        const auto num_entries = reader.LoadSize();
-        num_face_records += num_entries;
+        const auto section = CBCDSectionHeader::Load(reader.ptr);
+        num_face_records += section.num_faces;
 
         const auto source_partition_index =
-          source_indices_by_angle_set_[angle_set_id][source_index];
+          source_indices_by_angle_set_[section.angle_set_id][source_index];
 
         const auto* const section_ptr = reader.Data();
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          reader.LoadFaceIndex();
-          const auto data_size = reader.LoadSize();
-          reader.SkipBytes(data_size * sizeof(double));
-        }
-        auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+        reader.SkipBytes(section.num_bytes);
+        auto& batch = incoming_mailboxes_[section.angle_set_id]->ReserveSlot();
         batch.source_partition_index = source_partition_index;
         batch.packet = packet;
         batch.offset = section_ptr - packet->data.data();
-        batch.num_faces = num_entries;
-        incoming_mailboxes_[angle_set_id]->PublishSlot();
+        batch.num_faces = section.num_faces;
+        incoming_mailboxes_[section.angle_set_id]->PublishSlot();
       }
       if (profiler_)
         profiler_->RecordReceive(static_cast<std::uint64_t>(num_bytes), num_face_records);
