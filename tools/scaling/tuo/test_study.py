@@ -110,6 +110,17 @@ class MeshTests(unittest.TestCase):
 
 
 class PreparationTests(unittest.TestCase):
+    def test_launch_mode_is_frozen_in_generated_jobs(self):
+        for mode in ("0", "1"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                args = prepare_args(Path(directory), nodes=(1,))
+                create_meshes(args.mesh_dir, (39,))
+                with mock.patch.dict(os.environ, OPENSN_CBCD_FUSE_WORKER_LAUNCHES=mode):
+                    STUDY.prepare(args)
+                job = (args.output / "jobs/strong-1.zsh").read_text()
+                self.assertIn(f"export OPENSN_CBCD_FUSE_WORKER_LAUNCHES={mode}", job)
+                self.assertIn("fuse_worker_launches=${OPENSN_CBCD_FUSE_WORKER_LAUNCHES:-0}", job)
+
     def test_internal_profiles_cover_strong_and_weak_meshes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

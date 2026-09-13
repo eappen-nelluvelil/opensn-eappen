@@ -215,6 +215,7 @@ def runtime_environment(args):
 export MPICH_GPU_SUPPORT_ENABLED=1
 export MPICH_SMP_SINGLE_COPY_MODE=XPMEM
 export OPENSN_CBCD_WORKER_POLICY={quote(args.worker_policy)}
+export OPENSN_CBCD_FUSE_WORKER_LAUNCHES={quote(os.environ.get('OPENSN_CBCD_FUSE_WORKER_LAUNCHES', '0'))}
 {workers}export OPENSN_NUM_THREADS={args.opensn_num_threads}
 export OMP_NUM_THREADS={args.opensn_num_threads}
 """
@@ -257,6 +258,7 @@ trap finish_run EXIT INT TERM
   print -- "flux_job_id=${{FLUX_JOB_ID:-unset}}"
   print -- "trial_group=${{OPENSN_TUO_PROFILE_TRIAL_GROUP:-single}}"
   print -- "trial_number=${{OPENSN_TUO_PROFILE_TRIAL:-1}}"
+  print -- "fuse_worker_launches=${{OPENSN_CBCD_FUSE_WORKER_LAUNCHES:-0}}"
 }} >| "$result/metadata.txt"
 """
 

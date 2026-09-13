@@ -26,6 +26,7 @@ class CampaignTest(unittest.TestCase):
             OPENSN_TUO_STUDY_ROOT=str(self.root / "study"),
             OPENSN_TUO_RESULTS=str(self.root / "results"),
         )
+        self.env.pop("OPENSN_CBCD_FUSE_WORKER_LAUNCHES", None)
         git = self.bin / "git"
         git.write_text(
             '#!/bin/sh\ncase "$*" in\n'
@@ -44,6 +45,7 @@ print -r -- "$*" >> "$TEST_LOG"
 [[ $OPENSN_TUO_PROFILE_REPETITIONS == 3 ]]
 [[ $OPENSN_TUO_REUSE_VENV == */flux-copy-f60e0ecbd/venv ]]
 [[ $OPENSN_TUO_TIME_LIMIT == 60m ]]
+[[ $OPENSN_CBCD_FUSE_WORKER_LAUNCHES == ${TEST_EXPECT_LAUNCH_MODE:-0} ]]
 if [[ $1 == build ]]; then
   mkdir -p "$OPENSN_TUO_BUILD"
   print -- "${TEST_BUILD_SHA:-123456789abcdef}" > "$OPENSN_TUO_BUILD/source-revision.txt"
@@ -92,6 +94,25 @@ fi
 
     def test_invalid_label_is_rejected(self):
         self.assertEqual(self.run_driver("run", "../other").returncode, 2)
+        self.assertFalse(self.log.exists())
+
+    def test_launch_mode_is_restored_on_resume(self):
+        self.env["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"] = "1"
+        self.env["TEST_EXPECT_LAUNCH_MODE"] = "1"
+        result = self.run_driver("run", "fusion", "baseline")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        campaign = self.root / "results/fusion-profile/resource-aware"
+        campaign.mkdir(parents=True)
+        (campaign / "manifest.json").write_text("{}")
+        del self.env["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"]
+        result = self.run_driver("resume", "fusion", "baseline")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.env["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"] = "0"
+        self.assertEqual(self.run_driver("resume", "fusion", "baseline").returncode, 2)
+
+    def test_invalid_launch_mode_is_rejected(self):
+        self.env["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"] = "invalid"
+        self.assertEqual(self.run_driver("run", "invalid-mode").returncode, 2)
         self.assertFalse(self.log.exists())
 
 

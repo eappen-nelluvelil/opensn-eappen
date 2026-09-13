@@ -73,6 +73,26 @@ if [[ $action == resume && ! -f $OPENSN_TUO_PROFILE_ROOT/manifest.json ]]; then
   exit 2
 fi
 
+mode_file=$OPENSN_TUO_RESULTS/$label-launch-mode.txt
+if [[ -r $mode_file ]]; then
+  mode=$(<"$mode_file")
+  [[ ${OPENSN_CBCD_FUSE_WORKER_LAUNCHES:-$mode} == $mode ]] || {
+    print -u2 'The launch mode differs from this campaign. Use a new label.'
+    exit 2
+  }
+else
+  mode=${OPENSN_CBCD_FUSE_WORKER_LAUNCHES:-0}
+fi
+[[ $mode == 0 || $mode == 1 ]] || {
+  print -u2 'OPENSN_CBCD_FUSE_WORKER_LAUNCHES must be 0 or 1.'
+  exit 2
+}
+export OPENSN_CBCD_FUSE_WORKER_LAUNCHES=$mode
+mkdir -p "$OPENSN_TUO_RESULTS"
+if [[ ! -e $mode_file ]]; then
+  print -- "$mode" > "$mode_file"
+fi
+
 zsh "$helper" build
 [[ -r $OPENSN_TUO_BUILD/source-revision.txt &&
    $(<"$OPENSN_TUO_BUILD/source-revision.txt") == $revision ]] || {
