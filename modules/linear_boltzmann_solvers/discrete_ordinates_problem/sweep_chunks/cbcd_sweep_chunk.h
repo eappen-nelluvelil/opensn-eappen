@@ -33,9 +33,6 @@ public:
   /// Return the active groupset.
   const LBSGroupset& GetGroupset() const { return groupset_; }
 
-  /// Return the first global group index in the active groupset.
-  unsigned int GetGroupsetGroupIndex() const { return groupset_.first_group; }
-
   /// Return transport metadata for one local cell.
   const CellLBSView& GetCellTransportView(std::uint64_t cell_local_id) const
   {

@@ -135,7 +135,6 @@ CBCD_FLUDS::LoadIncomingBoundaryPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet& 
   const auto& angle_indices = angle_set.GetAngleIndices();
   const auto num_angles = angle_indices.size();
   const std::size_t groups_bytes = num_groups_ * sizeof(double);
-  const auto gs_gi = sweep_chunk.GetGroupsetGroupIndex();
   const bool surface_source_active = sweep_chunk.IsSurfaceSourceActive();
 
   for (const auto& face_plan : common_data_.GetIncomingBoundaryFaces())
@@ -156,7 +155,7 @@ CBCD_FLUDS::LoadIncomingBoundaryPsi(CBCDSweepChunk& sweep_chunk, CBCD_AngleSet& 
                                 face_plan.cell_local_id,
                                 face_plan.face_id,
                                 static_cast<unsigned int>(face_plan.first_face_node_index + node),
-                                gs_gi,
+                                0,
                                 surface_source_active);
         std::memcpy(dst_psi, src_psi, groups_bytes);
       }
