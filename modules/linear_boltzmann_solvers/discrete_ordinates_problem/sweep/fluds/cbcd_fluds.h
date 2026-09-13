@@ -95,10 +95,10 @@ public:
                           const std::vector<std::uint32_t>& angle_indices,
                           std::span<const std::uint32_t> cell_local_ids);
 
-  /// Store one received nonlocal face and return its downwind local cell ID.
+  /// Copy one received nonlocal face's bytes and return its downwind local cell ID.
   std::uint32_t StoreIncomingFace(std::uint32_t source_partition_index,
                                   std::uint32_t incoming_face_index,
-                                  const void* psi_values);
+                                  const std::byte* psi_bytes);
 
   void ClearLocalAndReceivePsi() override {}
   void ClearSendPsi() override {}

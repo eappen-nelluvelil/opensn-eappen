@@ -280,7 +280,7 @@ CBCD_FLUDS::StoreSavedPsi(CBCDSweepChunk& sweep_chunk, const CBCD_AngleSet& angl
 std::uint32_t
 CBCD_FLUDS::StoreIncomingFace(const std::uint32_t source_partition_index,
                               const std::uint32_t incoming_face_index,
-                              const void* psi_values)
+                              const std::byte* psi_bytes)
 {
   const auto& face_info =
     common_data_.GetIncomingNonlocalFace(source_partition_index, incoming_face_index);
@@ -288,7 +288,7 @@ CBCD_FLUDS::StoreIncomingFace(const std::uint32_t source_partition_index,
                 static_cast<std::size_t>(face_info.storage_offset) * num_groups_and_angles_;
   const std::size_t face_values =
     static_cast<std::size_t>(face_info.num_face_nodes) * num_groups_and_angles_;
-  std::memcpy(dst, psi_values, face_values * sizeof(double));
+  std::memcpy(dst, psi_bytes, face_values * sizeof(double));
   return face_info.cell_local_id;
 }
 

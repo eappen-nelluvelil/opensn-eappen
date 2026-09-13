@@ -15,6 +15,8 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <span>
+#include <type_traits>
 
 namespace opensn
 {
@@ -302,28 +304,29 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
     in_flight.data.Data().swap(channel.reusable_packet.Data());
     in_flight.data.Data().resize(current_payload_bytes);
     std::size_t offset = 0;
-    const auto write_bytes = [&](const void* ptr, const std::size_t size)
+    const auto WriteValues = [&]<typename T, std::size_t Extent>(std::span<const T, Extent> values)
+      requires std::is_trivially_copyable_v<T>
     {
-      std::memcpy(in_flight.data.Data().data() + offset, ptr, size);
-      offset += size;
+      std::memcpy(in_flight.data.Data().data() + offset, values.data(), values.size_bytes());
+      offset += values.size_bytes();
     };
 
     const auto num_sections = active_angle_set_ids_.size();
     std::size_t num_face_records = 0;
-    write_bytes(&num_sections, sizeof(std::size_t));
+    WriteValues(std::span{&num_sections, 1});
     for (const auto angle_set_id : active_angle_set_ids_)
     {
       auto& entries = pending_records_by_angle_set_[angle_set_id];
-      write_bytes(&angle_set_id, sizeof(std::size_t));
+      WriteValues(std::span{&angle_set_id, 1});
       const auto num_entries = entries.size();
       num_face_records += num_entries;
-      write_bytes(&num_entries, sizeof(std::size_t));
+      WriteValues(std::span{&num_entries, 1});
       for (const auto* entry : entries)
       {
-        write_bytes(&entry->destination_face_index, sizeof(std::uint32_t));
+        WriteValues(std::span{&entry->destination_face_index, 1});
         const auto data_size = entry->num_psi_values;
-        write_bytes(&data_size, sizeof(std::size_t));
-        write_bytes(entry->psi_values, data_size * sizeof(double));
+        WriteValues(std::span{&data_size, 1});
+        WriteValues(std::span{entry->psi_values, data_size});
       }
       entries.clear();
     }
