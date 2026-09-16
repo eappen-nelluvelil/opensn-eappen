@@ -6,6 +6,7 @@
 #include "framework/mesh/mesh.h"
 #include "framework/runtime.h"
 #include "mpicpp-lite/mpicpp-lite.h"
+#include <utility>
 
 namespace mpi = mpicpp_lite;
 
@@ -21,11 +22,33 @@ namespace opensn
 class MPICommunicatorSet
 {
 public:
+  /// Take ownership of created MPI handles, emptying the supplied containers and group.
   MPICommunicatorSet(std::vector<mpi::Communicator>& communicators,
                      std::vector<mpi::Group>& location_groups,
                      mpi::Group& world_group)
-    : communicators_(communicators), location_groups_(location_groups), world_group_(world_group)
+    : world_group_(std::exchange(world_group, mpi::Group(MPI_GROUP_NULL)))
   {
+    communicators_.swap(communicators);
+    location_groups_.swap(location_groups);
+  }
+
+  MPICommunicatorSet(const MPICommunicatorSet&) = delete;
+  MPICommunicatorSet& operator=(const MPICommunicatorSet&) = delete;
+
+  /// Release handles after all communication finishes, before MPI finalization.
+  ~MPICommunicatorSet()
+  {
+    if (not mpi::Environment::is_initialized() or mpi::Environment::is_finalized())
+      return;
+
+    for (auto& communicator : communicators_)
+      if (communicator)
+        communicator.free();
+    for (auto& group : location_groups_)
+      if (static_cast<MPI_Group>(group) != MPI_GROUP_NULL)
+        group.free();
+    if (static_cast<MPI_Group>(world_group_) != MPI_GROUP_NULL)
+      world_group_.free();
   }
 
   const mpi::Communicator& LocICommunicator(int locI) const { return communicators_[locI]; }
