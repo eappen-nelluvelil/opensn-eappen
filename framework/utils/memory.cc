@@ -3,10 +3,73 @@
 
 #include "framework/utils/memory.h"
 #include "framework/runtime.h"
+#include <chrono>
+#include <atomic>
+#include <cstdlib>
+#include <cstdio>
+#include <fstream>
+#include <string>
 #include <sys/resource.h>
+#include <unistd.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 namespace opensn
 {
+
+void
+TraceMemory(const char* stage, std::uintptr_t object, bool device)
+{
+  const char* directory = std::getenv("OPENSN_MEMORY_TRACE_DIR");
+  if (directory == nullptr or directory[0] == '\0')
+    return;
+
+  static std::atomic<std::uint64_t> sequence{0};
+  const auto id = sequence.fetch_add(1, std::memory_order_relaxed);
+  const auto prefix = std::string(directory) + "/rank-" + std::to_string(mpi_comm.rank()) +
+                      "-pid-" + std::to_string(getpid());
+  std::ofstream out(prefix + ".log", std::ios::app);
+  if (not out)
+  {
+    std::fprintf(stderr, "Memory trace: cannot open %s.log\n", prefix.c_str());
+    return;
+  }
+  char hostname[256] = {};
+  gethostname(hostname, sizeof(hostname) - 1);
+  const auto time =
+    std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+  out.precision(17);
+  out << "sample=" << id << " time=" << time << " host=" << hostname << " stage=" << stage
+      << " object=" << object;
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line))
+    if (line.starts_with("VmRSS:") or line.starts_with("VmHWM:") or line.starts_with("RssAnon:") or
+        line.starts_with("VmSize:") or line.starts_with("VmLck:") or line.starts_with("VmPin:"))
+      out << " | " << line;
+#ifdef __OPENSN_WITH_GPU__
+  if (device)
+    TraceDeviceMemory(out);
+#endif
+  out << '\n';
+  out.flush();
+#ifdef __GLIBC__
+  const char* allocator = std::getenv("OPENSN_MEMORY_ALLOCATOR");
+  if (allocator != nullptr and std::string(allocator) == "1")
+  {
+    const auto filename = prefix + "-" + std::to_string(id) + ".malloc.xml";
+    if (auto* file = std::fopen(filename.c_str(), "w"))
+    {
+      if (malloc_info(0, file) != 0)
+        std::fprintf(stderr, "Memory trace: malloc_info failed for %s\n", filename.c_str());
+      std::fclose(file);
+    }
+    else
+      std::fprintf(stderr, "Memory trace: cannot open %s\n", filename.c_str());
+  }
+#endif
+}
 
 std::optional<std::uint64_t>
 GetPeakMemoryUsageBytes()

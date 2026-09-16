@@ -21,6 +21,7 @@
 #include "framework/utils/error.h"
 #include "framework/utils/caliper_scopes.h"
 #include "framework/utils/timer.h"
+#include "framework/utils/memory.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
 #include <algorithm>
@@ -99,6 +100,7 @@ DiscreteOrdinatesProblem::GetBoundaryOptionsBlock()
 std::shared_ptr<DiscreteOrdinatesProblem>
 DiscreteOrdinatesProblem::Create(const ParameterBlock& params)
 {
+  TraceMemory("problem.create.begin");
   const auto grid = params.GetParamValue<std::shared_ptr<MeshContinuum>>("mesh");
   std::shared_ptr<SpatialDiscretization> discretization = PieceWiseLinearDiscontinuous::New(grid);
 
@@ -110,10 +112,21 @@ DiscreteOrdinatesProblem::Create(const ParameterBlock& params)
   std::shared_ptr<DiscreteOrdinatesProblem> problem;
   {
     CaliperPhaseScope cali_setup_phase("Setup", CaliperSetupPhaseDepth());
-    problem = std::shared_ptr<DiscreteOrdinatesProblem>(new DiscreteOrdinatesProblem(input_params));
+    problem = std::shared_ptr<DiscreteOrdinatesProblem>(
+      new DiscreteOrdinatesProblem(input_params),
+      [](DiscreteOrdinatesProblem* p)
+      {
+        const auto address = reinterpret_cast<std::uintptr_t>(p);
+        const bool device = p->use_gpus_;
+        TraceMemory("problem.delete.begin", address, device);
+        delete p;
+        TraceMemory("problem.delete.complete", address, device);
+      });
   }
   problem->discretization_ = discretization;
   problem->BuildRuntime();
+  TraceMemory(
+    "problem.create.complete", reinterpret_cast<std::uintptr_t>(problem.get()), problem->use_gpus_);
   return problem;
 }
 
@@ -205,9 +218,11 @@ DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params
 
 DiscreteOrdinatesProblem::~DiscreteOrdinatesProblem()
 {
+  TraceMemory("problem.destructor.begin", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   ags_solver_.reset();
   wgs_solvers_.clear();
   wgs_contexts_.clear();
+  TraceMemory("problem.solvers.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 
   ResetBoundaryCarrier();
 
@@ -220,6 +235,7 @@ DiscreteOrdinatesProblem::~DiscreteOrdinatesProblem()
     if (groupset.angle_agg != nullptr)
       groupset.angle_agg->GetAngleSetGroups().clear();
   }
+  TraceMemory("problem.anglesets.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 }
 
 std::pair<std::uint64_t, std::uint64_t>
@@ -396,6 +412,7 @@ DiscreteOrdinatesProblem::BuildRuntime()
   }
 
   LBSProblem::BuildRuntime();
+  TraceMemory("problem.base_runtime.complete", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   InitializeFCS();
 
   UpdateAngularFluxStorage();
@@ -428,6 +445,7 @@ DiscreteOrdinatesProblem::BuildRuntime()
 
   // Initialize groupsets for sweeping
   InitializeSweepDataStructures();
+  TraceMemory("problem.spds.complete", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   for (auto& groupset : groupsets_)
   {
     InitFluxDataStructures(groupset);
@@ -438,6 +456,7 @@ DiscreteOrdinatesProblem::BuildRuntime()
 
   if (options_.verbose_inner_iterations)
     log.Log() << program_timer.GetTimeString() << " Initialized angle aggregation.";
+  TraceMemory("problem.fluds.complete", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 
   // Initialize runtime boundary data
   RebuildBoundaryRuntimeData();

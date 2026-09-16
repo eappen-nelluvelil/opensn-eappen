@@ -8,6 +8,7 @@
 #include "framework/logging/log.h"
 #include "framework/parameters/input_parameters.h"
 #include "framework/utils/error.h"
+#include "framework/utils/memory.h"
 #include "framework/utils/caliper_scopes.h"
 #include "framework/runtime.h"
 #include "caliper/cali.h"
@@ -80,7 +81,11 @@ SteadyStateSourceSolver::Execute()
   }
 
   auto& ags_solver = *do_problem_->GetAGSSolver();
+  TraceMemory(
+    "solve.begin", reinterpret_cast<std::uintptr_t>(do_problem_.get()), do_problem_->UseGPUs());
   ags_solver.Solve();
+  TraceMemory(
+    "solve.complete", reinterpret_cast<std::uintptr_t>(do_problem_.get()), do_problem_->UseGPUs());
 
   if (do_problem_->HasUncollidedFlux())
     do_problem_->ComputeFluxFromUncollided();
