@@ -16,6 +16,13 @@ template <typename Function>
 void
 ParallelFor(size_t count, size_t num_threads, Function function)
 {
+  if (num_threads == 1)
+  {
+    for (size_t i = 0; i < count; ++i)
+      function(i);
+    return;
+  }
+
   std::vector<std::exception_ptr> exceptions(num_threads);
   {
     std::vector<std::jthread> workers;
