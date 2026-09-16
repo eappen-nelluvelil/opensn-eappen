@@ -5,6 +5,7 @@
 
 #include "framework/mesh/mesh.h"
 #include "framework/runtime.h"
+#include "framework/utils/memory.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <utility>
 
@@ -41,6 +42,7 @@ public:
     if (not mpi::Environment::is_initialized() or mpi::Environment::is_finalized())
       return;
 
+    TraceMemory("mpi.communicators.release.begin", reinterpret_cast<std::uintptr_t>(this));
     for (auto& communicator : communicators_)
       if (communicator)
         communicator.free();
@@ -49,6 +51,7 @@ public:
         group.free();
     if (static_cast<MPI_Group>(world_group_) != MPI_GROUP_NULL)
       world_group_.free();
+    TraceMemory("mpi.communicators.release.complete", reinterpret_cast<std::uintptr_t>(this));
   }
 
   const mpi::Communicator& LocICommunicator(int locI) const { return communicators_[locI]; }
