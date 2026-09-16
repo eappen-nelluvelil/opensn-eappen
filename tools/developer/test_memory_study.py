@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 import ast
+import json
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +13,20 @@ import memory_study
 
 
 class MemoryStudyTest(unittest.TestCase):
+    def test_optional_smaps(self):
+        namespace = {"os": os}
+        exec(memory_study.MARKERS, namespace)
+        for enabled in ("0", "1"):
+            with tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, OPENSN_MEMORY_TRACE_DIR=directory,
+                                OPENSN_MEMORY_SMAPS=enabled):
+                    namespace["memory_marker"](0, "after_trial")
+                record = json.loads(next(Path(directory).glob("python-*.jsonl")).read_text())
+                self.assertEqual("smaps" in record, enabled == "1")
+                if enabled == "1":
+                    self.assertIsInstance(record["smaps"], str)
+                    self.assertIn("Rss:", record["smaps"])
+
     def test_cgroup_snapshots(self):
         namespace = {}
         exec(memory_study.MARKERS, namespace)
@@ -97,13 +113,14 @@ class MemoryStudyTest(unittest.TestCase):
             for filename in ("opensn", "input.py", "xs_168g.xs"):
                 (root / filename).write_text("test\n")
             args = memory_study.argparse.Namespace(
-                case=root, binary=root / "opensn", trim=False,
+                case=root, binary=root / "opensn", trim=False, smaps=True,
                 launcher=["--", "mpirun", "--np", "2"])
             with patch.object(memory_study.subprocess, "run") as run:
                 run.return_value.returncode = 0
                 memory_study.run_case(args)
             self.assertEqual(run.call_args.args[0][:3], ["mpirun", "--np", "2"])
             self.assertEqual(run.call_args.kwargs["env"]["OPENSN_MEMORY_TRIM"], "0")
+            self.assertEqual(run.call_args.kwargs["env"]["OPENSN_MEMORY_SMAPS"], "1")
             self.assertEqual((root / "exit_code.txt").read_text(), "0\n")
             with self.assertRaises(FileExistsError):
                 memory_study.run_case(args)

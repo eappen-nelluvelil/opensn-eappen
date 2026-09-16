@@ -55,6 +55,8 @@ def memory_marker(trial, stage):
     record["node_memory"] = Path("/proc/meminfo").read_text()
     record["cgroup"] = Path("/proc/self/cgroup").read_text()
     record["smaps_rollup"] = read_memory_file("/proc/self/smaps_rollup")
+    if os.environ.get("OPENSN_MEMORY_SMAPS") == "1":
+        record["smaps"] = read_memory_file("/proc/self/smaps")
     record["maps"] = read_memory_file("/proc/self/maps")
     record["memory_pressure"] = read_memory_file("/proc/pressure/memory")
     record["cgroup_memory"] = cgroup_memory_snapshot(record["cgroup"])
@@ -198,7 +200,8 @@ def run_case(args):
         raise ValueError("Supply the MPI launcher after --")
     command = launcher + [str(binary), "-i", "input.py"]
     env = dict(os.environ, OPENSN_MEMORY_TRACE_DIR=str(directory / "trace"),
-               OPENSN_MEMORY_ALLOCATOR="1", OPENSN_MEMORY_TRIM="1" if args.trim else "0")
+               OPENSN_MEMORY_ALLOCATOR="1", OPENSN_MEMORY_TRIM="1" if args.trim else "0",
+               OPENSN_MEMORY_SMAPS="1" if args.smaps else "0")
     prefixes = ("OPENSN_", "OMP_", "SLURM_", "FLUX_", "MPI", "OMPI_", "PMIX_",
                 "CUDA_", "HIP_", "ROCR_", "GLIBC_", "MALLOC_", "CALI_")
     settings = {k: v for k, v in env.items() if k.startswith(prefixes)}
@@ -237,6 +240,8 @@ def main():
     p.add_argument("--case", type=Path, required=True)
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--trim", action="store_true")
+    p.add_argument("--smaps", action="store_true",
+                   help="Capture resident memory by mapping at each trial boundary")
     p.add_argument("launcher", nargs=argparse.REMAINDER)
     p.set_defaults(action=run_case)
     args = parser.parse_args()
