@@ -16,6 +16,7 @@ class SteadyStateSourceSolver : public Solver
 {
 public:
   explicit SteadyStateSourceSolver(const InputParameters& params);
+  ~SteadyStateSourceSolver() override;
 
   void Initialize() override;
 

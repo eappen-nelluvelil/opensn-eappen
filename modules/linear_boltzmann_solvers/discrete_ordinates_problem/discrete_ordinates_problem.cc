@@ -220,11 +220,15 @@ DiscreteOrdinatesProblem::~DiscreteOrdinatesProblem()
 {
   TraceMemory("problem.destructor.begin", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   ags_solver_.reset();
+  TraceMemory("problem.ags.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   wgs_solvers_.clear();
+  TraceMemory("problem.wgs_solvers.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   wgs_contexts_.clear();
   TraceMemory("problem.solvers.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 
   ResetBoundaryCarrier();
+  TraceMemory(
+    "problem.boundary_carrier.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 
   for (auto& groupset : groupsets_)
   {
@@ -460,8 +464,10 @@ DiscreteOrdinatesProblem::BuildRuntime()
 
   // Initialize runtime boundary data
   RebuildBoundaryRuntimeData();
+  TraceMemory("problem.boundaries.complete", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 
   InitializeSolverSchemes();
+  TraceMemory("problem.solver_schemes.complete", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 }
 
 void

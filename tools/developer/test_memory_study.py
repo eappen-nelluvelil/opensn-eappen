@@ -113,7 +113,7 @@ class MemoryStudyTest(unittest.TestCase):
             for filename in ("opensn", "input.py", "xs_168g.xs"):
                 (root / filename).write_text("test\n")
             args = memory_study.argparse.Namespace(
-                case=root, binary=root / "opensn", trim=False, smaps=True,
+                case=root, binary=root / "opensn", trim=False, smaps=True, sample_seconds=15,
                 launcher=["--", "mpirun", "--np", "2"])
             with patch.object(memory_study.subprocess, "run") as run:
                 run.return_value.returncode = 0
@@ -121,9 +121,24 @@ class MemoryStudyTest(unittest.TestCase):
             self.assertEqual(run.call_args.args[0][:3], ["mpirun", "--np", "2"])
             self.assertEqual(run.call_args.kwargs["env"]["OPENSN_MEMORY_TRIM"], "0")
             self.assertEqual(run.call_args.kwargs["env"]["OPENSN_MEMORY_SMAPS"], "1")
+            self.assertEqual(run.call_args.kwargs["env"]["OPENSN_MEMORY_SAMPLE_SECONDS"], "15")
             self.assertEqual((root / "exit_code.txt").read_text(), "0\n")
             with self.assertRaises(FileExistsError):
                 memory_study.run_case(args)
+
+    def test_sampling_requires_explicit_option(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in ("opensn", "input.py", "xs_168g.xs"):
+                (root / filename).write_text("test\n")
+            args = memory_study.argparse.Namespace(
+                case=root, binary=root / "opensn", trim=False, smaps=False, sample_seconds=None,
+                launcher=["mpirun", "--np", "2"])
+            with patch.dict(os.environ, OPENSN_MEMORY_SAMPLE_SECONDS="1"):
+                with patch.object(memory_study.subprocess, "run") as run:
+                    run.return_value.returncode = 0
+                    memory_study.run_case(args)
+            self.assertNotIn("OPENSN_MEMORY_SAMPLE_SECONDS", run.call_args.kwargs["env"])
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 #include "framework/math/linear_solver/petsc_linear_system_solver.h"
 #include "framework/math/petsc_utils/petsc_utils.h"
 #include "framework/runtime.h"
+#include "framework/utils/memory.h"
 
 namespace opensn
 {
@@ -24,10 +25,20 @@ PETScLinearSolver::PETScLinearSolver(IterativeMethod method,
 
 PETScLinearSolver::~PETScLinearSolver()
 {
+  const auto address = reinterpret_cast<std::uintptr_t>(this);
+  TraceMemory("petsc_solver.destructor.begin",
+              address,
+              false,
+              {{"ksp", ksp_ != nullptr},
+               {"matrix", A_ != nullptr},
+               {"x", x_ != nullptr},
+               {"b", b_ != nullptr}});
   OpenSnPETScCall(KSPDestroy(&ksp_));
+  TraceMemory("petsc_solver.ksp.released", address);
   OpenSnPETScCall(MatDestroy(&A_));
   OpenSnPETScCall(VecDestroy(&x_));
   OpenSnPETScCall(VecDestroy(&b_));
+  TraceMemory("petsc_solver.handles.released", address);
 }
 
 void

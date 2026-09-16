@@ -39,6 +39,20 @@ SteadyStateSourceSolver::SteadyStateSourceSolver(const InputParameters& params)
   : Solver(params),
     do_problem_(params.GetSharedPtrParam<Problem, DiscreteOrdinatesProblem>("problem"))
 {
+  TraceMemory("source_solver.create.complete",
+              reinterpret_cast<std::uintptr_t>(this),
+              false,
+              {{"problem", reinterpret_cast<std::uintptr_t>(do_problem_.get())},
+               {"problem_owners", static_cast<std::uint64_t>(do_problem_.use_count())}});
+}
+
+SteadyStateSourceSolver::~SteadyStateSourceSolver()
+{
+  TraceMemory("source_solver.destructor.begin",
+              reinterpret_cast<std::uintptr_t>(this),
+              false,
+              {{"problem", reinterpret_cast<std::uintptr_t>(do_problem_.get())},
+               {"problem_owners", static_cast<std::uint64_t>(do_problem_.use_count())}});
 }
 
 void

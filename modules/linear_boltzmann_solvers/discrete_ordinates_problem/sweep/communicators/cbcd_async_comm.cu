@@ -6,6 +6,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/runtime.h"
+#include "framework/utils/memory.h"
 #include "caliper/cali.h"
 #include <algorithm>
 #include <cassert>
@@ -62,6 +63,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     mpi_tag_(static_cast<int>(angle_sets.size())),
     angle_set_complete_(angle_sets.size())
 {
+  TraceMemory("cbcd_communicator.create.begin", reinterpret_cast<std::uintptr_t>(this));
   std::set<int> sources;
   std::set<int> destinations;
   for (std::size_t i = 0; i < angle_sets.size(); ++i)
@@ -119,10 +121,16 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
                                           : std::min(max_message_bytes, MPI_BYTE_COUNT_LIMIT);
   if (max_message_bytes > 0)
     recv_buffer_.Data().reserve(message_limit_);
+  TraceMemory(
+    "cbcd_communicator.create.complete",
+    reinterpret_cast<std::uintptr_t>(this),
+    false,
+    {{"anglesets", num_angle_sets_}, {"recv_capacity_bytes", recv_buffer_.Data().capacity()}});
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
 {
+  TraceMemory("cbcd_communicator.destructor.begin", reinterpret_cast<std::uintptr_t>(this));
   if (comm_thread_.joinable())
     Stop();
 }
@@ -196,6 +204,10 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
 
   log.Log0Verbose1() << "CBCD communicator: worker_queues=" << realized_queues
                      << ", destinations=" << destination_ranks_.size() << ".";
+  TraceMemory("cbcd_communicator.worker_queues.ready",
+              reinterpret_cast<std::uintptr_t>(this),
+              false,
+              {{"queues", realized_queues}, {"workers", num_workers_}});
 }
 
 void
@@ -208,6 +220,11 @@ CBCD_AsynchronousCommunicator::Start(const std::size_t num_workers)
   for (auto& complete : angle_set_complete_)
     complete.store(false, std::memory_order_relaxed);
 
+  TraceMemory("communicator_thread.start",
+              reinterpret_cast<std::uintptr_t>(this),
+              false,
+              {{"threads", 1}},
+              false);
   comm_thread_ = std::thread(&CBCD_AsynchronousCommunicator::CommThreadLoop, this);
 }
 
@@ -216,7 +233,14 @@ CBCD_AsynchronousCommunicator::Stop()
 {
   stop_requested_.store(true, std::memory_order_release);
   if (comm_thread_.joinable())
+  {
     comm_thread_.join();
+    TraceMemory("communicator_thread.joined",
+                reinterpret_cast<std::uintptr_t>(this),
+                false,
+                {{"threads", 1}},
+                false);
+  }
 }
 
 void

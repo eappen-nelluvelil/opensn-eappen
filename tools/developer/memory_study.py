@@ -202,6 +202,10 @@ def run_case(args):
     env = dict(os.environ, OPENSN_MEMORY_TRACE_DIR=str(directory / "trace"),
                OPENSN_MEMORY_ALLOCATOR="1", OPENSN_MEMORY_TRIM="1" if args.trim else "0",
                OPENSN_MEMORY_SMAPS="1" if args.smaps else "0")
+    if args.sample_seconds:
+        env["OPENSN_MEMORY_SAMPLE_SECONDS"] = str(args.sample_seconds)
+    else:
+        env.pop("OPENSN_MEMORY_SAMPLE_SECONDS", None)
     prefixes = ("OPENSN_", "OMP_", "SLURM_", "FLUX_", "MPI", "OMPI_", "PMIX_",
                 "CUDA_", "HIP_", "ROCR_", "GLIBC_", "MALLOC_", "CALI_")
     settings = {k: v for k, v in env.items() if k.startswith(prefixes)}
@@ -242,6 +246,8 @@ def main():
     p.add_argument("--trim", action="store_true")
     p.add_argument("--smaps", action="store_true",
                    help="Capture resident memory by mapping at each trial boundary")
+    p.add_argument("--sample-seconds", type=positive,
+                   help="Sample host memory in one diagnostic thread per rank during C++ calls")
     p.add_argument("launcher", nargs=argparse.REMAINDER)
     p.set_defaults(action=run_case)
     args = parser.parse_args()

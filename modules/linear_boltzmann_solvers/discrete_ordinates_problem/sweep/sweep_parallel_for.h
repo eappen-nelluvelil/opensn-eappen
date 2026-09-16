@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "framework/utils/memory.h"
 #include <exception>
 #include <thread>
 #include <vector>
@@ -24,6 +25,7 @@ ParallelFor(size_t count, size_t num_threads, Function function)
   }
 
   std::vector<std::exception_ptr> exceptions(num_threads);
+  TraceMemory("setup_threads.start", 0, false, {{"threads", num_threads}, {"items", count}});
   {
     std::vector<std::jthread> workers;
     workers.reserve(num_threads);
@@ -42,6 +44,8 @@ ParallelFor(size_t count, size_t num_threads, Function function)
           }
         });
   }
+
+  TraceMemory("setup_threads.joined", 0, false, {{"threads", num_threads}, {"items", count}});
 
   for (const auto& exception : exceptions)
     if (exception)

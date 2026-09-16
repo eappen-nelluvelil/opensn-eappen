@@ -31,6 +31,11 @@ public:
   {
     communicators_.swap(communicators);
     location_groups_.swap(location_groups);
+    TraceMemory(
+      "mpi.communicators.create.complete",
+      reinterpret_cast<std::uintptr_t>(this),
+      false,
+      {{"communicator_slots", communicators_.size()}, {"groups", location_groups_.size()}});
   }
 
   MPICommunicatorSet(const MPICommunicatorSet&) = delete;

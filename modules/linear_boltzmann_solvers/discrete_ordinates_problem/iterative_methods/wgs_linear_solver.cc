@@ -11,6 +11,7 @@
 #include "framework/utils/caliper_scopes.h"
 #include "framework/utils/timer.h"
 #include "framework/runtime.h"
+#include "framework/utils/memory.h"
 #include <petscksp.h>
 #include "caliper/cali.h"
 #include <memory>
@@ -52,7 +53,9 @@ WGSLinearSolver::WGSLinearSolver(const std::shared_ptr<WGSContext>& gs_context_p
 
 WGSLinearSolver::~WGSLinearSolver()
 {
+  TraceMemory("wgs_solver.destructor.begin", reinterpret_cast<std::uintptr_t>(this));
   OpenSnPETScCall(VecDestroy(&rhs_preconditioned_work_));
+  TraceMemory("wgs_solver.work_vector.released", reinterpret_cast<std::uintptr_t>(this));
 }
 
 void

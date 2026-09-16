@@ -10,6 +10,7 @@
 #include "framework/utils/hdf_utils.h"
 #include "framework/logging/log.h"
 #include "framework/runtime.h"
+#include "framework/utils/memory.h"
 #include "framework/data_types/allowable_range.h"
 #include "framework/utils/error.h"
 #include "framework/utils/timer.h"
@@ -1268,7 +1269,9 @@ LBSProblem::MakeSourceMomentsFromPhi()
 
 LBSProblem::~LBSProblem()
 {
+  TraceMemory("lbs.destructor.begin", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
   ResetGPUCarriers();
+  TraceMemory("lbs.gpu_carriers.released", reinterpret_cast<std::uintptr_t>(this), use_gpus_);
 }
 
 void

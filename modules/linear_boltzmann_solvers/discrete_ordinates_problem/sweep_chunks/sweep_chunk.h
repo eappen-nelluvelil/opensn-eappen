@@ -86,7 +86,7 @@ public:
 
   virtual bool IsTimeDependent() const { return false; }
 
-  virtual ~SweepChunk() = default;
+  virtual ~SweepChunk();
 
   /**
    * Functions of type MomentCallbackFunc can be added to the moment_callbacks

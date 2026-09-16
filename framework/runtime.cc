@@ -84,6 +84,7 @@ int
 Initialize()
 {
   opensn_num_threads = ResolveOpenSnNumThreads();
+  StartMemorySampling();
 
   if (use_caliper)
   {
@@ -105,6 +106,8 @@ Initialize()
 void
 Finalize()
 {
+  TraceMemory("runtime.finalize.begin");
+  StopMemorySampling();
   // Flush standard streams
   std::cout.flush();
   std::cerr.flush();

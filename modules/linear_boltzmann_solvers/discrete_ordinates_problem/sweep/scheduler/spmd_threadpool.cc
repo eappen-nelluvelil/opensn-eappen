@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
+#include "framework/utils/memory.h"
 #include <cassert>
 
 namespace opensn
@@ -33,6 +34,9 @@ SPMD_ThreadPool::Start(std::size_t n)
   if (workers_initialized_ || n == 0)
     return;
 
+  TraceMemory(
+    "worker_pool.start.begin", reinterpret_cast<std::uintptr_t>(this), false, {{"threads", n}});
+
   worker_threads_.reserve(n);
   epoch_states_.assign(n, EpochState{0, 0});
   outstanding_ = 0;
@@ -41,6 +45,8 @@ SPMD_ThreadPool::Start(std::size_t n)
     worker_threads_.emplace_back(&SPMD_ThreadPool::InfiniteLoop, this, i);
 
   workers_initialized_ = true;
+  TraceMemory(
+    "worker_pool.start.complete", reinterpret_cast<std::uintptr_t>(this), false, {{"threads", n}});
 }
 
 void
@@ -48,6 +54,11 @@ SPMD_ThreadPool::Stop()
 {
   if (!workers_initialized_)
     return;
+
+  TraceMemory("worker_pool.stop.begin",
+              reinterpret_cast<std::uintptr_t>(this),
+              false,
+              {{"threads", worker_threads_.size()}});
 
   {
     std::scoped_lock<std::mutex> lock(mutex_);
@@ -67,6 +78,7 @@ SPMD_ThreadPool::Stop()
   workers_initialized_ = false;
   stop_workers_ = false;
   outstanding_ = 0;
+  TraceMemory("worker_pool.stop.complete", reinterpret_cast<std::uintptr_t>(this));
 }
 
 void

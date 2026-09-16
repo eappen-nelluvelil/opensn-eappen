@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/cbcd_sweep_chunk.h"
+#include "framework/utils/memory.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/main.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep_chunks/gpu_kernel/round_up.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/device_vector_mirror.h"
@@ -144,6 +145,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
 
 CBCDSweepChunk::~CBCDSweepChunk()
 {
+  TraceMemory("cbcd_sweep_chunk.destructor.begin", reinterpret_cast<std::uintptr_t>(this));
   StopCommunicator();
 }
 
