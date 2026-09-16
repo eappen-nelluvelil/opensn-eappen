@@ -406,16 +406,13 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
   std::vector<std::uint32_t>& cells_who_received_data)
 {
   const auto tag = static_cast<int>(angle_set_id_);
-
-  for (;;)
+  mpi::Status status;
+  while (receive_comm_.iprobe(mpi::ANY_SOURCE, tag, status))
   {
-    auto message = receive_comm_.improbe(mpi::ANY_SOURCE, tag);
-    if (not message)
-      break;
-
-    message.recv(receive_buffer_);
-
-    const auto source_rank = message.source();
+    const auto source_rank = status.source();
+    const auto num_bytes = status.count<char>();
+    receive_buffer_.resize(static_cast<std::size_t>(num_bytes));
+    receive_comm_.recv(source_rank, tag, receive_buffer_.data(), num_bytes);
     auto* read_ptr = receive_buffer_.data();
     const auto* const read_end = read_ptr + receive_buffer_.size();
 
