@@ -23,6 +23,29 @@ import socket
 import time
 from pathlib import Path
 
+def read_memory_file(path):
+    try:
+        return Path(path).read_text()
+    except OSError as error:
+        return {"error": str(error)}
+
+def cgroup_memory_snapshot(membership, root=Path("/sys/fs/cgroup")):
+    result = {}
+    for line in membership.splitlines():
+        if not line.startswith("0::"):
+            continue
+        directory = root / line[3:].lstrip("/")
+        while directory == root or root in directory.parents:
+            result[str(directory)] = {
+                name: read_memory_file(directory / name)
+                for name in ("memory.current", "memory.peak", "memory.max",
+                             "memory.high", "memory.events", "memory.stat",
+                             "memory.pressure", "memory.swap.current")}
+            if directory == root:
+                break
+            directory = directory.parent
+    return result
+
 def memory_marker(trial, stage):
     directory = Path(os.environ["OPENSN_MEMORY_TRACE_DIR"])
     directory.mkdir(parents=True, exist_ok=True)
@@ -31,6 +54,10 @@ def memory_marker(trial, stage):
                   status=Path("/proc/self/status").read_text())
     record["node_memory"] = Path("/proc/meminfo").read_text()
     record["cgroup"] = Path("/proc/self/cgroup").read_text()
+    record["smaps_rollup"] = read_memory_file("/proc/self/smaps_rollup")
+    record["maps"] = read_memory_file("/proc/self/maps")
+    record["memory_pressure"] = read_memory_file("/proc/pressure/memory")
+    record["cgroup_memory"] = cgroup_memory_snapshot(record["cgroup"])
     filename = "python-" + socket.gethostname() + "-" + str(os.getpid()) + ".jsonl"
     with (directory / filename).open("a") as f:
         f.write(json.dumps(record) + "\\n")

@@ -11,6 +11,23 @@ import memory_study
 
 
 class MemoryStudyTest(unittest.TestCase):
+    def test_cgroup_snapshots(self):
+        namespace = {}
+        exec(memory_study.MARKERS, namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            leaf = root / "job" / "step" / "task"
+            leaf.mkdir(parents=True)
+            (root / "job" / "memory.max").write_text("1024\n")
+            (leaf / "memory.current").write_text("512\n")
+            snapshot = namespace["cgroup_memory_snapshot"]("0::/job/step/task\n", root)
+            self.assertEqual(set(snapshot),
+                             {str(leaf), str(leaf.parent), str(root / "job"), str(root)})
+            self.assertEqual(snapshot[str(leaf)]["memory.current"], "512\n")
+            self.assertEqual(snapshot[str(root / "job")]["memory.max"], "1024\n")
+            self.assertIn("error", snapshot[str(leaf)]["memory.peak"])
+            self.assertEqual(namespace["cgroup_memory_snapshot"]("1:memory:/job\n", root), {})
+
     def test_scoped_trials(self):
         for gpu in (False, True):
             tree = ast.parse(memory_study.render(Path("/tmp/mesh.msh"), gpu, 17, 16))
