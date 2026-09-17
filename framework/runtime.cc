@@ -5,6 +5,7 @@
 #include "framework/logging/log.h"
 #include "framework/math/math.h"
 #include "framework/utils/memory.h"
+#include "framework/utils/parallel_for.h"
 #include "framework/utils/timer.h"
 #include "config.h"
 #include "caliper/cali.h"
@@ -108,6 +109,8 @@ Finalize()
 {
   TraceMemory("runtime.finalize.begin");
   StopMemorySampling();
+  ReleaseParallelForWorkers();
+  TraceMemory("runtime.setup_workers.released");
   // Flush standard streams
   std::cout.flush();
   std::cerr.flush();
