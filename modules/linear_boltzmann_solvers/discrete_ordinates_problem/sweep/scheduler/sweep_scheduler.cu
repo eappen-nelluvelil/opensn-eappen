@@ -88,7 +88,7 @@ SweepScheduler::ScheduleAlgoAsyncFIFO(SweepChunk& sweep_chunk)
   cbcd_sweep_chunk.GetProblem().CopyPhiAndSrcToDevice();
   cbcd_sweep_chunk.RefreshKernelArguments();
 
-  auto& angle_sets = cbcd_sweep_chunk.GetAngleSets();
+  const auto& angle_sets = cbcd_sweep_chunk.GetAngleSets();
   const auto num_angle_sets = angle_sets.size();
   for (auto* angle_set : angle_sets)
     angle_set->ResetSweepDependencies();

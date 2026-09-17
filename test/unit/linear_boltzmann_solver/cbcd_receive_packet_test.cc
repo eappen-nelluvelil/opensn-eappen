@@ -159,7 +159,7 @@ TEST(CBCDReceivePacket, UnalignedFacePayloads)
     [&](const std::uint32_t face, const std::byte* payload)
     {
       EXPECT_EQ(face, count == 0 ? 2 : 7);
-      std::array<double, 3> values;
+      std::array<double, 3> values{};
       std::memcpy(values.data(), payload, sizeof(values));
       for (std::size_t i = 0; i < values.size(); ++i)
         EXPECT_EQ(values[i], static_cast<double>(face + i));
@@ -178,7 +178,7 @@ TEST(CBCDReceivePacket, ConcurrentPublicationAndRecycling)
   opensn::CBCDReceivePacketPool pool(3);
   std::array<opensn::LockFreeSPSCSlotQueue<opensn::CBCDReceivePacket*>, num_workers> queues;
   std::array<std::thread, num_workers> workers;
-  std::array<bool, num_workers> valid;
+  std::array<bool, num_workers> valid{};
   for (std::size_t sweep = 0; sweep < 2; ++sweep)
   {
     valid.fill(true);

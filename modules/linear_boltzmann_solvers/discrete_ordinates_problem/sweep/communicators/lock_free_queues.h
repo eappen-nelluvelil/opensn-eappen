@@ -3,12 +3,13 @@
 
 #pragma once
 
+#include "framework/utils/hardware_interference_size.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <limits>
-#include <new>
 #include <span>
 #include <thread>
 #include <vector>
@@ -25,18 +26,15 @@ public:
   void Preallocate(const std::size_t capacity)
   {
     buffer_ = std::vector<T>(capacity);
-    producer_head_ = 0;
-    producer_published_head_ = 0;
-    consumer_tail_ = 0;
-    producer_tail_cache_ = 0;
-    consumer_head_cache_ = 0;
+    producer_ = {};
+    consumer_ = {};
     published_head_.store(0, std::memory_order_relaxed);
     consumed_tail_.store(0, std::memory_order_relaxed);
   }
 
   /** Applies `callback` once to each reusable element. */
   template <typename Callback>
-  void InitializeSlots(Callback&& callback)
+  void InitializeSlots(Callback callback)
   {
     for (auto& element : buffer_)
       callback(element);
@@ -46,16 +44,17 @@ public:
   T& ReserveSlot()
   {
     const auto capacity = buffer_.size();
-    while ((producer_head_ - producer_tail_cache_) >= capacity)
+    assert(capacity > 0);
+    while ((producer_.head - producer_.tail_cache) >= capacity)
     {
       // Let the consumer release staged elements before waiting for space.
       PublishStagedSlots();
-      producer_tail_cache_ = consumed_tail_.load(std::memory_order_acquire);
-      if ((producer_head_ - producer_tail_cache_) < capacity)
+      producer_.tail_cache = consumed_tail_.load(std::memory_order_acquire);
+      if ((producer_.head - producer_.tail_cache) < capacity)
         break;
       std::this_thread::yield();
     }
-    return buffer_[producer_head_ % capacity];
+    return buffer_[producer_.head % capacity];
   }
 
   /** Makes the most recently reserved element visible to the consumer. */
@@ -66,15 +65,15 @@ public:
   }
 
   /** Finishes the reserved element without publishing it yet. Producer only. */
-  void StageSlot() { ++producer_head_; }
+  void StageSlot() { ++producer_.head; }
 
   /** Publishes all finished elements. Call before the producer waits for more work. */
   void PublishStagedSlots()
   {
-    if (producer_head_ == producer_published_head_)
+    if (producer_.head == producer_.published_head)
       return;
-    published_head_.store(producer_head_, std::memory_order_release);
-    producer_published_head_ = producer_head_;
+    published_head_.store(producer_.head, std::memory_order_release);
+    producer_.published_head = producer_.head;
   }
 
   /** Returns the published prefix as at most two spans, valid until released. */
@@ -84,13 +83,13 @@ public:
     if (buffer_.empty())
       return {};
 
-    consumer_head_cache_ = published_head_.load(std::memory_order_acquire);
-    const auto ready_count = std::min(consumer_head_cache_ - consumer_tail_, max_slots);
+    consumer_.head_cache = published_head_.load(std::memory_order_acquire);
+    const auto ready_count = std::min(consumer_.head_cache - consumer_.tail, max_slots);
     if (ready_count == 0)
       return {};
 
     const auto capacity = buffer_.size();
-    const auto first_index = consumer_tail_ % capacity;
+    const auto first_index = consumer_.tail % capacity;
     const auto first_count = std::min(ready_count, capacity - first_index);
     const std::span<const T> buffer(buffer_);
     return {buffer.subspan(first_index, first_count), buffer.first(ready_count - first_count)};
@@ -102,13 +101,13 @@ public:
     if (count == 0)
       return;
 
-    consumer_tail_ += count;
-    consumed_tail_.store(consumer_tail_, std::memory_order_release);
+    consumer_.tail += count;
+    consumed_tail_.store(consumer_.tail, std::memory_order_release);
   }
 
   /** Processes and releases every element currently visible to the consumer. */
   template <typename Callback>
-  std::size_t ProcessReady(Callback&& callback)
+  std::size_t ProcessReady(Callback callback)
   {
     const auto ready = PeekReadySlots();
     const auto ready_count = ready[0].size() + ready[1].size();
@@ -124,18 +123,27 @@ public:
   {
     if (buffer_.empty())
       return true;
-    return published_head_.load(std::memory_order_acquire) == consumer_tail_;
+    return published_head_.load(std::memory_order_acquire) == consumer_.tail;
   }
 
 private:
+  struct alignas(HardwareInterferenceSize) ProducerState
+  {
+    std::size_t head = 0;
+    std::size_t published_head = 0;
+    std::size_t tail_cache = 0;
+  };
+  struct alignas(HardwareInterferenceSize) ConsumerState
+  {
+    std::size_t tail = 0;
+    std::size_t head_cache = 0;
+  };
+
+  ProducerState producer_;
+  ConsumerState consumer_;
+  alignas(HardwareInterferenceSize) std::atomic<std::size_t> published_head_{0};
+  alignas(HardwareInterferenceSize) std::atomic<std::size_t> consumed_tail_{0};
   std::vector<T> buffer_;
-  alignas(std::hardware_destructive_interference_size) std::size_t producer_head_ = 0;
-  std::size_t producer_published_head_ = 0;
-  alignas(std::hardware_destructive_interference_size) std::size_t consumer_tail_ = 0;
-  std::size_t producer_tail_cache_ = 0;
-  std::size_t consumer_head_cache_ = 0;
-  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> published_head_{0};
-  alignas(std::hardware_destructive_interference_size) std::atomic<std::size_t> consumed_tail_{0};
 };
 
 } // namespace opensn

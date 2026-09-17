@@ -105,7 +105,7 @@ public:
 
   /** Process all received batches currently visible for one angle set. */
   template <typename Callback>
-  bool ProcessIncoming(std::size_t angle_set_id, Callback&& callback)
+  bool ProcessIncoming(std::size_t angle_set_id, Callback callback)
   {
     return incoming_mailboxes_[angle_set_id]->ProcessReady(
              [&](const IncomingFaceBatch& batch)
