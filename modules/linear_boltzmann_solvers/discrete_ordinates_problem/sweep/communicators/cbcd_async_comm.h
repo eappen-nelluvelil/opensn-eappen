@@ -6,13 +6,13 @@
 #include "framework/data_types/byte_array.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_receive_packet.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
 #include "mpicpp-lite/mpicpp-lite.h"
 #include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -117,9 +117,9 @@ public:
 
   /// Mark an angle set locally complete after all of its faces have been published.
   void SignalAngleSetComplete(std::size_t angle_set_id);
-  /// Allocate worker-owned queues and start the MPI progress thread.
+  /// Allocate worker-owned queues and start a sweep on the reusable MPI progress thread.
   void Start(std::size_t num_workers);
-  /// Drain published work and join the MPI progress thread.
+  /// Drain published work and wait for the MPI progress thread to become idle.
   void Stop();
 
 private:
@@ -180,7 +180,8 @@ private:
   /// Progress-thread lifecycle and per-angle-set completion state.
   std::atomic<bool> stop_requested_{false};
   std::vector<std::atomic<bool>> angle_set_complete_;
-  std::thread comm_thread_;
+  bool sweep_active_ = false;
+  SPMD_ThreadPool comm_pool_;
   /// Ready outgoing records and queues released after serialization.
   std::vector<OutgoingFaceRecord*> ready_records_;
   std::vector<std::pair<OutgoingQueue*, std::size_t>> pending_slot_releases_;

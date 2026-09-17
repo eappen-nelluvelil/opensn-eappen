@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <thread>
 
 namespace opensn
 {
@@ -113,8 +114,9 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
 {
-  if (comm_thread_.joinable())
-    Stop();
+  Stop();
+  if (comm_pool_.GetSize() != 0)
+    comm_pool_.Stop();
 }
 
 void
@@ -181,22 +183,31 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
 void
 CBCD_AsynchronousCommunicator::Start(const std::size_t num_workers)
 {
-  assert(not comm_thread_.joinable() and "CBCD communicator progress thread is already running.");
+  assert(not sweep_active_ and "CBCD communicator progress thread is already running.");
   ConfigureWorkerQueues(num_workers);
 
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& complete : angle_set_complete_)
     complete.store(false, std::memory_order_relaxed);
 
-  comm_thread_ = std::thread(&CBCD_AsynchronousCommunicator::CommThreadLoop, this);
+  if (comm_pool_.GetSize() == 0)
+  {
+    comm_pool_.Resize(1);
+    comm_pool_.AssignTask([this](std::size_t) { CommThreadLoop(); });
+  }
+  sweep_active_ = true;
+  comm_pool_.Run(0);
 }
 
 void
 CBCD_AsynchronousCommunicator::Stop()
 {
-  stop_requested_.store(true, std::memory_order_release);
-  if (comm_thread_.joinable())
-    comm_thread_.join();
+  if (sweep_active_)
+  {
+    stop_requested_.store(true, std::memory_order_release);
+    comm_pool_.WaitAll();
+    sweep_active_ = false;
+  }
   receive_packets_->Reclaim();
 }
 
