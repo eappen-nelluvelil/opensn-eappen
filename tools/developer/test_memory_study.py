@@ -8,11 +8,18 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+from types import SimpleNamespace
 
 import memory_study
 
 
 class MemoryStudyTest(unittest.TestCase):
+    @staticmethod
+    def complete_run(*args, **kwargs):
+        kwargs["stdout"].write("avg_sweep_time = 1.0 s, sweep_time_per_unknown = 2.0 ns\n"
+                               "MEMORY_TRIAL_END 1/1\n")
+        return SimpleNamespace(returncode=0)
+
     def test_optional_smaps(self):
         namespace = {"os": os}
         exec(memory_study.MARKERS, namespace)
@@ -66,7 +73,7 @@ class MemoryStudyTest(unittest.TestCase):
             self.assertEqual(ast.literal_eval(groupset["l_max_its"]), 16)
             loop = tree.body[-1]
             self.assertEqual(ast.literal_eval(loop.iter.args[0]), 17)
-            self.assertEqual(loop.body[1].value.func.id, "run_trial")
+            self.assertEqual(loop.body[2].value.func.id, "run_trial")
 
     def test_cache_parser(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -101,6 +108,7 @@ class MemoryStudyTest(unittest.TestCase):
             self.assertIn("-DPython3_EXECUTABLE:FILEPATH=/stack/venv/bin/python", configure)
             self.assertIn("-DCMAKE_CXX_FLAGS:STRING=-I/stack/include", configure)
             self.assertIn("-DOPENSN_WITH_HIP:BOOL=ON", configure)
+            self.assertIn("-DCMAKE_BUILD_TYPE=Native", configure)
             self.assertFalse(any("NOTFOUND" in arg or "HOME_DIRECTORY" in arg
                                  for arg in configure))
             self.assertEqual(run.call_args_list[1].args[0][-2:], ["--parallel", "4"])
@@ -112,11 +120,12 @@ class MemoryStudyTest(unittest.TestCase):
             root = Path(directory)
             for filename in ("opensn", "input.py", "xs_168g.xs"):
                 (root / filename).write_text("test\n")
+            (root / "input.json").write_text('{"repetitions": 1}\n')
             args = memory_study.argparse.Namespace(
                 case=root, binary=root / "opensn", trim=False, smaps=True, sample_seconds=15,
                 launcher=["--", "mpirun", "--np", "2"])
             with patch.object(memory_study.subprocess, "run") as run:
-                run.return_value.returncode = 0
+                run.side_effect = self.complete_run
                 memory_study.run_case(args)
             self.assertEqual(run.call_args.args[0][:3], ["mpirun", "--np", "2"])
             self.assertEqual(run.call_args.kwargs["env"]["OPENSN_MEMORY_TRIM"], "0")
@@ -131,14 +140,128 @@ class MemoryStudyTest(unittest.TestCase):
             root = Path(directory)
             for filename in ("opensn", "input.py", "xs_168g.xs"):
                 (root / filename).write_text("test\n")
+            (root / "input.json").write_text('{"repetitions": 1}\n')
             args = memory_study.argparse.Namespace(
                 case=root, binary=root / "opensn", trim=False, smaps=False, sample_seconds=None,
                 launcher=["mpirun", "--np", "2"])
             with patch.dict(os.environ, OPENSN_MEMORY_SAMPLE_SECONDS="1"):
                 with patch.object(memory_study.subprocess, "run") as run:
-                    run.return_value.returncode = 0
+                    run.side_effect = self.complete_run
                     memory_study.run_case(args)
             self.assertNotIn("OPENSN_MEMORY_SAMPLE_SECONDS", run.call_args.kwargs["env"])
+
+    def test_profile_modes_are_isolated(self):
+        for mode in ("baseline", "caliper"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for filename in ("opensn", "input.py", "xs_168g.xs", "caliper.txt"):
+                    (root / filename).write_text("test\n")
+                (root / "input.json").write_text('{"repetitions": 1}\n')
+                args = memory_study.argparse.Namespace(
+                    case=root, binary=root / "opensn", mode=mode, trim=False,
+                    smaps=False, sample_seconds=None, launcher=["mpirun", "--np", "2"])
+                with patch.dict(os.environ, OPENSN_MEMORY_TRACE_DIR="stale", CALI_CONFIG="stale"):
+                    with patch.object(memory_study.subprocess, "run") as run:
+                        run.side_effect = self.complete_run
+                        memory_study.run_case(args)
+                env = run.call_args.kwargs["env"]
+                self.assertFalse(any(k.startswith("OPENSN_MEMORY_") for k in env))
+                self.assertEqual(bool(env["CALI_CONFIG"]), mode == "caliper")
+                self.assertTrue((root / "SUCCESS").is_file())
+
+    def test_incomplete_run_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in ("opensn", "input.py", "xs_168g.xs"):
+                (root / filename).write_text("test\n")
+            (root / "input.json").write_text('{"repetitions": 17}\n')
+            args = memory_study.argparse.Namespace(
+                case=root, binary=root / "opensn", trim=False,
+                smaps=False, sample_seconds=None, launcher=["mpirun", "--np", "2"])
+            with patch.object(memory_study.subprocess, "run") as run:
+                run.side_effect = self.complete_run
+                with self.assertRaisesRegex(RuntimeError, "Incomplete trial"):
+                    memory_study.run_case(args)
+            self.assertFalse((root / "SUCCESS").exists())
+
+    def test_rocprof_rank_selection(self):
+        for rank in ("0", "1"):
+            with tempfile.TemporaryDirectory() as directory:
+                args = memory_study.argparse.Namespace(
+                    binary=Path("/build/opensn"), output=Path(directory))
+                with patch.dict(os.environ, {"FLUX_TASK_RANK": rank}, clear=True), \
+                        patch.object(memory_study.shutil, "which", return_value="/bin/rocprofv3"), \
+                        patch.object(memory_study.subprocess, "run") as run, \
+                        patch.object(memory_study.os, "execvp") as execute:
+                    memory_study.rocprof_rank(args)
+                command = execute.call_args.args[1]
+                if rank == "0":
+                    self.assertEqual(command[0], "/bin/rocprofv3")
+                    self.assertIn("--memory-allocation-trace", command)
+                    self.assertEqual(command[-4:], ["--", "/build/opensn", "-i", "input.py"])
+                    self.assertEqual(run.call_args.args[0], ["/bin/rocprofv3", "--version"])
+                else:
+                    self.assertEqual(command, ["/build/opensn", "-i", "input.py"])
+                    run.assert_not_called()
+
+    def test_rocprof_requires_trace_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in ("opensn", "input.py", "xs_168g.xs"):
+                (root / filename).write_text("test\n")
+            (root / "input.json").write_text('{"repetitions": 1, "gpu": true}\n')
+            args = memory_study.argparse.Namespace(
+                case=root, binary=root / "opensn", mode="rocprof", trim=False,
+                smaps=False, sample_seconds=None, launcher=["mpirun", "--np", "2"])
+            with patch.object(memory_study.shutil, "which", return_value="/bin/rocprofv3"), \
+                    patch.object(memory_study.subprocess, "run") as run:
+                run.side_effect = self.complete_run
+                with self.assertRaisesRegex(RuntimeError, "did not produce"):
+                    memory_study.run_case(args)
+                self.assertIn("rocprof-rank", run.call_args.args[0])
+            self.assertFalse((root / "SUCCESS").exists())
+
+    def test_rocprof_requires_rank(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "Cannot determine"):
+                memory_study.rocprof_rank(SimpleNamespace())
+
+    def test_rocprof_complete_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in ("opensn", "input.py", "xs_168g.xs"):
+                (root / filename).write_text("test\n")
+            (root / "input.json").write_text('{"repetitions": 1, "gpu": true}\n')
+            args = memory_study.argparse.Namespace(
+                case=root, binary=root / "opensn", mode="rocprof", trim=False,
+                smaps=False, sample_seconds=None, launcher=["mpirun", "--np", "2"])
+
+            def capture(*args, **kwargs):
+                output = root / "rocprof" / "rank-0"
+                output.mkdir(parents=True)
+                for name in ("hip_api", "kernel", "memory_copy", "memory_allocation"):
+                    (output / f"123_{name}_trace.csv").write_text("header\nrecord\n")
+                return self.complete_run(*args, **kwargs)
+
+            with patch.object(memory_study.shutil, "which", return_value="/bin/rocprofv3"), \
+                    patch.object(memory_study.subprocess, "run", side_effect=capture):
+                memory_study.run_case(args)
+            self.assertTrue((root / "SUCCESS").exists())
+
+    def test_launcher_failure_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in ("opensn", "input.py", "xs_168g.xs"):
+                (root / filename).write_text("test\n")
+            args = memory_study.argparse.Namespace(
+                case=root, binary=root / "opensn", mode="baseline", trim=False,
+                smaps=False, sample_seconds=None, launcher=["mpirun", "--np", "2"])
+            with patch.object(memory_study.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=99)):
+                with self.assertRaises(SystemExit):
+                    memory_study.run_case(args)
+            self.assertEqual((root / "exit_code.txt").read_text(), "99\n")
+            self.assertFalse((root / "SUCCESS").exists())
 
 
 if __name__ == "__main__":
