@@ -22,7 +22,7 @@
 namespace opensn
 {
 
-namespace detail
+namespace
 {
 
 constexpr std::size_t MPI_BYTE_COUNT_LIMIT =
@@ -45,7 +45,7 @@ struct BufferReader
   const std::byte* Data() const noexcept { return ptr; }
 };
 
-} // namespace detail
+} // namespace
 
 CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
@@ -125,9 +125,8 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (auto& complete : angle_set_complete_)
     complete.store(false, std::memory_order_relaxed);
 
-  message_limit_ = max_message_bytes == 0
-                     ? detail::MPI_BYTE_COUNT_LIMIT
-                     : std::min(max_message_bytes, detail::MPI_BYTE_COUNT_LIMIT);
+  message_limit_ = max_message_bytes == 0 ? MPI_BYTE_COUNT_LIMIT
+                                          : std::min(max_message_bytes, MPI_BYTE_COUNT_LIMIT);
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -371,7 +370,7 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
       for (const auto& record : span)
       {
         constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
-        assert(record.num_psi_values <= (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
+        assert(record.num_psi_values <= (MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
                                          section_header_bytes - record_header_bytes) /
                                           sizeof(double));
         const auto record_bytes = record_header_bytes + record.num_psi_values * sizeof(double);
@@ -440,7 +439,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       auto* packet = receive_packets_->Acquire(source_index, static_cast<std::size_t>(num_bytes));
       recv_comm.recv(source_rank, status.tag(), packet->data.data(), num_bytes);
 
-      detail::BufferReader reader{packet->data.data()};
+      BufferReader reader{packet->data.data()};
       const auto num_sections = reader.LoadSize();
       // Count all sections before publication and keep one reference while parsing the packet.
       packet->readers.store(num_sections + 1, std::memory_order_relaxed);
