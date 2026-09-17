@@ -9,7 +9,11 @@
 #include "caribou/main.hpp"
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
 #include <span>
+#include <vector>
 
 namespace crb = caribou;
 

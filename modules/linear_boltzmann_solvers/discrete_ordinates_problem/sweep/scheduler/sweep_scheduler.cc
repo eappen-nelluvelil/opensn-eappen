@@ -64,12 +64,10 @@ SweepScheduler::SweepScheduler(SchedulingAlgorithm scheduler_type,
   }
   else if (scheduler_type_ == SchedulingAlgorithm::ASYNC_FIFO)
   {
-    if (opensn_num_threads < 2)
-      throw std::logic_error("CBCD requires OPENSN_NUM_THREADS to be at least 2 (one sweep "
-                             "worker and one communication-progress thread).");
-
     constexpr std::size_t num_communicator_threads = 1;
-    const auto worker_limit = opensn_num_threads - num_communicator_threads;
+    const auto worker_limit = opensn_num_threads > num_communicator_threads
+                                ? opensn_num_threads - num_communicator_threads
+                                : 1;
     const auto num_workers =
       std::max<std::size_t>(1, std::min(angle_agg_.GetNumAngleSets(), worker_limit));
 

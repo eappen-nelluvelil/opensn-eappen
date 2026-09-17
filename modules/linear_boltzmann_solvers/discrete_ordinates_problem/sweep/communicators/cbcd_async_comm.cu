@@ -8,9 +8,9 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/profiling/cbcd_profiler.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/runtime.h"
-#include "framework/utils/error.h"
 #include "caliper/cali.h"
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -91,7 +91,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
   {
     const auto& common_data =
-      static_cast<const CBCD_FLUDS&>(angle_sets[angle_set_id]->GetFLUDS()).GetCommonData();
+      dynamic_cast<const CBCD_FLUDS&>(angle_sets[angle_set_id]->GetFLUDS()).GetCommonData();
     auto& source_to_index = source_indices_by_angle_set_[angle_set_id];
     const auto& source_partitions = incoming_source_partitions[angle_set_id];
     source_to_index.resize(source_partitions_.size());
@@ -99,6 +99,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     {
       const auto peer = std::lower_bound(
         source_partitions_.begin(), source_partitions_.end(), source_partitions[source_index]);
+      assert(peer != source_partitions_.end() and *peer == source_partitions[source_index]);
       source_to_index[peer - source_partitions_.begin()] = static_cast<std::uint32_t>(source_index);
       source_face_counts_[peer - source_partitions_.begin()] +=
         common_data.GetNumIncomingNonlocalFaces(source_index);
@@ -109,12 +110,15 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   destination_channels_by_angle_set_.resize(angle_sets.size());
   for (std::size_t i = 0; i < angle_sets.size(); ++i)
   {
-    const auto& fluds = static_cast<const CBCD_FLUDS&>(angle_sets[i]->GetFLUDS());
+    const auto& fluds = dynamic_cast<const CBCD_FLUDS&>(angle_sets[i]->GetFLUDS());
     auto& channels = destination_channels_by_angle_set_[i];
     for (const auto destination : fluds.GetCommonData().GetDestinationRanks())
-      channels.push_back(
-        std::lower_bound(destination_ranks_.begin(), destination_ranks_.end(), destination) -
-        destination_ranks_.begin());
+    {
+      const auto peer =
+        std::lower_bound(destination_ranks_.begin(), destination_ranks_.end(), destination);
+      assert(peer != destination_ranks_.end() and *peer == destination);
+      channels.push_back(peer - destination_ranks_.begin());
+    }
   }
 
   pending_records_by_angle_set_.resize(num_angle_sets_);
@@ -367,11 +371,9 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
       for (const auto& record : span)
       {
         constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
-        OpenSnLogicalErrorIf(
-          record.num_psi_values > (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
-                                   section_header_bytes - record_header_bytes) /
-                                    sizeof(double),
-          "One CBCD face record exceeds the MPI int byte-count limit and cannot be serialized.");
+        assert(record.num_psi_values <= (detail::MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
+                                         section_header_bytes - record_header_bytes) /
+                                          sizeof(double));
         const auto record_bytes = record_header_bytes + record.num_psi_values * sizeof(double);
         auto& records = pending_records_by_angle_set_[record.angle_set_id];
         const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
