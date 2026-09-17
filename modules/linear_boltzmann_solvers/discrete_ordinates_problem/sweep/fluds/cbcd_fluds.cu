@@ -32,7 +32,7 @@ CBCD_FLUDS::CBCD_FLUDS(std::size_t num_groups,
                        bool save_angular_flux)
   : FLUDS(num_groups, num_angles, common_data.GetSPDS()),
     common_data_(common_data),
-    cbc_spds_(static_cast<const CBC_SPDS&>(common_data.GetSPDS())),
+    cbc_spds_(dynamic_cast<const CBC_SPDS&>(common_data.GetSPDS())),
     psi_uk_man_(psi_uk_man),
     sdm_(sdm),
     num_local_spatial_dofs_(sdm_.GetNumLocalDOFs(psi_uk_man_) / psi_uk_man_.GetNumberOfUnknowns() /
