@@ -67,10 +67,10 @@ public:
   /// Return CBCD angle sets in scheduler order.
   const std::vector<CBCD_AngleSet*>& GetAngleSets() const { return angle_sets_; }
 
-  /// Start the MPI progress thread and configure worker-owned queues.
+  /// Start a sweep on the reusable MPI progress thread and configure worker-owned queues.
   void StartCommunicator(std::size_t num_workers);
 
-  /// Drain and stop the MPI progress thread.
+  /// Drain published work and wait for the MPI progress thread to become idle.
   void StopCommunicator();
 
   /// Refresh problem-dependent arguments cached for each angle set.
