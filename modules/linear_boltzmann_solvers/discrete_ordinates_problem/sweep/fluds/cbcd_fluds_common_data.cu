@@ -27,9 +27,27 @@ CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization&
   const auto& local_face_slot_ids = cbc_spds.GetLocalFaceSlotIDs();
   const auto& local_face_slot_node_offsets = cbc_spds.GetLocalFaceSlotNodeOffsets();
   std::uint64_t total_face_nodes = 0;
+  std::size_t outgoing_boundary_nodes = 0;
+  std::size_t incoming_nonlocal_faces = 0;
+  std::size_t outgoing_nonlocal_faces = 0;
   for (const auto& cell : grid.local_cells)
     for (std::uint32_t f = 0; f < cell.faces.size(); ++f)
-      total_face_nodes += sdm.GetCellMapping(cell).GetNumFaceNodes(f);
+    {
+      const auto num_nodes = sdm.GetCellMapping(cell).GetNumFaceNodes(f);
+      total_face_nodes += num_nodes;
+      const auto& face = cell.faces[f];
+      const auto orientation = face_orientations[cell.local_id][f];
+      if (not face.has_neighbor)
+      {
+        if (orientation == FaceOrientation::OUTGOING)
+          outgoing_boundary_nodes += num_nodes;
+      }
+      else if (not face.IsNeighborLocal(&grid))
+      {
+        incoming_nonlocal_faces += orientation == FaceOrientation::INCOMING;
+        outgoing_nonlocal_faces += orientation == FaceOrientation::OUTGOING;
+      }
+    }
 
   const size_t offsets_size = 2 * num_local_cells;
   const size_t total_size = offsets_size + total_face_nodes;
@@ -45,9 +63,11 @@ CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization&
 
   std::unordered_map<int, std::uint32_t> destination_rank_to_index;
   std::unordered_map<int, std::uint32_t> source_partition_to_index;
-  destination_ranks_.reserve(num_local_cells);
-  incoming_source_partitions_.reserve(num_local_cells);
-  outgoing_boundary_nodes_.reserve(total_face_nodes);
+  destination_ranks_.reserve(spds_.GetLocationSuccessors().size());
+  incoming_source_partitions_.reserve(spds_.GetLocationDependencies().size());
+  outgoing_boundary_nodes_.reserve(outgoing_boundary_nodes);
+  incoming_nonlocal_faces_.reserve(incoming_nonlocal_faces);
+  outgoing_nonlocal_faces_.reserve(outgoing_nonlocal_faces);
   struct OrderedNonlocalFace
   {
     std::uint32_t peer_index = 0;
@@ -57,8 +77,8 @@ CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization&
   };
   std::vector<OrderedNonlocalFace> incoming_face_order;
   std::vector<OrderedNonlocalFace> outgoing_face_order;
-  incoming_face_order.reserve(total_face_nodes);
-  outgoing_face_order.reserve(total_face_nodes);
+  incoming_face_order.reserve(incoming_nonlocal_faces);
+  outgoing_face_order.reserve(outgoing_nonlocal_faces);
 
   const auto update_cell_offsets = [this](const std::uint64_t cell_local_id)
   {
