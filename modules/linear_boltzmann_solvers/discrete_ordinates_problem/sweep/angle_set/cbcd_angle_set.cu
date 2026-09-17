@@ -27,7 +27,7 @@ CBCD_AngleSet::CBCD_AngleSet(size_t id,
   : AngleSet(id, groupset, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds)),
     comm_set_(comm_set),
-    cbcd_fluds_(static_cast<CBCD_FLUDS&>(*fluds_)),
+    cbcd_fluds_(dynamic_cast<CBCD_FLUDS&>(*fluds_)),
     stream_(),
     device_angle_indices_(angles_.size())
 {
@@ -229,8 +229,8 @@ CBCD_AngleSet::TryReleaseFollowers()
   // Publish reflecting-boundary writes before releasing follower dependencies.
   for (auto* angle_set : following_angle_sets_)
   {
-    auto* cbcd_angle_set = static_cast<CBCD_AngleSet*>(angle_set);
-    cbcd_angle_set->unresolved_sweep_dependencies_.fetch_sub(1, std::memory_order_release);
+    auto& cbcd_angle_set = dynamic_cast<CBCD_AngleSet&>(*angle_set);
+    cbcd_angle_set.unresolved_sweep_dependencies_.fetch_sub(1, std::memory_order_release);
   }
   followers_released_ = true;
 }
@@ -326,7 +326,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
 }
 
 AngleSetStatus
-CBCD_AngleSet::AngleSetAdvance(SweepChunk&, AngleSetStatus)
+CBCD_AngleSet::AngleSetAdvance(SweepChunk& /*sweep_chunk*/, AngleSetStatus /*permission*/)
 {
   OpenSnLogicalError("Device CBC angle sets are advanced only by the ASYNC_FIFO scheduler.");
 }

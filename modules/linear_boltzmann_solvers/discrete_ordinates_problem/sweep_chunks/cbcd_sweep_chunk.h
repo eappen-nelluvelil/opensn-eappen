@@ -63,10 +63,10 @@ private:
     gpu_kernel::Arguments<SweepKind::CBC> arguments;
     /// Fixed block geometry and stride-axis grid extent.
     crb::Dim3 threads_per_block;
-    unsigned int num_stride_blocks;
+    unsigned int num_stride_blocks = 0;
     /// Owning FLUDS and optional saved-psi device storage.
-    CBCD_FLUDS* fluds;
-    double* device_saved_psi;
+    CBCD_FLUDS* fluds = nullptr;
+    double* device_saved_psi = nullptr;
   };
   /// Owning problem and groupset-wide aggregated communicator.
   DiscreteOrdinatesProblem& problem_;

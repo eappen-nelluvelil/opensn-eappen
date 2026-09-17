@@ -47,7 +47,7 @@ public:
   void InitializeDelayedUpstreamData() override {}
 
   int GetMaxBufferMessages() const override { return 0; }
-  void SetMaxBufferMessages(int) override {}
+  void SetMaxBufferMessages(int /*max_buffer_messages*/) override {}
 
   /// Initialize the angle set after its upstream angle-set dependencies are resolved.
   bool TryInitialize(CBCDSweepChunk& sweep_chunk);

@@ -21,7 +21,7 @@ void
 CBCD_FLUDSCommonData::BuildMetadataAndCopyNodeIndex(const SpatialDiscretization& sdm)
 {
   const MeshContinuum& grid = *(spds_.GetGrid());
-  const auto& cbc_spds = static_cast<const CBC_SPDS&>(spds_);
+  const auto& cbc_spds = dynamic_cast<const CBC_SPDS&>(spds_);
   const size_t num_local_cells = grid.local_cells.size();
   const auto& face_orientations = spds_.GetCellFaceOrientations();
   const auto& local_face_slot_ids = cbc_spds.GetLocalFaceSlotIDs();
