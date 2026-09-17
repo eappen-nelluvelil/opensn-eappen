@@ -74,15 +74,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     {
       auto mailbox = std::make_unique<LockFreeSPSCSlotQueue<IncomingFaceBatch>>();
       mailbox->Preallocate(bounds[i].incoming_mailbox_capacity);
-      mailbox->InitializeSlots(
-        [&](IncomingFaceBatch& batch)
-        {
-          batch.faces.reserve(bounds[i].max_incoming_faces_per_batch);
-          batch.psi_values.reserve(bounds[i].max_incoming_values_per_batch);
-          batch.faces.clear();
-          batch.psi_values.clear();
-          batch.source_partition_index = 0;
-        });
       incoming_mailboxes_.push_back(std::move(mailbox));
     }
     else
@@ -91,6 +82,7 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
   my_rank_ = opensn::mpi_comm.rank();
   source_partitions_.assign(sources.begin(), sources.end());
+  receive_packets_ = std::make_unique<CBCDReceivePacketPool>(source_partitions_.size());
   source_ranks_.reserve(source_partitions_.size());
   for (const int source_partition : source_partitions_)
     source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
@@ -117,8 +109,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
   message_limit_ = max_message_bytes == 0 ? MPI_BYTE_COUNT_LIMIT
                                           : std::min(max_message_bytes, MPI_BYTE_COUNT_LIMIT);
-  if (max_message_bytes > 0)
-    recv_buffer_.Data().reserve(message_limit_);
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -217,6 +207,7 @@ CBCD_AsynchronousCommunicator::Stop()
   stop_requested_.store(true, std::memory_order_release);
   if (comm_thread_.joinable())
     comm_thread_.join();
+  receive_packets_->Reclaim();
 }
 
 void
@@ -369,11 +360,13 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
     {
       received_any = true;
       const auto num_bytes = status.count<std::byte>();
-      recv_buffer_.Data().resize(static_cast<std::size_t>(num_bytes));
-      recv_comm.recv(source_rank, status.tag(), recv_buffer_.Data().data(), num_bytes);
+      auto* packet = receive_packets_->Acquire(source_index, static_cast<std::size_t>(num_bytes));
+      recv_comm.recv(source_rank, status.tag(), packet->data.data(), num_bytes);
 
-      BufferReader reader{reinterpret_cast<const std::byte*>(recv_buffer_.Data().data())};
+      BufferReader reader{packet->data.data()};
       const auto num_sections = reader.LoadSize();
+      // Keep one producer reference until every section has been published.
+      packet->readers.store(num_sections + 1, std::memory_order_relaxed);
       for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
       {
         const auto angle_set_id = reader.LoadSize();
@@ -386,34 +379,20 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto source_partition_index = source->second;
 
         const auto* const section_ptr = reader.Data();
-        std::size_t total_values = 0;
         for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
         {
           reader.LoadFaceIndex();
           const auto data_size = reader.LoadSize();
           reader.SkipBytes(data_size * sizeof(double));
-          total_values += data_size;
         }
         auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
         batch.source_partition_index = source_partition_index;
-        batch.faces.resize(num_entries);
-        batch.psi_values.resize(total_values);
-        BufferReader section_reader{section_ptr};
-        std::size_t value_offset = 0;
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          auto& face = batch.faces[entry_index];
-          face.incoming_face_index = section_reader.LoadFaceIndex();
-          face.psi_offset = value_offset;
-          const auto num_psi_values = section_reader.LoadSize();
-          std::memcpy(batch.psi_values.data() + value_offset,
-                      section_reader.Data(),
-                      num_psi_values * sizeof(double));
-          section_reader.SkipBytes(num_psi_values * sizeof(double));
-          value_offset += num_psi_values;
-        }
+        batch.packet = packet;
+        batch.offset = section_ptr - packet->data.data();
+        batch.num_faces = num_entries;
         incoming_mailboxes_[angle_set_id]->PublishSlot();
       }
+      receive_packets_->Release(packet);
     }
   }
   return received_any;
