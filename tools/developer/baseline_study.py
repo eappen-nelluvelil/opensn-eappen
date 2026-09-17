@@ -87,6 +87,16 @@ def render(mesh, gpu, repetitions, iterations):
         template = template.replace("{{" + key + "}}", value)
     tree = ast.parse(template)
     loops = [node for node in tree.body if isinstance(node, ast.For)]
+    if not loops:
+        starts = [i for i, node in enumerate(tree.body) if isinstance(node, ast.Assign)
+                  and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                  and node.value.func.id == "DiscreteOrdinatesProblem"]
+        if len(starts) != 1 or len(tree.body[starts[0]:]) != 4:
+            raise ValueError("Expected one solver setup and execution block")
+        loop = ast.parse("for i in range(1):\n    pass\n").body[0]
+        loop.body = tree.body[starts[0]:]
+        tree.body[starts[0]:] = [loop]
+        loops = [loop]
     if len(loops) != 1:
         raise ValueError("Expected one top-level repetition loop")
     loop = loops[0]
@@ -103,6 +113,11 @@ def render(mesh, gpu, repetitions, iterations):
             for groupset in keyword.value.elts:
                 groupset.keys.append(ast.Constant("allow_cycles"))
                 groupset.values.append(ast.Constant(False))
+                for i, key in enumerate(groupset.keys):
+                    if ast.literal_eval(key) == "l_max_its":
+                        groupset.values[i] = ast.Constant(iterations)
+                    if ast.literal_eval(key) == "l_abs_tol":
+                        groupset.values[i] = ast.Constant(1.0e-18)
     function = ast.parse("def run_trial():\n    pass\n").body[0]
     function.body = loop.body
     index = tree.body.index(loop)
@@ -118,6 +133,8 @@ for trial in range({repetitions}):
 
 
 def prepare(args):
+    if args.fuse_worker_launches and not args.gpu:
+        raise ValueError("Combined worker launches require --gpu")
     mesh = args.mesh.resolve(strict=True)
     if any(c in str(mesh) for c in ('"', "\n", "\\")):
         raise ValueError("Unsupported mesh path")
@@ -130,7 +147,8 @@ def prepare(args):
     write_json(output / "input.json", dict(
         mesh=str(mesh), mesh_sha256=digest(mesh), xs_sha256=digest(xs),
         gpu=args.gpu, repetitions=args.repetitions, iterations=args.iterations,
-        allow_cycles=False, source=str(SOURCE), revision=subprocess.check_output(
+        allow_cycles=False, fuse_worker_launches=args.fuse_worker_launches,
+        source=str(SOURCE), revision=subprocess.check_output(
             ["git", "-C", str(SOURCE), "rev-parse", "HEAD"], text=True).strip()))
 
 
@@ -174,6 +192,8 @@ def run_case(args):
     if not launcher:
         raise ValueError("Supply the MPI launcher after --")
     env = baseline_environment(os.environ)
+    config = json.loads((case / "input.json").read_text())
+    env["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"] = str(config["fuse_worker_launches"])
     command = launcher + [str(binary), "-i", "input.py"]
     prefixes = ("OPENSN_", "OMP_", "SLURM_", "FLUX_", "MPI", "OMPI_", "PMIX_",
                 "CUDA_", "HIP_", "ROCR_", "CALI_", "HSA_", "PYTHON", "VIRTUAL_ENV")
@@ -187,7 +207,7 @@ def run_case(args):
     (case / "exit_code.txt").write_text(str(result.returncode) + "\n")
     samples = completed_trials((case / "stdout.txt").read_text())
     write_json(case / "trials.json", samples)
-    expected = json.loads((case / "input.json").read_text())["repetitions"]
+    expected = config["repetitions"]
     complete = [s["trial"] for s in samples] == list(range(1, expected + 1))
     if result.returncode != 0 or not complete:
         raise SystemExit(f"Incomplete baseline: exit={result.returncode}, "
@@ -215,6 +235,7 @@ def main():
     p.add_argument("--mesh", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--gpu", action="store_true")
+    p.add_argument("--fuse-worker-launches", type=int, choices=(0, 1), default=0)
     p.add_argument("--repetitions", type=positive, default=17)
     p.add_argument("--iterations", type=positive, default=16)
     p.set_defaults(action=prepare)

@@ -4,6 +4,7 @@
 import contextlib
 import gc
 import io
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -71,6 +72,7 @@ class BaselineStudyTest(unittest.TestCase):
                     group = args["groupsets"][0]
                     self.assertFalse(group["allow_cycles"])
                     self.assertEqual(group["l_max_its"], 16)
+                    self.assertEqual(group["l_abs_tol"], 1.0e-18)
                     self.assertEqual(group["angle_aggregation_type"], "single")
 
     def test_environment(self):
@@ -129,6 +131,39 @@ class BaselineStudyTest(unittest.TestCase):
                 "CMAKE_CXX_FLAGS:STRING=-fsanitize=address\n")
             with self.assertRaises(ValueError):
                 study.build(SimpleNamespace(reuse_build=root, build=root / "new", jobs=4))
+
+    def test_explicit_launch_mode_survives_environment_cleanup(self):
+        for mode in (0, 1):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for name in ("opensn", "input.py"):
+                    (root / name).write_text("test\n")
+                study.write_json(root / "input.json",
+                                 dict(repetitions=1, fuse_worker_launches=mode))
+
+                def execute(*args, **kwargs):
+                    self.assertEqual(kwargs["env"]["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"],
+                                     str(mode))
+                    self.assertNotIn("OPENSN_CBCD_PROFILE_DIR", kwargs["env"])
+                    kwargs["stdout"].write(
+                        "BASELINE_TRIAL_BEGIN 1/1\n"
+                        "avg_sweep_time = 1.0 s, sweep_time_per_unknown = 2.0 ns\n"
+                        "BASELINE_TRIAL_END 1/1\n")
+                    return SimpleNamespace(returncode=0)
+
+                with patch.dict(study.os.environ, OPENSN_CBCD_FUSE_WORKER_LAUNCHES=str(1 - mode),
+                                OPENSN_CBCD_PROFILE_DIR="stale"), \
+                        patch.object(study.subprocess, "run", side_effect=execute):
+                    study.run_case(SimpleNamespace(case=root, binary=root / "opensn",
+                                                   launcher=["mpirun", "-np", "2"]))
+                metadata = json.loads((root / "launch.json").read_text())
+                self.assertEqual(metadata["environment"]["OPENSN_CBCD_FUSE_WORKER_LAUNCHES"],
+                                 str(mode))
+                self.assertTrue((root / "SUCCESS").exists())
+
+    def test_combined_launches_require_gpu(self):
+        with self.assertRaisesRegex(ValueError, "require --gpu"):
+            study.prepare(SimpleNamespace(fuse_worker_launches=1, gpu=False))
 
 
 if __name__ == "__main__":

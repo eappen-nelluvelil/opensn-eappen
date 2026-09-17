@@ -8,6 +8,14 @@ The mesh and cross sections are reused across trials. Each solver and problem
 is function-scoped so the previous trial releases its ownership before the next
 problem is constructed. Cycles and angular-flux saving are disabled.
 
+On this branch, add `--fuse-worker-launches 1` to `prepare --gpu` to select
+combined worker launches. The default is `0`, the original launch path. The
+selection is saved in `input.json` and restored explicitly by `run` after it
+clears inherited profiling settings. Use a separate case with `0` for a control
+using the same binary. All ranks must use the same selection. Neither mode
+enables profiling. Saved angular flux would select the original launch path,
+so it remains disabled in these inputs.
+
 Run `build` inside a compute-node allocation. It creates a separate Native build
 using the compiler, accelerator architecture, dependencies, Python executable,
 and native flags from an existing CMake cache. It does not install Python packages
