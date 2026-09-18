@@ -149,8 +149,8 @@ private:
                                 std::size_t face_id) const;
   /// Reset cell-task and batch state for a new sweep.
   void InitializeSweepState();
-  /// Retire a completed kernel and release its cell successors.
-  bool TryRetireCompletedBatch();
+  /// Retire the batch after this worker has observed stream completion.
+  void RetireCompletedBatch();
   /// Launch all cells currently ready in the active batch buffer.
   bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
   /// Publish reflecting and nonlocal psi from the completed batch.
