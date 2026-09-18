@@ -122,7 +122,7 @@ def prepare(args):
     assets[str(root / "inputs/xs_168g.xs")] = digest(root / "inputs/xs_168g.xs")
     config["assets"] = assets
     config["helper_hashes"] = {str(HERE / name): digest(HERE / name) for name in (
-        "cbcd_study.py", "study_build.py", "cbcd_study_input.py.in")}
+        "cbcd_study.py", "cbcd_study_batch.py", "study_build.py", "cbcd_study_input.py.in")}
     config["reuse_cache_sha256"] = digest(Path(config["reuse_build"]) / "CMakeCache.txt")
     write_json(root / "manifest.json", config)
     print(f"Prepared: {root}", flush=True)
@@ -356,7 +356,7 @@ def run(args):
         raise ValueError("rocprofv3 is not available in this environment")
     if not math.isfinite(args.seconds) or args.seconds <= 0:
         raise ValueError("Allocation time remaining must be positive and finite")
-    with locked(root / ".run.lock"):
+    with locked(root / f".run-{args.kind}-{args.nodes}.lock"):
         estimates = {}
         for mode, trial in pending(root, args.kind, args.nodes, config):
             remaining = deadline - time.monotonic() - 60
