@@ -129,6 +129,7 @@ private:
   {
     /// Destination MPI rank.
     int destination_rank = 0;
+    int mapped_rank = 0;
     /// One SPSC queue per scheduler worker; empty queues require no storage.
     std::vector<std::unique_ptr<OutgoingQueue>> worker_queues;
     /// Workers owning at least one outgoing face toward this destination.
@@ -162,6 +163,8 @@ private:
   /// Unique receive peers in partition and communicator-rank coordinates.
   std::vector<int> source_partitions_;
   std::vector<int> source_ranks_;
+  std::vector<std::size_t> source_face_counts_;
+  std::vector<std::size_t> remaining_source_faces_;
   /// Per-angle-set map from source partition to compact source index.
   std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_index_by_angle_set_;
   /// Unique destinations and their compact communication channels.
