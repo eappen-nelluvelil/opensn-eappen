@@ -3,6 +3,7 @@
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_async_comm.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/angle_set/angle_set.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbcd_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/mpi_comm_set.h"
 #include "framework/runtime.h"
@@ -91,14 +92,23 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
     source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
 
   source_partition_to_index_by_angle_set_.resize(angle_sets.size());
+  source_face_counts_.resize(source_partitions_.size(), 0);
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
   {
+    const auto& common_data =
+      dynamic_cast<const CBCD_FLUDS&>(angle_sets[angle_set_id]->GetFLUDS()).GetCommonData();
     auto& source_to_index = source_partition_to_index_by_angle_set_[angle_set_id];
     const auto& source_partitions = incoming_source_partitions[angle_set_id];
     source_to_index.reserve(source_partitions.size());
     for (std::size_t source_index = 0; source_index < source_partitions.size(); ++source_index)
+    {
       source_to_index.emplace(source_partitions[source_index],
                               static_cast<std::uint32_t>(source_index));
+      const auto peer = std::lower_bound(
+        source_partitions_.begin(), source_partitions_.end(), source_partitions[source_index]);
+      source_face_counts_[peer - source_partitions_.begin()] +=
+        common_data.GetNumIncomingNonlocalFaces(source_index);
+    }
   }
 
   destination_ranks_.assign(destinations.begin(), destinations.end());
@@ -170,6 +180,7 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
   {
     auto& channel = destination_channels_[queue_index];
     channel.destination_rank = destination_ranks_[queue_index];
+    channel.mapped_rank = comm_set_.MapIonJ(channel.destination_rank, channel.destination_rank);
     channel.worker_queues.resize(num_workers);
     channel.active_workers.clear();
 
@@ -200,6 +211,7 @@ CBCD_AsynchronousCommunicator::Start(const std::size_t num_workers)
 {
   assert(not sweep_active_ and "CBCD communicator progress thread is already running.");
   ConfigureWorkerQueues(num_workers);
+  remaining_source_faces_ = source_face_counts_;
 
   stop_requested_.store(false, std::memory_order_relaxed);
   for (auto& complete : angle_set_complete_)
@@ -302,8 +314,7 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
       entries.clear();
     }
     const auto& comm = comm_set_.LocICommunicator(channel.destination_rank);
-    const auto mapped_rank = comm_set_.MapIonJ(channel.destination_rank, channel.destination_rank);
-    in_flight.request = comm.isend(mapped_rank, mpi_tag_, in_flight.data.Data());
+    in_flight.request = comm.isend(channel.mapped_rank, mpi_tag_, in_flight.data.Data());
     in_flight_sends_.push_back(std::move(in_flight));
     current_payload_bytes = sizeof(std::size_t);
     active_angle_set_ids_.clear();
@@ -375,11 +386,15 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
   const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
   for (std::size_t source_index = 0; source_index < source_ranks_.size(); ++source_index)
   {
+    auto& remaining_faces = remaining_source_faces_[source_index];
+    if (remaining_faces == 0)
+      continue;
     const int source_partition = source_partitions_[source_index];
     const int source_rank = source_ranks_[source_index];
     mpi::Status status;
 
-    while (recv_comm.iprobe(source_rank, mpi_tag_, status))
+    // Each face arrives once per angle set. The sweep barrier separates successive counts.
+    while (remaining_faces != 0 and recv_comm.iprobe(source_rank, mpi_tag_, status))
     {
       received_any = true;
       const auto num_bytes = status.count<std::byte>();
@@ -394,6 +409,7 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       {
         const auto angle_set_id = reader.LoadSize();
         const auto num_entries = reader.LoadSize();
+        remaining_faces -= num_entries;
 
         assert(angle_set_id < num_angle_sets_ and "Invalid angle-set ID in CBCD message.");
         const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];

@@ -47,6 +47,13 @@ public:
   /// Return the number of incoming nonlocal faces.
   std::size_t GetNumIncomingNonlocalFaces() const { return incoming_nonlocal_faces_.size(); }
 
+  /// Return the exact incoming face count for one source-partition index.
+  std::size_t GetNumIncomingNonlocalFaces(std::size_t source_partition_index) const
+  {
+    return source_to_incoming_face_offsets_[source_partition_index + 1] -
+           source_to_incoming_face_offsets_[source_partition_index];
+  }
+
   /// Return the number of outgoing nonlocal faces.
   std::size_t GetNumOutgoingNonlocalFaces() const { return outgoing_nonlocal_faces_.size(); }
 
