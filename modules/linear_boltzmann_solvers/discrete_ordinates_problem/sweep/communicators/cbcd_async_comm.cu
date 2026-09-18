@@ -15,6 +15,7 @@
 #include <limits>
 #include <set>
 #include <thread>
+#include <unordered_map>
 
 namespace opensn
 {
@@ -81,30 +82,43 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (const int source_partition : source_partitions_)
     source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
 
-  source_partition_to_index_by_angle_set_.resize(angle_sets.size());
+  source_indices_by_angle_set_.resize(angle_sets.size());
   source_face_counts_.resize(source_partitions_.size(), 0);
   for (std::size_t angle_set_id = 0; angle_set_id < angle_sets.size(); ++angle_set_id)
   {
     const auto& common_data =
       dynamic_cast<const CBCD_FLUDS&>(angle_sets[angle_set_id]->GetFLUDS()).GetCommonData();
-    auto& source_to_index = source_partition_to_index_by_angle_set_[angle_set_id];
+    auto& source_to_index = source_indices_by_angle_set_[angle_set_id];
     const auto& source_partitions = incoming_source_partitions[angle_set_id];
-    source_to_index.reserve(source_partitions.size());
+    source_to_index.assign(source_partitions_.size(), std::numeric_limits<std::uint32_t>::max());
     for (std::size_t source_index = 0; source_index < source_partitions.size(); ++source_index)
     {
-      source_to_index.emplace(source_partitions[source_index],
-                              static_cast<std::uint32_t>(source_index));
       const auto peer = std::lower_bound(
         source_partitions_.begin(), source_partitions_.end(), source_partitions[source_index]);
+      assert(peer != source_partitions_.end() and *peer == source_partitions[source_index]);
+      assert(source_index < std::numeric_limits<std::uint32_t>::max());
+      source_to_index[peer - source_partitions_.begin()] = static_cast<std::uint32_t>(source_index);
       source_face_counts_[peer - source_partitions_.begin()] +=
         common_data.GetNumIncomingNonlocalFaces(source_index);
     }
   }
 
   destination_ranks_.assign(destinations.begin(), destinations.end());
-  destination_to_channel_.reserve(destination_ranks_.size());
-  for (std::size_t queue_index = 0; queue_index < destination_ranks_.size(); ++queue_index)
-    destination_to_channel_.emplace(destination_ranks_[queue_index], queue_index);
+  destination_channels_by_angle_set_.resize(angle_sets.size());
+  for (std::size_t i = 0; i < angle_sets.size(); ++i)
+  {
+    const auto& common_data =
+      dynamic_cast<const CBCD_FLUDS&>(angle_sets[i]->GetFLUDS()).GetCommonData();
+    auto& channels = destination_channels_by_angle_set_[i];
+    channels.reserve(common_data.GetDestinationRanks().size());
+    for (const auto destination : common_data.GetDestinationRanks())
+    {
+      const auto peer =
+        std::lower_bound(destination_ranks_.begin(), destination_ranks_.end(), destination);
+      assert(peer != destination_ranks_.end() and *peer == destination);
+      channels.push_back(peer - destination_ranks_.begin());
+    }
+  }
 
   pending_records_by_angle_set_.resize(num_angle_sets_);
   for (auto& complete : angle_set_complete_)
@@ -368,7 +382,6 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
     auto& remaining_faces = remaining_source_faces_[source_index];
     if (remaining_faces == 0)
       continue;
-    const int source_partition = source_partitions_[source_index];
     const int source_rank = source_ranks_[source_index];
     mpi::Status status;
 
@@ -391,10 +404,10 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         remaining_faces -= section.num_faces;
 
         assert(angle_set_id < num_angle_sets_ and "Invalid angle-set ID in CBCD message.");
-        const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
-        const auto source = source_indices.find(source_partition);
-        assert(source != source_indices.end() and "Invalid source partition for CBCD angle set.");
-        const auto source_partition_index = source->second;
+        const auto source_partition_index =
+          source_indices_by_angle_set_[angle_set_id][source_index];
+        assert(source_partition_index != std::numeric_limits<std::uint32_t>::max() and
+               "Invalid source partition for CBCD angle set.");
 
         const auto* const section_ptr = reader.Data();
         reader.SkipBytes(section.num_bytes);

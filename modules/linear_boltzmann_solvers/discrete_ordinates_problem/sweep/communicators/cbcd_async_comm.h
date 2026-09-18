@@ -13,7 +13,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -78,16 +77,17 @@ public:
   ~CBCD_AsynchronousCommunicator();
 
   /** Publish one outgoing face through the calling worker's SPSC queue. */
-  void EnqueueOutgoing(int destination_rank,
+  void EnqueueOutgoing(std::size_t destination_index,
                        std::size_t worker_id,
                        std::size_t angle_set_id,
                        std::uint32_t destination_face_index,
                        const double* psi_values,
                        std::size_t num_psi_values)
   {
-    const auto destination = destination_to_channel_.find(destination_rank);
-    assert(destination != destination_to_channel_.end());
-    const auto channel = destination->second;
+    assert(angle_set_id < destination_channels_by_angle_set_.size());
+    const auto& channels = destination_channels_by_angle_set_[angle_set_id];
+    assert(destination_index < channels.size());
+    const auto channel = channels[destination_index];
     auto& queue = *destination_channels_[channel].worker_queues[worker_id];
     auto& record = queue.ReserveSlot();
     record.angle_set_id = angle_set_id;
@@ -167,12 +167,12 @@ private:
   std::vector<int> source_ranks_;
   std::vector<std::size_t> source_face_counts_;
   std::vector<std::size_t> remaining_source_faces_;
-  /// Per-angle-set map from source partition to compact source index.
-  std::vector<std::unordered_map<int, std::uint32_t>> source_partition_to_index_by_angle_set_;
+  /// Per-angle-set source indices indexed by this communicator's receive peer.
+  std::vector<std::vector<std::uint32_t>> source_indices_by_angle_set_;
   /// Unique destinations and their compact communication channels.
   std::vector<int> destination_ranks_;
   std::vector<DestinationChannel> destination_channels_;
-  std::unordered_map<int, std::size_t> destination_to_channel_;
+  std::vector<std::vector<std::size_t>> destination_channels_by_angle_set_;
   /// Progress-thread-to-worker SPSC mailboxes indexed by angle-set ID.
   std::vector<std::unique_ptr<LockFreeSPSCSlotQueue<IncomingFaceBatch>>> incoming_mailboxes_;
   /// Serialization scratch grouped by angle-set section.
