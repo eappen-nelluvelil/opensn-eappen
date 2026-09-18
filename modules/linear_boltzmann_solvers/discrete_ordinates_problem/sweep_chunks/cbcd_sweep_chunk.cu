@@ -113,7 +113,7 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       {
         if (section_bytes == 0)
           continue;
-        message_bytes += 2 * sizeof(std::size_t) + section_bytes;
+        message_bytes += CBCDSectionHeader::SERIALIZED_SIZE + section_bytes;
       }
       max_message_bytes = std::max(max_message_bytes, message_bytes);
     }
