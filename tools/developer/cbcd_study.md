@@ -107,8 +107,9 @@ python tools/developer/cbcd_study.py run --root RESULTS \
   --kind strong --nodes N --seconds REMAINING_SECONDS --allocation ALLOCATION_ID
 ```
 
-Use `--kind weak` for weak scaling. A single campaign lock prevents concurrent
-runs from interfering. The driver reserves 60 seconds for cleanup and avoids
+Use `--kind weak` for weak scaling. A per-kind, per-node-count lock prevents
+duplicate runs of the same case while allowing distinct batch cases to run
+concurrently. The driver reserves 60 seconds for cleanup and avoids
 starting another trial if the remaining time is insufficient based on completed
 trials of that mode. A hard timeout cancels the recorded scheduler step and reaps
 the local launcher. The enclosing allocation remains the final resource boundary.
@@ -151,12 +152,55 @@ failed attempts and allocation logs. Build trees and mesh caches remain outside
 that directory. Keep the destination on the external results volume and use a
 resumable copy without `--delete`.
 
+## Baseline batch campaigns
+
+Prepare a separate campaign with `modes: ["baseline"]` and `trials: 17`.
+The site adapter builds on an allocated compute node and writes `batch.json`:
+
+```json
+{
+  "max_nodes": 256,
+  "assets": {"/path/to/allocated-launcher": "SHA256"},
+  "submit": ["flux", "batch", "-q", "pbatch", "-N", "{nodes}",
+             "-n", "{ranks}", "--exclusive", "-t", "1h",
+             "--output={allocation}/stdout.txt", "--error={allocation}/stderr.txt",
+             "--wrap", "/path/to/allocated-launcher", "{root}",
+             "{kind}", "{nodes}", "{allocation}"]
+}
+```
+
+Paths, bank, GPU mode and node limit are site configuration, not portable
+defaults. Include environment files in `assets`. Set `max_nodes` to the approved
+site limit, not the machine size. The allocated launcher restores the recorded
+environment and invokes `run` with the scheduler's actual time remaining.
+
+```sh
+python tools/developer/cbcd_study_batch.py --root RESULTS
+python tools/developer/cbcd_study_batch.py --root RESULTS --kind strong --nodes 4 --retry
+```
+
+The first command submits one job per kind and permitted node count. Each job
+runs 17 trials sequentially, each with fresh MPI processes. Different cases
+can run concurrently. Repeating submission does not duplicate recorded jobs.
+An explicit retry requires all previous submissions of that case to be inactive.
+If submission was interrupted before its job ID was recorded, the tool stops
+instead of risking duplicate submission. Inspect `submit.stdout`, `submit.stderr`
+and the scheduler to resolve it. Never remove an unresolved record to retry blindly.
+
+Seventeen trials share one allocation when they fit within the requested hour.
+Setup, mesh loading and process startup count toward this limit. A partial job
+retains its trials and can be resumed, but the combined samples then span
+allocations. Use a new campaign if all 17 samples must share one allocation.
+No automatic resubmission or extension of walltime is performed.
+
 ## Validation
 
 ```sh
 python tools/developer/test_cbcd_study.py
+python tools/developer/test_cbcd_study_batch.py
 flake8 --jobs 1 tools/developer/cbcd_study.py tools/developer/study_build.py \
-  tools/developer/test_cbcd_study.py
+  tools/developer/cbcd_study_batch.py tools/developer/test_cbcd_study.py \
+  tools/developer/test_cbcd_study_batch.py
 ```
 
 The tests cover independent process lifetimes, incomplete outputs, failed-attempt

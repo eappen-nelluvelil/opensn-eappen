@@ -83,6 +83,30 @@ print(''' + repr(OUTPUT) + ''')
         self.assertEqual(study.pending(self.root, "strong", 1, self.config), [])
         self.assertEqual(len(study.pending(self.root, "weak", 1, self.config)), 3)
 
+    def test_seventeen_trials_use_one_allocation_and_distinct_processes(self):
+        self.config["trials"] = 17
+        (self.root / "manifest.json").write_text(study.json.dumps(self.config))
+        args = SimpleNamespace(root=self.root, kind="strong", nodes=1, seconds=3600,
+                               allocation="batch-allocation")
+        with patch.object(study, "verify_inputs"), redirect_stdout(io.StringIO()):
+            self.assertEqual(study.run(args), 0)
+        launches = list(self.root.glob(
+            "results/strong/nodes-1/baseline/trial-*/attempt-*/launch.json"))
+        self.assertEqual(len(launches), 17)
+        self.assertEqual({study.read_json(p)["allocation"] for p in launches}, {"batch-allocation"})
+        pids = {study.read_json(p.parent / "placement/rank-0.json")["pid"] for p in launches}
+        self.assertEqual(len(pids), 17)
+
+    def test_lock_is_per_case(self):
+        args = SimpleNamespace(root=self.root, kind="weak", nodes=1, seconds=70,
+                               allocation="test")
+        with study.locked(self.root / ".run-strong-1.lock"), \
+                patch.object(study, "verify_inputs"), redirect_stdout(io.StringIO()):
+            self.assertEqual(study.run(args), 3)
+        with study.locked(self.root / ".run-weak-1.lock"), \
+                patch.object(study, "verify_inputs"), self.assertRaises(BlockingIOError):
+            study.run(args)
+
     def test_failure_retained_on_retry(self):
         with patch.dict(os.environ, FAIL_STUDY="1"), self.assertRaises(ValueError):
             self.launch(1)
