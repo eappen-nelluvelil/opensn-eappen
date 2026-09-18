@@ -37,14 +37,6 @@ struct BufferReader
     return value;
   }
 
-  std::uint32_t LoadFaceIndex()
-  {
-    std::uint32_t value{};
-    std::memcpy(&value, ptr, sizeof(std::uint32_t));
-    ptr += sizeof(std::uint32_t);
-    return value;
-  }
-
   void SkipBytes(const std::size_t num_bytes) { ptr += num_bytes; }
 
   const std::byte* Data() const noexcept { return ptr; }
@@ -260,11 +252,11 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
 
   bool work_done = false;
   std::size_t current_payload_bytes = sizeof(std::size_t);
-  constexpr std::size_t section_header_bytes = 2 * sizeof(std::size_t);
+  constexpr std::size_t section_header_bytes = CBCDSectionHeader::SERIALIZED_SIZE;
 
   const auto send_batch = [&]()
   {
-    // [section count], followed by [angle-set id, record count] sections.
+    // [section count], followed by [angle-set id, record count, payload bytes] sections.
     InFlightSend in_flight;
     in_flight.data.Data().resize(current_payload_bytes);
     std::size_t offset = 0;
@@ -279,9 +271,9 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
     for (const auto angle_set_id : active_angle_set_ids_)
     {
       auto& entries = pending_records_by_angle_set_[angle_set_id];
-      write_bytes(&angle_set_id, sizeof(std::size_t));
       const auto num_entries = entries.size();
-      write_bytes(&num_entries, sizeof(std::size_t));
+      const auto header_offset = offset;
+      offset += section_header_bytes;
       for (const auto* entry : entries)
       {
         write_bytes(&entry->destination_face_index, sizeof(std::uint32_t));
@@ -289,6 +281,8 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
         write_bytes(&data_size, sizeof(std::size_t));
         write_bytes(entry->psi_values, data_size * sizeof(double));
       }
+      CBCDSectionHeader{angle_set_id, num_entries, offset - header_offset - section_header_bytes}
+        .Store(in_flight.data.Data().data() + header_offset);
       entries.clear();
     }
     const auto& comm = comm_set_.LocICommunicator(channel.destination_rank);
@@ -306,36 +300,38 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
   for (const auto worker_id : channel.active_workers)
   {
     auto& queue = *channel.worker_queues[worker_id];
-    queue.PeekReadySlots(ready_records_);
-    if (ready_records_.empty())
+    const auto ready = queue.PeekReadySlots();
+    if (ready[0].empty())
       continue;
 
-    for (const auto* record : ready_records_)
-    {
-      constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
-      assert(record->num_psi_values <= (MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
-                                        section_header_bytes - record_header_bytes) /
-                                         sizeof(double) and
-             "One CBCD face record exceeds the MPI int byte-count limit and cannot be serialized.");
-      const auto record_bytes = record_header_bytes + record->num_psi_values * sizeof(double);
-      auto& records = pending_records_by_angle_set_[record->angle_set_id];
-      const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
-
-      if (current_payload_bytes + appended_bytes > message_limit_ and
-          not active_angle_set_ids_.empty())
-        send_batch();
-
-      if (records.empty())
+    for (const auto span : ready)
+      for (const auto& record : span)
       {
-        active_angle_set_ids_.push_back(record->angle_set_id);
-        current_payload_bytes += section_header_bytes;
+        constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
+        assert(
+          record.num_psi_values <= (MPI_BYTE_COUNT_LIMIT - sizeof(std::size_t) -
+                                    section_header_bytes - record_header_bytes) /
+                                     sizeof(double) and
+          "One CBCD face record exceeds the MPI int byte-count limit and cannot be serialized.");
+        const auto record_bytes = record_header_bytes + record.num_psi_values * sizeof(double);
+        auto& records = pending_records_by_angle_set_[record.angle_set_id];
+        const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
+
+        if (current_payload_bytes + appended_bytes > message_limit_ and
+            not active_angle_set_ids_.empty())
+          send_batch();
+
+        if (records.empty())
+        {
+          active_angle_set_ids_.push_back(record.angle_set_id);
+          current_payload_bytes += section_header_bytes;
+        }
+        records.push_back(&record);
+        current_payload_bytes += record_bytes;
       }
-      records.push_back(record);
-      current_payload_bytes += record_bytes;
-    }
 
     // The section vectors still point into these slots. Return them only after serialization.
-    pending_slot_releases_.emplace_back(&queue, ready_records_.size());
+    pending_slot_releases_.emplace_back(&queue, ready[0].size() + ready[1].size());
     work_done = true;
   }
 
@@ -385,9 +381,9 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
       packet->readers.store(num_sections + 1, std::memory_order_relaxed);
       for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
       {
-        const auto angle_set_id = reader.LoadSize();
-        const auto num_entries = reader.LoadSize();
-        remaining_faces -= num_entries;
+        const auto section = CBCDSectionHeader::Load(reader.ptr);
+        const auto angle_set_id = section.angle_set_id;
+        remaining_faces -= section.num_faces;
 
         assert(angle_set_id < num_angle_sets_ and "Invalid angle-set ID in CBCD message.");
         const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
@@ -396,17 +392,12 @@ CBCD_AsynchronousCommunicator::ProbeAndReceive()
         const auto source_partition_index = source->second;
 
         const auto* const section_ptr = reader.Data();
-        for (std::size_t entry_index = 0; entry_index < num_entries; ++entry_index)
-        {
-          reader.LoadFaceIndex();
-          const auto data_size = reader.LoadSize();
-          reader.SkipBytes(data_size * sizeof(double));
-        }
+        reader.SkipBytes(section.num_bytes);
         auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
         batch.source_partition_index = source_partition_index;
         batch.packet = packet;
         batch.offset = section_ptr - packet->data.data();
-        batch.num_faces = num_entries;
+        batch.num_faces = section.num_faces;
         incoming_mailboxes_[angle_set_id]->PublishSlot();
       }
       receive_packets_->Release(packet);

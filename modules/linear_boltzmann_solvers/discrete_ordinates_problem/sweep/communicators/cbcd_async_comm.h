@@ -185,8 +185,7 @@ private:
   std::vector<std::atomic<bool>> angle_set_complete_;
   bool sweep_active_ = false;
   SPMD_ThreadPool comm_pool_;
-  /// Ready outgoing records and queues released after serialization.
-  std::vector<OutgoingFaceRecord*> ready_records_;
+  /// Queues released after serialization.
   std::vector<std::pair<OutgoingQueue*, std::size_t>> pending_slot_releases_;
 };
 
