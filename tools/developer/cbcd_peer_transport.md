@@ -5,7 +5,7 @@
 This branch starts at baseline revision `547ef7bc80f4c3456c46cbf9549701c2b24b4c63`.
 It tests a peer-based transport with one MPI progress thread per rank. It does
 not import the fused kernels from the profiling-2 branch. The production,
-memory-profiling, and baseline branches remain unchanged.
+memory-profiling, and baseline branches were unchanged by the initial experiment.
 
 Keep this as an experiment pending Tuolumne measurements. Local median sweep
 times are essentially unchanged. Some samples are faster but more variable.
@@ -237,3 +237,87 @@ stalls, numerical checks fail, or host memory rises materially. Test window or
 packet-target changes one at a time. Do not add kernel fusion during this
 comparison. No claim about Cray MPICH's internal locking is needed to retain
 one transport MPI thread per rank.
+
+## Review of the 547ef7bc8 campaign, 2026-09-18
+
+The subsequent parent campaign contains all 120 requested trials: three trials
+of baseline, Caliper+MPI, PMPI, and rocprof for strong and weak scaling at one,
+two, four, eight, and sixteen nodes. Every trial starts fresh MPI processes.
+All twelve trials of each scaling kind and node count used the same allocation.
+The numerical signatures, placement, and required outputs passed revalidation.
+This campaign does not measure peer transport.
+
+Baseline strong-scaling median sweep times are 2.083318, 1.362536, 1.540251,
+1.095121, and 0.8460111 seconds. The four-node baseline samples range from
+1.202249 to 1.690000 seconds. Its Caliper+MPI samples on the same hosts range
+from 1.156289 to 1.174595 seconds. The baseline outliers remain in the analysis.
+They establish variability, not its cause or a regression attributable to one
+commit. Sixteen-node strong efficiency is 15.39% relative to one node.
+
+Weak-scaling median sweep time rises from 0.1424307 to 0.2232111 seconds.
+Actual cells per rank fall from 311.25 to 254.0625. The endpoint time ratio is
+63.81%, but efficiency normalized for this reduced local work is 52.09%.
+Decreasing time per global unknown does not establish good weak scaling.
+
+Rank-zero strong-scaling kernel launches fall from about 2.49 million to
+1.33 million while local work falls sixteenfold. HIP completion queries remain
+about three times as numerous as launches. Weak-scaling launches increase by
+about 32% despite reduced work per rank. These traces support removing redundant
+completion queries, but also show that transport alone cannot remove the launch
+and wavefront costs. HIP API durations sum overlapping calls from workers and
+must not be interpreted as additive wall time.
+
+The sixteen-node strong profiles report a median maximum-rank Iprobe count of
+2,968,024. This supports testing posted receives, but does not establish that
+MPI locking caused the timing outliers. Keep the two-buffer window, packet
+target, kernels, and placement unchanged for the first Tuo peer campaign.
+
+Two refinements follow from this review:
+
+- Reuse the successful stream-completion observation when retiring a batch.
+  The same worker submits no intervening stream work. The real completion
+  check remains, and no dependency or kernel changes.
+- Count active receive requests alongside active sends. Skip MPI_Testsome
+  only when neither exists. Continue checking worker-held buffers on every
+  progress pass and repost immediately after release. This avoids MPI calls
+  with only null requests without delaying any actual communication.
+
+The ordinary communicator's completed-send cache is not added here because the
+peer transport already owns reusable send windows. No kernel fusion is included.
+
+The new held-window test retains both receive buffers, drains sends, performs
+idle progress, then releases one buffer and delivers a third packet through it.
+The other packet remains valid. Three sweeps test reuse. This checks liveness
+and ownership, not performance or MPI call counts. All sixteen transport,
+packet, and queue tests pass at one, two, and four ranks in CPU and CUDA builds,
+with the existing one-way test skipped at one rank. Six peer tests also pass
+ThreadSanitizer with two ranks. Four focused GPU regressions and all four CUDA
+Compute Sanitizer modes pass. Host clang-tidy passes. CUDA clang-tidy remains
+blocked by the installed toolkit header parse error described above.
+
+The first five alternating local before/after pairs use the same benchmark and
+environment as above, comparing against the initial peer implementation:
+
+| Ranks | Implementation | Median sweep (s) | Mean sweep (s) | Sample SD (s) |
+| ---: | --- | ---: | ---: | ---: |
+| 2 | Before refinement | 0.5100976 | 0.48551012 | 0.06987923 |
+| 2 | After refinement | 0.5473642 | 0.49346124 | 0.07518191 |
+| 4 | Before refinement | 0.6067459 | 0.60497874 | 0.00280182 |
+| 4 | After refinement | 0.6055641 | 0.60596806 | 0.00128859 |
+
+Both two-rank binaries moved from approximately 0.411 to 0.548 seconds during
+the sequence. One pair straddled this transition. The 7.31% median increase
+cannot simply be discarded, but does not isolate a code regression. Retain the
+samples and investigate with an additional comparison. Full-field differences
+remain at most 7.78e-16. No Tuo speedup, stability improvement, or monotonic
+scaling result is established for this branch.
+
+Five additional alternating two-rank pairs give before/after medians of
+0.5487326/0.5498391 seconds, means of 0.5489882/0.54876544 seconds, and sample
+standard deviations of 0.00053238/0.00169227 seconds. The median change is
++0.20%, rather than the first sequence's +7.31%. Full-field differences are
+at most 8.89e-16. Retain both sequences. These measurements support neither a
+material local speedup nor a repeatable slowdown from the refinement.
+
+The external `cbcd-studies/analysis-547ef7bc8-20260918` archive contains the
+complete analysis, individual Tuo measurements, scripts, and validation records.

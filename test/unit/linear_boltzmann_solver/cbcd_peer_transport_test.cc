@@ -152,6 +152,62 @@ TEST(CBCDPeerTransport, OneWayAndZeroFaceSources)
   }
 }
 
+TEST(CBCDPeerTransport, RepostsAfterAllBuffersAreHeld)
+{
+  const auto& comm = opensn::mpi_comm;
+  const int previous = (comm.rank() + comm.size() - 1) % comm.size();
+  const int next = (comm.rank() + 1) % comm.size();
+  CBCDPeerTransport transport({{&comm, previous, 32}}, {{&comm, next, 32}}, 20);
+  for (int sweep = 0; sweep < 3; ++sweep)
+  {
+    transport.Start();
+    std::vector<CBCDReceivePacket*> held;
+    for (std::size_t i = 0; i < CBCDPeerTransport::WINDOW; ++i)
+    {
+      const auto slot = transport.GetSendSlot(0);
+      ASSERT_FALSE(slot.data.empty());
+      slot.data.front() = std::byte{57};
+      transport.Send(slot, 1);
+    }
+    while (held.size() < CBCDPeerTransport::WINDOW or transport.HasSends())
+      transport.Progress(
+        [&](CBCDReceivePacket& packet, int count)
+        {
+          EXPECT_EQ(count, 1);
+          EXPECT_EQ(packet.data.front(), std::byte{57});
+          held.push_back(&packet);
+          return true;
+        });
+    for (int i = 0; i < 100; ++i)
+      EXPECT_FALSE(transport.Progress(
+        [](auto&, int)
+        {
+          ADD_FAILURE();
+          return true;
+        }));
+    held.front()->readers.fetch_sub(1, std::memory_order_release);
+    const auto slot = transport.GetSendSlot(0);
+    ASSERT_FALSE(slot.data.empty());
+    slot.data.front() = std::byte{83};
+    transport.Send(slot, 1);
+    bool received = false;
+    while (not received or transport.HasSends())
+      transport.Progress(
+        [&](CBCDReceivePacket& packet, int count)
+        {
+          EXPECT_EQ(count, 1);
+          EXPECT_EQ(&packet, held.front());
+          EXPECT_EQ(packet.data.front(), std::byte{83});
+          packet.readers.fetch_sub(1, std::memory_order_release);
+          received = true;
+          return false;
+        });
+    EXPECT_EQ(held.back()->data.front(), std::byte{57});
+    held.back()->readers.fetch_sub(1, std::memory_order_release);
+    comm.barrier();
+  }
+}
+
 TEST(CBCDPeerTransport, ConcurrentSectionReaders)
 {
   const auto& comm = opensn::mpi_comm;

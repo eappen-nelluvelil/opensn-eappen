@@ -83,7 +83,7 @@ public:
 
   void Start()
   {
-    assert(active_sends_ == 0);
+    assert(active_sends_ == 0 and active_receives_ == 0);
     for (std::size_t index = 0; index < requests_.size(); ++index)
       assert(IsIdle(index));
     for (const auto& packet : receive_packets_)
@@ -137,7 +137,7 @@ public:
   {
     bool progressed = false;
     int count = 0;
-    if (not requests_.empty())
+    if (active_sends_ != 0 or active_receives_ != 0)
       MPI_CHECK(MPI_Testsome(static_cast<int>(requests_.size()),
                              requests_.data(),
                              &count,
@@ -150,6 +150,7 @@ public:
         const auto index = static_cast<std::size_t>(completed_[entry]);
         if (index < receive_packets_.size())
         {
+          --active_receives_;
           auto& packet = *receive_packets_[index];
           int bytes = 0;
           MPI_CHECK(MPI_Get_count(&statuses_[entry], MPI_BYTE, &bytes));
@@ -196,6 +197,7 @@ private:
                             tag_,
                             *peer.communicator,
                             &requests_[index]));
+        ++active_receives_;
       }
     }
   }
@@ -208,6 +210,7 @@ private:
         // Exact face counts prove that no further packet belongs to this sweep.
         MPI_CHECK(MPI_Cancel(&requests_[index]));
         MPI_CHECK(MPI_Wait(&requests_[index], MPI_STATUS_IGNORE));
+        --active_receives_;
         receive_packets_[index]->readers.store(0, std::memory_order_relaxed);
       }
   }
@@ -223,6 +226,7 @@ private:
   std::vector<std::vector<std::byte>> send_buffers_;
   std::vector<std::size_t> send_cursors_;
   std::size_t active_sends_ = 0;
+  std::size_t active_receives_ = 0;
 };
 
 } // namespace opensn
