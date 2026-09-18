@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "framework/data_types/byte_array.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_peer_transport.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbcd_receive_packet.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/lock_free_queues.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/scheduler/spmd_threadpool.h"
@@ -38,13 +38,13 @@ struct OutgoingFaceRecord
   std::size_t num_psi_values = 0;
 };
 
-/// Exact outgoing queue bounds contributed by one angle set to one destination.
-struct DestinationQueueBounds
+/// Exact face counts and serialized record sizes for one angle set and peer.
+struct PeerCommunicationBounds
 {
-  /// Destination MPI rank.
-  int destination_rank = -1;
-  /// Number of outgoing face records.
+  int rank = -1;
   std::size_t num_faces = 0;
+  std::size_t num_bytes = 0;
+  std::size_t largest_record_bytes = 0;
 };
 
 /// Precomputed storage bounds and exact outgoing queue counts for one angle set.
@@ -53,7 +53,8 @@ struct AngleSetCommunicationBounds
   /// Safe mailbox capacity: at most one received batch per incoming face.
   std::size_t incoming_mailbox_capacity = 0;
   /// Exact queue bounds for each destination reached by this angle set.
-  std::vector<DestinationQueueBounds> outgoing_queue_bounds;
+  std::vector<PeerCommunicationBounds> outgoing_queue_bounds;
+  std::vector<PeerCommunicationBounds> incoming_queue_bounds;
 };
 
 /** Aggregated CBCD communicator with per-worker SPSC queues and one MPI progress thread. */
@@ -66,13 +67,11 @@ public:
    * \param angle_sets Angle sets served by this communicator.
    * \param comm_set Partition communicator mapping.
    * \param incoming_source_partitions Source partitions for each angle set.
-   * \param max_message_bytes Exact maximum aggregate message size.
    * \param bounds Per-angle-set storage bounds and outgoing queue counts.
    */
   CBCD_AsynchronousCommunicator(const std::vector<AngleSet*>& angle_sets,
                                 const MPICommunicatorSet& comm_set,
                                 const std::vector<std::vector<int>>& incoming_source_partitions,
-                                std::size_t max_message_bytes,
                                 const std::vector<AngleSetCommunicationBounds>& bounds);
 
   ~CBCD_AsynchronousCommunicator();
@@ -105,7 +104,7 @@ public:
              [&](const IncomingFaceBatch& batch)
              {
                callback(batch);
-               receive_packets_->Release(batch.packet);
+               batch.packet->readers.fetch_sub(1, std::memory_order_release);
              }) > 0;
   }
 
@@ -129,26 +128,19 @@ private:
   {
     /// Destination MPI rank.
     int destination_rank = 0;
-    int mapped_rank = 0;
     /// One SPSC queue per scheduler worker; empty queues require no storage.
     std::vector<std::unique_ptr<OutgoingQueue>> worker_queues;
     /// Workers owning at least one outgoing face toward this destination.
     std::vector<std::size_t> active_workers;
-  };
-
-  struct InFlightSend
-  {
-    /// Nonblocking MPI request and its owning serialized storage.
-    mpi::Request request;
-    ByteArray data;
+    std::size_t next_worker = 0;
   };
 
   void CommThreadLoop();
   void ConfigureWorkerQueues(std::size_t num_workers);
   bool FlushDestination(std::size_t destination_channel_index);
   bool FlushOutgoing();
-  bool ProbeAndReceive();
-  bool PollInFlightSends();
+  bool ProgressPackets();
+  bool DispatchPacket(CBCDReceivePacket& packet, int num_bytes);
   bool AllAngleSetsComplete() const;
 
   /// Immutable communicator topology and per-angle-set bounds.
@@ -158,11 +150,9 @@ private:
   /// Worker count and MPI message parameters.
   std::size_t num_workers_ = 0;
   int mpi_tag_;
-  std::size_t message_limit_ = 0;
   int my_rank_ = 0;
   /// Unique receive peers in partition and communicator-rank coordinates.
   std::vector<int> source_partitions_;
-  std::vector<int> source_ranks_;
   std::vector<std::size_t> source_face_counts_;
   std::vector<std::size_t> remaining_source_faces_;
   /// Per-angle-set map from source partition to compact source index.
@@ -176,10 +166,7 @@ private:
   /// Serialization scratch grouped by angle-set section.
   std::vector<std::vector<const OutgoingFaceRecord*>> pending_records_by_angle_set_;
   std::vector<std::size_t> active_angle_set_ids_;
-  /// Packets shared by receive mailboxes, reclaimed only after worker-side placement.
-  std::unique_ptr<CBCDReceivePacketPool> receive_packets_;
-  /// Sends whose buffers remain MPI-owned.
-  std::vector<InFlightSend> in_flight_sends_;
+  std::unique_ptr<CBCDPeerTransport> transport_;
   /// Progress-thread lifecycle and per-angle-set completion state.
   std::atomic<bool> stop_requested_{false};
   std::vector<std::atomic<bool>> angle_set_complete_;

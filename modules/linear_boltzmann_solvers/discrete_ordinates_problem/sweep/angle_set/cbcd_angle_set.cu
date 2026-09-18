@@ -240,13 +240,20 @@ CBCD_AngleSet::TryInitialize(CBCDSweepChunk& sweep_chunk)
 {
   if (sweep_initialized_)
     return false;
+  if (not sweep_state_prepared_)
+  {
+    InitializeSweepState();
+    sweep_state_prepared_ = true;
+  }
+  // Release transport buffers even while reflecting-boundary dependencies delay execution.
+  if (async_comm_->HasIncoming(GetID()))
+    ProcessIncoming();
   if (unresolved_sweep_dependencies_.load(std::memory_order_acquire) != 0)
     return false;
 
   CALI_CXX_MARK_SCOPE("CBCD_AngleSet::TryInitialize");
 
   cbcd_fluds_.LoadIncomingBoundaryPsi(sweep_chunk, *this);
-  InitializeSweepState();
   sweep_initialized_ = true;
   return true;
 }
@@ -279,22 +286,7 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   }
 
   if (has_incoming)
-  {
-    CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
-    work_done |= async_comm_->ProcessIncoming(
-      GetID(),
-      [this, &ready_cell_ids](const IncomingFaceBatch& batch)
-      {
-        batch.ProcessFaces(
-          [this, &batch, &ready_cell_ids](const std::uint32_t face_index, const std::byte* psi)
-          {
-            const auto cell_local_id =
-              cbcd_fluds_.StoreIncomingFace(batch.source_partition_index, face_index, psi);
-            if (--remaining_cell_dependencies_[cell_local_id] == 0)
-              ready_cell_ids.push_back(static_cast<std::uint32_t>(cell_local_id));
-          });
-      });
-  }
+    work_done |= ProcessIncoming();
 
   if ((not batch_pipeline_.HasKernelInFlight()) and (not ready_cell_ids.empty()))
   {
@@ -325,6 +317,26 @@ CBCD_AngleSet::TryAdvanceOneStep(CBCDSweepChunk& cbcd_sweep_chunk, const std::si
   return work_done;
 }
 
+bool
+CBCD_AngleSet::ProcessIncoming()
+{
+  CALI_CXX_MARK_SCOPE("CBCD_AngleSet::ProcessIncoming");
+  auto& ready_cell_ids = cbcd_fluds_.GetCellBatchBuffer(batch_pipeline_.ready_buffer);
+  return async_comm_->ProcessIncoming(
+    GetID(),
+    [this, &ready_cell_ids](const IncomingFaceBatch& batch)
+    {
+      batch.ProcessFaces(
+        [this, &batch, &ready_cell_ids](const std::uint32_t face_index, const std::byte* psi)
+        {
+          const auto cell_local_id =
+            cbcd_fluds_.StoreIncomingFace(batch.source_partition_index, face_index, psi);
+          if (--remaining_cell_dependencies_[cell_local_id] == 0)
+            ready_cell_ids.push_back(cell_local_id);
+        });
+    });
+}
+
 AngleSetStatus
 CBCD_AngleSet::AngleSetAdvance(SweepChunk& /*sweep_chunk*/, AngleSetStatus /*permission*/)
 {
@@ -341,6 +353,7 @@ CBCD_AngleSet::ResetSweepBuffers()
   num_completed_cells_ = 0;
   pending_reflecting_cells_ = 0;
   sweep_initialized_ = false;
+  sweep_state_prepared_ = false;
   followers_released_ = false;
   ResetSweepDependencies();
   executed_ = false;

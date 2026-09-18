@@ -59,13 +59,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
   {
     std::vector<std::vector<int>> incoming_source_partitions_by_angle_set;
     incoming_source_partitions_by_angle_set.reserve(angle_sets_.size());
-    std::unordered_map<int, std::vector<std::size_t>> section_bytes_by_source;
     std::vector<AngleSetCommunicationBounds> communication_bounds(angle_sets_.size());
     for (std::size_t angle_set_id = 0; angle_set_id < angle_sets_.size(); ++angle_set_id)
     {
       const auto stride = fluds_list[angle_set_id]->GetStrideSize();
       const auto& common_data = fluds_list[angle_set_id]->GetCommonData();
-      std::unordered_map<int, DestinationQueueBounds> outgoing_bounds_by_destination;
+      std::unordered_map<int, PeerCommunicationBounds> outgoing_bounds_by_destination;
+      std::unordered_map<int, PeerCommunicationBounds> incoming_bounds_by_source;
       incoming_source_partitions_by_angle_set.push_back(common_data.GetIncomingSourcePartitions());
       auto& bounds = communication_bounds[angle_set_id];
       bounds.incoming_mailbox_capacity = common_data.GetNumIncomingNonlocalFaces();
@@ -77,8 +77,13 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
           const int destination_rank =
             common_data.GetDestinationRanks()[face_info.destination_index];
           auto& destination = outgoing_bounds_by_destination[destination_rank];
-          destination.destination_rank = destination_rank;
+          destination.rank = destination_rank;
           ++destination.num_faces;
+          const auto bytes =
+            sizeof(std::uint32_t) + sizeof(std::size_t) +
+            static_cast<std::size_t>(face_info.num_face_nodes) * stride * sizeof(double);
+          destination.num_bytes += bytes;
+          destination.largest_record_bytes = std::max(destination.largest_record_bytes, bytes);
         }
       }
       bounds.outgoing_queue_bounds.reserve(outgoing_bounds_by_destination.size());
@@ -94,27 +99,19 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
             continue;
           const auto source_partition =
             common_data.GetIncomingSourcePartitions()[face_info.source_partition_index];
-          auto& section_bytes_by_angle_set = section_bytes_by_source[source_partition];
-          if (section_bytes_by_angle_set.empty())
-            section_bytes_by_angle_set.assign(angle_sets_.size(), 0);
-          section_bytes_by_angle_set[angle_set_id] +=
+          auto& source = incoming_bounds_by_source[source_partition];
+          source.rank = source_partition;
+          ++source.num_faces;
+          const auto bytes =
             sizeof(std::uint32_t) + sizeof(std::size_t) +
             static_cast<std::size_t>(face_info.num_face_nodes) * stride * sizeof(double);
+          source.num_bytes += bytes;
+          source.largest_record_bytes = std::max(source.largest_record_bytes, bytes);
         }
       }
-    }
-
-    std::size_t max_message_bytes = 0;
-    for (const auto& [_, section_bytes_by_angle_set] : section_bytes_by_source)
-    {
-      std::size_t message_bytes = sizeof(std::size_t);
-      for (const auto& section_bytes : section_bytes_by_angle_set)
-      {
-        if (section_bytes == 0)
-          continue;
-        message_bytes += CBCDSectionHeader::SERIALIZED_SIZE + section_bytes;
-      }
-      max_message_bytes = std::max(max_message_bytes, message_bytes);
+      bounds.incoming_queue_bounds.reserve(incoming_bounds_by_source.size());
+      for (const auto& [_, source] : incoming_bounds_by_source)
+        bounds.incoming_queue_bounds.push_back(source);
     }
 
     std::vector<AngleSet*> base_angle_sets(angle_sets_.begin(), angle_sets_.end());
@@ -122,7 +119,6 @@ CBCDSweepChunk::CBCDSweepChunk(DiscreteOrdinatesProblem& problem, LBSGroupset& g
       std::make_unique<CBCD_AsynchronousCommunicator>(base_angle_sets,
                                                       angle_sets_.front()->GetCommunicatorSet(),
                                                       incoming_source_partitions_by_angle_set,
-                                                      max_message_bytes,
                                                       communication_bounds);
     for (auto* angle_set : angle_sets_)
       angle_set->SetCommunicator(*async_comm_);

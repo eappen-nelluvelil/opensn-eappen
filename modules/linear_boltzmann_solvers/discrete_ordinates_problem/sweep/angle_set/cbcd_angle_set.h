@@ -136,6 +136,7 @@ private:
   std::size_t pending_reflecting_cells_ = 0;
   /// Whether per-sweep state has been initialized.
   bool sweep_initialized_ = false;
+  bool sweep_state_prepared_ = false;
   /// Whether follower angle sets have been released.
   bool followers_released_ = false;
 
@@ -149,6 +150,7 @@ private:
                                 std::size_t face_id) const;
   /// Reset cell-task and batch state for a new sweep.
   void InitializeSweepState();
+  bool ProcessIncoming();
   /// Retire a completed kernel and release its cell successors.
   bool TryRetireCompletedBatch();
   /// Launch all cells currently ready in the active batch buffer.

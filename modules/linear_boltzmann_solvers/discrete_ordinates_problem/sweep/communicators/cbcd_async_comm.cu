@@ -15,6 +15,7 @@
 #include <limits>
 #include <set>
 #include <thread>
+#include <utility>
 
 namespace opensn
 {
@@ -48,7 +49,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   const std::vector<AngleSet*>& angle_sets,
   const MPICommunicatorSet& comm_set,
   const std::vector<std::vector<int>>& incoming_source_partitions,
-  const std::size_t max_message_bytes,
   const std::vector<AngleSetCommunicationBounds>& bounds)
   : comm_set_(comm_set),
     num_angle_sets_(angle_sets.size()),
@@ -76,10 +76,6 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
 
   my_rank_ = opensn::mpi_comm.rank();
   source_partitions_.assign(sources.begin(), sources.end());
-  receive_packets_ = std::make_unique<CBCDReceivePacketPool>(source_partitions_.size());
-  source_ranks_.reserve(source_partitions_.size());
-  for (const int source_partition : source_partitions_)
-    source_ranks_.push_back(comm_set_.MapIonJ(source_partition, my_rank_));
 
   source_partition_to_index_by_angle_set_.resize(angle_sets.size());
   source_face_counts_.resize(source_partitions_.size(), 0);
@@ -110,8 +106,33 @@ CBCD_AsynchronousCommunicator::CBCD_AsynchronousCommunicator(
   for (auto& complete : angle_set_complete_)
     complete.store(false, std::memory_order_relaxed);
 
-  message_limit_ = max_message_bytes == 0 ? MPI_BYTE_COUNT_LIMIT
-                                          : std::min(max_message_bytes, MPI_BYTE_COUNT_LIMIT);
+  const auto MakePeers = [&](const std::vector<int>& ranks, bool incoming)
+  {
+    std::unordered_map<int, PeerCommunicationBounds> peer_bounds;
+    for (const auto& angle_bounds : bounds)
+      for (const auto& peer :
+           incoming ? angle_bounds.incoming_queue_bounds : angle_bounds.outgoing_queue_bounds)
+      {
+        auto& total = peer_bounds[peer.rank];
+        total.num_bytes += CBCDSectionHeader::SERIALIZED_SIZE + peer.num_bytes;
+        total.largest_record_bytes =
+          std::max(total.largest_record_bytes, peer.largest_record_bytes);
+      }
+    std::vector<CBCDPeerTransport::Peer> peers;
+    peers.reserve(ranks.size());
+    for (const int rank : ranks)
+    {
+      const auto& total = peer_bounds[rank];
+      const int owner = incoming ? my_rank_ : rank;
+      const auto bytes = total.num_bytes == 0 ? 0 : total.num_bytes + sizeof(std::size_t);
+      peers.push_back({&comm_set_.LocICommunicator(owner),
+                       comm_set_.MapIonJ(rank, owner),
+                       CBCDPeerTransport::PacketBytes(bytes, total.largest_record_bytes)});
+    }
+    return peers;
+  };
+  transport_ = std::make_unique<CBCDPeerTransport>(
+    MakePeers(source_partitions_, true), MakePeers(destination_ranks_, false), mpi_tag_);
 }
 
 CBCD_AsynchronousCommunicator::~CBCD_AsynchronousCommunicator()
@@ -134,7 +155,7 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
     return;
 
   num_workers_ = num_workers;
-  std::vector<std::unordered_map<int, DestinationQueueBounds>> worker_queue_bounds(num_workers);
+  std::vector<std::unordered_map<int, std::size_t>> worker_queue_bounds(num_workers);
 
   // Match the scheduler's cyclic angle-set partitioning.
   for (std::size_t worker_id = 0; worker_id < num_workers; ++worker_id)
@@ -146,9 +167,7 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
       const auto& bounds = communication_bounds_[angle_set_id];
       for (const auto& destination : bounds.outgoing_queue_bounds)
       {
-        auto& worker_destination = queue_bounds[destination.destination_rank];
-        worker_destination.destination_rank = destination.destination_rank;
-        worker_destination.num_faces += destination.num_faces;
+        queue_bounds[destination.rank] += destination.num_faces;
       }
     }
   }
@@ -161,7 +180,6 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
   {
     auto& channel = destination_channels_[queue_index];
     channel.destination_rank = destination_ranks_[queue_index];
-    channel.mapped_rank = comm_set_.MapIonJ(channel.destination_rank, channel.destination_rank);
     channel.worker_queues.resize(num_workers);
     channel.active_workers.clear();
 
@@ -173,7 +191,7 @@ CBCD_AsynchronousCommunicator::ConfigureWorkerQueues(const std::size_t num_worke
       {
         ++realized_queues;
         channel.active_workers.push_back(worker_id);
-        queue->Preallocate(bounds_it->second.num_faces);
+        queue->Preallocate(bounds_it->second);
       }
       channel.worker_queues[worker_id] = std::move(queue);
     }
@@ -212,27 +230,25 @@ CBCD_AsynchronousCommunicator::Stop()
     comm_pool_.WaitAll();
     sweep_active_ = false;
   }
-  receive_packets_->Reclaim();
 }
 
 void
 CBCD_AsynchronousCommunicator::CommThreadLoop()
 {
   CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::CommThreadLoop");
+  transport_->Start();
 
   while (true)
   {
     bool work_done = FlushOutgoing();
-    work_done |= ProbeAndReceive();
-    work_done |= PollInFlightSends();
+    work_done |= ProgressPackets();
 
     if (stop_requested_.load(std::memory_order_acquire) and AllAngleSetsComplete())
     {
-      FlushOutgoing();
-      while (not in_flight_sends_.empty())
+      while (transport_->HasSends())
       {
-        PollInFlightSends();
-        if (not in_flight_sends_.empty())
+        ProgressPackets();
+        if (transport_->HasSends())
           std::this_thread::yield();
       }
       break;
@@ -250,19 +266,20 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
   if (channel.active_workers.empty())
     return false;
 
-  bool work_done = false;
+  const auto slot = transport_->GetSendSlot(destination_channel_index);
+  if (slot.data.empty())
+    return false;
+
   std::size_t current_payload_bytes = sizeof(std::size_t);
   constexpr std::size_t section_header_bytes = CBCDSectionHeader::SERIALIZED_SIZE;
 
   const auto send_batch = [&]()
   {
     // [section count], followed by [angle-set id, record count, payload bytes] sections.
-    InFlightSend in_flight;
-    in_flight.data.Data().resize(current_payload_bytes);
     std::size_t offset = 0;
     const auto write_bytes = [&](const void* ptr, const std::size_t size)
     {
-      std::memcpy(in_flight.data.Data().data() + offset, ptr, size);
+      std::memcpy(slot.data.data() + offset, ptr, size);
       offset += size;
     };
 
@@ -282,13 +299,10 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
         write_bytes(entry->psi_values, data_size * sizeof(double));
       }
       CBCDSectionHeader{angle_set_id, num_entries, offset - header_offset - section_header_bytes}
-        .Store(in_flight.data.Data().data() + header_offset);
+        .Store(slot.data.data() + header_offset);
       entries.clear();
     }
-    const auto& comm = comm_set_.LocICommunicator(channel.destination_rank);
-    in_flight.request = comm.isend(channel.mapped_rank, mpi_tag_, in_flight.data.Data());
-    in_flight_sends_.push_back(std::move(in_flight));
-    current_payload_bytes = sizeof(std::size_t);
+    transport_->Send(slot, current_payload_bytes);
     active_angle_set_ids_.clear();
 
     for (const auto& [queue, count] : pending_slot_releases_)
@@ -297,14 +311,22 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
   };
 
   // Poll every realizable SPSC queue without separate wake-up state.
-  for (const auto worker_id : channel.active_workers)
+  bool full = false;
+  const auto first_worker = channel.next_worker;
+  for (std::size_t worker = 0; worker < channel.active_workers.size() and not full; ++worker)
   {
+    const auto worker_index = (first_worker + worker) % channel.active_workers.size();
+    const auto worker_id = channel.active_workers[worker_index];
     auto& queue = *channel.worker_queues[worker_id];
     const auto ready = queue.PeekReadySlots();
     if (ready[0].empty())
       continue;
 
+    std::size_t consumed = 0;
     for (const auto span : ready)
+    {
+      if (full)
+        break;
       for (const auto& record : span)
       {
         constexpr std::size_t record_header_bytes = sizeof(std::uint32_t) + sizeof(std::size_t);
@@ -317,9 +339,12 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
         auto& records = pending_records_by_angle_set_[record.angle_set_id];
         const auto appended_bytes = record_bytes + (records.empty() ? section_header_bytes : 0);
 
-        if (current_payload_bytes + appended_bytes > message_limit_ and
-            not active_angle_set_ids_.empty())
-          send_batch();
+        if (appended_bytes > slot.data.size() - current_payload_bytes)
+        {
+          assert(not active_angle_set_ids_.empty());
+          full = true;
+          break;
+        }
 
         if (records.empty())
         {
@@ -328,16 +353,24 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
         }
         records.push_back(&record);
         current_payload_bytes += record_bytes;
+        ++consumed;
       }
+    }
 
     // The section vectors still point into these slots. Return them only after serialization.
-    pending_slot_releases_.emplace_back(&queue, ready[0].size() + ready[1].size());
-    work_done = true;
+    if (consumed != 0)
+    {
+      pending_slot_releases_.emplace_back(&queue, consumed);
+      channel.next_worker = (worker_index + 1) % channel.active_workers.size();
+    }
   }
 
   if (not active_angle_set_ids_.empty())
+  {
     send_batch();
-  return work_done;
+    return true;
+  }
+  return false;
 }
 
 bool
@@ -352,78 +385,49 @@ CBCD_AsynchronousCommunicator::FlushOutgoing()
 }
 
 bool
-CBCD_AsynchronousCommunicator::ProbeAndReceive()
+CBCD_AsynchronousCommunicator::ProgressPackets()
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProbeAndReceive");
-
-  bool received_any = false;
-  const auto& recv_comm = comm_set_.LocICommunicator(my_rank_);
-  for (std::size_t source_index = 0; source_index < source_ranks_.size(); ++source_index)
-  {
-    auto& remaining_faces = remaining_source_faces_[source_index];
-    if (remaining_faces == 0)
-      continue;
-    const int source_partition = source_partitions_[source_index];
-    const int source_rank = source_ranks_[source_index];
-    mpi::Status status;
-
-    // Each face arrives once per angle set. The sweep barrier separates successive counts.
-    while (remaining_faces != 0 and recv_comm.iprobe(source_rank, mpi_tag_, status))
-    {
-      received_any = true;
-      const auto num_bytes = status.count<std::byte>();
-      auto* packet = receive_packets_->Acquire(source_index, static_cast<std::size_t>(num_bytes));
-      recv_comm.recv(source_rank, status.tag(), packet->data.data(), num_bytes);
-
-      BufferReader reader{packet->data.data()};
-      const auto num_sections = reader.LoadSize();
-      // Keep one producer reference until every section has been published.
-      packet->readers.store(num_sections + 1, std::memory_order_relaxed);
-      for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
-      {
-        const auto section = CBCDSectionHeader::Load(reader.ptr);
-        const auto angle_set_id = section.angle_set_id;
-        remaining_faces -= section.num_faces;
-
-        assert(angle_set_id < num_angle_sets_ and "Invalid angle-set ID in CBCD message.");
-        const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
-        const auto source = source_indices.find(source_partition);
-        assert(source != source_indices.end() and "Invalid source partition for CBCD angle set.");
-        const auto source_partition_index = source->second;
-
-        const auto* const section_ptr = reader.Data();
-        reader.SkipBytes(section.num_bytes);
-        auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
-        batch.source_partition_index = source_partition_index;
-        batch.packet = packet;
-        batch.offset = section_ptr - packet->data.data();
-        batch.num_faces = section.num_faces;
-        incoming_mailboxes_[angle_set_id]->PublishSlot();
-      }
-      receive_packets_->Release(packet);
-    }
-  }
-  return received_any;
+  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::ProgressPackets");
+  return transport_->Progress([this](CBCDReceivePacket& packet, int bytes)
+                              { return DispatchPacket(packet, bytes); });
 }
 
 bool
-CBCD_AsynchronousCommunicator::PollInFlightSends()
+CBCD_AsynchronousCommunicator::DispatchPacket(CBCDReceivePacket& packet, const int num_bytes)
 {
-  CALI_CXX_MARK_SCOPE("CBCD_AsynchronousCommunicator::PollInFlightSends");
-
-  bool completed_any = false;
-  for (std::size_t i = 0; i < in_flight_sends_.size();)
+  assert(std::cmp_greater_equal(num_bytes, sizeof(std::size_t)));
+  assert(std::cmp_less_equal(num_bytes, packet.data.size()));
+  auto& remaining_faces = remaining_source_faces_[packet.source_index];
+  const auto source_partition = source_partitions_[packet.source_index];
+  BufferReader reader{packet.data.data()};
+  const auto num_sections = reader.LoadSize();
+  packet.readers.store(num_sections + 1, std::memory_order_relaxed);
+  for (std::size_t section_index = 0; section_index < num_sections; ++section_index)
   {
-    if (mpi::test(in_flight_sends_[i].request))
-    {
-      completed_any = true;
-      in_flight_sends_[i] = std::move(in_flight_sends_.back());
-      in_flight_sends_.pop_back();
-    }
-    else
-      ++i;
+    assert(reader.ptr + CBCDSectionHeader::SERIALIZED_SIZE <= packet.data.data() + num_bytes);
+    const auto section = CBCDSectionHeader::Load(reader.ptr);
+    const auto angle_set_id = section.angle_set_id;
+    assert(section.num_faces <= remaining_faces);
+    remaining_faces -= section.num_faces;
+
+    assert(angle_set_id < num_angle_sets_ and "Invalid angle-set ID in CBCD message.");
+    const auto& source_indices = source_partition_to_index_by_angle_set_[angle_set_id];
+    const auto source = source_indices.find(source_partition);
+    assert(source != source_indices.end() and "Invalid source partition for CBCD angle set.");
+
+    const auto* const section_ptr = reader.Data();
+    assert(std::cmp_less_equal(section.num_bytes, packet.data.data() + num_bytes - reader.ptr));
+    reader.SkipBytes(section.num_bytes);
+    auto& batch = incoming_mailboxes_[angle_set_id]->ReserveSlot();
+    batch.source_partition_index = source->second;
+    batch.packet = &packet;
+    batch.offset = section_ptr - packet.data.data();
+    batch.num_faces = section.num_faces;
+    incoming_mailboxes_[angle_set_id]->PublishSlot();
   }
-  return completed_any;
+  assert(reader.ptr == packet.data.data() + num_bytes);
+  packet.readers.fetch_sub(1, std::memory_order_release);
+  return remaining_faces != 0;
 }
 
 bool
