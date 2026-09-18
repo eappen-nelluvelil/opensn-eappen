@@ -134,6 +134,7 @@ private:
     std::vector<std::unique_ptr<OutgoingQueue>> worker_queues;
     /// Workers owning at least one outgoing face toward this destination.
     std::vector<std::size_t> active_workers;
+    ByteArray reusable_packet;
   };
 
   struct InFlightSend
@@ -141,6 +142,7 @@ private:
     /// Nonblocking MPI request and its owning serialized storage.
     mpi::Request request;
     ByteArray data;
+    std::size_t destination_channel_index = 0;
   };
 
   void CommThreadLoop();

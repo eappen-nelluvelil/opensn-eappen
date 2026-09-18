@@ -258,7 +258,12 @@ CBCD_AsynchronousCommunicator::FlushDestination(const std::size_t destination_ch
   {
     // [section count], followed by [angle-set id, record count, payload bytes] sections.
     InFlightSend in_flight;
-    in_flight.data.Data().resize(current_payload_bytes);
+    in_flight.destination_channel_index = destination_channel_index;
+    in_flight.data.Data().swap(channel.reusable_packet.Data());
+    if (in_flight.data.Data().capacity() < current_payload_bytes)
+      in_flight.data.Data() = std::vector<std::byte>(current_payload_bytes);
+    else
+      in_flight.data.Data().resize(current_payload_bytes);
     std::size_t offset = 0;
     const auto write_bytes = [&](const void* ptr, const std::size_t size)
     {
@@ -417,6 +422,10 @@ CBCD_AsynchronousCommunicator::PollInFlightSends()
     if (mpi::test(in_flight_sends_[i].request))
     {
       completed_any = true;
+      auto& completed = in_flight_sends_[i];
+      auto& reusable = destination_channels_[completed.destination_channel_index].reusable_packet;
+      if (completed.data.Data().capacity() > reusable.Data().capacity())
+        completed.data.Data().swap(reusable.Data());
       in_flight_sends_[i] = std::move(in_flight_sends_.back());
       in_flight_sends_.pop_back();
     }
