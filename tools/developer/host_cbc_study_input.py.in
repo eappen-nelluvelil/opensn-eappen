@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: 2026 The OpenSn Authors <https://open-sn.github.io/opensn/>
+# SPDX-License-Identifier: MIT
+
+"""One fixed-work, 64-group host CBC scaling trial."""
+
+import json
+import os
+from pathlib import Path
+import resource
+import socket
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+attempt = Path(os.environ["OPENSN_HOST_STUDY_ATTEMPT"])
+placement = comm.gather({
+    "rank": comm.rank, "hostname": socket.gethostname(), "pid": os.getpid(),
+    "cpu_affinity": sorted(os.sched_getaffinity(0)),
+    "environment": {key: os.environ.get(key) for key in (
+        "SLURM_LOCALID", "OMP_NUM_THREADS", "OPENSN_NUM_THREADS", "OMP_PROC_BIND",
+        "OMP_PLACES", "OMPI_MCA_pml", "OMPI_MCA_btl", "PSM2_MQ_RNDV_HFI_THRESH")},
+}, root=0)
+if comm.rank == 0:
+    with (attempt / "placement.json").open("x") as stream:
+        json.dump(placement, stream)
+    del placement
+
+grid = DistributedMeshGenerator(inputs=[FromFileMeshGenerator(filename=@MESH@)]).Execute()
+grid.SetOrthogonalBoundaries()
+xs = MultiGroupXS()
+xs.LoadFromOpenSn(@XS@)
+quadrature = GLCProductQuadrature3DXYZ(n_polar=14, n_azimuthal=32, scattering_order=0)
+problem = DiscreteOrdinatesProblem(
+    mesh=grid, num_groups=64, sweep_type="CBC", use_gpus=False,
+    groupsets=[{
+        "groups_from_to": (0, 63), "angular_quadrature": quadrature,
+        "angle_aggregation_type": "single", "allow_cycles": False,
+        "inner_linear_method": "petsc_richardson", "l_abs_tol": 1.0e-18,
+        "l_max_its": @ITERATIONS@,
+    }],
+    xs_map=[{"block_ids": [1], "xs": xs}],
+    boundary_conditions=[{
+        "name": "xmin", "type": "isotropic", "group_strength": [1.0] + [0.0] * 63,
+    }],
+    options={"max_mpi_message_size": 256 * 1024, "save_angular_flux": False},
+)
+solver = SteadyStateSourceSolver(problem=problem)
+solver.Initialize()
+solver.Execute()
+
+fluxes = problem.GetScalarFluxFieldFunction(only_scalar_flux=False)
+domain = RPPLogicalVolume(infx=True, infy=True, infz=True)
+for group in (0, 63):
+    interpolation = FieldFunctionInterpolationVolume()
+    interpolation.SetOperationType("max")
+    interpolation.SetLogicalVolume(domain)
+    interpolation.AddFieldFunction(fluxes[group][0])
+    interpolation.Execute()
+    if rank == 0:
+        print(f"OPENSN_STUDY_FLUX_MAX group={group} value={interpolation.GetValue():.17e}")
+if rank == 0:
+    print("OPENSN_STUDY_TRIAL_COMPLETE", flush=True)
+
+memory = comm.gather({"rank": comm.rank, "hostname": socket.gethostname(),
+                      "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}, root=0)
+if comm.rank == 0:
+    with (attempt / "memory.json").open("x") as stream:
+        json.dump(memory, stream)
