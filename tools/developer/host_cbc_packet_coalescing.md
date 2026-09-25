@@ -22,8 +22,10 @@ configuration or the target MPI/fabric.
 
 ## Correctness and resource invariants
 
-- Cell task order, dependency decrements, face records and numerical arithmetic
-  do not change. Consecutive records are grouped into fewer MPI envelopes.
+- Task-selection rules, dependency decrements, face-record format and numerical
+  arithmetic do not change. Consecutive records share MPI envelopes. As before,
+  actual task readiness/order can depend on MPI arrivals; the dependency partial
+  order, not one particular total execution order, must be preserved.
 - Every face is copied into owned packet storage before its source flux storage
   can be reused. Packet buffers remain alive and immutable during active sends.
 - Fragmented faces unlock their receiving cell only after all values arrive.
