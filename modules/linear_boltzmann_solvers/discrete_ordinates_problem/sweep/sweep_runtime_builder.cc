@@ -863,7 +863,7 @@ AccumulateCBCGlobalEdgeWeights(const std::vector<std::shared_ptr<CBC_SPDS>>& spd
         const auto num_weight_values = values.size() - num_dependencies - 1;
         for (const auto dependency : values.subspan(num_weight_values, num_dependencies))
         {
-          OpenSnLogicalErrorIf(dependency >= static_cast<std::uint64_t>(comm_size),
+          OpenSnLogicalErrorIf(std::cmp_greater_equal(dependency, comm_size),
                                "Malformed CBC location-dependency rank.");
           global_dependencies[rank].push_back(static_cast<int>(dependency));
         }
