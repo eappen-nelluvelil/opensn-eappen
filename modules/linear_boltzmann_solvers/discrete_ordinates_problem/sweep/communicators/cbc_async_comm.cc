@@ -168,6 +168,8 @@ CBC_AsynchronousCommunicator::GetOpenSendBuffer(std::size_t peer_index,
     if (buffer.data.size() + record_size <= max_mpi_message_size_)
       return buffer;
 
+    if (&buffers == &send_buffer_)
+      has_closed_normal_packet_ = true;
     open_buffer_index = INVALID_BUFFER_INDEX;
   }
 
@@ -197,8 +199,6 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
                                                    std::span<const double> outgoing_face_psi)
 {
   const bool delayed = psi_type == DownwindPsiType::DELAYED;
-  if (not delayed)
-    has_unsent_messages_ = true;
   const auto kind = delayed ? MessageKind::DELAYED_FACE_PSI : MessageKind::NORMAL_FACE_PSI;
   auto peer_index = target;
   const auto* peers = &send_peer_ranks_;
@@ -305,7 +305,7 @@ CBC_AsynchronousCommunicator::SendData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::SendData");
 
-  has_unsent_messages_ = false;
+  has_closed_normal_packet_ = false;
   return SendMessages(send_buffer_, send_requests_, open_send_buffer_indices_);
 }
 
@@ -361,7 +361,7 @@ CBC_AsynchronousCommunicator::Reset()
             INVALID_BUFFER_INDEX);
   std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), 0);
   delayed_completion_markers_queued_ = false;
-  has_unsent_messages_ = false;
+  has_closed_normal_packet_ = false;
 }
 
 void
