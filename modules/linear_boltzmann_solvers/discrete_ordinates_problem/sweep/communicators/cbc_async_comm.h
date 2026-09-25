@@ -75,8 +75,8 @@ public:
   /// Return whether sends remain in flight.
   bool HasPendingCommunication() const noexcept { return not send_buffer_.empty(); }
 
-  /// Return whether newly queued normal face messages have not yet been started.
-  bool HasUnsentMessages() const noexcept { return has_unsent_messages_; }
+  /// Return whether a normal packet could not accept the next queued record.
+  bool HasClosedNormalPacket() const noexcept { return has_closed_normal_packet_; }
 
   /// Clear pending send and receive state.
   void Reset();
@@ -214,8 +214,8 @@ private:
   std::vector<std::size_t> incoming_received_values_;
   /// Normal faces still needed in this sweep; fragmented faces count only once.
   std::size_t remaining_incoming_faces_ = 0;
-  /// Whether a cell queued normal face data since the last SendData call.
-  bool has_unsent_messages_ = false;
+  /// A normal packet was closed by the configured MPI message-size bound.
+  bool has_closed_normal_packet_ = false;
   /// Whether delayed completion markers have been queued this sweep.
   bool delayed_completion_markers_queued_ = false;
   /// Maximum serialized MPI message size.
