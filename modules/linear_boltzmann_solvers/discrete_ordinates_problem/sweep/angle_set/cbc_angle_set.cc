@@ -76,7 +76,10 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
         ready_tasks_.push_back(local_task_num);
 
     ++num_completed_tasks_;
-    if (async_comm_.HasPendingCommunication())
+    // Start newly produced messages immediately, but do not retest the same
+    // pending sends after every interior cell. Entry/exit polling still drives
+    // completion even when no further cell produces outgoing face data.
+    if (async_comm_.HasUnsentMessages())
       async_comm_.SendData();
   }
 

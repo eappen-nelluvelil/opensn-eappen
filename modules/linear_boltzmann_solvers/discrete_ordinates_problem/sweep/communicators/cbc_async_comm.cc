@@ -118,6 +118,7 @@ CBC_AsynchronousCommunicator::CBC_AsynchronousCommunicator(
     max_payload_chunk_size_(MaxPayloadChunkSize(max_mpi_message_size_))
 {
   incoming_received_values_.assign(cbc_fluds_.GetCommonData().NumIncomingFaces(), 0);
+  remaining_incoming_faces_ = incoming_received_values_.size();
 
   const auto& location_successors = fluds_.GetSPDS().GetLocationSuccessors();
   send_peer_ranks_.reserve(location_successors.size());
@@ -196,6 +197,8 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
                                                    std::span<const double> outgoing_face_psi)
 {
   const bool delayed = psi_type == DownwindPsiType::DELAYED;
+  if (not delayed)
+    has_unsent_messages_ = true;
   const auto kind = delayed ? MessageKind::DELAYED_FACE_PSI : MessageKind::NORMAL_FACE_PSI;
   auto peer_index = target;
   const auto* peers = &send_peer_ranks_;
@@ -302,6 +305,7 @@ CBC_AsynchronousCommunicator::SendData()
 {
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::SendData");
 
+  has_unsent_messages_ = false;
   return SendMessages(send_buffer_, send_requests_, open_send_buffer_indices_);
 }
 
@@ -349,6 +353,7 @@ CBC_AsynchronousCommunicator::Reset()
   receive_buffer_.clear();
   received_task_scratch_.clear();
   std::fill(incoming_received_values_.begin(), incoming_received_values_.end(), 0);
+  remaining_incoming_faces_ = incoming_received_values_.size();
   std::fill(
     open_send_buffer_indices_.begin(), open_send_buffer_indices_.end(), INVALID_BUFFER_INDEX);
   std::fill(open_delayed_send_buffer_indices_.begin(),
@@ -356,6 +361,7 @@ CBC_AsynchronousCommunicator::Reset()
             INVALID_BUFFER_INDEX);
   std::fill(delayed_recv_done_.begin(), delayed_recv_done_.end(), 0);
   delayed_completion_markers_queued_ = false;
+  has_unsent_messages_ = false;
 }
 
 void
@@ -391,6 +397,7 @@ CBC_AsynchronousCommunicator::StoreFacePsi(bool delayed,
     {
       cells_who_received_data.push_back(incoming.cell_local_id);
       received = 0;
+      --remaining_incoming_faces_;
     }
   }
 }
@@ -461,7 +468,11 @@ CBC_AsynchronousCommunicator::ReceiveData(std::vector<std::uint32_t>& cells_who_
   CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveData");
 
   cells_who_received_data.clear();
-  ReceiveAvailableMessages(cells_who_received_data);
+  // Completed incoming faces cannot unlock any more tasks. In particular, do not
+  // probe source partitions or poll receives while only send completion is pending.
+  // Delayed traffic is drained separately by ReceiveDelayedData before reset.
+  if (remaining_incoming_faces_ != 0)
+    ReceiveAvailableMessages(cells_who_received_data);
 }
 
 bool
@@ -472,6 +483,11 @@ CBC_AsynchronousCommunicator::ReceiveDelayedData()
   const auto& delayed_location_dependencies = fluds_.GetSPDS().GetDelayedLocationDependencies();
   if (delayed_recv_done_.size() != delayed_location_dependencies.size())
     delayed_recv_done_.assign(delayed_location_dependencies.size(), 0);
+
+  if (std::all_of(delayed_recv_done_.begin(),
+                  delayed_recv_done_.end(),
+                  [](const auto done) { return done != 0; }))
+    return true;
 
   received_task_scratch_.clear();
   ReceiveAvailableMessages(received_task_scratch_);

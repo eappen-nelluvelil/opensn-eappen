@@ -1,5 +1,64 @@
 [
   {
+    "file": "communication_equilibrium.py",
+    "comment": "Analytic CBC equilibrium, fragmented faces, two groupsets and repeated execution",
+    "num_procs": 4,
+    "outfileprefix": "communication_fragmented",
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Communication equilibrium error=",
+        "goldvalue": 0.0,
+        "abs_tol": 1e-08
+      }
+    ]
+  },
+  {
+    "file": "communication_equilibrium.py",
+    "comment": "Analytic CBC equilibrium with complete face messages",
+    "num_procs": 4,
+    "args": ["--py", "message_size=65536"],
+    "outfileprefix": "communication_complete",
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Communication equilibrium error=",
+        "goldvalue": 0.0,
+        "abs_tol": 1e-08
+      }
+    ]
+  },
+  {
+    "file": "communication_equilibrium.py",
+    "comment": "Analytic CBC equilibrium with fragmented delayed faces on a cyclic partition",
+    "num_procs": 4,
+    "args": ["--py", "cyclic=True"],
+    "outfileprefix": "communication_cyclic",
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Communication equilibrium error=",
+        "goldvalue": 0.0,
+        "abs_tol": 1e-08
+      }
+    ]
+  },
+  {
+    "file": "communication_equilibrium.py",
+    "comment": "Analytic serial CBC equilibrium without MPI face traffic",
+    "num_procs": 1,
+    "args": ["--py", "expected_ranks=1"],
+    "outfileprefix": "communication_serial",
+    "checks": [
+      {
+        "type": "KeyValuePair",
+        "key": "Communication equilibrium error=",
+        "goldvalue": 0.0,
+        "abs_tol": 1e-08
+      }
+    ]
+  },
+  {
     "file": "transport_1d_1.py",
     "comment": "1D LinearBSolver Test - PWLD",
     "num_procs": 3,
