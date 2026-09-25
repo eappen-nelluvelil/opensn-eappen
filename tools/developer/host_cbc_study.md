@@ -117,3 +117,28 @@ API, MPI/Python compatibility, generated annotations and Caliper report options
 in the actual target environment. Inspect the scope-only overlay and verify
 baseline/profile scalar-flux and residual signatures. This smoke test is not a
 replacement for independent transport correctness regressions.
+
+### Comparing host communication polling changes
+
+Use a new campaign when changing source revisions; do not edit a completed
+campaign's manifests or reuse its completion markers with a different binary.
+Keep the original Native baseline samples, and compare like-for-like meshes,
+rank counts, thread counts, iteration limits and build settings. A rebase onto
+a new upstream revision is another changed variable; measure against the same
+upstream base when isolating a communication optimization.
+
+Host CBC can avoid normal receive probes once every incoming face is complete,
+and can reserve per-cell send progress for cells that queued new messages.
+Its angle-set entry/exit completion checks and delayed-data drain remain active.
+Compare `MPI_Iprobe` and `MPI_Testsome` counts as well as Native sweep timings;
+unchanged message contents do not imply identical probe counts or identical
+communication/computation overlap on every MPI implementation. Caliper scope
+and MPI-call overhead can amplify the apparent benefit of fewer polls, so
+profile timings are not evidence of the baseline speedup.
+
+The registered `communication_equilibrium.py` regressions independently check
+a uniform reflecting absorber, fragmented/full faces, multiple groupsets,
+cyclic partitions, repeated execution and balance. Run these and the existing
+nonuniform cyclic/restart/balance regressions before performance comparisons.
+Local shared-memory results do not establish multi-node fabric performance;
+retain the target-machine baseline and profiling modes for that validation.
