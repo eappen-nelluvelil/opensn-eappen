@@ -60,7 +60,8 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   if (permission != AngleSetStatus::EXECUTE)
     return AngleSetStatus::READY_TO_EXECUTE;
 
-  if (not ready_tasks_.empty())
+  const bool had_ready_tasks = not ready_tasks_.empty();
+  if (had_ready_tasks)
     sweep_chunk.SetAngleSet(*this);
 
   while (not ready_tasks_.empty())
@@ -85,8 +86,10 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   }
 
   const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
+  // An idle visit already polled sends above and cannot have created new packets.
+  // Productive visits must also start every remaining partial packet before returning.
   const bool all_messages_sent =
-    not async_comm_.HasPendingCommunication() or async_comm_.SendData();
+    not async_comm_.HasPendingCommunication() or (had_ready_tasks and async_comm_.SendData());
 
   if (all_tasks_completed and all_messages_sent)
   {

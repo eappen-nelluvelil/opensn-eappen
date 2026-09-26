@@ -12,7 +12,8 @@ the packet is closed and the angle set starts pending sends after the producing
 cell. Otherwise records can accumulate while local tasks remain ready. At the
 end of every angle-set visit, all remaining normal packets, including partial
 ones, are started before waiting for additional dependencies or declaring the
-angle set finished. Entry/exit completion polling remains active.
+angle set finished. Pending sends are polled at entry; productive visits also
+poll/flush at exit.
 
 There is no new byte threshold, cell-count interval, timer, rank-count selection,
 or prediction of critical messages. The pre-existing message-size limit remains
@@ -35,6 +36,23 @@ angle-set advances visited already-finished sets. New `AngleSetAdvance` visit
 counts exclude those no-work visits; compare actual MPI calls and baseline
 timings, not raw annotation counts across revisions. Lower annotation overhead
 is not evidence of lower network latency or an improved wavefront critical path.
+
+## Idle send-completion polling
+
+An unfinished advance polls pending normal sends after receiving data. When no
+cell task is ready, no sweep chunk runs and no new packet can be created during
+that visit. In this case, do not immediately repeat the same send-completion poll
+at exit. If sends remain pending, the next advance still polls them. If the
+entry poll completed all sends, the existing completion check can finish the
+angle set in this visit. Visits that sweep any cells still flush all partial
+packets at exit, even if the last cell did not close a packet.
+
+This changes polling frequency, not the completion condition, buffer lifetime,
+task dependencies, or delayed-message drain. It needs no background MPI thread,
+timer, or minimum-work threshold. Fewer completion polls are not automatically
+faster: latency and progress depend on the MPI implementation and fabric. Keep
+this experimental policy separate from the annotation-only change when measuring
+on Dane, and include rendezvous traffic and cyclic/repeated sweeps in validation.
 
 ## Correctness and resource invariants
 
