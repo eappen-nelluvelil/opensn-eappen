@@ -151,7 +151,9 @@ data that would unlock further computation. The remaining current-sweep graph
 must be acyclic; feedback edges continue to use the existing delayed phase.
 
 Only the rank's sweep thread calls MPI. A collectively constructed, groupset-
-private communicator isolates the wildcard dispatcher. An ordinary receive
+private normal-phase communicator isolates the wildcard dispatcher from delayed
+angle packets, including next-sweep traffic from ranks that finish earlier.
+An ordinary receive
 uses the exact source and tag obtained by the probe. With no ready tasks, a
 blocking probe supplies MPI progress; neither an asynchronous MPI thread nor
 an eager-message buffering guarantee is required. Local angle-set completion
@@ -161,8 +163,9 @@ the transport retains copied outgoing data until its requests complete.
 After all normal receives have finished globally, the barrier separates normal
 transport traffic from delayed cyclic traffic. Normal requests are drained
 before their storage is recycled; delayed completion markers are drained
-before the next sweep. Setup adds one private communicator per host CBC
-groupset, not per angle. Scheduler state is linear in the number of angle sets;
+before the next sweep. Setup adds two private communicators per host CBC
+groupset (normal and delayed), not per angle. Scheduler state is linear in the
+number of angle sets;
 packet storage depends on neighbors and outstanding flux, and is not claimed
 to be memory-neutral. Coalescing reduces matching operations but can delay
 pipeline startup. These branches are experimental: neither faster strong

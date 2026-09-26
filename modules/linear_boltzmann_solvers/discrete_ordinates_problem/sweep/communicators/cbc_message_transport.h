@@ -38,6 +38,9 @@ public:
   CBC_MessageTransport(const CBC_MessageTransport&) = delete;
   CBC_MessageTransport& operator=(const CBC_MessageTransport&) = delete;
 
+  /// Normal-phase context, collectively duplicated and distinct from delayed traffic.
+  const mpicpp_lite::Communicator& GetCommunicator() const;
+
   /**
    * Append an envelope header and return its peer buffer for direct serialization.
    * The caller MUST immediately append exactly num_bytes bytes before another call.

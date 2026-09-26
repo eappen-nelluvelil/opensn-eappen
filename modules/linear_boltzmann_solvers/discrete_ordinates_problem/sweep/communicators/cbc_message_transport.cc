@@ -15,12 +15,21 @@ namespace opensn
 
 CBC_MessageTransport::CBC_MessageTransport(std::shared_ptr<const SweepCommunicator> communicator,
                                            std::size_t packet_limit)
-  : communicator_(std::move(communicator)), packet_limit_(packet_limit)
+  : packet_limit_(packet_limit)
 {
-  OpenSnInvalidArgumentIf(communicator_ == nullptr or packet_limit_ <= FRAME_BYTES or
+  OpenSnInvalidArgumentIf(communicator == nullptr or packet_limit_ <= FRAME_BYTES or
                             packet_limit_ >
                               static_cast<std::size_t>(std::numeric_limits<int>::max()),
                           "Invalid host CBC transport context or MPI packet limit.");
+  // Separate normal frames from delayed angle packets, including across epochs:
+  // an early rank may start its next sweep while a peer still drains delayed data.
+  communicator_ = std::make_shared<SweepCommunicator>(communicator->GetCommunicator(), 1);
+}
+
+const mpicpp_lite::Communicator&
+CBC_MessageTransport::GetCommunicator() const
+{
+  return communicator_->GetCommunicator();
 }
 
 void

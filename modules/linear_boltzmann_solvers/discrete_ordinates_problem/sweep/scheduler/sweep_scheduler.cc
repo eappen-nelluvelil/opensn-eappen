@@ -166,7 +166,7 @@ SweepScheduler::ScheduleReceiveEvents(SweepChunk& sweep_chunk)
 
   if (num_sets != 0)
   {
-    const auto& comm = event_angle_sets_.front()->GetEventCommunicator()->GetCommunicator();
+    const auto& comm = event_transport_->GetCommunicator();
     const auto first_tag = event_angle_sets_.front()->GetMessageTag();
     const auto dispatch = [&](const mpi::Status& status)
     {

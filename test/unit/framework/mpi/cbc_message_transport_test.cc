@@ -11,6 +11,40 @@
 
 using namespace opensn;
 
+TEST(CBCMessageTransportTest, IsolatesNormalFramesFromDelayedPackets)
+{
+  auto delayed = std::make_shared<SweepCommunicator>(mpi_comm, 1);
+  CBC_MessageTransport transport(delayed, 64);
+  const auto& normal = transport.GetCommunicator();
+  int relation = MPI_UNEQUAL;
+  ASSERT_EQ(MPI_Comm_compare(static_cast<MPI_Comm>(delayed->GetCommunicator()),
+                             static_cast<MPI_Comm>(normal),
+                             &relation),
+            MPI_SUCCESS);
+  EXPECT_EQ(relation, MPI_CONGRUENT);
+  if (relation != MPI_CONGRUENT)
+    return; // Fail before posting requests if context isolation was removed.
+
+  const int next = (mpi_comm.rank() + 1) % mpi_comm.size();
+  const int previous = (mpi_comm.rank() + mpi_comm.size() - 1) % mpi_comm.size();
+  const int delayed_value = 42;
+  auto delayed_request = delayed->GetCommunicator().isend(next, 0, &delayed_value, 1);
+  auto& data = transport.GetMessageBuffer(next, 0, 1);
+  data.push_back('x');
+  transport.Flush();
+  mpi::Status status;
+  ASSERT_EQ(MPI_Probe(previous, 0, static_cast<MPI_Comm>(normal), status), MPI_SUCCESS);
+  const auto packet = transport.Receive(status);
+  EXPECT_EQ(packet.size(), 9);
+  if (packet.size() == 9)
+    EXPECT_EQ(packet.back(), 'x');
+  int received_delayed = 0;
+  delayed->GetCommunicator().recv(previous, 0, &received_delayed, 1);
+  EXPECT_EQ(received_delayed, delayed_value);
+  mpi::wait(delayed_request);
+  transport.Finish();
+}
+
 TEST(CBCMessageTransportTest, ValidatesPacketLimit)
 {
   auto context = std::make_shared<SweepCommunicator>(mpi_comm, 1);
@@ -30,10 +64,10 @@ TEST(CBCMessageTransportTest, ValidatesPacketLimit)
 TEST(CBCMessageTransportTest, CoalescesSplitsAndReusesAcrossSweeps)
 {
   auto context = std::make_shared<SweepCommunicator>(mpi_comm, 1);
-  const auto& comm = context->GetCommunicator();
   const int next = (mpi_comm.rank() + 1) % mpi_comm.size();
   const int previous = (mpi_comm.rank() + mpi_comm.size() - 1) % mpi_comm.size();
   CBC_MessageTransport transport(context, 64);
+  const auto& comm = transport.GetCommunicator();
 
   for (int epoch = 0; epoch < 3; ++epoch)
   {
