@@ -32,10 +32,11 @@ CBC_AngleSet::GetCommunicator()
 AngleSetStatus
 CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
 {
-  CALI_CXX_MARK_SCOPE("AngleSetAdvance");
-
   if (executed_)
     return AngleSetStatus::FINISHED;
+
+  // Completed sets perform no work and need no annotation on repeated FIFO visits.
+  CALI_CXX_MARK_SCOPE("AngleSetAdvance");
 
   if (task_list_ == nullptr)
   {

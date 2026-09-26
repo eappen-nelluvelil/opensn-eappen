@@ -20,6 +20,22 @@ unchanged. This makes the batching decision structural, not a performance
 heuristic; it does not make its performance independent of the message-size
 configuration or the target MPI/fabric.
 
+## Completed angle-set annotations
+
+The host CBC FIFO scheduler can revisit already-finished sets while waiting for
+other sets. CBC returns immediately on those visits, before entering the
+`AngleSetAdvance` Caliper scope. This avoids annotation construction/destruction
+on a no-work path, including its cost in Native runs with recording disabled.
+No scheduler order, MPI progress, completion check, delayed-data drain, or
+allocation policy changes. The scope still covers every unfinished advance,
+including unsuccessful receive polling.
+
+September 2026 Dane Caliper profiles showed that roughly half the host CBC
+angle-set advances visited already-finished sets. New `AngleSetAdvance` visit
+counts exclude those no-work visits; compare actual MPI calls and baseline
+timings, not raw annotation counts across revisions. Lower annotation overhead
+is not evidence of lower network latency or an improved wavefront critical path.
+
 ## Correctness and resource invariants
 
 - Task-selection rules, dependency decrements, face-record format and numerical
