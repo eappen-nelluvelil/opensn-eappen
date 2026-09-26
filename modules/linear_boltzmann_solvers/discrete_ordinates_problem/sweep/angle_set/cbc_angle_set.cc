@@ -88,10 +88,12 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   const bool all_tasks_completed = (num_completed_tasks_ == task_list_->size());
   // An idle visit already polled sends above and cannot have created new packets.
   // Productive visits must also start every remaining partial packet before returning.
-  const bool all_messages_sent =
-    not async_comm_.HasPendingCommunication() or (had_ready_tasks and async_comm_.SendData());
+  if (had_ready_tasks and async_comm_.HasPendingCommunication())
+    async_comm_.SendData();
 
-  if (all_tasks_completed and all_messages_sent)
+  // The communicator owns copies of outgoing flux until the final send drain.
+  // Local dependents need completed flux, not remote MPI send completion.
+  if (all_tasks_completed)
   {
     for (auto* angle_set : following_angle_sets_)
       angle_set->DecrementCounter();
