@@ -16,10 +16,16 @@ CBC_AngleSet::CBC_AngleSet(std::size_t id,
                            const std::vector<std::size_t>& angle_indices,
                            std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                            int max_mpi_message_size,
-                           const SweepCommunicator& sweep_communicator)
+                           const SweepCommunicator& sweep_communicator,
+                           std::shared_ptr<const SweepCommunicator> event_communicator)
   : AngleSet(id, groupset, spds, fluds, angle_indices, boundaries),
     cbc_spds_(dynamic_cast<const CBC_SPDS&>(spds_)),
-    async_comm_(groupset.id, id, *fluds, max_mpi_message_size, sweep_communicator)
+    event_communicator_(std::move(event_communicator)),
+    async_comm_(groupset.id,
+                id,
+                *fluds,
+                max_mpi_message_size,
+                event_communicator_ ? *event_communicator_ : sweep_communicator)
 {
 }
 
@@ -29,27 +35,43 @@ CBC_AngleSet::GetCommunicator()
   return &async_comm_;
 }
 
-AngleSetStatus
-CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+void
+CBC_AngleSet::InitializeTasks()
 {
-  if (executed_)
-    return AngleSetStatus::FINISHED;
-
-  // Completed sets perform no work and need no annotation on repeated FIFO visits.
-  CALI_CXX_MARK_SCOPE("AngleSetAdvance");
-
   if (task_list_ == nullptr)
   {
     task_list_ = &cbc_spds_.GetTaskList();
     remaining_dependency_counts_ = cbc_spds_.GetInitialTaskDependencyCounts();
     ready_tasks_ = cbc_spds_.GetInitialReadyTasks();
   }
+}
 
-  async_comm_.ReceiveData(received_task_buffer_);
-
+void
+CBC_AngleSet::UpdateReceivedDependencies()
+{
   for (const auto task_number : received_task_buffer_)
     if (--remaining_dependency_counts_[task_number] == 0)
       ready_tasks_.push_back(task_number);
+}
+
+AngleSetStatus
+CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission)
+{
+  if (executed_)
+    return AngleSetStatus::FINISHED;
+  InitializeTasks();
+  async_comm_.ReceiveData(received_task_buffer_);
+  UpdateReceivedDependencies();
+  return AdvanceReadyTasks(sweep_chunk, permission);
+}
+
+AngleSetStatus
+CBC_AngleSet::AdvanceReadyTasks(SweepChunk& sweep_chunk, AngleSetStatus permission)
+{
+  if (executed_)
+    return AngleSetStatus::FINISHED;
+  CALI_CXX_MARK_SCOPE("AngleSetAdvance");
+  InitializeTasks();
 
   if (async_comm_.HasPendingCommunication())
     async_comm_.SendData();
@@ -102,6 +124,16 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
   }
 
   return AngleSetStatus::NOT_FINISHED;
+}
+
+bool
+CBC_AngleSet::ReceivePacket(int source_rank, std::span<const char> packet)
+{
+  InitializeTasks();
+  received_task_buffer_.clear();
+  async_comm_.DecodePacket(source_rank, packet, received_task_buffer_);
+  UpdateReceivedDependencies();
+  return IsDependencyResolved() and not ready_tasks_.empty();
 }
 
 void

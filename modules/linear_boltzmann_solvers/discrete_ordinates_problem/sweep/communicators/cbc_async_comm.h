@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -18,6 +19,7 @@ namespace mpi = mpicpp_lite;
 
 class SweepCommunicator;
 class CBC_FLUDS;
+class CBC_MessageTransport;
 
 /// Host CBC asynchronous communicator.
 class CBC_AsynchronousCommunicator : public AsynchronousCommunicator
@@ -68,6 +70,23 @@ public:
    * stored in the CBC FLUDS.
    */
   void ReceiveData(std::vector<std::uint32_t>& cells_who_received_data);
+
+  /// Tag identifying this angle set within the groupset's private context.
+  int GetMessageTag() const { return message_tag_; }
+
+  /// Normal faces not yet completely received in this sweep.
+  std::size_t GetPendingNormalFaces() const { return remaining_incoming_faces_; }
+
+  /// Existing upper bound on serialized MPI packets, including transport envelopes.
+  std::size_t GetPacketLimit() const { return max_mpi_message_size_; }
+
+  /// Install the groupset normal transport before a sweep; delayed traffic remains angle-local.
+  void SetMessageTransport(std::shared_ptr<CBC_MessageTransport> transport);
+
+  /// Decode already received records, appending complete-face notifications.
+  void DecodePacket(int source_rank,
+                    std::span<const char> packet,
+                    std::vector<std::uint32_t>& cells_who_received_data);
 
   /// Receive delayed face psi until all delayed upstream locations have sent completion markers.
   bool ReceiveDelayedData();
@@ -157,6 +176,10 @@ private:
   /// Receive all currently available packed CBC messages.
   void ReceiveAvailableMessages(std::vector<std::uint32_t>& cells_who_received_data);
 
+  /// Receive the exact source/tag just probed by ReceiveAvailableMessages.
+  void ReceiveMessage(const mpi::Status& status,
+                      std::vector<std::uint32_t>& cells_who_received_data);
+
   /// Mark a delayed upstream location complete.
   void MarkDelayedReceiveComplete(int source_rank);
 
@@ -180,6 +203,8 @@ private:
   const mpi::Communicator& receive_comm_;
   /// CBC FLUDS.
   CBC_FLUDS& cbc_fluds_;
+  /// Groupset-wide normal packet storage and MPI requests, if event scheduling is used.
+  std::shared_ptr<CBC_MessageTransport> message_transport_;
   /// Active nonblocking send buffers.
   std::vector<BufferItem> send_buffer_;
   /// MPI requests matching `send_buffer_`.

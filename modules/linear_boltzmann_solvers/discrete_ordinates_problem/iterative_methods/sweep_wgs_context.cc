@@ -37,7 +37,7 @@ GetSchedulingAlgorithm(const std::string& sweep_type, bool use_gpu)
     if (use_gpu)
       return SchedulingAlgorithm::ASYNC_FIFO;
     else
-      return SchedulingAlgorithm::FIRST_IN_FIRST_OUT;
+      return SchedulingAlgorithm::RECEIVE_EVENTS;
   }
   else
     throw std::runtime_error("Unsupported sweep scheduling algorithm: " + sweep_type + "\n");

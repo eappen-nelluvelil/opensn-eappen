@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_async_comm.h"
+#include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/communicators/cbc_message_transport.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/fluds/cbc_fluds.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/sweep/spds/spds.h"
 #include "framework/mpi/sweep_communicator.h"
@@ -35,7 +36,7 @@ WriteMessageValue(char*& buffer, const T& value)
 template <typename T>
   requires std::is_trivially_copyable_v<T>
 T
-ReadMessageValue(char*& buffer)
+ReadMessageValue(const char*& buffer)
 {
   T value;
   std::memcpy(static_cast<void*>(&value), static_cast<const void*>(buffer), sizeof(T));
@@ -215,30 +216,36 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
     open_buffer_indices = &open_delayed_send_buffer_indices_;
   }
 
+  const bool shared_normal = not delayed and message_transport_ != nullptr;
+  const auto packet_limit =
+    shared_normal ? message_transport_->GetPacketLimit() - CBC_MessageTransport::FRAME_BYTES
+                  : max_mpi_message_size_;
+  const auto get_buffer = [&](std::size_t record_size) -> std::vector<char>&
+  {
+    if (shared_normal)
+      return message_transport_->GetMessageBuffer(
+        send_peer_ranks_[peer_index], message_tag_, record_size);
+    return GetOpenSendBuffer(
+             peer_index, record_size, *peers, *buffers, *requests, *open_buffer_indices)
+      .data;
+  };
   const auto total_size = outgoing_face_psi.size();
   const auto complete_record_size = FACE_MESSAGE_HEADER_SIZE + total_size * sizeof(double);
-  if (complete_record_size <= max_mpi_message_size_)
+  if (complete_record_size <= packet_limit)
   {
-    auto& raw =
-      GetOpenSendBuffer(
-        peer_index, complete_record_size, *peers, *buffers, *requests, *open_buffer_indices)
-        .data;
+    auto& raw = get_buffer(complete_record_size);
     AppendFaceMessage(raw, kind, face_slot, outgoing_face_psi);
     return;
   }
 
   const auto chunk_kind =
     delayed ? MessageKind::DELAYED_FACE_PSI_CHUNK : MessageKind::NORMAL_FACE_PSI_CHUNK;
-  for (std::size_t offset = 0; offset < total_size; offset += max_payload_chunk_size_)
+  const auto max_chunk_size =
+    shared_normal ? MaxPayloadChunkSize(packet_limit) : max_payload_chunk_size_;
+  for (std::size_t offset = 0; offset < total_size; offset += max_chunk_size)
   {
-    const auto chunk_size = std::min(max_payload_chunk_size_, total_size - offset);
-    auto& raw = GetOpenSendBuffer(peer_index,
-                                  CHUNK_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double),
-                                  *peers,
-                                  *buffers,
-                                  *requests,
-                                  *open_buffer_indices)
-                  .data;
+    const auto chunk_size = std::min(max_chunk_size, total_size - offset);
+    auto& raw = get_buffer(CHUNK_MESSAGE_HEADER_SIZE + chunk_size * sizeof(double));
     AppendFaceMessageChunk(raw,
                            chunk_kind,
                            face_slot,
@@ -246,6 +253,19 @@ CBC_AsynchronousCommunicator::QueueDownwindMessage(DownwindPsiType psi_type,
                            offset,
                            outgoing_face_psi.subspan(offset, chunk_size));
   }
+}
+
+void
+CBC_AsynchronousCommunicator::SetMessageTransport(std::shared_ptr<CBC_MessageTransport> transport)
+{
+  OpenSnInvalidArgumentIf(
+    transport == nullptr or transport->GetPacketLimit() < CBC_MessageTransport::FRAME_BYTES +
+                                                            CHUNK_MESSAGE_HEADER_SIZE +
+                                                            sizeof(double),
+    "Host CBC transport must fit an envelope, a chunk header and one flux value.");
+  OpenSnLogicalErrorIf(not send_buffer_.empty() or not delayed_send_buffer_.empty(),
+                       "Cannot replace host CBC transport with active packets.");
+  message_transport_ = std::move(transport);
 }
 
 void
@@ -410,55 +430,66 @@ CBC_AsynchronousCommunicator::ReceiveAvailableMessages(
 
   mpi::Status status;
   while (receive_comm_.iprobe(mpi::ANY_SOURCE, tag, status))
+    ReceiveMessage(status, cells_who_received_data);
+}
+
+void
+CBC_AsynchronousCommunicator::ReceiveMessage(const mpi::Status& status,
+                                             std::vector<std::uint32_t>& cells_who_received_data)
+{
+  CALI_CXX_MARK_SCOPE("CBC_AsynchronousCommunicator::ReceiveMessage");
+  OpenSnLogicalErrorIf(status.tag() != message_tag_,
+                       "CBC receive dispatched to the wrong angle set.");
+  const auto source_rank = status.source();
+  const auto num_bytes = status.count<char>();
+  receive_buffer_.resize(static_cast<std::size_t>(num_bytes));
+  receive_comm_.recv(source_rank, status.tag(), receive_buffer_.data(), num_bytes);
+  DecodePacket(source_rank, receive_buffer_, cells_who_received_data);
+}
+
+void
+CBC_AsynchronousCommunicator::DecodePacket(int source_rank,
+                                           std::span<const char> packet,
+                                           std::vector<std::uint32_t>& cells_who_received_data)
+{
+  auto* read_ptr = packet.data();
+  const auto* const read_end = read_ptr + packet.size();
+
+  while (read_ptr < read_end)
   {
-    const auto source_rank = status.source();
-    const auto num_bytes = status.count<char>();
-    receive_buffer_.resize(static_cast<std::size_t>(num_bytes));
-    receive_comm_.recv(source_rank, tag, receive_buffer_.data(), num_bytes);
-    auto* read_ptr = receive_buffer_.data();
-    const auto* const read_end = read_ptr + receive_buffer_.size();
-
-    while (read_ptr < read_end)
+    const auto kind = static_cast<MessageKind>(ReadMessageValue<std::uint8_t>(read_ptr));
+    if (kind == MessageKind::DELAYED_COMPLETION)
     {
-      const auto kind = static_cast<MessageKind>(ReadMessageValue<std::uint8_t>(read_ptr));
-      if (kind == MessageKind::DELAYED_COMPLETION)
-      {
-        MarkDelayedReceiveComplete(source_rank);
-        continue;
-      }
-
-      const bool delayed =
-        kind == MessageKind::DELAYED_FACE_PSI or kind == MessageKind::DELAYED_FACE_PSI_CHUNK;
-      const bool chunked =
-        kind == MessageKind::NORMAL_FACE_PSI_CHUNK or kind == MessageKind::DELAYED_FACE_PSI_CHUNK;
-      const auto face_slot = ReadMessageValue<std::size_t>(read_ptr);
-
-      std::size_t total_size = 0;
-      std::size_t chunk_offset = 0;
-      std::size_t chunk_size = 0;
-      if (chunked)
-      {
-        total_size = ReadMessageValue<std::size_t>(read_ptr);
-        chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
-        chunk_size = ReadMessageValue<std::size_t>(read_ptr);
-      }
-      else
-      {
-        total_size = delayed ? cbc_fluds_.GetDelayedNonlocalPsiSize(face_slot)
-                             : cbc_fluds_.GetIncomingNonlocalPsiSize(face_slot);
-        chunk_size = total_size;
-      }
-
-      StoreFacePsi(delayed,
-                   face_slot,
-                   total_size,
-                   chunk_offset,
-                   read_ptr,
-                   chunk_size,
-                   cells_who_received_data);
-
-      read_ptr += chunk_size * sizeof(double);
+      MarkDelayedReceiveComplete(source_rank);
+      continue;
     }
+
+    const bool delayed =
+      kind == MessageKind::DELAYED_FACE_PSI or kind == MessageKind::DELAYED_FACE_PSI_CHUNK;
+    const bool chunked =
+      kind == MessageKind::NORMAL_FACE_PSI_CHUNK or kind == MessageKind::DELAYED_FACE_PSI_CHUNK;
+    const auto face_slot = ReadMessageValue<std::size_t>(read_ptr);
+
+    std::size_t total_size = 0;
+    std::size_t chunk_offset = 0;
+    std::size_t chunk_size = 0;
+    if (chunked)
+    {
+      total_size = ReadMessageValue<std::size_t>(read_ptr);
+      chunk_offset = ReadMessageValue<std::size_t>(read_ptr);
+      chunk_size = ReadMessageValue<std::size_t>(read_ptr);
+    }
+    else
+    {
+      total_size = delayed ? cbc_fluds_.GetDelayedNonlocalPsiSize(face_slot)
+                           : cbc_fluds_.GetIncomingNonlocalPsiSize(face_slot);
+      chunk_size = total_size;
+    }
+
+    StoreFacePsi(
+      delayed, face_slot, total_size, chunk_offset, read_ptr, chunk_size, cells_who_received_data);
+
+    read_ptr += chunk_size * sizeof(double);
   }
 }
 

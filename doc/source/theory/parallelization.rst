@@ -129,6 +129,46 @@ the order in which to execute the available tasks.
    Task Dependency Graph for Direction :math:`\vec{\Omega}`.
 
 
+Experimental host CBC receive events
+------------------------------------
+
+On the host-event-progress development branches, host CBC uses a ready-set
+scheduler and one normal-flux transport per groupset. Cell solves, the task
+dependency graph, compact-storage reuse dependencies, and delayed cyclic
+unknowns are unchanged. A receive makes a cell eligible only after its entire
+incoming face has arrived and all other task dependencies are satisfied.
+Ready angle sets retain cyclic ID priority, and ready cells retain their
+within-angle-set stack ordering. Independent angle sets can complete in a
+different order, so floating-point moment sums need not be bitwise identical.
+
+Normal face records from different ready angle sets share destination packets.
+Each record has an eight-byte angle-tag/length envelope, included in the
+configured message-size limit. A full packet starts immediately when the next
+record would exceed that limit. All partial packets start before the scheduler
+blocks for a receive, and before it enters the end-of-sweep barrier. This rule
+is necessary for progress: waiting only for full packets can withhold the very
+data that would unlock further computation. The remaining current-sweep graph
+must be acyclic; feedback edges continue to use the existing delayed phase.
+
+Only the rank's sweep thread calls MPI. A collectively constructed, groupset-
+private communicator isolates the wildcard dispatcher. An ordinary receive
+uses the exact source and tag obtained by the probe. With no ready tasks, a
+blocking probe supplies MPI progress; neither an asynchronous MPI thread nor
+an eager-message buffering guarantee is required. Local angle-set completion
+releases local dependents without waiting for remote send completion, while
+the transport retains copied outgoing data until its requests complete.
+
+After all normal receives have finished globally, the barrier separates normal
+transport traffic from delayed cyclic traffic. Normal requests are drained
+before their storage is recycled; delayed completion markers are drained
+before the next sweep. Setup adds one private communicator per host CBC
+groupset, not per angle. Scheduler state is linear in the number of angle sets;
+packet storage depends on neighbors and outstanding flux, and is not claimed
+to be memory-neutral. Coalescing reduces matching operations but can delay
+pipeline startup. These branches are experimental: neither faster strong
+scaling nor ideal weak scaling is guaranteed for arbitrary partitions or MPI
+implementations. Device CBC and both AAH schedulers are unchanged.
+
 References
 ----------
     

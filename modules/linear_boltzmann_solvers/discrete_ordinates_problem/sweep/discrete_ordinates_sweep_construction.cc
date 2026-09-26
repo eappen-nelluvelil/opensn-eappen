@@ -15,6 +15,7 @@
 #include "framework/utils/error.h"
 #include "framework/utils/caliper_scopes.h"
 #include "framework/runtime.h"
+#include "framework/mpi/sweep_communicator.h"
 #include "caliper/cali.h"
 #include <memory>
 #include <stdexcept>
@@ -136,6 +137,13 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
   groupset.angle_agg =
     std::make_shared<AngleAggregation>(groupset, sweep_boundaries_, groupset.quadrature, grid_);
 
+  // A wildcard event dispatcher must never consume another groupset's traffic.
+  // One collective context per host CBC groupset, not one per angle or worker.
+  std::shared_ptr<const SweepCommunicator> event_communicator;
+  if (not use_gpus_ and ParseSweepKind(sweep_type_, GetName()) == SweepKind::CBC)
+    event_communicator = std::make_shared<SweepCommunicator>(sweep_communicator_->GetCommunicator(),
+                                                             groupsets_.size());
+
   size_t angle_set_id = 0;
   for (const auto& so_grouping : unique_so_groupings)
   {
@@ -233,7 +241,8 @@ DiscreteOrdinatesProblem::InitFluxDataStructures(LBSGroupset& groupset)
                                                      angle_indices,
                                                      sweep_boundaries_,
                                                      options_.max_mpi_message_size,
-                                                     *sweep_communicator_);
+                                                     *sweep_communicator_,
+                                                     event_communicator);
         }
 
         groupset.angle_agg->GetAngleSetGroups().push_back(angle_set);

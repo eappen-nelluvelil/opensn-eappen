@@ -24,7 +24,8 @@ public:
                const std::vector<std::size_t>& angle_indices,
                std::map<std::uint64_t, std::shared_ptr<SweepBoundary>>& boundaries,
                int max_mpi_message_size,
-               const SweepCommunicator& sweep_communicator);
+               const SweepCommunicator& sweep_communicator,
+               std::shared_ptr<const SweepCommunicator> event_communicator = nullptr);
 
   /// Return the CBC asynchronous communicator.
   AsynchronousCommunicator* GetCommunicator() override;
@@ -41,6 +42,34 @@ public:
   /// Advance ready CBC tasks and progress asynchronous communication.
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
+  /// Advance local tasks without probing receives; the event scheduler dispatches them.
+  AngleSetStatus AdvanceReadyTasks(SweepChunk& sweep_chunk, AngleSetStatus permission);
+
+  /// Consume one normal-flux frame from the shared transport.
+  bool ReceivePacket(int source_rank, std::span<const char> packet);
+
+  /// Install a groupset transport before execution.
+  void SetMessageTransport(std::shared_ptr<CBC_MessageTransport> transport)
+  {
+    async_comm_.SetMessageTransport(std::move(transport));
+  }
+
+  std::size_t GetPacketLimit() const { return async_comm_.GetPacketLimit(); }
+
+  const std::shared_ptr<const SweepCommunicator>& GetEventCommunicatorPtr() const
+  {
+    return event_communicator_;
+  }
+
+  /// Private groupset context, owned until all angle-set requests have been drained.
+  const SweepCommunicator* GetEventCommunicator() const { return event_communicator_.get(); }
+
+  /// Message tag used by the groupset event dispatcher.
+  int GetMessageTag() const { return async_comm_.GetMessageTag(); }
+
+  /// Normal faces not yet completely received in this sweep.
+  std::size_t GetPendingNormalFaces() const { return async_comm_.GetPendingNormalFaces(); }
+
   /// Flush pending CBC send buffers.
   AngleSetStatus FlushSendBuffers() override
   {
@@ -55,6 +84,10 @@ public:
   bool ReceiveDelayedData() override { return async_comm_.ReceiveDelayedData(); }
 
 protected:
+  /// Initialize task dependencies once per sweep, including when a receive arrives first.
+  void InitializeTasks();
+  /// Apply one notification for each fully received nonlocal face.
+  void UpdateReceivedDependencies();
   /// CBC sweep-plane data structure.
   const CBC_SPDS& cbc_spds_;
   /// Current CBC task list.
@@ -69,6 +102,8 @@ protected:
   std::size_t num_completed_tasks_ = 0;
   /// Maximum number of buffered messages.
   int max_buffer_messages_ = 0;
+  /// Declared before the communicator so the MPI context outlives its requests.
+  std::shared_ptr<const SweepCommunicator> event_communicator_;
   /// CBC asynchronous communicator.
   CBC_AsynchronousCommunicator async_comm_;
 };

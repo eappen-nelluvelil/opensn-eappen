@@ -13,13 +13,16 @@ namespace opensn
 {
 
 class SweepChunk;
+class CBC_AngleSet;
+class CBC_MessageTransport;
 
 enum class SchedulingAlgorithm
 {
   FIRST_IN_FIRST_OUT = 1, ///< FIFO
   DEPTH_OF_GRAPH = 2,     ///< DOG
   ALL_AT_ONCE = 3,        ///< AAO
-  ASYNC_FIFO = 4          ///< ASYNC_FIFO
+  ASYNC_FIFO = 4,         ///< ASYNC_FIFO
+  RECEIVE_EVENTS = 5      ///< Host CBC receive-driven ready queue
 };
 
 struct RuleValues
@@ -56,6 +59,12 @@ public:
   void PrepareForSweep(bool use_boundary_source, bool zero_incoming_delayed_psi);
 
 private:
+  /// Build the host CBC dispatch table once; all sets must share a private groupset context.
+  void InitializeReceiveEvents();
+
+  /// Advance only newly ready angle sets; idle ranks block in MPI for normal face data.
+  void ScheduleReceiveEvents(SweepChunk& sweep_chunk);
+
   /// Applies a first-in-first-out sweep scheduling.
   void ScheduleAlgoFIFO(SweepChunk& sweep_chunk);
 
@@ -75,6 +84,15 @@ private:
   SchedulingAlgorithm scheduler_type_;
   AngleAggregation& angle_agg_;
   SweepChunk& sweep_chunk_;
+
+  /// Host CBC sets in dense ID/tag order, retaining ownership in angle_agg_.
+  std::vector<CBC_AngleSet*> event_angle_sets_;
+  /// Normal-flux packet batching across ready angle sets; delayed streams stay angle-local.
+  std::shared_ptr<CBC_MessageTransport> event_transport_;
+  /// Ready bits in original angle order; cyclic selection preserves FIFO sweep priority.
+  std::vector<std::uint64_t> event_ready_;
+  /// Local computation completion, reset each sweep.
+  std::vector<unsigned char> event_finished_;
 
   std::vector<RuleValues> rule_values_;
 
