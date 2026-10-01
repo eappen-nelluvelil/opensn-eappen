@@ -72,7 +72,7 @@ def prepare(args):
     python = subprocess.check_output(environment(
         ["python", "-c", "import sys; print(sys.executable)"], env_file), text=True).strip()
     settings = dict(config, work=str(work), root=str(root), python=python,
-                    driver=str(work / "cbc_cluster_study.py"),
+                    driver=str(work / "tools/cbc_cluster_study.py"),
                     tools=str(work / "tools/cbc_study.py"), cases={}, sources={})
     support = work / "tools"
     support.mkdir()
@@ -80,7 +80,6 @@ def prepare(args):
                      "cbc_study_input.py.in", "study_build.py")
     for name in support_names:
         shutil.copy2(HERE / name, support / name)
-    shutil.copy2(HERE / "cbc_cluster_study.py", work / "cbc_cluster_study.py")
     shutil.copytree(support, root / "tools")
     smoke_mesh = str(Path(config["smoke_mesh"]).resolve(strict=True))
     settings["smoke_mesh"] = smoke_mesh
@@ -163,7 +162,6 @@ def prepare(args):
     settings["environment_sha256"] = digest(env_file)
     settings["tool_hashes"] = {str(support / name): digest(support / name)
                                for name in support_names}
-    settings["tool_hashes"][settings["driver"]] = digest(settings["driver"])
     write_json(work / "settings.json", settings)
     write_json(root / "settings.json", settings)
     print("Settings:", work / "settings.json", flush=True)
