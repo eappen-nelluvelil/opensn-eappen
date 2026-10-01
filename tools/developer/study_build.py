@@ -31,7 +31,7 @@ def cache_values(path):
     return values
 
 
-def configure_command(source, previous, destination):
+def configure_command(source, previous, destination, gpu=None):
     cache = cache_values(previous / "CMakeCache.txt")
     keys = {
         "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER", "CMAKE_CUDA_COMPILER",
@@ -62,6 +62,8 @@ def configure_command(source, previous, destination):
             command.append(f"-DFETCHCONTENT_SOURCE_DIR_{package.upper()}={candidate}")
     command += ["-DCMAKE_BUILD_TYPE=Native", "-DOPENSN_WITH_PYTHON=ON",
                 "-DOPENSN_WITH_PYTHON_MODULE=OFF", "-DFETCHCONTENT_UPDATES_DISCONNECTED=ON"]
+    if gpu is False:
+        command += [f"-DOPENSN_WITH_{backend}=OFF" for backend in ("CUDA", "HIP", "SYCL")]
     return command
 
 
@@ -73,9 +75,9 @@ def fingerprint(build):
     return {path: digest(path) for path in sorted(paths)}
 
 
-def build_variant(source, previous, destination, record_dir, jobs):
+def build_variant(source, previous, destination, record_dir, jobs, gpu=None):
     record_dir.mkdir(parents=True, exist_ok=True)
-    command = configure_command(source, previous, destination)
+    command = configure_command(source, previous, destination, gpu)
     plan = record_dir / "configure.json"
     if plan.exists():
         if json.loads(plan.read_text()) != command:
