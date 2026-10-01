@@ -76,8 +76,9 @@ def prepare(args):
                     tools=str(work / "tools/cbc_study.py"), cases={}, sources={})
     support = work / "tools"
     support.mkdir()
-    for name in ("cbc_cluster_study.py", "cbc_study.py", "cbc_study_overlay.py",
-                 "cbc_study_input.py.in", "study_build.py"):
+    support_names = ("cbc_cluster_study.py", "cbc_study.py", "cbc_study_overlay.py",
+                     "cbc_study_input.py.in", "study_build.py")
+    for name in support_names:
         shutil.copy2(HERE / name, support / name)
     shutil.copy2(HERE / "cbc_cluster_study.py", work / "cbc_cluster_study.py")
     shutil.copytree(support, root / "tools")
@@ -160,7 +161,8 @@ def prepare(args):
                                              "--config", filename), env_file))
                     settings["cases"][partition + "/" + key] = str(root_case)
     settings["environment_sha256"] = digest(env_file)
-    settings["tool_hashes"] = {str(path): digest(path) for path in support.iterdir()}
+    settings["tool_hashes"] = {str(support / name): digest(support / name)
+                               for name in support_names}
     settings["tool_hashes"][settings["driver"]] = digest(settings["driver"])
     write_json(work / "settings.json", settings)
     write_json(root / "settings.json", settings)
