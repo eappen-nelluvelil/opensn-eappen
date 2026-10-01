@@ -77,7 +77,7 @@ CBC_AngleSet::AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission
 
     ++num_completed_tasks_;
 
-    if (async_comm_.HasUnsentMessages())
+    if (async_comm_.HasClosedNormalPacket())
       async_comm_.SendData();
   }
 
