@@ -17,6 +17,7 @@ namespace opensn
 class CBCD_FLUDS;
 class CBC_SPDS;
 class CBCDSweepChunk;
+struct CBCDWorkerLaunch;
 class CellFace;
 class LBSGroupset;
 
@@ -53,7 +54,9 @@ public:
   bool TryInitialize(CBCDSweepChunk& sweep_chunk);
 
   /// Advance the angle set by one scheduler step.
-  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
+  bool TryAdvanceOneStep(CBCDSweepChunk& sweep_chunk,
+                         std::size_t worker_id,
+                         CBCDWorkerLaunch* worker_launch = nullptr);
 
   AngleSetStatus AngleSetAdvance(SweepChunk& sweep_chunk, AngleSetStatus permission) override;
 
@@ -152,7 +155,7 @@ private:
   /// Retire the batch after this worker has observed stream completion.
   void RetireCompletedBatch();
   /// Launch all cells currently ready in the active batch buffer.
-  bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk);
+  bool TryLaunchReadyBatch(CBCDSweepChunk& sweep_chunk, CBCDWorkerLaunch* worker_launch);
   /// Publish reflecting and nonlocal psi from the completed batch.
   void PublishCompletedBatch(CBCDSweepChunk& sweep_chunk, std::size_t worker_id);
   /// Release follower angle sets after all reflecting writes are visible.
