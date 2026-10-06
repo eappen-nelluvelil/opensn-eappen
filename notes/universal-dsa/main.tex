@@ -1,0 +1,237 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm,amssymb,amsfonts}
+\usepackage{fullpage}
+\usepackage{times}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{comment}
+\usepackage{color}
+\usepackage{minted}
+\usepackage{appendix}
+\usepackage{subcaption}
+\usepackage{svg}
+\usepackage{pdfpages}
+\usepackage{hyperref}
+\usepackage{mathtools}
+\usepackage{gensymb}
+% \usepackage{minipage}
+\usepackage[varqu]{zi4} % "Inconsolata" font - very readable for code
+\usepackage[T1]{fontenc} % Ensures the font renders correctly
+
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+
+\usepackage[most]{tcolorbox}
+
+% Define the "theorem" environment 
+\newtcbtheorem[auto counter, number within=section]{theorem}{Theorem}%
+{
+  enhanced,
+  colback=blue!5!white,      % Very light blue background
+  colframe=blue!75!black,    % Dark blue frame
+  fonttitle=\bfseries,
+  coltitle=white,
+  boxrule=0.5mm,
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=blue!75!black}
+}{thm} % "thm" is the prefix for referencing (e.g., \ref{thm:my-theorem})
+
+% Define the "lemma" environment
+\newtcbtheorem[auto counter, number within=section]{lemma}{Lemma}%
+{
+  enhanced,                % Enable advanced features
+  colback=blue!5!white,    % Background color (very light blue)
+  colframe=blue!75!black,  % Frame color (dark blue)
+  fonttitle=\bfseries,     % Title font
+  coltitle=white,          % Title text color
+  boxrule=0.5mm,           % Thickness of the box border
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=blue!75!black}
+}{lem} % "lem" is the prefix for referencing (e.g., \ref{lem:my-lemma})
+
+% Define the "definition" environment
+\newtcbtheorem[auto counter, number within=section]{definition}{Definition}%
+{
+  enhanced,
+  colback=teal!5!white,      % Very light teal background
+  colframe=teal!75!black,    % Dark teal frame
+  fonttitle=\bfseries,
+  coltitle=white,
+  boxrule=0.5mm,
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=teal!75!black}
+}{def} % "def" is the prefix for referencing (e.g., \ref{def}{my-definition})
+
+% Define the "note" environment
+\newtcolorbox{note}{
+    colback=yellow!10!white,
+    colframe=yellow!50!black,
+    title=Note,
+    fonttitle=\bfseries
+}
+
+% Define the "axiom" environment
+\newtcbtheorem[auto counter, number within=section]{axiom}{Axiom}%
+{
+  enhanced,
+  colback=violet!5!white,    % Very light purple background
+  colframe=violet!75!black,  % Dark purple frame
+  fonttitle=\bfseries,
+  coltitle=white,
+  boxrule=0.5mm,
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=violet!75!black}
+}{ax}
+
+% Define a proof box
+\newtcolorbox{boxproof}{
+  enhanced,
+  breakable,                % Allows proof to break across pages
+  colback=white,            % White background
+  colframe=gray!50,         % Light gray frame (subtle)
+  title={\textit{Proof.}},  % Title looks like standard proof
+  coltitle=black,           % Black title text
+  fonttitle=\bfseries,
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=white, frame hidden}, % Title floats in whitespace
+  after upper=\hfill\qedsymbol % Puts the QED square at the end automatically
+}
+
+% Define a simple black box environment (No Title)
+\newtcolorbox{answer}{
+  enhanced,
+  breakable,                % Allows box to break across pages
+  colback=white,            % White background
+  colframe=black,           % Black border
+  boxrule=0.5mm,            % Matches the thickness of your other boxes
+  coltext=black             % Ensures text inside is black
+}
+
+% Load the minted library for tcolorbox
+\tcbuselibrary{minted} 
+
+% --- 1. C++ CODE BOX (2 spaces per tab, No Line Numbers) ---
+\newtcblisting[auto counter, number within=section]{cppcode}[2][]{%
+  enhanced,
+  colback=gray!5!white,        % Light gray background
+  colframe=red!75!black,       % Red frame
+  listing only,
+  minted language=cpp,
+  minted options={
+      linenos=false,           % NO Line numbers
+      fontsize=\small,         
+      tabsize=2,               % 1 Tab = 2 Spaces
+      breaklines=true,
+      autogobble=true,
+      fontfamily=tt            % Uses the new Inconsolata font
+  },
+  fonttitle=\bfseries,
+  coltitle=white,
+  title={Listing \thetcbcounter: #2}, 
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=red!75!black},
+  #1
+}
+
+% --- 2. PYTHON CODE BOX (4 spaces per tab, No Line Numbers) ---
+\newtcblisting[auto counter, number within=section]{pycode}[2][]{%
+  enhanced,
+  colback=gray!5!white,
+  colframe=red!75!black,
+  listing only,
+  minted language=python,
+  minted options={
+      linenos=false,           % NO Line numbers
+      fontsize=\small,
+      tabsize=4,               % 1 Tab = 4 Spaces
+      breaklines=true,
+      autogobble=true,
+      fontfamily=tt            % Uses the new Inconsolata font
+  },
+  fonttitle=\bfseries,
+  coltitle=white,
+  title={Listing \thetcbcounter: #2},
+  attach boxed title to top left={xshift=5mm, yshift*=-\tcboxedtitleheight/2},
+  boxed title style={colback=red!75!black},
+  #1
+}
+
+\newcommand{\abs}[1]{\left| #1 \right|}
+\newcommand{\norm}[1]{\lVert  #1 \rVert}
+\newcommand{\parens}[1]{\left( #1 \right)}
+\newcommand{\braces}[1]{\left\{ #1 \right\}}
+\newcommand{\brackets}[1]{\left[ #1 \right]}
+\newcommand{\angles}[1]{\langle #1 \rangle}
+
+\setlength{\parindent}{0pt}
+
+\newenvironment{code}{\captionsetup{type=listing}}{}
+
+\title{Default Template}
+\author{Eappen Nelluvelil}
+\date{October 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Analytical algorithm}
+
+The universal DSA scheme is given below.
+Assume $x \in \brackets{0, x_{0}}$ and that there are $G$ groups.
+The $S_{N}$ equations are below:
+\begin{align}
+  \mu \frac{\partial \psi_{1}^{\ell+\frac{1}{2}}}{\partial x} + \sigma_{t, 1} \psi_{1}^{\ell+\frac{1}{2}} & = \frac{1}{4\pi} \sigma_{1 \rightarrow 1} \phi_{1}^{\ell},                                                                                                                \\
+  \mu \frac{\partial \psi_{g}^{\ell+\frac{1}{2}}}{\partial x} + \sigma_{t, g} \psi_{g}^{\ell+\frac{1}{2}} & = \frac{1}{4 \pi} \sigma_{g \rightarrow g} \phi_{g}^{\ell} + \frac{1}{4 \pi} \sigma_{\parens{g - 1} \rightarrow g} \phi_{\parens{g-1}}^{\ell}, \quad g = 2, 3, \ldots, G.
+\end{align}
+
+The boundary conditions are below:
+\begin{align}
+  \psi_{g} \parens{0, \mu}     & = 0, \quad \mu > 0, \quad g = 1, 2, \ldots, G, \\
+  \psi_{1} \parens{x_{0}, \mu} & = 1, \quad \mu < 0,                            \\
+  \psi_{g} \parens{x_{0}, \mu} & = 0, \quad \mu < 0, \quad g = 2, 3, \ldots, G.
+\end{align}
+
+The diffusion acceleration step is given below:
+\begin{align}
+  -\frac{\partial}{\partial x} \frac{1}{3 \sigma_{t, 1}} \frac{\partial \phi_{1}^{\ell+1}}{\partial x} + \sigma_{R, 1} \phi_{1}^{\ell+1} & = \frac{\partial}{\partial x} \parens{J_{1}^{\ell + \frac{1}{2}} + \frac{1}{3 \sigma_{t, 1}} \frac{\partial \phi_{1}^{\ell + \frac{1}{2}}}{\partial x}},                                                                                                 \\
+  -\frac{\partial}{\partial x} \frac{1}{3 \sigma_{t, g}} \frac{\partial \phi_{g}^{\ell+1}}{\partial x} + \sigma_{R, g} \phi_{g}^{\ell+1} & = \sigma_{\parens{g - 1} \rightarrow g} \phi_{\parens{g-1}}^{\ell+1} + \frac{\partial}{\partial x} \parens{J_{g}^{\ell + \frac{1}{2}} + \frac{1}{3 \sigma_{t, g}} \frac{\partial \phi_{g}^{\ell + \frac{1}{2}}}{\partial x}}, \quad g = 2, 3, \ldots, G.
+\end{align}
+
+Assume vacuum boundary conditions.
+The cross-sections are defined as follows:
+\begin{align}
+  \sigma_{t, g} & = \sigma_{a, g} + \sigma_{g \rightarrow g} + \sigma_{g \rightarrow \parens{g + 1}}, \quad g = 1, 2, \ldots, G - 1, \\
+  \sigma_{R, g} & = \sigma_{a, g} + \sigma_{g \rightarrow \parens{g + 1}}, \quad g = 1, 2, \ldots, G - 1,                            \\
+  \sigma_{t, G} & = \sigma_{a, G} + \sigma_{G \rightarrow G},                                                                        \\
+  \sigma_{R, G} & = \sigma_{a, G}.
+\end{align}
+
+We can just use diamond-differencing for both the $S_{N}$ and diffusion equations (look back at the NUEN 625 notes).
+We can also define a routine to define the cross-sections.
+
+For the time being, take $x_{0} = 10$ cm and the following as the cross-sections for all groups $g = 1, 2, \ldots, G$:
+\begin{align}
+  \sigma_{a, g}                         & = 0.25 \, \text{cm}^{-1}, \\
+  \sigma_{g \rightarrow g}              & = 1.0 \, \text{cm}^{-1},  \\
+  \sigma_{g \rightarrow \parens{g + 1}} & = 1.0 \, \text{cm}^{-1}.
+\end{align}
+
+\subsection{Notes from 09/30/2026 meeting}:
+\begin{itemize}
+  \item \textbf{Need to double-check the following statements/questions}.
+  \item With a finite number of gorups, and with downscattering, there are $N$ iterations needed to reach convergence for $N$ groups (?)
+  \item Fourier analysis might not be useful here?
+  \item Maybe forget about WGS scattering at the moment?
+  \item (?) Assume isotropic downscattering
+        \begin{itemize}
+          \item (?) No scattering source for group $1$, and scattering source
+          \item No WGS, only downscatter from group-to-group sequentially (?)
+          \item Maybe the solution is going to look like a pure absorber solution?
+          \item Maybe make a modification to get rid of residual calculations since we don't need to worry about anisotropic scattering (?)
+        \end{itemize}
+\end{itemize}
+
+\end{document}
