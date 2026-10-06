@@ -81,6 +81,9 @@ public:
   /// Whether the opt-in steady-state, host CBC slab sweep uses diamond difference.
   bool UsesDiamondDifference() const { return transport_discretization_ == "diamond_difference"; }
 
+  /// Whether classic Richardson applies the consistent multigroup slab DSA correction.
+  bool ApplyOneDimensionalDSA() const { return apply_1d_dsa_; }
+
   /**
    * Validate diamond-difference mode after base runtime initialization.
    * Collective over opensn::mpi_comm; also used before a repeated solve.
@@ -334,6 +337,7 @@ protected:
 
   const std::string sweep_type_;
   const std::string transport_discretization_;
+  const bool apply_1d_dsa_;
   /** @} */
 
   /**

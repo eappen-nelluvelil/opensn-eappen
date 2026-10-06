@@ -1163,6 +1163,14 @@ WrapLBS(py::module& slv)
         fission, and uncollided-flux inputs are not supported on this path.
         Cell-local scalar and stored angular flux entries represent edge values.
         No negative-flux fixup is applied on optically thick cells.
+    apply_1d_dsa : bool, default=False
+        Apply consistent edge-based multigroup DSA after each diamond-difference
+        sweep. Requires ``transport_discretization='diamond_difference'`` and no
+        lagged interface fluxes. Cannot be combined with WGDSA or TGDSA. Correction
+        systems use PETSc CG/GAMG, with relative tolerance 1e-12, absolute tolerance
+        1e-14, and at most 1000 iterations. PETSc options use the prefix
+        ``<problem_name>_dd_dsa_g<zero_based_group>_``. Setup is rebuilt for each
+        classic Richardson solve and reused throughout that solve.
     time_dependent : bool, default=False
         If true, the problem starts in time-dependent mode. Otherwise it starts in
         steady-state mode. Requires ``options.save_angular_flux=True``.
