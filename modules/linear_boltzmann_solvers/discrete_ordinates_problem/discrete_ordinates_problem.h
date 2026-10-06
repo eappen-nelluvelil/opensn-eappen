@@ -78,6 +78,14 @@ public:
   void ValidateOptions(std::optional<SweepChunkMode> mode = std::nullopt) const;
   /// Rejects adjoint mode for CSDA problems and problems with an uncollided flux file.
   void ValidateAdjointModeAllowed() const override;
+  /// Whether the opt-in steady-state, host CBC slab sweep uses diamond difference.
+  bool UsesDiamondDifference() const { return transport_discretization_ == "diamond_difference"; }
+
+  /**
+   * Validate diamond-difference mode after base runtime initialization.
+   * Collective over opensn::mpi_comm; also used before a repeated solve.
+   */
+  void ValidateDiamondDifference() const;
 
   std::pair<std::uint64_t, std::uint64_t> GetNumPhiIterativeUnknowns() override;
 
@@ -325,6 +333,7 @@ protected:
     quadrature_fluds_commondata_map_;
 
   const std::string sweep_type_;
+  const std::string transport_discretization_;
   /** @} */
 
   /**

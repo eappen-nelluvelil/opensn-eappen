@@ -10,6 +10,7 @@
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/iterative_methods/ags_linear_solver.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/lbs_problem.h"
 #include "framework/math/functions/function.h"
+#include "framework/math/quadratures/angular/product_quadrature.h"
 #include "framework/data_types/allowable_range.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/source_functions/source_function.h"
 #include "modules/linear_boltzmann_solvers/discrete_ordinates_problem/source_functions/transient_source_function.h"
@@ -50,6 +51,14 @@ DiscreteOrdinatesProblem::GetInputParameters()
   params.AddOptionalParameter(
     "sweep_type", "AAH", "The sweep type to use for sweep operatorations.");
   params.ConstrainParameterRange("sweep_type", AllowableRangeList::New({"AAH", "CBC"}));
+  params.AddOptionalParameter(
+    "transport_discretization",
+    "pwld",
+    "Transport cell discretization. diamond_difference is restricted to "
+    "steady-state, host CBC Cartesian slabs with isotropic scattering, "
+    "prescribed incoming boundaries, and one classic Richardson groupset.");
+  params.ConstrainParameterRange("transport_discretization",
+                                 AllowableRangeList::New({"pwld", "diamond_difference"}));
   params.AddOptionalParameter("time_dependent",
                               false,
                               "If true, initializes the problem in time-dependent mode. "
@@ -120,7 +129,9 @@ DiscreteOrdinatesProblem::Create(const ParameterBlock& params)
 }
 
 DiscreteOrdinatesProblem::DiscreteOrdinatesProblem(const InputParameters& params)
-  : LBSProblem(params), sweep_type_(params.GetParamValue<std::string>("sweep_type"))
+  : LBSProblem(params),
+    sweep_type_(params.GetParamValue<std::string>("sweep_type")),
+    transport_discretization_(params.GetParamValue<std::string>("transport_discretization"))
 {
   // Time-dependent mode (GPU/adjoint/geometry/save_angular_flux) is checked in
   // BuildRuntime(), once the object is fully constructed. SupportsTimeDependentMode() is
@@ -376,8 +387,73 @@ DiscreteOrdinatesProblem::PrintSimHeader()
 }
 
 void
+DiscreteOrdinatesProblem::ValidateDiamondDifference() const
+{
+  if (not UsesDiamondDifference())
+    return;
+
+  OpenSnInvalidArgumentIf(sweep_type_ != "CBC" or UseGPUs() or IsTimeDependent() or
+                            geometry_type_ != GeometryType::ONED_SLAB or options_.adjoint or
+                            not uncollided_flux_file_.empty(),
+                          "Diamond difference requires steady-state host CBC Cartesian slab "
+                          "transport without adjoint or uncollided-flux options.");
+  OpenSnInvalidArgumentIf(groupsets_.size() != 1 or groupsets_.front().first_group != 0 or
+                            groupsets_.front().GetNumGroups() != num_groups_,
+                          "Diamond difference requires one groupset containing all groups.");
+  const auto& groupset = groupsets_.front();
+  OpenSnInvalidArgumentIf(
+    dynamic_cast<const GLProductQuadrature1DSlab*>(groupset.quadrature.get()) == nullptr,
+    "Diamond difference initially requires a Gauss-Legendre slab quadrature.");
+  OpenSnInvalidArgumentIf(groupset.iterative_method !=
+                              LinearSystemSolver::IterativeMethod::CLASSIC_RICHARDSON or
+                            num_moments_ != 1 or groupset.apply_wgdsa or groupset.apply_tgdsa,
+                          "Diamond difference requires isotropic classic Richardson iteration "
+                          "without WGDSA or TGDSA.");
+  for (const auto& [id, boundary] : boundary_definitions_)
+    OpenSnInvalidArgumentIf(boundary.type == LBSBoundaryType::REFLECTING,
+                            "Diamond difference does not yet support reflecting boundaries.");
+
+  for (const auto& [id, xs] : block_id_to_xs_map_)
+  {
+    OpenSnInvalidArgumentIf(xs->IsFissionable(),
+                            "Diamond difference does not yet support fission.");
+    OpenSnInvalidArgumentIf(xs->GetScatteringOrder() != 0,
+                            "Diamond difference initially requires isotropic cross sections.");
+    for (const auto sigma_t : xs->GetSigmaTotal())
+      OpenSnInvalidArgumentIf(not std::isfinite(sigma_t) or sigma_t <= 0.0,
+                              "Diamond difference requires positive, finite total cross sections.");
+    for (unsigned int g = 0; g < num_groups_; ++g)
+      OpenSnInvalidArgumentIf(xs->GetSigmaTotal()[g] < xs->GetTransferMatrix(0).GetValueIJ(g, g),
+                              "Diamond difference requires nonnegative removal cross sections.");
+    const auto& scatter = xs->GetTransferMatrix(0);
+    for (unsigned int g = 0; g < num_groups_; ++g)
+      for (const auto& [row, column, value] : scatter.Row(g))
+        OpenSnInvalidArgumentIf(value != 0.0 and (column > row or row - column > 1),
+                                "Diamond difference initially supports only self-scattering and "
+                                "adjacent downscatter.");
+  }
+
+  bool invalid_cell = false;
+  for (const auto& cell : grid_->GetLocalCells())
+  {
+    const auto& mapping = discretization_->GetCellMapping(*cell);
+    const auto nodes = mapping.GetNodeLocations();
+    invalid_cell |= nodes.size() != 2 or cell->faces.size() != 2;
+    if (nodes.size() == 2)
+      invalid_cell |=
+        nodes[0].z == nodes[1].z or nodes[0].x != nodes[1].x or nodes[0].y != nodes[1].y;
+  }
+  bool any_invalid_cell = false;
+  opensn::mpi_comm.all_reduce(invalid_cell, any_invalid_cell, mpi::op::logical_or<bool>());
+  OpenSnInvalidArgumentIf(any_invalid_cell,
+                          "Diamond difference requires two-node Cartesian slabs aligned with z.");
+}
+
+void
 DiscreteOrdinatesProblem::ValidateTimeDependentModeAllowed() const
 {
+  OpenSnInvalidArgumentIf(UsesDiamondDifference(),
+                          "Diamond-difference transport supports only steady-state problems.");
   if (UseGPUs())
     throw std::runtime_error(GetName() + ": Time-dependent problems are not supported on GPUs.");
   if (options_.adjoint)
@@ -549,6 +625,7 @@ DiscreteOrdinatesProblem::BuildRuntime()
     phi_e_new_local_.assign(grid_->GetLocalCellCount() * static_cast<size_t>(num_groups_), 0.0);
   else
     phi_e_new_local_.clear();
+  ValidateDiamondDifference();
   InitializeFCS();
 
   ValidateOptions();
