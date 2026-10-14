@@ -10,6 +10,7 @@
 namespace opensn::gpu_kernel
 {
 
+template <bool diamond_difference = false>
 __CRB_GLOBAL_FUNC__ void
 CBCDBatchKernel(const CBCDBatch* batches, std::uint32_t num_batches, std::uint64_t num_blocks)
 {
@@ -62,15 +63,19 @@ CBCDBatchKernel(const CBCDBatch* batches, std::uint32_t num_batches, std::uint64
     quadrature.GetDirectionView(direction, args.directions[angle_idx]);
     auto* saved_psi = batch.saved_psi;
     auto stride_idx = angle_group_idx;
-    SweepDispatch<SweepKind::CBC>(cell.num_nodes,
-                                  args,
-                                  cell,
-                                  direction,
-                                  cell_edge_data,
-                                  stride_idx,
-                                  group_idx,
-                                  num_moments,
-                                  saved_psi);
+    if constexpr (diamond_difference)
+      SweepDiamondDifference(
+        args, cell, direction, cell_edge_data, stride_idx, group_idx, saved_psi);
+    else
+      SweepDispatch<SweepKind::CBC>(cell.num_nodes,
+                                    args,
+                                    cell,
+                                    direction,
+                                    cell_edge_data,
+                                    stride_idx,
+                                    group_idx,
+                                    num_moments,
+                                    saved_psi);
   }
 }
 

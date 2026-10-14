@@ -55,7 +55,7 @@ DiscreteOrdinatesProblem::GetInputParameters()
     "transport_discretization",
     "pwld",
     "Transport cell discretization. diamond_difference is restricted to "
-    "steady-state, host CBC Cartesian slabs with isotropic scattering, "
+    "steady-state CBC Cartesian slabs with isotropic scattering, "
     "prescribed incoming boundaries, and one classic Richardson groupset.");
   params.ConstrainParameterRange("transport_discretization",
                                  AllowableRangeList::New({"pwld", "diamond_difference"}));
@@ -399,10 +399,10 @@ DiscreteOrdinatesProblem::ValidateDiamondDifference() const
   if (not UsesDiamondDifference())
     return;
 
-  OpenSnInvalidArgumentIf(sweep_type_ != "CBC" or UseGPUs() or IsTimeDependent() or
+  OpenSnInvalidArgumentIf(sweep_type_ != "CBC" or IsTimeDependent() or
                             geometry_type_ != GeometryType::ONED_SLAB or options_.adjoint or
                             not uncollided_flux_file_.empty(),
-                          "Diamond difference requires steady-state host CBC Cartesian slab "
+                          "Diamond difference requires steady-state CBC Cartesian slab "
                           "transport without adjoint or uncollided-flux options.");
   OpenSnInvalidArgumentIf(groupsets_.size() != 1 or groupsets_.front().first_group != 0 or
                             groupsets_.front().GetNumGroups() != num_groups_,

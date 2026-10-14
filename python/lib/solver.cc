@@ -1156,13 +1156,16 @@ WrapLBS(py::module& slv)
         Both sweep types support time-dependent (transient) mode.
     transport_discretization : {'pwld', 'diamond_difference'}, default='pwld'
         Cell transport discretization. The experimental ``diamond_difference``
-        path supports only steady-state host CBC Cartesian slabs, Gauss-Legendre
+        path supports only steady-state CBC Cartesian slabs, Gauss-Legendre
         slab quadrature, isotropic self-scattering and adjacent downscatter,
         prescribed incoming boundaries, and one classic Richardson groupset
-        containing all groups. Reflecting boundaries, GPU execution, adjoint,
+        containing all groups. Reflecting boundaries, adjoint,
         fission, and uncollided-flux inputs are not supported on this path.
         Cell-local scalar and stored angular flux entries represent edge values.
-        No negative-flux fixup is applied on optically thick cells.
+        No negative-flux fixup is applied on optically thick cells. With GPUs,
+        ordinary fused CBC evaluates the transport balance on the device;
+        the diffusion correction, source assembly, and convergence checks remain
+        on the host. This hybrid path does not imply a device-resident DSA solve.
     apply_1d_dsa : bool, default=False
         Apply consistent edge-based multigroup DSA after each diamond-difference
         sweep. Requires ``transport_discretization='diamond_difference'`` and no

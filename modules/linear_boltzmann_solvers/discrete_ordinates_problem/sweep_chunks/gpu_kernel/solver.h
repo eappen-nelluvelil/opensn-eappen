@@ -8,6 +8,7 @@
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/view/mesh_view.h"
 #include "modules/linear_boltzmann_solvers/lbs_problem/device/view/quadrature_view.h"
 #include "caribou/main.hpp"
+#include <cmath>
 
 namespace crb = caribou;
 
@@ -296,6 +297,42 @@ Sweep(const Arguments<k>& args,
     SaveAngularFlux<ndofs>(
       buffer.b(), saved_psi, cell, angle_group_idx, args.flud_data.stride_size);
   }
+}
+
+/// Two-edge slab balance, with the same nodal source average as host diamond difference.
+__CRB_DEVICE_FUNC__ void
+SweepDiamondDifference(const Arguments<SweepKind::CBC>& args,
+                       CellView& cell,
+                       DirectionView& direction,
+                       const std::uint64_t* cell_edge_data,
+                       const unsigned int& angle_group_idx,
+                       const unsigned int& group_idx,
+                       double* saved_psi)
+{
+  FaceView face;
+  cell.GetFaceView(face, 0);
+  const unsigned int incoming_face = direction.omega[2] * face.normal[2] < 0.0 ? 0 : 1;
+  cell.GetFaceView(face, incoming_face);
+  const auto incoming_node = face.cell_mapping_data[0];
+  const auto outgoing_node = 1 - incoming_node;
+  const double abs_mu = std::fabs(direction.omega[2]);
+  // The sum of the two-node slab mass matrix is its length (unit transverse area).
+  const double h = cell.GM_data[3] + cell.GM_data[7] + cell.GM_data[11] + cell.GM_data[15];
+  const double half_tau = 0.5 * cell.total_xs[args.groupset_start + group_idx] * h;
+  const auto offset = cell.phi_address + args.groupset_start + group_idx;
+  const double source_sum =
+    direction.m2d[0] * (args.src_moment[offset] + args.src_moment[offset + args.num_groups]);
+  const double psi_in = *args.flud_data.GetIncomingFluxPointer(
+    CBCD_NodeIndex(cell_edge_data[incoming_face]), angle_group_idx);
+  double psi[2];
+  psi[incoming_node] = psi_in;
+  psi[outgoing_node] = ((abs_mu - half_tau) * psi_in + 0.5 * h * source_sum) / (abs_mu + half_tau);
+  WritePsiToFludsAndOutflow<SweepKind::CBC>(
+    psi, cell, direction, cell_edge_data, angle_group_idx, group_idx, args);
+  const std::uint32_t num_moments = 1;
+  ComputePhi<2, SweepKind::CBC>(psi, cell, direction, group_idx, num_moments, args);
+  if (saved_psi != nullptr)
+    SaveAngularFlux<2>(psi, saved_psi, cell, angle_group_idx, args.flud_data.stride_size);
 }
 
 // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, modernize-use-auto)

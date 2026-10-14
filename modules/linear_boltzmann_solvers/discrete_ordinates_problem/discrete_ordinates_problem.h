@@ -78,7 +78,7 @@ public:
   void ValidateOptions(std::optional<SweepChunkMode> mode = std::nullopt) const;
   /// Rejects adjoint mode for CSDA problems and problems with an uncollided flux file.
   void ValidateAdjointModeAllowed() const override;
-  /// Whether the opt-in steady-state, host CBC slab sweep uses diamond difference.
+  /// Whether the opt-in steady-state CBC slab sweep uses diamond difference.
   bool UsesDiamondDifference() const { return transport_discretization_ == "diamond_difference"; }
 
   /// Whether classic Richardson applies the consistent multigroup slab DSA correction.

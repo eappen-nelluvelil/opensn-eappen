@@ -14,6 +14,8 @@ import os
 import sys
 import numpy as np
 
+use_device = globals().get("use_device", False)
+
 if "opensn_console" not in globals():
     from mpi4py import MPI
     rank = MPI.COMM_WORLD.rank
@@ -78,6 +80,7 @@ def solve(nodes, angles, xs, source, left, right, accelerated, max_iterations=20
             {"name": "zmax", "type": "isotropic", "group_strength": list(right)},
         ],
         sweep_type="CBC",
+        use_gpus=use_device,
         transport_discretization="diamond_difference",
         apply_1d_dsa=accelerated,
         options={"max_ags_iterations": 1},

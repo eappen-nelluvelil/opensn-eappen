@@ -1,6 +1,19 @@
 [
   {
     "file": "transport_1d_diamond_dsa.py",
+    "comment": "Device diamond CBC/host DSA: independent discrete SN and balance",
+    "num_procs": 3,
+    "args": ["use_device=True"],
+    "requires_gpu": true,
+    "outfileprefix": "transport_1d_diamond_dsa_gpu",
+    "checks": [
+      {"type": "KeyValuePair", "key": "Diamond reference error=", "goldvalue": 0.0, "abs_tol": 1e-9},
+      {"type": "KeyValuePair", "key": "Diamond constant error=", "goldvalue": 0.0, "abs_tol": 1e-9},
+      {"type": "KeyValuePair", "key": "Diamond balance error=", "goldvalue": 0.0, "abs_tol": 1e-9}
+    ]
+  },
+  {
+    "file": "transport_1d_diamond_dsa.py",
     "comment": "1D diamond CBC/DSA: independent discrete SN, constant solution, and balance",
     "num_procs": 3,
     "checks": [

@@ -211,12 +211,21 @@ CBCDSweepChunk::LaunchWorkerBatch(const std::size_t worker_id)
   crb::Dim3 block_size(gpu_kernel::threshold);
   auto& stream = launch.stream;
 #if defined(__NVCC__) || defined(__HIPCC__)
-  gpu_kernel::CBCDBatchKernel<<<grid_size, block_size, 0, stream>>>(
-    batches, num_batches, num_blocks);
+  if (problem_.UsesDiamondDifference())
+    gpu_kernel::CBCDBatchKernel<true>
+      <<<grid_size, block_size, 0, stream>>>(batches, num_batches, num_blocks);
+  else
+    gpu_kernel::CBCDBatchKernel<false>
+      <<<grid_size, block_size, 0, stream>>>(batches, num_batches, num_blocks);
 #elif defined(SYCL_LANGUAGE_VERSION) && defined(__INTEL_LLVM_COMPILER)
-  stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
-                      [=](sycl::nd_item<3> work_index)
-                      { gpu_kernel::CBCDBatchKernel(batches, num_batches, num_blocks); });
+  if (problem_.UsesDiamondDifference())
+    stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
+                        [=](sycl::nd_item<3> work_index)
+                        { gpu_kernel::CBCDBatchKernel<true>(batches, num_batches, num_blocks); });
+  else
+    stream.parallel_for(sycl::nd_range<3>(grid_size * block_size, block_size),
+                        [=](sycl::nd_item<3> work_index)
+                        { gpu_kernel::CBCDBatchKernel<false>(batches, num_batches, num_blocks); });
 #endif
   launch.in_flight = true;
 }
